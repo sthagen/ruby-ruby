@@ -31,7 +31,9 @@ Note: We're only listing outstanding class updates.
 *   The following default gem are updated.
     * RubyGems 3.4.0.dev
     * bundler 2.4.0.dev
+    * etc 1.4.0
     * io-console 0.5.11
+    * reline 0.3.1
 *   The following bundled gems are updated.
     * typeprof 0.21.2
 *   The following default gems are now bundled gems.
@@ -41,6 +43,12 @@ Note: We're only listing outstanding class updates.
 Note: Excluding feature bug fixes.
 
 ### Removed methods
+
+The following deprecated constant is removed.
+
+* `Random::DEFAULT`
+* `Struct::Group`
+* `Struct::Passwd`
 
 The following deprecated methods are removed.
 

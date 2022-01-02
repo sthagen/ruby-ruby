@@ -25,17 +25,25 @@ Gem::Specification.new do |spec|
   spec.files         = %w[
     LICENSE.txt
     README.md
+    ChangeLog
     ext/etc/constdefs.h
     ext/etc/etc.c
     ext/etc/extconf.rb
     ext/etc/mkconstants.rb
     test/etc/test_etc.rb
   ]
+  spec.rdoc_options = ["--main", "README.md"]
+  spec.extra_rdoc_files = [
+    "LICENSE.txt",
+    "README.md",
+    "ChangeLog",
+    *Dir.glob("logs/ChangeLog-*[^~]", base: __dir__),
+  ]
   spec.bindir        = "exe"
   spec.require_paths = ["lib"]
   spec.extensions    = %w{ext/etc/extconf.rb}
 
-  spec.required_ruby_version = ">= 2.3.0"
+  spec.required_ruby_version = ">= 2.6.0"
 
   spec.add_development_dependency "bundler"
   spec.add_development_dependency "rake"

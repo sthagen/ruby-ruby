@@ -12,6 +12,11 @@ class Reline::Terminfo::Test < Reline::TestCase
     omit e.message
   end
 
+  def test_tigetstr_with_error
+    assert_raise(Reline::Terminfo::TerminfoError) { Reline::Terminfo.tigetstr('unknown') }
+    assert_raise(Reline::Terminfo::TerminfoError) { Reline::Terminfo.tigetstr(nil) }
+  end
+
   def test_tiparm
     assert Reline::Terminfo.tigetstr('khome').tiparm
   rescue Reline::Terminfo::TerminfoError => e
@@ -28,5 +33,29 @@ class Reline::Terminfo::Test < Reline::TestCase
     assert Reline::Terminfo.tigetstr('cuu').tiparm(4649).include?('4649')
   rescue Reline::Terminfo::TerminfoError => e
     omit e.message
+  end
+
+  def test_tigetflag
+    assert_instance_of Integer, Reline::Terminfo.tigetflag('xenl')
+  rescue Reline::Terminfo::TerminfoError => e
+    omit e.message
+  end
+
+  def test_tigetflag_with_error
+    assert_raise(Reline::Terminfo::TerminfoError) { Reline::Terminfo.tigetflag('cuu') }
+    assert_raise(Reline::Terminfo::TerminfoError) { Reline::Terminfo.tigetflag('unknown') }
+    assert_raise(Reline::Terminfo::TerminfoError) { Reline::Terminfo.tigetflag(nil) }
+  end
+
+  def test_tigetnum
+    assert_instance_of Integer, Reline::Terminfo.tigetnum('colors')
+  rescue Reline::Terminfo::TerminfoError => e
+    omit e.message
+  end
+
+  def test_tigetnum_with_error
+    assert_raise(Reline::Terminfo::TerminfoError) { Reline::Terminfo.tigetnum('cuu') }
+    assert_raise(Reline::Terminfo::TerminfoError) { Reline::Terminfo.tigetnum('unknown') }
+    assert_raise(Reline::Terminfo::TerminfoError) { Reline::Terminfo.tigetnum(nil) }
   end
 end if Reline::Terminfo.enabled?
