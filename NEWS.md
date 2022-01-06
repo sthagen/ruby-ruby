@@ -26,6 +26,13 @@ Note that each entry is kept to a minimum, see links for details.
 
 Note: We're only listing outstanding class updates.
 
+* Module
+    * Module.used_refinements has been added. [[Feature #14332]]
+    * Module#refinements has been added. [[Feature #12737]]
+
+* Refinement
+    * Refinement#refined_class has been added. [[Feature #12737]]
+
 ## Stdlib updates
 
 *   The following default gem are updated.
@@ -35,6 +42,7 @@ Note: We're only listing outstanding class updates.
     * io-console 0.5.11
     * reline 0.3.1
 *   The following bundled gems are updated.
+    * net-imap 0.2.3
     * typeprof 0.21.2
 *   The following default gems are now bundled gems.
 
@@ -42,18 +50,25 @@ Note: We're only listing outstanding class updates.
 
 Note: Excluding feature bug fixes.
 
-### Removed methods
+### Removed constants
 
 The following deprecated constant is removed.
 
-* `Random::DEFAULT`
+* `Random::DEFAULT` [[Feature #17351]]
 * `Struct::Group`
 * `Struct::Passwd`
 
+### Removed methods
+
 The following deprecated methods are removed.
 
-* `Dir.exists?`
-* `File.exists?`
+* `Dir.exists?` [[Feature #17391]]
+* `File.exists?` [[Feature #17391]]
+* `Kernel#=~` [[Feature #15231]]
+* `Kernel#taint`, `Kernel#untaint`, `Kernel#tainted?`
+  [[Feature #16131]]
+* `Kernel#trust`, `Kernel#untrust`, `Kernel#untrusted?`
+  [[Feature #16131]]
 
 ## Stdlib compatibility issues
 
@@ -64,7 +79,7 @@ The following deprecated methods are removed.
 The following deprecated APIs are removed.
 
 * `rb_cData` variable.
-* "taintedness" and "trustedness" functions.
+* "taintedness" and "trustedness" functions. [[Feature #16131]]
 
 ## Implementation improvements
 
@@ -88,4 +103,8 @@ The following deprecated APIs are removed.
 
 ## Miscellaneous changes
 
+[Feature #15231]: https://bugs.ruby-lang.org/issues/15231
+[Feature #16131]: https://bugs.ruby-lang.org/issues/16131
+[Feature #17351]: https://bugs.ruby-lang.org/issues/17351
+[Feature #17391]: https://bugs.ruby-lang.org/issues/17391
 [Feature #18351]: https://bugs.ruby-lang.org/issues/18351

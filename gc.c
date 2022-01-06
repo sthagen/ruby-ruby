@@ -2797,13 +2797,49 @@ rb_objspace_data_type_name(VALUE obj)
     }
 }
 
+static int
+ptr_in_page_body_p(const void *ptr, const void *memb)
+{
+    struct heap_page *page = *(struct heap_page **)memb;
+    uintptr_t p_body = (uintptr_t)GET_PAGE_BODY(page->start);
+
+    if ((uintptr_t)ptr >= p_body) {
+        return (uintptr_t)ptr < (p_body + HEAP_PAGE_SIZE) ? 0 : 1;
+    }
+    else {
+        return -1;
+    }
+}
+
+PUREFUNC(static inline struct heap_page * heap_page_for_ptr(rb_objspace_t *objspace, uintptr_t ptr);)
+static inline struct heap_page *
+heap_page_for_ptr(rb_objspace_t *objspace, uintptr_t ptr)
+{
+    struct heap_page **res;
+
+    if (ptr < (uintptr_t)heap_pages_lomem ||
+            ptr > (uintptr_t)heap_pages_himem) {
+        return NULL;
+    }
+
+    res = bsearch((void *)ptr, heap_pages_sorted,
+                  (size_t)heap_allocated_pages, sizeof(struct heap_page *),
+                  ptr_in_page_body_p);
+
+    if (res) {
+        return *res;
+    }
+    else {
+        return NULL;
+    }
+}
+
 PUREFUNC(static inline int is_pointer_to_heap(rb_objspace_t *objspace, void *ptr);)
 static inline int
 is_pointer_to_heap(rb_objspace_t *objspace, void *ptr)
 {
     register RVALUE *p = RANY(ptr);
     register struct heap_page *page;
-    register size_t hi, lo, mid;
 
     RB_DEBUG_COUNTER_INC(gc_isptr_trial);
 
@@ -2813,30 +2849,19 @@ is_pointer_to_heap(rb_objspace_t *objspace, void *ptr)
     if ((VALUE)p % sizeof(RVALUE) != 0) return FALSE;
     RB_DEBUG_COUNTER_INC(gc_isptr_align);
 
-    /* check if p looks like a pointer using bsearch*/
-    lo = 0;
-    hi = heap_allocated_pages;
-    while (lo < hi) {
-	mid = (lo + hi) / 2;
-	page = heap_pages_sorted[mid];
-	if (page->start <= p) {
-            if ((uintptr_t)p < ((uintptr_t)page->start + (page->total_slots * page->slot_size))) {
-                RB_DEBUG_COUNTER_INC(gc_isptr_maybe);
+    page = heap_page_for_ptr(objspace, (uintptr_t)ptr);
+    if (page) {
+        RB_DEBUG_COUNTER_INC(gc_isptr_maybe);
+        if (page->flags.in_tomb) {
+            return FALSE;
+        }
+        else {
+            if ((uintptr_t)p < ((uintptr_t)page->start)) return FALSE;
+            if ((uintptr_t)p >= ((uintptr_t)page->start + (page->total_slots * page->slot_size))) return FALSE;
+            if ((NUM_IN_PAGE(p) * sizeof(RVALUE)) % page->slot_size != 0) return FALSE;
 
-                if (page->flags.in_tomb) {
-                    return FALSE;
-                }
-                else {
-                    if ((NUM_IN_PAGE(p) * sizeof(RVALUE)) % page->slot_size != 0) return FALSE;
-
-                    return TRUE;
-                }
-	    }
-	    lo = mid + 1;
-	}
-	else {
-	    hi = mid;
-	}
+            return TRUE;
+        }
     }
     return FALSE;
 }
@@ -10641,6 +10666,128 @@ rb_gc_stat(VALUE key)
 	gc_stat_internal(key);
 	return 0;
     }
+}
+
+
+enum gc_stat_heap_sym {
+    gc_stat_heap_sym_slot_size,
+    gc_stat_heap_sym_heap_allocatable_pages,
+    gc_stat_heap_sym_heap_eden_pages,
+    gc_stat_heap_sym_heap_eden_slots,
+    gc_stat_heap_sym_heap_tomb_pages,
+    gc_stat_heap_sym_heap_tomb_slots,
+    gc_stat_heap_sym_last
+};
+
+static VALUE gc_stat_heap_symbols[gc_stat_heap_sym_last];
+
+static void
+setup_gc_stat_heap_symbols(void)
+{
+    if (gc_stat_heap_symbols[0] == 0) {
+#define S(s) gc_stat_heap_symbols[gc_stat_heap_sym_##s] = ID2SYM(rb_intern_const(#s))
+        S(slot_size);
+        S(heap_allocatable_pages);
+        S(heap_eden_pages);
+        S(heap_eden_slots);
+        S(heap_tomb_pages);
+        S(heap_tomb_slots);
+#undef S
+    }
+}
+
+static size_t
+gc_stat_heap_internal(int size_pool_idx, VALUE hash_or_sym)
+{
+    rb_objspace_t *objspace = &rb_objspace;
+    VALUE hash = Qnil, key = Qnil;
+
+    setup_gc_stat_heap_symbols();
+
+    if (RB_TYPE_P(hash_or_sym, T_HASH)) {
+        hash = hash_or_sym;
+    }
+    else if (SYMBOL_P(hash_or_sym)) {
+        key = hash_or_sym;
+    }
+    else {
+        rb_raise(rb_eTypeError, "non-hash or symbol argument");
+    }
+
+    if (size_pool_idx < 0 || size_pool_idx >= SIZE_POOL_COUNT) {
+        rb_raise(rb_eArgError, "size pool index out of range");
+    }
+
+    rb_size_pool_t *size_pool = &size_pools[size_pool_idx];
+
+#define SET(name, attr) \
+    if (key == gc_stat_heap_symbols[gc_stat_heap_sym_##name]) \
+        return attr; \
+    else if (hash != Qnil) \
+        rb_hash_aset(hash, gc_stat_heap_symbols[gc_stat_heap_sym_##name], SIZET2NUM(attr));
+
+    SET(slot_size, size_pool->slot_size);
+    SET(heap_allocatable_pages, size_pool->allocatable_pages);
+    SET(heap_eden_pages, SIZE_POOL_EDEN_HEAP(size_pool)->total_pages);
+    SET(heap_eden_slots, SIZE_POOL_EDEN_HEAP(size_pool)->total_slots);
+    SET(heap_tomb_pages, SIZE_POOL_TOMB_HEAP(size_pool)->total_pages);
+    SET(heap_tomb_slots, SIZE_POOL_TOMB_HEAP(size_pool)->total_slots);
+#undef SET
+
+    if (!NIL_P(key)) { /* matched key should return above */
+        rb_raise(rb_eArgError, "unknown key: %"PRIsVALUE, rb_sym2str(key));
+    }
+
+    return 0;
+}
+
+static VALUE
+gc_stat_heap(rb_execution_context_t *ec, VALUE self, VALUE heap_name, VALUE arg)
+{
+    if (NIL_P(heap_name)) {
+        if (NIL_P(arg)) {
+            arg = rb_hash_new();
+        }
+        else if (RB_TYPE_P(arg, T_HASH)) {
+            // ok
+        }
+        else {
+            rb_raise(rb_eTypeError, "non-hash given");
+        }
+
+        for (int i = 0; i < SIZE_POOL_COUNT; i++) {
+            VALUE hash = rb_hash_aref(arg, INT2FIX(i));
+            if (NIL_P(hash)) {
+                hash = rb_hash_new();
+                rb_hash_aset(arg, INT2FIX(i), hash);
+            }
+            gc_stat_heap_internal(i, hash);
+        }
+    }
+    else if (FIXNUM_P(heap_name)) {
+        int size_pool_idx = FIX2INT(heap_name);
+
+        if (NIL_P(arg)) {
+            arg = rb_hash_new();
+        }
+        else if (SYMBOL_P(arg)) {
+            size_t value = gc_stat_heap_internal(size_pool_idx, arg);
+            return SIZET2NUM(value);
+        }
+        else if (RB_TYPE_P(arg, T_HASH)) {
+            // ok
+        }
+        else {
+            rb_raise(rb_eTypeError, "non-hash or symbol given");
+        }
+
+        gc_stat_heap_internal(size_pool_idx, arg);
+    }
+    else {
+        rb_raise(rb_eTypeError, "heap_name must be nil or an Integer");
+    }
+
+    return arg;
 }
 
 static VALUE

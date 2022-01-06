@@ -561,7 +561,7 @@ end.join
   end
 
   def test_ensure_after_nomemoryerror
-    skip "Forcing NoMemoryError causes problems in some environments"
+    omit "Forcing NoMemoryError causes problems in some environments"
     assert_separately([], "$_ = 'a' * 1_000_000_000_000_000_000")
   rescue NoMemoryError
     assert_raise(NoMemoryError) do
@@ -1064,7 +1064,7 @@ $stderr = $stdout; raise "\x82\xa0"') do |outs, errs, status|
   end
 
   def test_warn_deprecated_backwards_compatibility_category
-    skip "no method to test"
+    omit "no method to test"
 
     warning = capture_warning_warn { }
 
@@ -1072,7 +1072,7 @@ $stderr = $stdout; raise "\x82\xa0"') do |outs, errs, status|
   end
 
   def test_warn_deprecated_category
-    skip "no method to test"
+    omit "no method to test"
 
     warning = capture_warning_warn(category: true) { }
 
@@ -1190,6 +1190,14 @@ $stderr = $stdout; raise "\x82\xa0"') do |outs, errs, status|
       Warning[:experimental] = experimental
     end
     assert_empty warning
+  end
+
+  def test_undef_Warning_warn
+    assert_separately([], "#{<<-"begin;"}\n#{<<-"end;"}")
+    begin;
+      Warning.undef_method(:warn)
+      assert_raise(NoMethodError) { warn "" }
+    end;
   end
 
   def test_undefined_backtrace
