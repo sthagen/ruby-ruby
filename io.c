@@ -1646,6 +1646,19 @@ io_binwrite_string(VALUE arg)
 }
 #endif
 
+inline static void
+io_allocate_write_buffer(rb_io_t *fptr, int sync)
+{
+    if (fptr->wbuf.ptr == NULL && !(sync && (fptr->mode & FMODE_SYNC))) {
+        fptr->wbuf.off = 0;
+        fptr->wbuf.len = 0;
+        fptr->wbuf.capa = IO_WBUF_CAPA_MIN;
+        fptr->wbuf.ptr = ALLOC_N(char, fptr->wbuf.capa);
+        fptr->write_lock = rb_mutex_new();
+        rb_mutex_allow_trap(fptr->write_lock, 1);
+    }
+}
+
 static long
 io_binwrite(VALUE str, const char *ptr, long len, rb_io_t *fptr, int nosync)
 {
@@ -1656,14 +1669,7 @@ io_binwrite(VALUE str, const char *ptr, long len, rb_io_t *fptr, int nosync)
 
     if ((n = len) <= 0) return n;
 
-    if (fptr->wbuf.ptr == NULL && !(!nosync && (fptr->mode & FMODE_SYNC))) {
-        fptr->wbuf.off = 0;
-        fptr->wbuf.len = 0;
-        fptr->wbuf.capa = IO_WBUF_CAPA_MIN;
-        fptr->wbuf.ptr = ALLOC_N(char, fptr->wbuf.capa);
-        fptr->write_lock = rb_mutex_new();
-        rb_mutex_allow_trap(fptr->write_lock, 1);
-    }
+    io_allocate_write_buffer(fptr, !nosync);
 
     if ((!nosync && (fptr->mode & (FMODE_SYNC|FMODE_TTY))) ||
         (fptr->wbuf.ptr && fptr->wbuf.capa <= fptr->wbuf.len + len)) {
@@ -1865,78 +1871,79 @@ io_binwritev(struct iovec *iov, int iovcnt, rb_io_t *fptr)
     if (iovcnt == 0) return 0;
     for (i = 1; i < iovcnt; i++) total += iov[i].iov_len;
 
-    if (fptr->wbuf.ptr == NULL && !(fptr->mode & FMODE_SYNC)) {
-	fptr->wbuf.off = 0;
-	fptr->wbuf.len = 0;
-	fptr->wbuf.capa = IO_WBUF_CAPA_MIN;
-	fptr->wbuf.ptr = ALLOC_N(char, fptr->wbuf.capa);
-	fptr->write_lock = rb_mutex_new();
-	rb_mutex_allow_trap(fptr->write_lock, 1);
-    }
+    io_allocate_write_buffer(fptr, 1);
 
     if (fptr->wbuf.ptr && fptr->wbuf.len) {
-	long offset = fptr->wbuf.off + fptr->wbuf.len;
-	if (offset + total <= fptr->wbuf.capa) {
-	    for (i = 1; i < iovcnt; i++) {
-		memcpy(fptr->wbuf.ptr+offset, iov[i].iov_base, iov[i].iov_len);
-		offset += iov[i].iov_len;
-	    }
-	    fptr->wbuf.len += total;
-	    return total;
-	}
-	else {
-	    iov[0].iov_base = fptr->wbuf.ptr + fptr->wbuf.off;
-	    iov[0].iov_len  = fptr->wbuf.len;
-	}
+        long offset = fptr->wbuf.off + fptr->wbuf.len;
+        if (offset + total <= fptr->wbuf.capa) {
+            for (i = 1; i < iovcnt; i++) {
+                memcpy(fptr->wbuf.ptr+offset, iov[i].iov_base, iov[i].iov_len);
+                offset += iov[i].iov_len;
+            }
+
+            fptr->wbuf.len += total;
+            return total;
+        }
+        else {
+            iov[0].iov_base = fptr->wbuf.ptr + fptr->wbuf.off;
+            iov[0].iov_len  = fptr->wbuf.len;
+        }
     }
     else {
-	iov++;
-	if (!--iovcnt) return 0;
+        iov++;
+        if (!--iovcnt) return 0;
     }
 
   retry:
     if (fptr->write_lock) {
-	struct binwritev_arg arg;
-	arg.fptr = fptr;
-	arg.iov  = iov;
-	arg.iovcnt = iovcnt;
-	r = rb_mutex_synchronize(fptr->write_lock, call_writev_internal, (VALUE)&arg);
+        struct binwritev_arg arg;
+        arg.fptr = fptr;
+        arg.iov  = iov;
+        arg.iovcnt = iovcnt;
+        r = rb_mutex_synchronize(fptr->write_lock, call_writev_internal, (VALUE)&arg);
     }
     else {
-	r = rb_writev_internal(fptr, iov, iovcnt);
+        r = rb_writev_internal(fptr, iov, iovcnt);
     }
 
     if (r >= 0) {
-	written_len += r;
-	if (fptr->wbuf.ptr && fptr->wbuf.len) {
-	    if (written_len < fptr->wbuf.len) {
-		fptr->wbuf.off += r;
-		fptr->wbuf.len -= r;
-	    }
-	    else {
-		written_len -= fptr->wbuf.len;
-		fptr->wbuf.off = 0;
-		fptr->wbuf.len = 0;
-	    }
-	}
-	if (written_len == total) return total;
+        written_len += r;
+        if (fptr->wbuf.ptr && fptr->wbuf.len) {
+            if (written_len < fptr->wbuf.len) {
+                fptr->wbuf.off += r;
+                fptr->wbuf.len -= r;
+            }
+            else {
+                written_len -= fptr->wbuf.len;
+                fptr->wbuf.off = 0;
+                fptr->wbuf.len = 0;
+            }
+        }
 
-	while (r >= (ssize_t)iov->iov_len) {
-	    /* iovcnt > 0 */
-	    r -= iov->iov_len;
-	    iov->iov_len = 0;
-	    iov++;
-	    if (!--iovcnt) return total;
-	    /* defensive check: written_len should == total */
-	}
-	iov->iov_base = (char *)iov->iov_base + r;
-	iov->iov_len -= r;
+        if (written_len == total) return total;
 
-	errno = EAGAIN;
+        while (r >= (ssize_t)iov->iov_len) {
+            /* iovcnt > 0 */
+            r -= iov->iov_len;
+            iov->iov_len = 0;
+            iov++;
+
+            if (!--iovcnt) {
+                // assert(written_len == total);
+
+                return total;
+            }
+        }
+
+        iov->iov_base = (char *)iov->iov_base + r;
+        iov->iov_len -= r;
+
+        errno = EAGAIN;
     }
+
     if (rb_io_maybe_wait_writable(errno, fptr->self, Qnil)) {
-	rb_io_check_closed(fptr);
-	goto retry;
+        rb_io_check_closed(fptr);
+        goto retry;
     }
 
     return -1L;
@@ -1954,24 +1961,26 @@ io_fwritev(int argc, const VALUE *argv, rb_io_t *fptr)
     tmp_array = ALLOCV_N(VALUE, v2, argc);
 
     for (i = 0; i < argc; i++) {
-	str = rb_obj_as_string(argv[i]);
-	converted = 0;
-	str = do_writeconv(str, fptr, &converted);
-	if (converted)
-	    OBJ_FREEZE(str);
+        str = rb_obj_as_string(argv[i]);
+        converted = 0;
+        str = do_writeconv(str, fptr, &converted);
 
-	tmp = rb_str_tmp_frozen_acquire(str);
-	tmp_array[i] = tmp;
-	/* iov[0] is reserved for buffer of fptr */
-	iov[i+1].iov_base = RSTRING_PTR(tmp);
-	iov[i+1].iov_len = RSTRING_LEN(tmp);
+        if (converted)
+            OBJ_FREEZE(str);
+
+        tmp = rb_str_tmp_frozen_acquire(str);
+        tmp_array[i] = tmp;
+
+        /* iov[0] is reserved for buffer of fptr */
+        iov[i+1].iov_base = RSTRING_PTR(tmp);
+        iov[i+1].iov_len = RSTRING_LEN(tmp);
     }
 
     n = io_binwritev(iov, iovcnt, fptr);
     if (v1) ALLOCV_END(v1);
 
     for (i = 0; i < argc; i++) {
-	rb_str_tmp_frozen_release(argv[i], tmp_array[i]);
+        rb_str_tmp_frozen_release(argv[i], tmp_array[i]);
     }
 
     if (v2) ALLOCV_END(v2);
@@ -2000,10 +2009,12 @@ io_writev(int argc, const VALUE *argv, VALUE io)
 
     io = GetWriteIO(io);
     tmp = rb_io_check_io(io);
+
     if (NIL_P(tmp)) {
-	/* port is not IO, call write method for it. */
-	return rb_funcallv(io, id_write, argc, argv);
+        /* port is not IO, call write method for it. */
+        return rb_funcallv(io, id_write, argc, argv);
     }
+
     io = tmp;
 
     GetOpenFile(io, fptr);
@@ -2011,18 +2022,21 @@ io_writev(int argc, const VALUE *argv, VALUE io)
 
     for (i = 0; i < argc; i += cnt) {
 #ifdef HAVE_WRITEV
-	if ((fptr->mode & (FMODE_SYNC|FMODE_TTY)) && iovcnt_ok(cnt = argc - i)) {
-	    n = io_fwritev(cnt, &argv[i], fptr);
-	}
-	else
+        if ((fptr->mode & (FMODE_SYNC|FMODE_TTY)) && iovcnt_ok(cnt = argc - i)) {
+            n = io_fwritev(cnt, &argv[i], fptr);
+        }
+        else
 #endif
-	{
-	    cnt = 1;
-	    /* sync at last item */
-	    n = io_fwrite(rb_obj_as_string(argv[i]), fptr, (i < argc-1));
-	}
-        if (n < 0L) rb_sys_fail_on_write(fptr);
-	total = rb_fix_plus(LONG2FIX(n), total);
+        {
+            cnt = 1;
+            /* sync at last item */
+            n = io_fwrite(rb_obj_as_string(argv[i]), fptr, (i < argc-1));
+        }
+
+        if (n < 0L)
+            rb_sys_fail_on_write(fptr);
+
+        total = rb_fix_plus(LONG2FIX(n), total);
     }
 
     return total;
@@ -2051,11 +2065,11 @@ static VALUE
 io_write_m(int argc, VALUE *argv, VALUE io)
 {
     if (argc != 1) {
-	return io_writev(argc, argv, io);
+        return io_writev(argc, argv, io);
     }
     else {
-	VALUE str = argv[0];
-	return io_write(io, str, 0);
+        VALUE str = argv[0];
+        return io_write(io, str, 0);
     }
 }
 
@@ -2069,16 +2083,22 @@ static VALUE
 rb_io_writev(VALUE io, int argc, const VALUE *argv)
 {
     if (argc > 1 && rb_obj_method_arity(io, id_write) == 1) {
-	if (io != rb_ractor_stderr() && RTEST(ruby_verbose)) {
-	    VALUE klass = CLASS_OF(io);
-	    char sep = FL_TEST(klass, FL_SINGLETON) ? (klass = io, '.') : '#';
-            rb_category_warning(RB_WARN_CATEGORY_DEPRECATED, "%+"PRIsVALUE"%c""write is outdated interface"
-		       " which accepts just one argument",
-		       klass, sep);
-	}
-	do rb_io_write(io, *argv++); while (--argc);
-	return argv[0];		/* unused right now */
+        if (io != rb_ractor_stderr() && RTEST(ruby_verbose)) {
+            VALUE klass = CLASS_OF(io);
+            char sep = FL_TEST(klass, FL_SINGLETON) ? (klass = io, '.') : '#';
+            rb_category_warning(
+                RB_WARN_CATEGORY_DEPRECATED, "%+"PRIsVALUE"%c""write is outdated interface"
+                " which accepts just one argument",
+                klass, sep
+            );
+        }
+
+        do rb_io_write(io, *argv++); while (--argc);
+
+        /* unused right now */
+        return argv[0];
     }
+
     return rb_funcallv(io, id_write, argc, argv);
 }
 
@@ -4804,34 +4824,40 @@ rb_io_ungetbyte(VALUE io, VALUE b)
 
 /*
  *  call-seq:
- *     ios.ungetc(integer)  -> nil
- *     ios.ungetc(string)   -> nil
+ *    ungetc(integer) -> nil
+ *    ungetc(string)  -> nil
  *
- *  Pushes back characters (passed as a parameter) onto <em>ios</em>,
- *  such that a subsequent buffered read will return it.
- *  It is only guaranteed to support a single byte, and only if ungetbyte
- *  or ungetc has not already been called on <em>ios</em> since the previous
- *  read of at least a single byte from <em>ios</em>.
- *  However, it can support additional bytes if there is space in the
- *  internal buffer to allow for it.
+ *  Pushes back ("unshifts") the given data onto the stream's buffer,
+ *  placing the data so that it is next to be read; returns +nil+.
  *
- *     f = File.new("testfile")   #=> #<File:testfile>
- *     c = f.getc                 #=> "8"
- *     f.ungetc(c)                #=> nil
- *     f.getc                     #=> "8"
+ *  Note that:
  *
- *  If given an integer, the integer must represent a valid codepoint in the
- *  external encoding of <em>ios</em>.
+ *  - Calling the method hs no effect with unbuffered reads (such as IO#sysread).
+ *  - Calling #rewind on the stream discards the pushed-back data.
  *
- *  Calling this method prepends to the existing buffer, even if the method
- *  has already been called previously:
+ *  When argument +integer+ is given, interprets the integer as a character:
  *
- *     f = File.new("testfile")   #=> #<File:testfile>
- *     f.ungetc("ab")             #=> nil
- *     f.ungetc("cd")             #=> nil
- *     f.read(5)                  #=> "cdab8"
+ *    File.write('t.tmp', '012')
+ *    f = File.open('t.tmp')
+ *    f.ungetc(0x41)     # => nil
+ *    f.read             # => "A012"
+ *    f.rewind
+ *    f.ungetc(0x0442)   # => nil
+ *    f.getc.ord         # => 1090
  *
- *  Has no effect with unbuffered reads (such as IO#sysread).
+ *  When argument +string+ is given, uses all characters:
+ *
+ *    File.write('t.tmp', '012')
+ *    f = File.open('t.tmp')
+ *    f.ungetc('A')      # => nil
+ *    f.read      # => "A012"
+ *    f.rewind
+ *    f.ungetc("\u0442\u0435\u0441\u0442") # => nil
+ *    f.getc.ord      # => 1090
+ *    f.getc.ord      # => 1077
+ *    f.getc.ord      # => 1089
+ *    f.getc.ord      # => 1090
+ *
  */
 
 VALUE
@@ -4880,14 +4906,16 @@ rb_io_ungetc(VALUE io, VALUE c)
 
 /*
  *  call-seq:
- *     ios.isatty   -> true or false
- *     ios.tty?     -> true or false
+ *    isatty -> true or false
  *
- *  Returns <code>true</code> if <em>ios</em> is associated with a
- *  terminal device (tty), <code>false</code> otherwise.
+ *  Returns +true+ if the stream is associated with a terminal device (tty),
+ *  +false+ otherwise:
  *
- *     File.new("testfile").isatty   #=> false
- *     File.new("/dev/tty").isatty   #=> true
+ *     File.new('t.txt').isatty    #=> false
+ *     File.new('/dev/tty').isatty #=> true
+ *
+ *  IO#tty? is an alias for IO#isatty.
+ *
  */
 
 static VALUE
@@ -4902,16 +4930,15 @@ rb_io_isatty(VALUE io)
 #if defined(HAVE_FCNTL) && defined(F_GETFD) && defined(F_SETFD) && defined(FD_CLOEXEC)
 /*
  *  call-seq:
- *     ios.close_on_exec?   -> true or false
+ *    close_on_exec? -> true or false
  *
- *  Returns <code>true</code> if <em>ios</em> will be closed on exec.
+ *  Returns +true+ if the stream will be closed on exec, +false+ otherwise:
  *
- *     f = open("/dev/null")
- *     f.close_on_exec?                 #=> false
- *     f.close_on_exec = true
- *     f.close_on_exec?                 #=> true
- *     f.close_on_exec = false
- *     f.close_on_exec?                 #=> false
+ *    f = File.open('t.txt')
+ *    f.close_on_exec? # => true
+ *    f.close_on_exec = false
+ *    f.close_on_exec? # => false
+ *
  */
 
 static VALUE

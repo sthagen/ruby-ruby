@@ -1419,9 +1419,10 @@ str_new_frozen_buffer(VALUE klass, VALUE orig, int copy_encoding)
     VALUE str;
 
     long len = RSTRING_LEN(orig);
+    int termlen = copy_encoding ? TERM_LEN(orig) : 1;
 
-    if (STR_EMBED_P(orig) || STR_EMBEDDABLE_P(len, 1)) {
-        str = str_new(klass, RSTRING_PTR(orig), len);
+    if (STR_EMBED_P(orig) || STR_EMBEDDABLE_P(len, termlen)) {
+        str = str_new0(klass, RSTRING_PTR(orig), len, termlen);
         assert(STR_EMBED_P(str));
     }
     else {
@@ -3188,6 +3189,7 @@ rb_enc_cr_str_buf_cat(VALUE str, const char *ptr, long len,
             if (RSTRING_LEN(str) == 0) {
                 rb_str_buf_cat(str, ptr, len);
                 ENCODING_CODERANGE_SET(str, ptr_encindex, ptr_cr);
+                rb_str_change_terminator_length(str, rb_enc_mbminlen(str_enc), rb_enc_mbminlen(ptr_enc));
                 return str;
             }
             goto incompatible;
@@ -9463,7 +9465,7 @@ chompped_length(VALUE str, VALUE rs)
 /*!
  * Returns the separator for arguments of rb_str_chomp.
  *
- * @return returns rb_ps ($/) as default, the default value of rb_ps ($/) is "\n".
+ * @return returns rb_rs ($/) as default, the default value of rb_rs ($/) is "\n".
  */
 static VALUE
 chomp_rs(int argc, const VALUE *argv)

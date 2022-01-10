@@ -184,6 +184,10 @@ jit_prepare_routine_call(jitstate_t *jit, ctx_t *ctx, x86opnd_t scratch_reg)
     jit->record_boundary_patch_point = true;
     jit_save_pc(jit, scratch_reg);
     jit_save_sp(jit, ctx);
+
+    // In case the routine calls Ruby methods, it can set local variables
+    // through Kernel#binding and other means.
+    ctx_clear_local_types(ctx);
 }
 
 // Record the current codeblock write position for rewriting into a jump into
@@ -3240,12 +3244,6 @@ gen_send_cfunc(jitstate_t *jit, ctx_t *ctx, const struct rb_callinfo *ci, const 
 {
     const rb_method_cfunc_t *cfunc = UNALIGNED_MEMBER_PTR(cme->def, body.cfunc);
 
-    // If the function expects a Ruby array of arguments
-    if (cfunc->argc < 0 && cfunc->argc != -1) {
-        GEN_COUNTER_INC(cb, send_cfunc_ruby_array_varg);
-        return YJIT_CANT_COMPILE;
-    }
-
     // If the argument count doesn't match
     if (cfunc->argc >= 0 && cfunc->argc != argc) {
         GEN_COUNTER_INC(cb, send_cfunc_argc_mismatch);
@@ -3379,23 +3377,13 @@ gen_send_cfunc(jitstate_t *jit, ctx_t *ctx, const struct rb_callinfo *ci, const 
         call_ptr(cb, REG0, (void *)&check_cfunc_dispatch);
     }
 
-    // Copy SP into RAX because REG_SP will get overwritten
-    lea(cb, RAX, ctx_sp_opnd(ctx, 0));
-
-    // Pop the C function arguments from the stack (in the caller)
-    ctx_stack_pop(ctx, argc + 1);
-
-    // Write interpreter SP into CFP.
-    // Needed in case the callee yields to the block.
-    jit_save_sp(jit, ctx);
-
     // Non-variadic method
     if (cfunc->argc >= 0) {
         // Copy the arguments from the stack to the C argument registers
         // self is the 0th argument and is at index argc from the stack top
         for (int32_t i = 0; i < argc + 1; ++i)
         {
-            x86opnd_t stack_opnd = mem_opnd(64, RAX, -(argc + 1 - i) * SIZEOF_VALUE);
+            x86opnd_t stack_opnd = ctx_stack_opnd(ctx, argc - i);
             x86opnd_t c_arg_reg = C_ARG_REGS[i];
             mov(cb, c_arg_reg, stack_opnd);
         }
@@ -3405,9 +3393,38 @@ gen_send_cfunc(jitstate_t *jit, ctx_t *ctx, const struct rb_callinfo *ci, const 
         // The method gets a pointer to the first argument
         // rb_f_puts(int argc, VALUE *argv, VALUE recv)
         mov(cb, C_ARG_REGS[0], imm_opnd(argc));
-        lea(cb, C_ARG_REGS[1], mem_opnd(64, RAX, -(argc) * SIZEOF_VALUE));
-        mov(cb, C_ARG_REGS[2], mem_opnd(64, RAX, -(argc + 1) * SIZEOF_VALUE));
+        lea(cb, C_ARG_REGS[1], ctx_stack_opnd(ctx, argc - 1));
+        mov(cb, C_ARG_REGS[2], ctx_stack_opnd(ctx, argc));
     }
+    // Variadic method with Ruby array
+    if (cfunc->argc == -2) {
+        // Create a Ruby array from the arguments.
+        //
+        // This follows similar behaviour to vm_call_cfunc_with_frame() and
+        // call_cfunc_m2(). We use rb_ec_ary_new_from_values() instead of
+        // rb_ary_new4() since we have REG_EC available.
+        //
+        // Before getting here we will have set the new CFP in the EC, and the
+        // stack at CFP's SP will contain the values we are inserting into the
+        // Array, so they will be properly marked if we hit a GC.
+
+        // rb_ec_ary_new_from_values(rb_execution_context_t *ec, long n, const VLAUE *elts)
+        mov(cb, C_ARG_REGS[0], REG_EC);
+        mov(cb, C_ARG_REGS[1], imm_opnd(argc));
+        lea(cb, C_ARG_REGS[2], ctx_stack_opnd(ctx, argc - 1));
+        call_ptr(cb, REG0, (void *)rb_ec_ary_new_from_values);
+
+        // rb_file_s_join(VALUE recv, VALUE args)
+        mov(cb, C_ARG_REGS[0], ctx_stack_opnd(ctx, argc));
+        mov(cb, C_ARG_REGS[1], RAX);
+    }
+
+    // Pop the C function arguments from the stack (in the caller)
+    ctx_stack_pop(ctx, argc + 1);
+
+    // Write interpreter SP into CFP.
+    // Needed in case the callee yields to the block.
+    jit_save_sp(jit, ctx);
 
     // Call the C function
     // VALUE ret = (cfunc->func)(recv, argv[0], argv[1]);

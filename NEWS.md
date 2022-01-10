@@ -52,7 +52,7 @@ Note: Excluding feature bug fixes.
 
 ### Removed constants
 
-The following deprecated constant is removed.
+The following deprecated constants are removed.
 
 * `Random::DEFAULT` [[Feature #17351]]
 * `Struct::Group`
@@ -103,6 +103,8 @@ The following deprecated APIs are removed.
 
 ## Miscellaneous changes
 
+[Feature #12737]: https://bugs.ruby-lang.org/issues/12737
+[Feature #14332]: https://bugs.ruby-lang.org/issues/14332
 [Feature #15231]: https://bugs.ruby-lang.org/issues/15231
 [Feature #16131]: https://bugs.ruby-lang.org/issues/16131
 [Feature #17351]: https://bugs.ruby-lang.org/issues/17351
