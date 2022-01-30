@@ -67,10 +67,15 @@ Note: We're only listing outstanding class updates.
 * Refinement
     * Refinement#refined_class has been added. [[Feature #12737]]
 
+* Struct
+    * A Struct class can also be initialized with keyboard arguments
+      without `keyword_init: true` on `Struct.new` [[Feature #16806]]
+
 ## Stdlib updates
 
 *   The following default gem are updated.
     * RubyGems 3.4.0.dev
+    * bigdecimal 3.1.2
     * bundler 2.4.0.dev
     * etc 1.4.0
     * io-console 0.5.11
@@ -88,6 +93,7 @@ Note: Excluding feature bug fixes.
 
 The following deprecated constants are removed.
 
+* `Fixnum` and `Bignum` [[Feature #12005]]
 * `Random::DEFAULT` [[Feature #17351]]
 * `Struct::Group`
 * `Struct::Passwd`
@@ -137,11 +143,13 @@ The following deprecated APIs are removed.
 
 ## Miscellaneous changes
 
+[Feature #12005]: https://bugs.ruby-lang.org/issues/12005
 [Feature #12737]: https://bugs.ruby-lang.org/issues/12737
 [Feature #14332]: https://bugs.ruby-lang.org/issues/14332
 [Feature #15231]: https://bugs.ruby-lang.org/issues/15231
 [Bug #15928]:     https://bugs.ruby-lang.org/issues/15928
 [Feature #16131]: https://bugs.ruby-lang.org/issues/16131
+[Feature #16806]: https://bugs.ruby-lang.org/issues/16806
 [Bug #16908]:     https://bugs.ruby-lang.org/issues/16908
 [Feature #17351]: https://bugs.ruby-lang.org/issues/17351
 [Feature #17391]: https://bugs.ruby-lang.org/issues/17391
