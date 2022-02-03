@@ -68,7 +68,7 @@ Note: We're only listing outstanding class updates.
     * Refinement#refined_class has been added. [[Feature #12737]]
 
 * Struct
-    * A Struct class can also be initialized with keyboard arguments
+    * A Struct class can also be initialized with keyword arguments
       without `keyword_init: true` on `Struct.new` [[Feature #16806]]
 
 ## Stdlib updates
@@ -79,9 +79,11 @@ Note: We're only listing outstanding class updates.
     * bundler 2.4.0.dev
     * etc 1.4.0
     * io-console 0.5.11
+    * io-wait 0.2.2
     * reline 0.3.1
 *   The following bundled gems are updated.
     * net-imap 0.2.3
+    * rbs 2.1.0
     * typeprof 0.21.2
 *   The following default gems are now bundled gems.
 
