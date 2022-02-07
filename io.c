@@ -3992,7 +3992,7 @@ rb_io_gets_internal(VALUE io)
  *    gets(sep, limit, **line_opts) -> string or nil
  *
  *  Reads and returns a line from the stream
- *  (see {Lines}[#class-IO-label-Lines])
+ *  (see {Lines}[#class-IO-label-Lines]);
  *  assigns the return value to <tt>$_</tt>.
  *
  *  With no arguments given, returns the next line
@@ -4220,7 +4220,8 @@ io_readlines(const struct getline_arg *arg, VALUE io)
  *    each_line(sep, limit, **line_opts) {|line| ... } -> self
  *    each_line                                   -> enumerator
  *
- *  Calls the block with each remaining line read from the stream;
+ *  Calls the block with each remaining line read from the stream
+ *  (see {Lines}[#class-IO-label-Lines]);
  *  does nothing if already at end-of-file;
  *  returns +self+.
  *
@@ -7636,8 +7637,8 @@ rb_open_file(int argc, const VALUE *argv, VALUE io)
  *  Document-method: File::open
  *
  *  call-seq:
- *    File.open(path, mode = 'r', perm = 0666, **opts) -> file
- *    File.open(path, mode = 'r', perm = 0666, **opts) {|f| ... } -> object
+ *    File.open(path, mode = 'r', perm = 0666, **open_opts) -> file
+ *    File.open(path, mode = 'r', perm = 0666, **open_opts) {|f| ... } -> object
  *
  *  Creates a new \File object, via File.new with the given arguments.
  *
@@ -7652,8 +7653,8 @@ rb_open_file(int argc, const VALUE *argv, VALUE io)
  *  Document-method: IO::open
  *
  *  call-seq:
- *    IO.open(fd, mode = 'r', **opts)             -> io
- *    IO.open(fd, mode = 'r', **opts) {|io| ... } -> object
+ *    IO.open(fd, mode = 'r', **open_opts)             -> io
+ *    IO.open(fd, mode = 'r', **open_opts) {|io| ... } -> object
  *
  *  Creates a new \IO object, via IO.new with the given arguments.
  *
@@ -7738,8 +7739,8 @@ check_pipe_command(VALUE filename_or_command)
 
 /*
  *  call-seq:
- *    open(path, mode = 'r', perm = 0666, **opts)             -> io or nil
- *    open(path, mode = 'r', perm = 0666, **opts) {|io| ... } -> obj
+ *    open(path, mode = 'r', perm = 0666, **open_opts)             -> io or nil
+ *    open(path, mode = 'r', perm = 0666, **open_opts) {|io| ... } -> obj
  *
  *  Creates an IO object connected to the given stream, file, or subprocess.
  *
@@ -7754,7 +7755,7 @@ check_pipe_command(VALUE filename_or_command)
  *  <b>File Opened</b>
 
  *  If +path+ does _not_ start with a pipe character (<tt>'|'</tt>),
- *  a file stream is opened with <tt>File.open(path, mode, perm, opts)</tt>.
+ *  a file stream is opened with <tt>File.open(path, mode, perm, **open_opts)</tt>.
  *
  *  With no block given, file stream is returned:
  *
@@ -7998,7 +7999,7 @@ rb_freopen(VALUE fname, const char *mode, FILE *fp)
 /*
  *  call-seq:
  *    reopen(other_io)                 -> self
- *    reopen(path, mode = 'r', **opts) -> self
+ *    reopen(path, mode = 'r', **open_opts) -> self
  *
  *  Reassociates the stream with another stream,
  *  which may be of a different class.
@@ -8019,6 +8020,9 @@ rb_freopen(VALUE fname, const char *mode, FILE *fp)
  *
  *    $stdin.reopen('t.txt')
  *    $stdout.reopen('t.tmp', 'w')
+ *
+ *  The optional keyword arguments +open_opts+ may be open options;
+ *  see {\IO Open Options}[#class-IO-label-Open+Options]
  *
  */
 
@@ -8917,7 +8921,7 @@ rb_io_make_open_file(VALUE obj)
 
 /*
  *  call-seq:
- *    IO.new(fd, mode = 'r', **opts) -> io
+ *    IO.new(fd, mode = 'r', **open_opts) -> io
  *
  *  Creates and returns a new \IO object (file stream) from a file descriptor.
  *
@@ -8937,7 +8941,7 @@ rb_io_make_open_file(VALUE obj)
  *    IO.new(fd, 'w')         # => #<IO:fd 3>
  *    IO.new(fd, File::WRONLY) # => #<IO:fd 3>
  *
- *  Optional argument +opts+ must specify valid open options
+ *  Optional argument +open_opts+ must specify valid open options
  *  see {IO Open Options}[#class-IO-label-Open+Options]:
  *
  *    IO.new(fd, internal_encoding: nil) # => #<IO:fd 3>
@@ -9049,7 +9053,7 @@ rb_io_set_encoding_by_bom(VALUE io)
 
 /*
  *  call-seq:
- *    File.new(path, mode = 'r', perm = 0666, **opts) -> file
+ *    File.new(path, mode = 'r', perm = 0666, **open_opts) -> file
  *
  *  Opens the file at the given +path+ according to the given +mode+;
  *  creates and returns a new \File object for that file.
@@ -9075,7 +9079,7 @@ rb_io_set_encoding_by_bom(VALUE io)
  *    File.new('t.tmp', File::CREAT, 0644)
  *    File.new('t.tmp', File::CREAT, 0444)
  *
- *  Optional argument +opts+ must specify valid open options
+ *  Optional argument +open_opts+ must specify valid open options
  *  see {IO Open Options}[#class-IO-label-Open+Options]:
  *
  *    File.new('t.tmp', autoclose: true)
@@ -9118,7 +9122,7 @@ rb_io_s_new(int argc, VALUE *argv, VALUE klass)
 
 /*
  *  call-seq:
- *    IO.for_fd(fd, mode = 'r', **opts) -> io
+ *    IO.for_fd(fd, mode = 'r', **open_opts) -> io
  *
  *  Synonym for IO.new.
  *
@@ -9710,7 +9714,8 @@ static VALUE argf_readlines(int, VALUE *, VALUE);
  *    readlines(sep, limit, **line_opts) -> array
  *
  *  Returns an array containing the lines returned by calling
- *  Kernel#gets until the end-of-file is reached.
+ *  Kernel#gets until the end-of-file is reached;
+ *  (see {Lines}[IO.html#class-IO-label-Lines]).
  *
  *  With only string argument +sep+ given,
  *  returns the remaining lines as determined by line separator +sep+,
@@ -11191,38 +11196,98 @@ io_s_foreach(VALUE v)
 
 /*
  *  call-seq:
- *     IO.foreach(name, sep=$/ [, getline_args, open_args]) {|line| block }     -> nil
- *     IO.foreach(name, limit [, getline_args, open_args]) {|line| block }      -> nil
- *     IO.foreach(name, sep, limit [, getline_args, open_args]) {|line| block } -> nil
- *     IO.foreach(...)                                            -> an_enumerator
- *     File.foreach(name, sep=$/ [, getline_args, open_args]) {|line| block }     -> nil
- *     File.foreach(name, limit [, getline_args, open_args]) {|line| block }      -> nil
- *     File.foreach(name, sep, limit [, getline_args, open_args]) {|line| block } -> nil
- *     File.foreach(...)                                            -> an_enumerator
+ *    IO.foreach(command, sep = $/, **opts) {|line| block }    -> nil
+ *    IO.foreach(command, limit, **opts) {|line| block }       -> nil
+ *    IO.foreach(command, sep, limit, **opts) {|line| block }  -> nil
+ *    IO.foreach(path, sep = $/, **opts) {|line| block }       -> nil
+ *    IO.foreach(path, limit, **opts) {|line| block }          -> nil
+ *    IO.foreach(path, sep, limit, **opts) {|line| block }     -> nil
+ *    IO.foreach(...)                                          -> an_enumerator
  *
- *  Executes the block for every line in the named I/O port, where lines
- *  are separated by <em>sep</em>.
+ *  Calls the block with each successive line read from the stream.
  *
- *  If no block is given, an enumerator is returned instead.
+ *  The first argument must be a string;
+ *  its meaning depends on whether it starts with the pipe character (<tt>'|'</tt>):
  *
- *  If +name+ starts with a pipe character (<code>"|"</code>) and the receiver
- *  is the IO class, a subprocess is created in the same way as Kernel#open,
- *  and each line in its output is yielded.
- *  Consider to use File.foreach to disable the behavior of subprocess invocation.
+ *  - If so (and if +self+ is \IO),
+ *    the rest of the string is a command to be executed as a subprocess.
+ *  - Otherwise, the string is the path to a file.
  *
- *     File.foreach("testfile") {|x| print "GOT ", x }
- *     IO.foreach("| cat testfile") {|x| print "GOT ", x }
+ *  With only argument +command+ given, executes the command in a shell,
+ *  parses its $stdout into lines, as determined by the default line separator,
+ *  and calls the block with each successive line:
  *
- *  <em>produces:</em>
+ *    IO.foreach('| cat t.txt') {|line| p line }
  *
- *     GOT This is line one
- *     GOT This is line two
- *     GOT This is line three
- *     GOT And so on...
+ *  Output:
  *
- *  If the last argument is a hash, it's the keyword argument to open.
- *  See IO.readlines for details about getline_args.
- *  And see also IO.read for details about open_args.
+ *    "First line\n"
+ *    "Second line\n"
+ *    "\n"
+ *    "Third line\n"
+ *    "Fourth line\n"
+ *
+ *  With only argument +path+ given, parses lines from the file at the given +path+,
+ *  as determined by the default line separator,
+ *  and calls the block with each successive line:
+ *
+ *    File.foreach('t.txt') {|line| p line }
+ *
+ *  Output: the same as above.
+ *
+ *  For both forms, command and path, the remaining arguments are the same.
+ *
+ *  With argument +sep+ given, parses lines as determined by that line separator
+ *  (see {IO Line Separator}[#class-IO-label-Line+Separator]):
+ *
+ *    File.foreach('t.txt', 'li') {|line| p line }
+ *
+ *  Output:
+ *
+ *    "First li"
+ *    "ne\nSecond li"
+ *    "ne\n\nThird li"
+ *    "ne\nFourth li"
+ *    "ne\n"
+ *
+ *  Each paragraph:
+ *
+ *    File.foreach('t.txt', '') {|paragraph| p paragraph }
+ *
+ *  Output:
+ *
+ *   "First line\nSecond line\n\n"
+ *   "Third line\nFourth line\n"
+ *
+ *  With argument +limit+ given, parses lines as determined by the default
+ *  line separator and the given line-length limit
+ *  (see {IO Line Limit}[#class-IO-label-Line+Limit]):
+ *
+ *    File.foreach('t.txt', 7) {|line| p line }
+ *
+ *  Output:
+ *
+ *    "First l"
+ *    "ine\n"
+ *    "Second "
+ *    "line\n"
+ *    "\n"
+ *    "Third l"
+ *    "ine\n"
+ *    "Fourth l"
+ *    "line\n"
+ *
+ *  With arguments +sep+ and  +limit+ given,
+ *  parses lines as determined by the given
+ *  line separator and the given line-length limit
+ *  (see {IO Line Separator and Line Limit}[#class-IO-label-Line+Separator+and+Line+Limit]):
+ *
+ *  Optional argument +opts+ specifies open options
+ *  (see {IO Open Options}[#class-IO-label-Open+Options])
+ *  and/or valid line options
+ *  (see {IO Line Options}[#class-IO-label-Line+Options])
+ *
+ *  Returns an Enumerator if no block is given.
  *
  */
 
@@ -11253,42 +11318,68 @@ io_s_readlines(VALUE v)
 
 /*
  *  call-seq:
- *     IO.readlines(name, sep=$/ [, getline_args, open_args])     -> array
- *     IO.readlines(name, limit [, getline_args, open_args])      -> array
- *     IO.readlines(name, sep, limit [, getline_args, open_args]) -> array
- *     File.readlines(name, sep=$/ [, getline_args, open_args])     -> array
- *     File.readlines(name, limit [, getline_args, open_args])      -> array
- *     File.readlines(name, sep, limit [, getline_args, open_args]) -> array
+ *     IO.readlines(command, sep = $/, **opts)     -> array
+ *     IO.readlines(command, limit, **opts)      -> array
+ *     IO.readlines(command, sep, limit, **opts) -> array
+ *     IO.readlines(path, sep = $/, **opts)     -> array
+ *     IO.readlines(path, limit, **opts)      -> array
+ *     IO.readlines(path, sep, limit, **opts) -> array
  *
- *  Reads the entire file specified by <i>name</i> as individual
- *  lines, and returns those lines in an array. Lines are separated by
- *  <i>sep</i>.
+ *  Returns an array of all lines read from the stream.
  *
- *  If +name+ starts with a pipe character (<code>"|"</code>) and the receiver
- *  is the IO class, a subprocess is created in the same way as Kernel#open,
- *  and each line in its output is yielded.
- *  Consider to use File.readlines to disable the behavior of subprocess invocation.
+ *  The first argument must be a string;
+ *  its meaning depends on whether it starts with the pipe character (<tt>'|'</tt>):
  *
- *     a = File.readlines("testfile")
- *     a[0]   #=> "This is line one\n"
+ *  - If so (and if +self+ is \IO),
+ *    the rest of the string is a command to be executed as a subprocess.
+ *  - Otherwise, the string is the path to a file.
  *
- *     b = File.readlines("testfile", chomp: true)
- *     b[0]   #=> "This is line one"
+ *  With only argument +command+ given, executes the command in a shell,
+ *  parses its $stdout into lines, as determined by the default line separator,
+ *  and returns those lines in an array:
  *
- *     IO.readlines("|ls -a")     #=> [".\n", "..\n", ...]
+ *    IO.readlines('| cat t.txt')
+ *    # => ["First line\n", "Second line\n", "\n", "Third line\n", "Fourth line\n"]
  *
- *  If the last argument is a hash, it's the keyword argument to open.
+ *  With only argument +path+ given, parses lines from the file at the given +path+,
+ *  as determined by the default line separator,
+ *  and returns those lines in an array:
  *
- *  === Options for getline
+ *    IO.readlines('t.txt')
+ *    # => ["First line\n", "Second line\n", "\n", "Third line\n", "Fourth line\n"]
  *
- *  The options hash accepts the following keys:
+ *  For both forms, command and path, the remaining arguments are the same.
  *
- *  :chomp::
- *    When the optional +chomp+ keyword argument has a true value,
- *    <code>\n</code>, <code>\r</code>, and <code>\r\n</code>
- *    will be removed from the end of each line.
+ *  With argument +sep+ given, parses lines as determined by that line separator
+ *  (see {IO Line Separator}[#class-IO-label-Line+Separator]):
  *
- *  See also IO.read for details about +name+ and open_args.
+ *    # Ordinary separator.
+ *    IO.readlines('t.txt', 'li')
+ *    # =>["First li", "ne\nSecond li", "ne\n\nThird li", "ne\nFourth li", "ne\n"]
+ *    # Get-paragraphs separator.
+ *    IO.readlines('t.txt', '')
+ *    # => ["First line\nSecond line\n\n", "Third line\nFourth line\n"]
+ *    # Get-all separator.
+ *    IO.readlines('t.txt', nil)
+ *    # => ["First line\nSecond line\n\nThird line\nFourth line\n"]
+ *
+ *  With argument +limit+ given, parses lines as determined by the default
+ *  line separator and the given line-length limit
+ *  (see {IO Line Limit}[#class-IO-label-Line+Limit]):
+ *
+ *    IO.readlines('t.txt', 7)
+ *    # => ["First l", "ine\n", "Second ", "line\n", "\n", "Third l", "ine\n", "Fourth ", "line\n"]
+ *
+ *  With arguments +sep+ and  +limit+ given,
+ *  parses lines as determined by the given
+ *  line separator and the given line-length limit
+ *  (see {IO Line Separator and Line Limit}[#class-IO-label-Line+Separator+and+Line+Limit]):
+ *
+ *  Optional argument +opts+ specifies open options
+ *  (see {IO Open Options}[#class-IO-label-Open+Options])
+ *  and/or valid line options
+ *  (see {IO Line Options}[#class-IO-label-Line+Options])
+ *
  */
 
 static VALUE
@@ -11330,48 +11421,48 @@ seek_before_access(VALUE argp)
 
 /*
  *  call-seq:
- *     IO.read(name, [length [, offset]] [, opt])   -> string
- *     File.read(name, [length [, offset]] [, opt]) -> string
+ *     IO.read(command, length = nil, offset = 0, **open_opts) -> string or nil
+ *     IO.read(path, length = nil, offset = 0, **open_opts)    -> string or nil
  *
- *  Opens the file, optionally seeks to the given +offset+, then returns
- *  +length+ bytes (defaulting to the rest of the file).  #read ensures
- *  the file is closed before returning.
+ *  Opens the stream, reads and returns some or all of its content,
+ *  and closes the stream; returns +nil+ if no bytes were read.
  *
- *  If +name+ starts with a pipe character (<code>"|"</code>) and the receiver
- *  is the IO class, a subprocess is created in the same way as Kernel#open,
- *  and its output is returned.
- *  Consider to use File.read to disable the behavior of subprocess invocation.
+ *  The first argument must be a string;
+ *  its meaning depends on whether it starts with the pipe character (<tt>'|'</tt>):
  *
- *  === Options
+ *  - If so (and if +self+ is \IO),
+ *    the rest of the string is a command to be executed as a subprocess.
+ *  - Otherwise, the string is the path to a file.
  *
- *  The options hash accepts the following keys:
+ *  With only argument +command+ given, executes the command in a shell,
+ *  returns its entire $stdout:
  *
- *  :encoding::
- *    string or encoding
+ *    IO.read('| cat t.txt')
+ *    # => "First line\nSecond line\n\nThird line\nFourth line\n"
  *
- *    Specifies the encoding of the read string.  +:encoding+ will be ignored
- *    if +length+ is specified.  See Encoding.aliases for possible encodings.
+ *  With only argument +path+ given, reads and returns the entire content
+ *  of the file at the given path:
  *
- *  :mode::
- *    string or integer
+ *    IO.read('t.txt')
+ *    # => "First line\nSecond line\n\nThird line\nFourth line\n"
  *
- *    Specifies the <i>mode</i> argument for open().  It must start
- *    with an "r", otherwise it will cause an error.
- *    See IO.new for the list of possible modes.
+ *  For both forms, command and path, the remaining arguments are the same.
  *
- *  :open_args::
- *    array
+ *  With argument +length+, returns +length+ bytes if available:
  *
- *    Specifies arguments for open() as an array.  This key can not be used
- *    in combination with either +:encoding+ or +:mode+.
+ *    IO.read('t.txt', 7) # => "First l"
+ *    IO.read('t.txt', 700)
+ *    # => "First line\r\nSecond line\r\n\r\nFourth line\r\nFifth line\r\n"
  *
- *  Examples:
+ *  With arguments +length+ and +offset+, returns +length+ bytes
+ *  if available, beginning at the given +offset+:
  *
- *    File.read("testfile")            #=> "This is line one\nThis is line two\nThis is line three\nAnd so on...\n"
- *    File.read("testfile", 20)        #=> "This is line one\nThi"
- *    File.read("testfile", 20, 10)    #=> "ne one\nThis is line "
- *    File.read("binfile", mode: "rb") #=> "\xF7\x00\x00\x0E\x12"
- *    IO.read("|ls -a")                #=> ".\n..\n"...
+ *    IO.read('t.txt', 10, 2)   # => "rst line\nS"
+ *    IO.read('t.txt', 10, 200) # => nil
+ *
+ *  The optional keyword arguments +open_opts+ may be open options;
+ *  see {\IO Open Options}[#class-IO-label-Open+Options]
+ *
  */
 
 static VALUE
@@ -11401,25 +11492,12 @@ rb_io_s_read(int argc, VALUE *argv, VALUE io)
 
 /*
  *  call-seq:
- *     IO.binread(name, [length [, offset]])   -> string
- *     File.binread(name, [length [, offset]]) -> string
+ *     IO.binread(command, length = nil, offset = 0) -> string or nil
+ *     IO.binread(path, length = nil, offset = 0)    -> string or nil
  *
- *  Opens the file, optionally seeks to the given <i>offset</i>, then
- *  returns <i>length</i> bytes (defaulting to the rest of the file).
- *  #binread ensures the file is closed before returning.  The open mode
- *  would be <code>"rb:ASCII-8BIT"</code>.
+ *  Behaves like IO.read, except that the stream is opened in binary mode
+ *  with ASCII-8BIT encoding.
  *
- *  If +name+ starts with a pipe character (<code>"|"</code>) and the receiver
- *  is the IO class, a subprocess is created in the same way as Kernel#open,
- *  and its output is returned.
- *  Consider to use File.binread to disable the behavior of subprocess invocation.
- *
- *     File.binread("testfile")           #=> "This is line one\nThis is line two\nThis is line three\nAnd so on...\n"
- *     File.binread("testfile", 20)       #=> "This is line one\nThi"
- *     File.binread("testfile", 20, 10)   #=> "ne one\nThis is line "
- *     IO.binread("| cat testfile")       #=> "This is line one\nThis is line two\nThis is line three\nAnd so on...\n"
- *
- *  See also IO.read for details about +name+ and open_args.
  */
 
 static VALUE
@@ -11515,56 +11593,57 @@ io_s_write(int argc, VALUE *argv, VALUE klass, int binary)
 
 /*
  *  call-seq:
- *     IO.write(name, string [, offset])           -> integer
- *     IO.write(name, string [, offset] [, opt])   -> integer
- *     File.write(name, string [, offset])         -> integer
- *     File.write(name, string [, offset] [, opt]) -> integer
+ *    IO.write(command, data, **open_opts)             -> integer
+ *    IO.write(path, data, offset = 0, **open_opts)    -> integer
  *
- *  Opens the file, optionally seeks to the given <i>offset</i>, writes
- *  <i>string</i>, then returns the length written.  #write ensures the
- *  file is closed before returning.  If <i>offset</i> is not given in
- *  write mode, the file is truncated.  Otherwise, it is not truncated.
+ *  Opens the stream, writes the given +data+ to it,
+ *  and closes the stream; returns the number of bytes written.
  *
- *  If +name+ starts with a pipe character (<code>"|"</code>) and the receiver
- *  is the IO class, a subprocess is created in the same way as Kernel#open,
- *  and its output is printed to the standard output.
- *  Consider to use File.write to disable the behavior of subprocess invocation.
+ *  The first argument must be a string;
+ *  its meaning depends on whether it starts with the pipe character (<tt>'|'</tt>):
  *
- *    File.write("testfile", "0123456789", 20)  #=> 10
- *    # File could contain:  "This is line one\nThi0123456789two\nThis is line three\nAnd so on...\n"
- *    File.write("testfile", "0123456789")      #=> 10
- *    # File would now read: "0123456789"
- *    IO.write("|tr a-z A-Z", "abc")            #=> 3
- *    # Prints "ABC" to the standard output
+ *  - If so (and if +self+ is an instance of \IO),
+ *    the rest of the string is a command to be executed as a subprocess.
+ *  - Otherwise, the string is the path to a file.
  *
- *  If the last argument is a hash, it specifies options for the internal
- *  open().  It accepts the following keys:
+ *  With argument +command+ given, executes the command in a shell,
+ *  passes +data+ through standard input, writes its output to $stdout,
+ *  and returns the length of the given +data+:
  *
- *  :encoding::
- *    string or encoding
+ *    IO.write('| cat', 'Hello World!') # => 12
  *
- *    Specifies the encoding of the read string.
- *    See Encoding.aliases for possible encodings.
+ *  Output:
  *
- *  :mode::
- *    string or integer
+ *    Hello World!
  *
- *    Specifies the <i>mode</i> argument for open().  It must start
- *    with "w", "a", or "r+", otherwise it will cause an error.
- *    See IO.new for the list of possible modes.
+ *  With argument +path+ given, writes the given +data+ to the file
+ *  at that path:
  *
- *  :perm::
- *    integer
+ *    IO.write('t.tmp', 'abc')    # => 3
+ *    File.read('t.tmp')          # => "abc"
  *
- *    Specifies the <i>perm</i> argument for open().
+ *  If +offset+ is zero (the default), the file is overwritten:
  *
- *  :open_args::
- *    array
+ *    IO.write('t.tmp', 'A')      # => 1
+ *    File.read('t.tmp')          # => "A"
  *
- *    Specifies arguments for open() as an array.
- *    This key can not be used in combination with other keys.
+ *  If +offset+ in within the file content, the file is partly overwritten:
  *
- *  See also IO.read for details about +name+ and open_args.
+ *    IO.write('t.tmp', 'abcdef') # => 3
+ *    File.read('t.tmp')          # => "abcdef"
+ *    # Offset within content.
+ *    IO.write('t.tmp', '012', 2) # => 3
+ *    File.read('t.tmp')          # => "ab012f"
+ *
+ *  If +offset+ is outside the file content,
+ *  the file is padded with null characters <tt>"\u0000"</tt>:
+ *
+ *    IO.write('t.tmp', 'xyz', 10) # => 3
+ *    File.read('t.tmp')           # => "ab012f\u0000\u0000\u0000\u0000xyz"
+ *
+ *  The optional keyword arguments +open_opts+ may be open options;
+ *  see {\IO Open Options}[#class-IO-label-Open+Options]
+ *
  */
 
 static VALUE
@@ -11575,20 +11654,12 @@ rb_io_s_write(int argc, VALUE *argv, VALUE io)
 
 /*
  *  call-seq:
- *     IO.binwrite(name, string, [offset])               -> integer
- *     IO.binwrite(name, string, [offset], open_args)    -> integer
- *     File.binwrite(name, string, [offset])             -> integer
- *     File.binwrite(name, string, [offset], open_args)  -> integer
+ *    IO.binwrite(command, string, offset = 0) -> integer
+ *    IO.binwrite(path, string, offset = 0)    -> integer
  *
- *  Same as IO.write except opening the file in binary mode and
- *  ASCII-8BIT encoding (<code>"wb:ASCII-8BIT"</code>).
+ *  Behaves like IO.write, except that the stream is opened in binary mode
+ *  with ASCII-8BIT encoding.
  *
- *  If +name+ starts with a pipe character (<code>"|"</code>) and the receiver
- *  is the IO class, a subprocess is created in the same way as Kernel#open,
- *  and its output is printed to the standard output.
- *  Consider to use File.binwrite to disable the behavior of subprocess invocation.
- *
- *  See also IO.read for details about +name+ and open_args.
  */
 
 static VALUE
@@ -12503,34 +12574,51 @@ copy_stream_finalize(VALUE arg)
 
 /*
  *  call-seq:
- *     IO.copy_stream(src, dst)
- *     IO.copy_stream(src, dst, copy_length)
- *     IO.copy_stream(src, dst, copy_length, src_offset)
+ *    IO.copy_stream(src, dst, src_length = nil, src_offset = 0) -> integer
  *
- *  IO.copy_stream copies <i>src</i> to <i>dst</i>.
- *  <i>src</i> and <i>dst</i> is either a filename or an IO-like object.
- *  IO-like object for <i>src</i> should have #readpartial or #read
- *  method.  IO-like object for <i>dst</i> should have #write method.
- *  (Specialized mechanisms, such as sendfile system call, may be used
- *  on appropriate situation.)
+ *  Copies from the given +src+ to the given +dst+,
+ *  returning the number of bytes copied.
  *
- *  This method returns the number of bytes copied.
+ *  - The given +src+ must be one of the following:
  *
- *  If optional arguments are not given,
- *  the start position of the copy is
- *  the beginning of the filename or
- *  the current file offset of the IO.
- *  The end position of the copy is the end of file.
+ *    - The path to a readable file, from which source data is to be read.
+ *    - An \IO-like object, opened for reading and capable of responding
+ *      to method +:readpartial+ or method +:read+.
  *
- *  If <i>copy_length</i> is given,
- *  No more than <i>copy_length</i> bytes are copied.
+ *  - The given +dst+ must be one of the following:
  *
- *  If <i>src_offset</i> is given,
- *  it specifies the start position of the copy.
+ *    - The path to a writable file, to which data is to be written.
+ *    - An \IO-like object, opened for writing and capable of responding
+ *      to method +:write+.
  *
- *  When <i>src_offset</i> is specified and
- *  <i>src</i> is an IO,
- *  IO.copy_stream doesn't move the current file offset.
+ *  The examples here use file <tt>t.txt</tt> as source:
+ *
+ *    File.read('t.txt')
+ *    # => "First line\nSecond line\n\nThird line\nFourth line\n"
+ *    File.read('t.txt').size # => 47
+ *
+ *  If only arguments +src+ and +dst+ are given,
+ *  the entire source stream is copied:
+ *
+ *    # Paths.
+ *    IO.copy_stream('t.txt', 't.tmp')  # => 47
+ *
+ *    # IOs (recall that a File is also an IO).
+ *    src_io = File.open('t.txt', 'r') # => #<File:t.txt>
+ *    dst_io = File.open('t.tmp', 'w') # => #<File:t.tmp>
+ *    IO.copy_stream(src_io, dst_io)   # => 47
+ *
+ *  With argument +src_length+ a non-negative integer,
+ *  no more than that many bytes are copied:
+ *
+ *    IO.copy_stream('t.txt', 't.tmp', 10) # => 10
+ *    File.read('t.tmp')                   # => "First line"
+ *
+ *  With argument +src_offset+ also given,
+ *  the source stream is read beginning at that offset:
+ *
+ *    IO.copy_stream('t.txt', 't.tmp', 11, 11) # => 11
+ *    IO.read('t.tmp')                         # => "Second line"
  *
  */
 static VALUE
@@ -12566,10 +12654,13 @@ rb_io_s_copy_stream(int argc, VALUE *argv, VALUE io)
 
 /*
  *  call-seq:
- *     io.external_encoding   -> encoding
+ *    external_encoding -> encoding or nil
  *
- *  Returns the Encoding object that represents the encoding of the file.
- *  If _io_ is in write mode and no encoding is specified, returns +nil+.
+ *  Returns the Encoding object that represents the encoding of the stream,
+ *  or +nil+ if the stream is in write mode and no encoding is specified.
+ *
+ *  See {Encodings}[#class-IO-label-Encodings].
+ *
  */
 
 static VALUE
@@ -12590,10 +12681,14 @@ rb_io_external_encoding(VALUE io)
 
 /*
  *  call-seq:
- *     io.internal_encoding   -> encoding
+ *    internal_encoding -> encoding or nil
  *
- *  Returns the Encoding of the internal string if conversion is
- *  specified.  Otherwise returns +nil+.
+ *  Returns the Encoding object that represents the encoding of the internal string,
+ *  if conversion is specified,
+ *  or +nil+ otherwise.
+ *
+ *  See {Encodings}[#class-IO-label-Encodings].
+ *
  */
 
 static VALUE
@@ -12607,21 +12702,26 @@ rb_io_internal_encoding(VALUE io)
 
 /*
  *  call-seq:
- *     io.set_encoding(ext_enc)                -> io
- *     io.set_encoding("ext_enc:int_enc")      -> io
- *     io.set_encoding(ext_enc, int_enc)       -> io
- *     io.set_encoding("ext_enc:int_enc", opt) -> io
- *     io.set_encoding(ext_enc, int_enc, opt)  -> io
+ *    set_encoding(ext_enc)                   -> self
+ *    set_encoding(ext_enc, int_enc, **enc_opts)  -> self
+ *    set_encoding('ext_enc:int_enc', **enc_opts) -> self
  *
- *  If single argument is specified, read string from io is tagged
- *  with the encoding specified.  If encoding is a colon separated two
- *  encoding names "A:B", the read string is converted from encoding A
- *  (external encoding) to encoding B (internal encoding), then tagged
- *  with B.  If two arguments are specified, those must be encoding
- *  objects or encoding names, and the first one is the external encoding, and the
- *  second one is the internal encoding.
- *  If the external encoding and the internal encoding is specified,
- *  optional hash argument specify the conversion option.
+ *  See {Encodings}[#class-IO-label-Encodings].
+ *
+ *  Argument +ext_enc+, if given, must be an Encoding object;
+ *  it is assigned as the encoding for the stream.
+ *
+ *  Argument +int_enc+, if given, must be an Encoding object;
+ *  it is assigned as the encoding for the internal string.
+ *
+ *  Argument <tt>'ext_enc:int_enc'</tt>, if given, is a string
+ *  containing two colon-separated encoding names;
+ *  corresponding Encoding objects are assigned as the external
+ *  and internal encodings for the stream.
+ *
+ *  The optional keyword arguments +enc_opts+ may be encoding options;
+ *  see String#encode.
+ *
  */
 
 static VALUE
