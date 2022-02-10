@@ -1562,19 +1562,19 @@ rb_struct_dig(int argc, VALUE *argv, VALUE self)
  *
  *  First, what's elsewhere. \Class \Struct:
  *
- *  - Inherits from {class Object}[Object.html#class-Object-label-What-27s+Here].
- *  - Includes {module Enumerable}[Enumerable.html#module-Enumerable-label-What-27s+Here],
+ *  - Inherits from {class Object}[rdoc-ref:Object@What-27s+Here].
+ *  - Includes {module Enumerable}[rdoc-ref:Enumerable@What-27s+Here],
  *    which provides dozens of additional methods.
  *
  *  Here, class \Struct provides methods that are useful for:
  *
- *  - {Creating a Struct Subclass}[#class-Struct-label-Methods+for+Creating+a+Struct+Subclass]
- *  - {Querying}[#class-Struct-label-Methods+for+Querying]
- *  - {Comparing}[#class-Struct-label-Methods+for+Comparing]
- *  - {Fetching}[#class-Struct-label-Methods+for+Fetching]
- *  - {Assigning}[#class-Struct-label-Methods+for+Assigning]
- *  - {Iterating}[#class-Struct-label-Methods+for+Iterating]
- *  - {Converting}[#class-Struct-label-Methods+for+Converting]
+ *  - {Creating a Struct Subclass}[rdoc-ref:Struct@Methods+for+Creating+a+Struct+Subclass]
+ *  - {Querying}[rdoc-ref:Struct@Methods+for+Querying]
+ *  - {Comparing}[rdoc-ref:Struct@Methods+for+Comparing]
+ *  - {Fetching}[rdoc-ref:Struct@Methods+for+Fetching]
+ *  - {Assigning}[rdoc-ref:Struct@Methods+for+Assigning]
+ *  - {Iterating}[rdoc-ref:Struct@Methods+for+Iterating]
+ *  - {Converting}[rdoc-ref:Struct@Methods+for+Converting]
  *
  *  === Methods for Creating a Struct Subclass
  *

@@ -2960,7 +2960,7 @@ rb_str_freeze(VALUE str)
  *
  * Returns +self+ if +self+ is not frozen.
  *
- * Otherwise. returns <tt>self.dup</tt>, which is not frozen.
+ * Otherwise returns <tt>self.dup</tt>, which is not frozen.
  */
 static VALUE
 str_uplus(VALUE str)
@@ -3707,7 +3707,7 @@ static VALUE str_casecmp_p(VALUE str1, VALUE str2);
  *    'foo'.casecmp('FOO') # => 0
  *    'foo'.casecmp(1) # => nil
  *
- *  See {Case Mapping}[doc/case_mapping_rdoc.html].
+ *  See {Case Mapping}[rdoc-ref:case_mapping.rdoc].
  *
  *  Related: String#casecmp?.
  *
@@ -3797,7 +3797,7 @@ str_casecmp(VALUE str1, VALUE str2)
  *
  *    'foo'.casecmp?(1) # => nil
  *
- *  See {Case Mapping}[doc/case_mapping_rdoc.html].
+ *  See {Case Mapping}[rdoc-ref:case_mapping.rdoc].
  *
  *  Related: String#casecmp.
  *
@@ -4188,7 +4188,7 @@ rb_str_rindex_m(int argc, VALUE *argv, VALUE str)
  *  returned by <tt>object =~ self</tt>.
  *
  *  Note that <tt>string =~ regexp</tt> is different from <tt>regexp =~ string</tt>
- *  (see {Regexp#=~}[https://ruby-doc.org/core-2.7.1/Regexp.html#method-i-3D-7E]):
+ *  (see {Regexp#=~}[Regexp.html#method-i-3D~]):
  *
  *    number= nil
  *    "no. 9" =~ /(?<number>\d+)/
@@ -5502,7 +5502,7 @@ rb_pat_search(VALUE pat, VALUE str, long pos, int set_backref_str)
  *  Returns +self+ with only the first occurrence
  *  (not all occurrences) of the given +pattern+ replaced.
  *
- *  See {Substitution Methods}[#class-String-label-Substitution+Methods].
+ *  See {Substitution Methods}[rdoc-ref:String@Substitution+Methods].
  *
  *  Related: String#sub, String#gsub, String#gsub!.
  *
@@ -5625,7 +5625,7 @@ rb_str_sub_bang(int argc, VALUE *argv, VALUE str)
  *  Returns a copy of +self+ with only the first occurrence
  *  (not all occurrences) of the given +pattern+ replaced.
  *
- *  See {Substitution Methods}[#class-String-label-Substitution+Methods].
+ *  See {Substitution Methods}[rdoc-ref:String@Substitution+Methods].
  *
  *  Related: String#sub!, String#gsub, String#gsub!.
  *
@@ -5771,7 +5771,7 @@ str_gsub(int argc, VALUE *argv, VALUE str, int bang)
  *  Performs the specified substring replacement(s) on +self+;
  *  returns +self+ if any replacement occurred, +nil+ otherwise.
  *
- *  See {Substitution Methods}[#class-String-label-Substitution+Methods].
+ *  See {Substitution Methods}[rdoc-ref:String@Substitution+Methods].
  *
  *  Returns an Enumerator if no +replacement+ and no block given.
  *
@@ -5795,7 +5795,7 @@ rb_str_gsub_bang(int argc, VALUE *argv, VALUE str)
  *
  *  Returns a copy of +self+ with all occurrences of the given +pattern+ replaced.
  *
- *  See {Substitution Methods}[#class-String-label-Substitution+Methods].
+ *  See {Substitution Methods}[rdoc-ref:String@Substitution+Methods].
  *
  *  Returns an Enumerator if no +replacement+ and no block given.
  *
@@ -7170,7 +7170,7 @@ upcase_single(VALUE str)
  *    s.upcase!          # => nil
  *
  *  The casing may be affected by the given +options+;
- *  see {Case Mapping}[doc/case_mapping_rdoc.html].
+ *  see {Case Mapping}[rdoc-ref:case_mapping.rdoc].
  *
  *  Related: String#upcase, String#downcase, String#downcase!.
  *
@@ -7209,7 +7209,7 @@ rb_str_upcase_bang(int argc, VALUE *argv, VALUE str)
  *     s.upcase           # => "HELLO WORLD!"
  *
  *  The casing may be affected by the given +options+;
- *  see {Case Mapping}[doc/case_mapping_rdoc.html].
+ *  see {Case Mapping}[rdoc-ref:case_mapping.rdoc].
  *
  *  Related: String#upcase!, String#downcase, String#downcase!.
  *
@@ -7272,7 +7272,7 @@ downcase_single(VALUE str)
  *    s.downcase!        # => nil
  *
  *  The casing may be affected by the given +options+;
- *  see {Case Mapping}[doc/case_mapping_rdoc.html].
+ *  see {Case Mapping}[rdoc-ref:case_mapping.rdoc].
  *
  *  Related: String#downcase, String#upcase, String#upcase!.
  *
@@ -7311,7 +7311,7 @@ rb_str_downcase_bang(int argc, VALUE *argv, VALUE str)
  *     s.downcase         # => "hello world!"
  *
  *  The casing may be affected by the given +options+;
- *  see {Case Mapping}[doc/case_mapping_rdoc.html].
+ *  see {Case Mapping}[rdoc-ref:case_mapping.rdoc].
  *
  *  Related: String#downcase!, String#upcase, String#upcase!.
  *
@@ -7357,7 +7357,7 @@ rb_str_downcase(int argc, VALUE *argv, VALUE str)
  *    s.capitalize!      # => nil
  *
  *  The casing may be affected by the given +options+;
- *  see {Case Mapping}[doc/case_mapping_rdoc.html].
+ *  see {Case Mapping}[rdoc-ref:case_mapping.rdoc].
  *
  *  Related: String#capitalize.
  *
@@ -7395,7 +7395,7 @@ rb_str_capitalize_bang(int argc, VALUE *argv, VALUE str)
  *     s.capitalize       # => "Hello world!"
  *
  *  The casing may be affected by the given +options+;
- *  see {Case Mapping}[doc/case_mapping_rdoc.html].
+ *  see {Case Mapping}[rdoc-ref:case_mapping.rdoc].
  *
  *  Related: String#capitalize!.
  *
@@ -7436,7 +7436,7 @@ rb_str_capitalize(int argc, VALUE *argv, VALUE str)
  *    ''.swapcase!       # => nil
  *
  *  The casing may be affected by the given +options+;
- *  see {Case Mapping}[doc/case_mapping_rdoc.html].
+ *  see {Case Mapping}[rdoc-ref:case_mapping.rdoc].
  *
  *  Related: String#swapcase.
  *
@@ -7473,7 +7473,7 @@ rb_str_swapcase_bang(int argc, VALUE *argv, VALUE str)
  *     s.swapcase         # => "hELLO wORLD!"
  *
  *  The casing may be affected by the given +options+;
- *  see {Case Mapping}[doc/case_mapping_rdoc.html].
+ *  see {Case Mapping}[rdoc-ref:case_mapping.rdoc].
  *
  *  Related: String#swapcase!.
  *
@@ -11234,7 +11234,7 @@ rb_str_unicode_normalized_p(int argc, VALUE *argv, VALUE str)
  *
  * You can create a \Symbol object explicitly with:
  *
- * - A {symbol literal}[doc/syntax/literals_rdoc.html#label-Symbol+Literals].
+ * - A {symbol literal}[rdoc-ref:syntax/literals.rdoc@Symbol+Literals].
  *
  * The same Symbol object will be
  * created for a given name or string for the duration of a program's
@@ -11291,14 +11291,14 @@ rb_str_unicode_normalized_p(int argc, VALUE *argv, VALUE str)
  *
  * First, what's elsewhere. \Class \Symbol:
  *
- * - Inherits from {class Object}[Object.html#class-Object-label-What-27s+Here].
- * - Includes {module Comparable}[Comparable.html#module-Comparable-label-What-27s+Here].
+ * - Inherits from {class Object}[rdoc-ref:Object@What-27s+Here].
+ * - Includes {module Comparable}[rdoc-ref:Comparable@What-27s+Here].
  *
  * Here, class \Symbol provides methods that are useful for:
  *
- * - {Querying}[#class-Symbol-label-Methods+for+Querying]
- * - {Comparing}[#class-Symbol-label-Methods+for+Comparing]
- * - {Converting}[#class-Symbol-label-Methods+for+Converting]
+ * - {Querying}[rdoc-ref:Symbol@Methods+for+Querying]
+ * - {Comparing}[rdoc-ref:Symbol@Methods+for+Comparing]
+ * - {Converting}[rdoc-ref:Symbol@Methods+for+Converting]
  *
  * === Methods for Querying
  *
@@ -11640,7 +11640,7 @@ sym_casecmp(VALUE sym, VALUE other)
  *    sym.casecmp?(other_sym) # => nil
  *    :foo.casecmp?(2)        # => nil
  *
- *  See {Case Mapping}[doc/case_mapping_rdoc.html].
+ *  See {Case Mapping}[rdoc-ref:case_mapping.rdoc].
  *
  *  Related: Symbol#casecmp.
  *
@@ -11960,12 +11960,12 @@ rb_enc_interned_str_cstr(const char *ptr, rb_encoding *enc)
  *
  *  You can create a \String object explicitly with:
  *
- *  - A {string literal}[doc/syntax/literals_rdoc.html#label-String+Literals].
- *  - A {heredoc literal}[doc/syntax/literals_rdoc.html#label-Here+Document+Literals].
+ *  - A {string literal}[rdoc-ref:syntax/literals.rdoc@String+Literals].
+ *  - A {heredoc literal}[rdoc-ref:syntax/literals.rdoc@Here+Document+Literals].
  *
  *  You can convert certain objects to Strings with:
  *
- *  - \Method {String}[Kernel.html#method-i-String].
+ *  - \Method #String.
  *
  *  Some \String methods modify +self+.
  *  Typically, a method whose name ends with <tt>!</tt> modifies +self+
@@ -12051,7 +12051,7 @@ rb_enc_interned_str_cstr(const char *ptr, rb_encoding *enc)
  *  Note that <tt>\\\\</tt> is interpreted as an escape, i.e., a single backslash.
  *
  *  Note also that a string literal consumes backslashes.
- *  See {String Literals}[doc/syntax/literals_rdoc.html#label-String+Literals] for details about string literals.
+ *  See {String Literals}[rdoc-ref:syntax/literals.rdoc@String+Literals] for details about string literals.
  *
  *  A back-reference is typically preceded by an additional backslash.
  *  For example, if you want to write a back-reference <tt>\&</tt> in
@@ -12095,19 +12095,19 @@ rb_enc_interned_str_cstr(const char *ptr, rb_encoding *enc)
  *
  *  First, what's elsewhere. \Class \String:
  *
- *  - Inherits from {class Object}[Object.html#class-Object-label-What-27s+Here].
- *  - Includes {module Comparable}[Comparable.html#module-Comparable-label-What-27s+Here].
+ *  - Inherits from {class Object}[rdoc-ref:Object@What-27s+Here].
+ *  - Includes {module Comparable}[rdoc-ref:Comparable@What-27s+Here].
  *
  *  Here, class \String provides methods that are useful for:
  *
- *  - {Creating a String}[#class-String-label-Methods+for+Creating+a+String]
- *  - {Frozen/Unfrozen Strings}[#class-String-label-Methods+for+a+Frozen-2FUnfrozen+String]
- *  - {Querying}[#class-String-label-Methods+for+Querying]
- *  - {Comparing}[#class-String-label-Methods+for+Comparing]
- *  - {Modifying a String}[#class-String-label-Methods+for+Modifying+a+String]
- *  - {Converting to New String}[#class-String-label-Methods+for+Converting+to+New+String]
- *  - {Converting to Non-String}[#class-String-label-Methods+for+Converting+to+Non--5CString]
- *  - {Iterating}[#class-String-label-Methods+for+Iterating]
+ *  - {Creating a String}[rdoc-ref:String@Methods+for+Creating+a+String]
+ *  - {Frozen/Unfrozen Strings}[rdoc-ref:String@Methods+for+a+Frozen-2FUnfrozen+String]
+ *  - {Querying}[rdoc-ref:String@Methods+for+Querying]
+ *  - {Comparing}[rdoc-ref:String@Methods+for+Comparing]
+ *  - {Modifying a String}[rdoc-ref:String@Methods+for+Modifying+a+String]
+ *  - {Converting to New String}[rdoc-ref:String@Methods+for+Converting+to+New+String]
+ *  - {Converting to Non-String}[rdoc-ref:String@Methods+for+Converting+to+Non--5CString]
+ *  - {Iterating}[rdoc-ref:String@Methods+for+Iterating]
  *
  *  === Methods for Creating a \String
  *
