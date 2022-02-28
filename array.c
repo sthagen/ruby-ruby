@@ -1422,30 +1422,14 @@ rb_ary_shift(VALUE ary)
     VALUE top;
     long len = RARRAY_LEN(ary);
 
-    rb_ary_modify_check(ary);
-    if (len == 0) return Qnil;
+    if (len == 0) {
+        rb_ary_modify_check(ary);
+        return Qnil;
+    }
+
     top = RARRAY_AREF(ary, 0);
-    if (!ARY_SHARED_P(ary)) {
-	if (len < ARY_DEFAULT_SIZE) {
-            RARRAY_PTR_USE_TRANSIENT(ary, ptr, {
-		MEMMOVE(ptr, ptr+1, VALUE, len-1);
-	    }); /* WB: no new reference */
-            ARY_INCREASE_LEN(ary, -1);
-            ary_verify(ary);
-	    return top;
-	}
-        assert(!ARY_EMBED_P(ary)); /* ARY_EMBED_LEN_MAX < ARY_DEFAULT_SIZE */
 
-	ARY_SET(ary, 0, Qnil);
-	ary_make_shared(ary);
-    }
-    else if (ARY_SHARED_ROOT_OCCUPIED(ARY_SHARED_ROOT(ary))) {
-        RARRAY_PTR_USE_TRANSIENT(ary, ptr, ptr[0] = Qnil);
-    }
-    ARY_INCREASE_PTR(ary, 1);		/* shift ptr */
-    ARY_INCREASE_LEN(ary, -1);
-
-    ary_verify(ary);
+    rb_ary_behead(ary, 1);
 
     return top;
 }
@@ -1498,48 +1482,37 @@ rb_ary_shift_m(int argc, VALUE *argv, VALUE ary)
     return result;
 }
 
-static VALUE
-behead_shared(VALUE ary, long n)
-{
-    assert(ARY_SHARED_P(ary));
-    rb_ary_modify_check(ary);
-    if (ARY_SHARED_ROOT_OCCUPIED(ARY_SHARED_ROOT(ary))) {
-        ary_mem_clear(ary, 0, n);
-    }
-    ARY_INCREASE_PTR(ary, n);
-    ARY_INCREASE_LEN(ary, -n);
-    ary_verify(ary);
-    return ary;
-}
-
-static VALUE
-behead_transient(VALUE ary, long n)
-{
-    rb_ary_modify_check(ary);
-    RARRAY_PTR_USE_TRANSIENT(ary, ptr, {
-        MEMMOVE(ptr, ptr+n, VALUE, RARRAY_LEN(ary)-n);
-    }); /* WB: no new reference */
-    ARY_INCREASE_LEN(ary, -n);
-    ary_verify(ary);
-    return ary;
-}
-
 MJIT_FUNC_EXPORTED VALUE
 rb_ary_behead(VALUE ary, long n)
 {
     if (n <= 0) {
         return ary;
     }
-    else if (ARY_SHARED_P(ary)) {
-        return behead_shared(ary, n);
-    }
-    else if (RARRAY_LEN(ary) >= ARY_DEFAULT_SIZE) {
+
+    rb_ary_modify_check(ary);
+
+    if (RB_UNLIKELY(!ARY_SHARED_P(ary))) {
+        if (RARRAY_LEN(ary) < ARY_DEFAULT_SIZE) {
+            RARRAY_PTR_USE_TRANSIENT(ary, ptr, {
+                MEMMOVE(ptr, ptr + n, VALUE, RARRAY_LEN(ary) - n);
+            }); /* WB: no new reference */
+            ARY_INCREASE_LEN(ary, -n);
+            ary_verify(ary);
+            return ary;
+        }
+
+        ary_mem_clear(ary, 0, n);
         ary_make_shared(ary);
-        return behead_shared(ary, n);
     }
-    else {
-        return behead_transient(ary, n);
+    else if (ARY_SHARED_ROOT_OCCUPIED(ARY_SHARED_ROOT(ary))) {
+        ary_mem_clear(ary, 0, n);
     }
+
+    ARY_INCREASE_PTR(ary, n);
+    ARY_INCREASE_LEN(ary, -n);
+    ary_verify(ary);
+
+    return ary;
 }
 
 static VALUE
@@ -5001,7 +4974,7 @@ recursive_eql(VALUE ary1, VALUE ary2, int recur)
  *
  *  Otherwise, returns +false+.
  *
- *  This method is different from method {Array#==}[#method-i-3D-3D],
+ *  This method is different from method Array#==,
  *  which compares using method <tt>Object#==</tt>.
  */
 
@@ -7230,13 +7203,13 @@ rb_ary_product(int argc, VALUE *argv, VALUE ary)
 
 	/* put it on the result array */
 	if (NIL_P(result)) {
-	    FL_SET(t0, FL_USER5);
+            FL_SET(t0, RARRAY_SHARED_ROOT_FLAG);
 	    rb_yield(subarray);
-	    if (! FL_TEST(t0, FL_USER5)) {
+            if (!FL_TEST(t0, RARRAY_SHARED_ROOT_FLAG)) {
 		rb_raise(rb_eRuntimeError, "product reentered");
 	    }
 	    else {
-		FL_UNSET(t0, FL_USER5);
+                FL_UNSET(t0, RARRAY_SHARED_ROOT_FLAG);
 	    }
 	}
 	else {
@@ -8119,10 +8092,11 @@ rb_ary_deconstruct(VALUE ary)
  *  #hash:: Returns the integer hash code.
  *
  *  === Methods for Comparing
- *  {#<=>}[#method-i-3C-3D-3E]:: Returns -1, 0, or 1
- *                               as +self+ is less than, equal to, or greater than a given object.
- *  {#==}[#method-i-3D-3D]:: Returns whether each element in +self+ is <tt>==</tt> to the
- *                           corresponding element in a given object.
+
+ *  #<=>:: Returns -1, 0, or 1 as +self+ is less than, equal to, or greater than a given
+ *         object.
+ *  #==:: Returns whether each element in +self+ is <tt>==</tt> to the corresponding element
+ *        in a given object.
  *  #eql?:: Returns whether each element in +self+ is <tt>eql?</tt> to the corresponding
  *          element in a given object.
 
@@ -8202,13 +8176,13 @@ rb_ary_deconstruct(VALUE ary)
  *
  *  === Methods for Combining
  *
- *  {#&}[#method-i-26]:: Returns an array containing elements found both in +self+ and a given array.
+ *  #&:: Returns an array containing elements found both in +self+ and a given array.
  *  #intersection:: Returns an array containing elements found both in +self+
  *                  and in each given array.
  *  #+:: Returns an array containing all elements of +self+ followed by all elements of a given array.
  *  #-:: Returns an array containiing all elements of +self+ that are not found in a given array.
- *  {#|}[#method-i-7C]:: Returns an array containing all elements of +self+ and all elements of a given array,
- *                       duplicates removed.
+ *  #|:: Returns an array containing all elements of +self+ and all elements of a given array,
+ *       duplicates removed.
  *  #union:: Returns an array containing all elements of +self+ and all elements of given arrays,
  *           duplicates removed.
  *  #difference:: Returns an array containing all elements of +self+ that are not found
