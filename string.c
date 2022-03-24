@@ -1810,7 +1810,17 @@ rb_ec_str_resurrect(struct rb_execution_context_struct *ec, VALUE str)
     return ec_str_duplicate(ec, rb_cString, str);
 }
 
-/* :nodoc: documented in doc/string.rdoc */
+/*
+ *
+ *  call-seq:
+ *    String.new(string = '') -> new_string
+ *    String.new(string = '', encoding: encoding) -> new_string
+ *    String.new(string = '', capacity: size) -> new_string
+ *
+ *  :include: doc/string/new.rdoc
+ *
+ */
+
 static VALUE
 rb_str_init(int argc, VALUE *argv, VALUE str)
 {
@@ -4262,8 +4272,8 @@ rb_str_byterindex(VALUE str, VALUE sub, long pos)
 
 /*
  *  call-seq:
- *    byterindex(substring, offset = self.length) -> integer or nil
- *    byterindex(regexp, offset = self.length) -> integer or nil
+ *    byterindex(substring, offset = self.bytesize) -> integer or nil
+ *    byterindex(regexp, offset = self.bytesize) -> integer or nil
  *
  *  Returns the \Integer byte-based index of the _last_ occurrence of the given +substring+,
  *  or +nil+ if none found:
@@ -6298,6 +6308,76 @@ rb_str_byteslice(int argc, VALUE *argv, VALUE str)
 
 /*
  *  call-seq:
+ *    bytesplice(index, length, str) -> string
+ *    bytesplice(range, str)         -> string
+ *
+ *  Replaces some or all of the content of +self+ with +str+, and returns +str+.
+ *  The portion of the string affected is determined using
+ *  the same criteria as String#byteslice, except that +length+ cannot be omitted.
+ *  If the replacement string is not the same length as the text it is replacing,
+ *  the string will be adjusted accordingly.
+ *  The form that take an Integer will raise an IndexError if the value is out
+ *  of range; the Range form will raise a RangeError.
+ *  If the beginning or ending offset does not land on character (codepoint)
+ *  boundary, an IndexError will be raised.
+ */
+
+static VALUE
+rb_str_bytesplice(int argc, VALUE *argv, VALUE str)
+{
+    long beg, end, len, slen;
+    VALUE val;
+    rb_encoding *enc;
+    int cr;
+
+    rb_check_arity(argc, 2, 3);
+    if (argc == 2) {
+        if (!rb_range_beg_len(argv[0], &beg, &len, RSTRING_LEN(str), 2)) {
+            rb_raise(rb_eTypeError, "wrong argument type %s (expected Range)",
+                     rb_builtin_class_name(argv[0]));
+        }
+        val = argv[1];
+    }
+    else {
+        beg = NUM2LONG(argv[0]);
+        len = NUM2LONG(argv[1]);
+        val = argv[2];
+    }
+    if (len < 0) rb_raise(rb_eIndexError, "negative length %ld", len);
+    slen = RSTRING_LEN(str);
+    if ((slen < beg) || ((beg < 0) && (beg + slen < 0))) {
+        rb_raise(rb_eIndexError, "index %ld out of string", beg);
+    }
+    if (beg < 0) {
+        beg += slen;
+    }
+    assert(beg >= 0);
+    assert(beg <= slen);
+    if (len > slen - beg) {
+        len = slen - beg;
+    }
+    end = beg + len;
+    if (!str_check_byte_pos(str, beg)) {
+        rb_raise(rb_eIndexError,
+                 "offset %ld does not land on character boundary", beg);
+    }
+    if (!str_check_byte_pos(str, end)) {
+        rb_raise(rb_eIndexError,
+                 "offset %ld does not land on character boundary", end);
+    }
+    StringValue(val);
+    enc = rb_enc_check(str, val);
+    str_modify_keep_cr(str);
+    rb_str_splice_0(str, beg, len, val);
+    rb_enc_associate(str, enc);
+    cr = ENC_CODERANGE_AND(ENC_CODERANGE(str), ENC_CODERANGE(val));
+    if (cr != ENC_CODERANGE_BROKEN)
+        ENC_CODERANGE_SET(str, cr);
+    return val;
+}
+
+/*
+ *  call-seq:
  *    reverse -> string
  *
  *  Returns a new string with the characters from +self+ in reverse order.
@@ -8007,11 +8087,11 @@ tr_trans(VALUE str, VALUE src, VALUE repl, int sflag)
 
 /*
  *  call-seq:
- *     str.tr!(from_str, to_str)   -> str or nil
+ *    tr!(selector, replacements) -> self or nil
  *
- *  Translates <i>str</i> in place, using the same rules as
- *  String#tr. Returns <i>str</i>, or <code>nil</code> if no changes
- *  were made.
+ *  Like String#tr, but modifies +self+ in place.
+ *  Returns +self+ if any changes were made, +nil+ otherwise.
+ *
  */
 
 static VALUE
@@ -8023,37 +8103,41 @@ rb_str_tr_bang(VALUE str, VALUE src, VALUE repl)
 
 /*
  *  call-seq:
- *     str.tr(from_str, to_str)   => new_str
+ *    tr(selector, replacements) -> new_string
  *
- *  Returns a copy of +str+ with the characters in +from_str+ replaced by the
- *  corresponding characters in +to_str+.  If +to_str+ is shorter than
- *  +from_str+, it is padded with its last character in order to maintain the
- *  correspondence.
+ *  Returns a copy of +self+ with each character specified by string +selector+
+ *  translated to the corresponding character in string +replacements+.
+ *  The correspondence is _positional_:
  *
- *     "hello".tr('el', 'ip')      #=> "hippo"
- *     "hello".tr('aeiou', '*')    #=> "h*ll*"
- *     "hello".tr('aeiou', 'AA*')  #=> "hAll*"
+ *  - Each occurrence of the first character specified by +selector+
+ *    is translated to the first character in +replacements+.
+ *  - Each occurrence of the second character specified by selector+
+ *    is translated to the second character in +replacements+.
+ *  - And so on.
  *
- *  Both strings may use the <code>c1-c2</code> notation to denote ranges of
- *  characters, and +from_str+ may start with a <code>^</code>, which denotes
- *  all characters except those listed.
+ *  Example:
  *
- *     "hello".tr('a-y', 'b-z')    #=> "ifmmp"
- *     "hello".tr('^aeiou', '*')   #=> "*e**o"
+ *    'hello'.tr('el', 'ip') #=> "hippo"
  *
- *  The backslash character <code>\\</code> can be used to escape
- *  <code>^</code> or <code>-</code> and is otherwise ignored unless it
- *  appears at the end of a range or the end of the +from_str+ or +to_str+:
+ *  If +replacements+ is shorter than +selector+,
+ *  it is implicitly padded with its own last character:
  *
- *     "hello^world".tr("\\^aeiou", "*") #=> "h*ll**w*rld"
- *     "hello-world".tr("a\\-eo", "*")   #=> "h*ll**w*rld"
+ *    'hello'.tr('aeiou', '-')   # => "h-ll-"
+ *    'hello'.tr('aeiou', 'AA-') # => "hAll-"
  *
- *     "hello\r\nworld".tr("\r", "")   #=> "hello\nworld"
- *     "hello\r\nworld".tr("\\r", "")  #=> "hello\r\nwold"
- *     "hello\r\nworld".tr("\\\r", "") #=> "hello\nworld"
+ *  Arguments +selector+ and +replacements+ must be valid character selectors
+ *  (see {Character Selectors}[rdoc-ref:character_selectors.rdoc]),
+ *  and may use any of its valid forms, including negation, ranges, and escaping:
  *
- *     "X['\\b']".tr("X\\", "")   #=> "['b']"
- *     "X['\\b']".tr("X-\\]", "") #=> "'b'"
+ *    # Negation.
+ *    'hello'.tr('^aeiou', '-') # => "-e--o"
+ *    # Ranges.
+ *    'ibm'.tr('b-z', 'a-z') # => "hal"
+ *    # Escapes.
+ *    'hel^lo'.tr('\^aeiou', '-')     # => "h-l-l-"    # Escaped leading caret.
+ *    'i-b-m'.tr('b\-z', 'a-z')       # => "ibabm"     # Escaped embedded hyphen.
+ *    'foo\\bar'.tr('ab\\', 'XYZ')    # => "fooZYXr"   # Escaped backslash.
+ *
  */
 
 static VALUE
@@ -8154,10 +8238,11 @@ tr_find(unsigned int c, const char table[TR_TABLE_SIZE], VALUE del, VALUE nodel)
 
 /*
  *  call-seq:
- *     str.delete!([other_str]+)   -> str or nil
+ *    delete!(*selectors) -> self or nil
  *
- *  Performs a <code>delete</code> operation in place, returning <i>str</i>, or
- *  <code>nil</code> if <i>str</i> was not modified.
+ *  Like String#delete, but modifies +self+ in place.
+ *  Returns +self+ if any changes were made, +nil+ otherwise.
+ *
  */
 
 static VALUE
@@ -8224,16 +8309,16 @@ rb_str_delete_bang(int argc, VALUE *argv, VALUE str)
 
 /*
  *  call-seq:
- *     str.delete([other_str]+)   -> new_str
+ *    delete(*selectors) -> new_string
  *
- *  Returns a copy of <i>str</i> with all characters in the intersection of its
- *  arguments deleted. Uses the same rules for building the set of characters as
- *  String#count.
+ *  Returns a copy of +self+ with characters specified by +selectors+ removed
+ *  (see {Multiple Character Selectors}[rdoc-ref:character_selectors.rdoc@Multiple+Character+Selectors]):
  *
  *     "hello".delete "l","lo"        #=> "heo"
  *     "hello".delete "lo"            #=> "he"
  *     "hello".delete "aeiou", "^e"   #=> "hell"
  *     "hello".delete "ej-m"          #=> "ho"
+ *
  */
 
 static VALUE
@@ -8247,10 +8332,10 @@ rb_str_delete(int argc, VALUE *argv, VALUE str)
 
 /*
  *  call-seq:
- *     str.squeeze!([other_str]*)   -> str or nil
+ *    squeeze!(*selectors) -> self or nil
  *
- *  Squeezes <i>str</i> in place, returning either <i>str</i>, or
- *  <code>nil</code> if no changes were made.
+ *  Like String#squeeze, but modifies +self+ in place.
+ *  Returns +self+ if any changes were made, +nil+ otherwise.
  */
 
 static VALUE
@@ -8331,17 +8416,19 @@ rb_str_squeeze_bang(int argc, VALUE *argv, VALUE str)
 
 /*
  *  call-seq:
- *     str.squeeze([other_str]*)    -> new_str
+ *     str.squeeze(*selectors) -> new_string
  *
- *  Builds a set of characters from the <i>other_str</i> parameter(s)
- *  using the procedure described for String#count. Returns a new
- *  string where runs of the same character that occur in this set are
- *  replaced by a single character. If no arguments are given, all
- *  runs of identical characters are replaced by a single character.
+ *  Returns a copy of +self+ with characters specified by +selectors+ "squeezed"
+ *  (see {Multiple Character Selectors}[rdoc-ref:character_selectors.rdoc@Multiple+Character+Selectors]):
+ *
+ *  "Squeezed" means that each multiple-character run of a selected character
+ *  is squeezed down to a single character;
+ *  with no arguments given, squeezes all characters:
  *
  *     "yellow moon".squeeze                  #=> "yelow mon"
  *     "  now   is  the".squeeze(" ")         #=> " now is the"
  *     "putters shoot balls".squeeze("m-z")   #=> "puters shot balls"
+ *
  */
 
 static VALUE
@@ -8355,10 +8442,12 @@ rb_str_squeeze(int argc, VALUE *argv, VALUE str)
 
 /*
  *  call-seq:
- *     str.tr_s!(from_str, to_str)   -> str or nil
+ *    tr_s!(selector, replacements) -> self or nil
  *
- *  Performs String#tr_s processing on <i>str</i> in place,
- *  returning <i>str</i>, or <code>nil</code> if no changes were made.
+ *  Like String#tr_s, but modifies +self+ in place.
+ *  Returns +self+ if any changes were made, +nil+ otherwise.
+ *
+ *  Related: String#squeeze!.
  */
 
 static VALUE
@@ -8370,15 +8459,17 @@ rb_str_tr_s_bang(VALUE str, VALUE src, VALUE repl)
 
 /*
  *  call-seq:
- *     str.tr_s(from_str, to_str)   -> new_str
+ *    tr_s(selector, replacements) -> string
  *
- *  Processes a copy of <i>str</i> as described under String#tr, then
- *  removes duplicate characters in regions that were affected by the
- *  translation.
+ *  Like String#tr, but also squeezes the modified portions of the translated string;
+ *  returns a new string (translated and squeezed).
  *
- *     "hello".tr_s('l', 'r')     #=> "hero"
- *     "hello".tr_s('el', '*')    #=> "h*o"
- *     "hello".tr_s('el', 'hx')   #=> "hhxo"
+ *    'hello'.tr_s('l', 'r')   #=> "hero"
+ *    'hello'.tr_s('el', '-')  #=> "h-o"
+ *    'hello'.tr_s('el', 'hx') #=> "hhxo"
+ *
+ *  Related: String#squeeze.
+ *
  */
 
 static VALUE
@@ -8392,15 +8483,11 @@ rb_str_tr_s(VALUE str, VALUE src, VALUE repl)
 
 /*
  *  call-seq:
- *     str.count([other_str]+)   -> integer
+ *    count(*selectors) -> integer
  *
- *  Each +other_str+ parameter defines a set of characters to count.  The
- *  intersection of these sets defines the characters to count in +str+.  Any
- *  +other_str+ that starts with a caret <code>^</code> is negated.  The
- *  sequence <code>c1-c2</code> means all characters between c1 and c2.  The
- *  backslash character <code>\\</code> can be used to escape <code>^</code> or
- *  <code>-</code> and is otherwise ignored unless it appears at the end of a
- *  sequence or the end of a +other_str+.
+ *  Returns the total number of characters in +self+
+ *  that are specified by the given +selectors+
+ *  (see {Multiple Character Selectors}[rdoc-ref:character_selectors.rdoc@Multiple+Character+Selectors]):
  *
  *     a = "hello world"
  *     a.count "lo"                   #=> 5
@@ -8576,57 +8663,11 @@ literal_split_pattern(VALUE spat, split_type_t default_type)
 }
 
 /*
- *  call-seq:
- *     str.split(pattern=nil, [limit])                -> an_array
- *     str.split(pattern=nil, [limit]) {|sub| block } -> str
+ *  :call-seq:
+ *    split(field_sep = $;, limit = nil) -> array
+ *    split(field_sep = $;, limit = nil) {|substring| ... } -> self
  *
- *  Divides <i>str</i> into substrings based on a delimiter, returning an array
- *  of these substrings.
- *
- *  If <i>pattern</i> is a String, then its contents are used as
- *  the delimiter when splitting <i>str</i>. If <i>pattern</i> is a single
- *  space, <i>str</i> is split on whitespace, with leading and trailing
- *  whitespace and runs of contiguous whitespace characters ignored.
- *
- *  If <i>pattern</i> is a Regexp, <i>str</i> is divided where the
- *  pattern matches. Whenever the pattern matches a zero-length string,
- *  <i>str</i> is split into individual characters. If <i>pattern</i> contains
- *  groups, the respective matches will be returned in the array as well.
- *
- *  If <i>pattern</i> is <code>nil</code>, the value of <code>$;</code> is used.
- *  If <code>$;</code> is <code>nil</code> (which is the default), <i>str</i> is
- *  split on whitespace as if ' ' were specified.
- *
- *  If the <i>limit</i> parameter is omitted, trailing null fields are
- *  suppressed. If <i>limit</i> is a positive number, at most that number
- *  of split substrings will be returned (captured groups will be returned
- *  as well, but are not counted towards the limit).
- *  If <i>limit</i> is <code>1</code>, the entire
- *  string is returned as the only entry in an array. If negative, there is no
- *  limit to the number of fields returned, and trailing null fields are not
- *  suppressed.
- *
- *  When the input +str+ is empty an empty Array is returned as the string is
- *  considered to have no fields to split.
- *
- *     " now's  the time ".split       #=> ["now's", "the", "time"]
- *     " now's  the time ".split(' ')  #=> ["now's", "the", "time"]
- *     " now's  the time".split(/ /)   #=> ["", "now's", "", "the", "time"]
- *     "1, 2.34,56, 7".split(%r{,\s*}) #=> ["1", "2.34", "56", "7"]
- *     "hello".split(//)               #=> ["h", "e", "l", "l", "o"]
- *     "hello".split(//, 3)            #=> ["h", "e", "llo"]
- *     "hi mom".split(%r{\s*})         #=> ["h", "i", "m", "o", "m"]
- *
- *     "mellow yellow".split("ello")   #=> ["m", "w y", "w"]
- *     "1,2,,3,4,,".split(',')         #=> ["1", "2", "", "3", "4"]
- *     "1,2,,3,4,,".split(',', 4)      #=> ["1", "2", "", "3,4,,"]
- *     "1,2,,3,4,,".split(',', -4)     #=> ["1", "2", "", "3", "4", "", ""]
- *
- *     "1:2:3".split(/(:)()()/, 2)     #=> ["1", ":", "", "", "2:3"]
- *
- *     "".split(',', -1)               #=> []
- *
- *  If a block is given, invoke the block with each split substring.
+ *  :include: doc/string/split.rdoc
  *
  */
 
@@ -9041,48 +9082,10 @@ rb_str_enumerate_lines(int argc, VALUE *argv, VALUE str, VALUE ary)
 
 /*
  *  call-seq:
- *     str.each_line(separator=$/, chomp: false) {|substr| block } -> str
- *     str.each_line(separator=$/, chomp: false)                   -> an_enumerator
+ *    each_line(line_sep = $/, chomp: false) {|substring| ... } -> self
+ *    each_line(line_sep = $/, chomp: false)                    -> enumerator
  *
- *  Splits <i>str</i> using the supplied parameter as the record
- *  separator (<code>$/</code> by default), passing each substring in
- *  turn to the supplied block.  If a zero-length record separator is
- *  supplied, the string is split into paragraphs delimited by
- *  multiple successive newlines.
- *
- *  If +chomp+ is +true+, +separator+ will be removed from the end of each
- *  line.
- *
- *  If no block is given, an enumerator is returned instead.
- *
- *     "hello\nworld".each_line {|s| p s}
- *     # prints:
- *     #   "hello\n"
- *     #   "world"
- *
- *     "hello\nworld".each_line('l') {|s| p s}
- *     # prints:
- *     #   "hel"
- *     #   "l"
- *     #   "o\nworl"
- *     #   "d"
- *
- *     "hello\n\n\nworld".each_line('') {|s| p s}
- *     # prints
- *     #   "hello\n\n"
- *     #   "world"
- *
- *     "hello\nworld".each_line(chomp: true) {|s| p s}
- *     # prints:
- *     #   "hello"
- *     #   "world"
- *
- *     "hello\nworld".each_line('l', chomp: true) {|s| p s}
- *     # prints:
- *     #   "he"
- *     #   ""
- *     #   "o\nwor"
- *     #   "d"
+ *  :include: doc/string/each_line.rdoc
  *
  */
 
@@ -9095,21 +9098,11 @@ rb_str_each_line(int argc, VALUE *argv, VALUE str)
 
 /*
  *  call-seq:
- *     str.lines(separator=$/, chomp: false)  -> an_array
+ *    lines(Line_sep = $/, chomp: false) -> array_of_strings
  *
- *  Returns an array of lines in <i>str</i> split using the supplied
- *  record separator (<code>$/</code> by default).  This is a
- *  shorthand for <code>str.each_line(separator, getline_args).to_a</code>.
+ *  Forms substrings ("lines") of +self+ according to the given arguments
+ *  (see String#each_line for details); returns the lines in an array.
  *
- *  If +chomp+ is +true+, +separator+ will be removed from the end of each
- *  line.
- *
- *     "hello\nworld\n".lines              #=> ["hello\n", "world\n"]
- *     "hello  world".lines(' ')           #=> ["hello ", " ", "world"]
- *     "hello\nworld\n".lines(chomp: true) #=> ["hello", "world"]
- *
- *  If a block is given, which is a deprecated form, works the same as
- *  <code>each_line</code>.
  */
 
 static VALUE
@@ -9141,17 +9134,11 @@ rb_str_enumerate_bytes(VALUE str, VALUE ary)
 
 /*
  *  call-seq:
- *     str.each_byte {|integer| block }    -> str
- *     str.each_byte                      -> an_enumerator
+ *    each_byte {|byte| ... } -> self
+ *    each_byte               -> enumerator
  *
- *  Passes each byte in <i>str</i> to the given block, or returns an
- *  enumerator if no block is given.
+ *  :include: doc/string/each_byte.rdoc
  *
- *     "hello".each_byte {|c| print c, ' ' }
- *
- *  <em>produces:</em>
- *
- *     104 101 108 108 111
  */
 
 static VALUE
@@ -9163,13 +9150,10 @@ rb_str_each_byte(VALUE str)
 
 /*
  *  call-seq:
- *     str.bytes    -> an_array
+ *    bytes -> array_of_bytes
  *
- *  Returns an array of bytes in <i>str</i>.  This is a shorthand for
- *  <code>str.each_byte.to_a</code>.
+ *  :include: doc/string/bytes.rdoc
  *
- *  If a block is given, which is a deprecated form, works the same as
- *  <code>each_byte</code>.
  */
 
 static VALUE
@@ -9219,17 +9203,11 @@ rb_str_enumerate_chars(VALUE str, VALUE ary)
 
 /*
  *  call-seq:
- *     str.each_char {|cstr| block }    -> str
- *     str.each_char                    -> an_enumerator
+ *    each_char {|c| ... } -> self
+ *    each_char            -> enumerator
  *
- *  Passes each character in <i>str</i> to the given block, or returns
- *  an enumerator if no block is given.
+ *  :include: doc/string/each_char.rdoc
  *
- *     "hello".each_char {|c| print c, ' ' }
- *
- *  <em>produces:</em>
- *
- *     h e l l o
  */
 
 static VALUE
@@ -9241,13 +9219,10 @@ rb_str_each_char(VALUE str)
 
 /*
  *  call-seq:
- *     str.chars    -> an_array
+ *    chars -> array_of_characters
  *
- *  Returns an array of characters in <i>str</i>.  This is a shorthand
- *  for <code>str.each_char.to_a</code>.
+ *  :include: doc/string/chars.rdoc
  *
- *  If a block is given, which is a deprecated form, works the same as
- *  <code>each_char</code>.
  */
 
 static VALUE
@@ -9288,22 +9263,11 @@ rb_str_enumerate_codepoints(VALUE str, VALUE ary)
 
 /*
  *  call-seq:
- *     str.each_codepoint {|integer| block }    -> str
- *     str.each_codepoint                       -> an_enumerator
+ *    each_codepoint {|integer| ... } -> self
+ *    each_codepoint                  -> enumerator
  *
- *  Passes the Integer ordinal of each character in <i>str</i>,
- *  also known as a <i>codepoint</i> when applied to Unicode strings to the
- *  given block.  For encodings other than UTF-8/UTF-16(BE|LE)/UTF-32(BE|LE),
- *  values are directly derived from the binary representation
- *  of each character.
+ *  :include: doc/string/each_codepoint.rdoc
  *
- *  If no block is given, an enumerator is returned instead.
- *
- *     "hello\u0639".each_codepoint {|c| print c, ' ' }
- *
- *  <em>produces:</em>
- *
- *     104 101 108 108 111 1593
  */
 
 static VALUE
@@ -9315,14 +9279,10 @@ rb_str_each_codepoint(VALUE str)
 
 /*
  *  call-seq:
- *     str.codepoints   -> an_array
+ *    codepoints -> array_of_integers
  *
- *  Returns an array of the Integer ordinals of the
- *  characters in <i>str</i>.  This is a shorthand for
- *  <code>str.each_codepoint.to_a</code>.
+ *  :include: doc/string/codepoints.rdoc
  *
- *  If a block is given, which is a deprecated form, works the same as
- *  <code>each_codepoint</code>.
  */
 
 static VALUE
@@ -9443,16 +9403,10 @@ rb_str_enumerate_grapheme_clusters(VALUE str, VALUE ary)
 
 /*
  *  call-seq:
- *     str.each_grapheme_cluster {|cstr| block }    -> str
- *     str.each_grapheme_cluster                    -> an_enumerator
+ *    each_grapheme_cluster {|gc| ... } -> self
+ *    each_grapheme_cluster             -> enumerator
  *
- *  Passes each grapheme cluster in <i>str</i> to the given block, or returns
- *  an enumerator if no block is given.
- *  Unlike String#each_char, this enumerates by grapheme clusters defined by
- *  Unicode Standard Annex #29 http://unicode.org/reports/tr29/
- *
- *     "a\u0300".each_char.to_a.size #=> 2
- *     "a\u0300".each_grapheme_cluster.to_a.size #=> 1
+ *  :include: doc/string/each_grapheme_cluster.rdoc
  *
  */
 
@@ -9465,13 +9419,10 @@ rb_str_each_grapheme_cluster(VALUE str)
 
 /*
  *  call-seq:
- *     str.grapheme_clusters   -> an_array
+ *    grapheme_clusters -> array_of_grapheme_clusters
  *
- *  Returns an array of grapheme clusters in <i>str</i>.  This is a shorthand
- *  for <code>str.each_grapheme_cluster.to_a</code>.
+ *  :include: doc/string/grapheme_clusters.rdoc
  *
- *  If a block is given, which is a deprecated form, works the same as
- *  <code>each_grapheme_cluster</code>.
  */
 
 static VALUE
@@ -10151,35 +10102,12 @@ rb_str_oct(VALUE str)
 # include "ruby/atomic.h"
 
 static struct {
-    rb_atomic_t initialized;
     rb_nativethread_lock_t lock;
-} crypt_mutex;
-
-static void
-crypt_mutex_destroy(void)
-{
-    RUBY_ASSERT_ALWAYS(crypt_mutex.initialized == 1);
-    rb_nativethread_lock_destroy(&crypt_mutex.lock);
-    crypt_mutex.initialized = 0;
-}
+} crypt_mutex = {PTHREAD_MUTEX_INITIALIZER};
 
 static void
 crypt_mutex_initialize(void)
 {
-    rb_atomic_t i;
-    while ((i = RUBY_ATOMIC_CAS(crypt_mutex.initialized, 0, 2)) == 2);
-    switch (i) {
-      case 0:
-	rb_nativethread_lock_initialize(&crypt_mutex.lock);
-	atexit(crypt_mutex_destroy);
-	RUBY_ASSERT(crypt_mutex.initialized == 2);
-	RUBY_ATOMIC_CAS(crypt_mutex.initialized, 2, 1);
-	break;
-      case 1:
-	break;
-      default:
-	rb_bug("crypt_mutex.initialized: %d->%d", i, crypt_mutex.initialized);
-    }
 }
 #endif
 
@@ -11402,17 +11330,16 @@ unicode_normalize_common(int argc, VALUE *argv, VALUE str, ID id)
  *  - +:nfkc+: Compatibility decomposition, followed by canonical composition.
  *  - +:nfkd+: Compatibility decomposition.
  *
- *  +self+ must have encoding UTF-8 or one of the other supported encodings:
+ *  The encoding of +self+ must be one of:
  *
- *    UnicodeNormalize::UNICODE_ENCODINGS
- *    # =>
- *    [#<Encoding:UTF-16BE (autoload)>,
- *     #<Encoding:UTF-16LE>,
- *     #<Encoding:UTF-32BE (autoload)>,
- *     #<Encoding:UTF-32LE (autoload)>,
- *     #<Encoding:GB18030 (autoload)>,
- *     #<Encoding:UTF-16BE (autoload)>,
- *     #<Encoding:UTF-32BE (autoload)>]
+ *  - Encoding::UTF_8
+ *  - Encoding::UTF_16BE
+ *  - Encoding::UTF_16LE
+ *  - Encoding::UTF_32BE
+ *  - Encoding::UTF_32LE
+ *  - Encoding::GB18030
+ *  - Encoding::UCS_2BE
+ *  - Encoding::UCS_4BE
  *
  *  Examples:
  *
@@ -12627,6 +12554,7 @@ Init_String(void)
     rb_define_method(rb_cString, "getbyte", rb_str_getbyte, 1);
     rb_define_method(rb_cString, "setbyte", rb_str_setbyte, 2);
     rb_define_method(rb_cString, "byteslice", rb_str_byteslice, -1);
+    rb_define_method(rb_cString, "bytesplice", rb_str_bytesplice, -1);
     rb_define_method(rb_cString, "scrub", str_scrub, -1);
     rb_define_method(rb_cString, "scrub!", str_scrub_bang, -1);
     rb_define_method(rb_cString, "freeze", rb_str_freeze, 0);
