@@ -20,6 +20,17 @@ Note that each entry is kept to a minimum, see links for details.
     end
     ```
 
+* A proc that accepts a single positional argument and keywords will
+  no longer autosplat. [[Bug #18633]]
+
+  ```ruby
+  proc{|a, **k| a}.call([1, 2])
+  # Ruby 3.1 and before
+  # => 1
+  # Ruby 3.2 and after
+  # => [1, 2]
+  ```
+
 * Constant assignment evaluation order for constants set on explicit
   objects has been made consistent with single attribute assignment
   evaluation order.  With this code:
@@ -48,6 +59,37 @@ Note that each entry is kept to a minimum, see links for details.
 * Find pattern is no longer experimental.
   [[Feature #18585]]
 
+* Methods taking a rest parameter (like `*args`) and wishing to delegate keyword
+  arguments through `foo(*args)` must now be marked with `ruby2_keywords`
+  (if not already the case). In other words, all methods wishing to delegate
+  keyword arguments through `*args` must now be marked with `ruby2_keywords`,
+  with no exception. This will make it easier to transition to other ways of
+  delegation once a library can require Ruby 3+. Previously, the `ruby2_keywords`
+  flag was kept if the receiving method took `*args`, but this was a bug and an
+  inconsistency. A good technique to find the potentially-missing `ruby2_keywords`
+  is to run the test suite, for where it fails find the last method which must
+  receive keyword arguments, use `puts nil, caller, nil` there, and check each
+  method/block on the call chain which must delegate keywords is correctly marked
+  as `ruby2_keywords`. [[Bug #18625]] [[Bug #16466]]
+
+    ```ruby
+    def target(**kw)
+    end
+
+    # Accidentally worked without ruby2_keywords in Ruby 2.7-3.1, ruby2_keywords
+    # needed in 3.2+. Just like (*args, **kwargs) or (...) would be needed on
+    # both #foo and #bar when migrating away from ruby2_keywords.
+    ruby2_keywords def bar(*args)
+      target(*args)
+    end
+
+    ruby2_keywords def foo(*args)
+      bar(*args)
+    end
+
+    foo(k: 1)
+    ```
+
 ## Command line options
 
 ## Core classes updates
@@ -58,6 +100,10 @@ Note: We're only listing outstanding class updates.
     * Hash#shift now always returns nil if the hash is
       empty, instead of returning the default value or
       calling the default proc. [[Bug #16908]]
+
+* Kernel
+    * Kernel#binding raises RuntimeError if called from a non-Ruby frame
+      (such as a method defined in C). [[Bug #18487]]
 
 * MatchData
     * MatchData#byteoffset has been added. [[Feature #13110]]
@@ -88,6 +134,13 @@ Note: We're only listing outstanding class updates.
     * A Struct class can also be initialized with keyword arguments
       without `keyword_init: true` on `Struct.new` [[Feature #16806]]
 
+* TracePoint
+    * TracePoint#binding now returns `nil` for `c_call`/`c_return` TracePoints.
+      [[Bug #18487]]
+    * TracePoint#enable `target_thread` keyword argument now defaults to the
+      current thread if `target` and `target_line` keyword arguments are not
+      passed. [[Bug #16889]]
+
 ## Stdlib updates
 
 *   The following default gem are updated.
@@ -100,13 +153,15 @@ Note: We're only listing outstanding class updates.
     * io-wait 0.2.2.pre1
     * ipaddr 1.2.4
     * logger 1.5.1
-    * ostruct 0.5.3
+    * net-protocol 0.1.3
+    * ostruct 0.5.5
     * reline 0.3.1
     * securerandom 0.2.0
 *   The following bundled gems are updated.
     * net-imap 0.2.3
-    * rbs 2.2.2
+    * rbs 2.3.2
     * typeprof 0.21.2
+    * debug 1.5.0
 *   The following default gems are now bundled gems.
 
 ## Compatibility issues
@@ -135,6 +190,10 @@ The following deprecated methods are removed.
   [[Feature #16131]]
 
 ## Stdlib compatibility issues
+
+* `Psych` no longer bundles libyaml sources.
+  Users need to install the libyaml library themselves via the package
+  system.  [[Feature #18571]]
 
 ## C API updates
 
@@ -175,7 +234,9 @@ The following deprecated APIs are removed.
 [Feature #15357]: https://bugs.ruby-lang.org/issues/15357
 [Bug #15928]:     https://bugs.ruby-lang.org/issues/15928
 [Feature #16131]: https://bugs.ruby-lang.org/issues/16131
+[Bug #16466]:     https://bugs.ruby-lang.org/issues/16466
 [Feature #16806]: https://bugs.ruby-lang.org/issues/16806
+[Bug #16889]:     https://bugs.ruby-lang.org/issues/16889
 [Bug #16908]:     https://bugs.ruby-lang.org/issues/16908
 [Feature #16989]: https://bugs.ruby-lang.org/issues/16989
 [Feature #17351]: https://bugs.ruby-lang.org/issues/17351
@@ -184,5 +245,9 @@ The following deprecated APIs are removed.
 [Feature #17881]: https://bugs.ruby-lang.org/issues/17881
 [Feature #18037]: https://bugs.ruby-lang.org/issues/18037
 [Feature #18351]: https://bugs.ruby-lang.org/issues/18351
+[Bug #18487]:     https://bugs.ruby-lang.org/issues/18487
+[Feature #18571]: https://bugs.ruby-lang.org/issues/18571
 [Feature #18585]: https://bugs.ruby-lang.org/issues/18585
 [Feature #18598]: https://bugs.ruby-lang.org/issues/18598
+[Bug #18625]:     https://bugs.ruby-lang.org/issues/18625
+[Bug #18633]:     https://bugs.ruby-lang.org/issues/18633
