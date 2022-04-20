@@ -85,6 +85,7 @@ class Net::HTTPResponse
     @uri  = nil
     @decode_content = false
     @body_encoding = false
+    @ignore_eof = true
   end
 
   # The HTTP version supported by the server.
@@ -118,6 +119,10 @@ class Net::HTTPResponse
     value = Encoding.find(value) if value.is_a?(String)
     @body_encoding = value
   end
+
+  # Whether to ignore EOF when reading bodies with a specified Content-Length
+  # header.
+  attr_accessor :ignore_eof
 
   def inspect
     "#<#{self.class} #{@code} #{@message} readbody=#{@read}>"
@@ -431,6 +436,9 @@ class Net::HTTPResponse
       ensure
         begin
           inflate_body_io.finish
+          if self['content-length']
+            self['content-length'] = inflate_body_io.bytes_inflated.to_s
+          end
         rescue => err
           # Ignore #finish's error if there is an exception from yield
           raise err if success
@@ -456,7 +464,7 @@ class Net::HTTPResponse
 
       clen = content_length()
       if clen
-        @socket.read clen, dest, true   # ignore EOF
+        @socket.read clen, dest, @ignore_eof
         return
       end
       clen = range_length()
@@ -530,6 +538,14 @@ class Net::HTTPResponse
     def finish
       return if @inflate.total_in == 0
       @inflate.finish
+    end
+
+    ##
+    # The number of bytes inflated, used to update the Content-Length of
+    # the response.
+
+    def bytes_inflated
+      @inflate.total_out
     end
 
     ##
