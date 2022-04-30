@@ -28,7 +28,7 @@ pub const REG0: X86Opnd = RAX;
 pub const REG0_32: X86Opnd = EAX;
 pub const REG0_8: X86Opnd = AL;
 pub const REG1: X86Opnd = RCX;
-pub const REG1_32: X86Opnd = ECX;
+// pub const REG1_32: X86Opnd = ECX;
 
 /// Status returned by code generation functions
 #[derive(PartialEq, Debug)]
@@ -106,10 +106,6 @@ impl JITState {
         self.opcode
     }
 
-    pub fn set_opcode(self: &mut JITState, opcode: usize) {
-        self.opcode = opcode;
-    }
-
     pub fn add_gc_object_offset(self: &mut JITState, ptr_offset: u32) {
         let mut gc_obj_vec: RefMut<_> = self.block.borrow_mut();
         gc_obj_vec.add_gc_object_offset(ptr_offset);
@@ -118,15 +114,11 @@ impl JITState {
     pub fn get_pc(self: &JITState) -> *mut VALUE {
         self.pc
     }
-
-    pub fn set_pc(self: &mut JITState, pc: *mut VALUE) {
-        self.pc = pc;
-    }
 }
 
 use crate::codegen::JCCKinds::*;
 
-#[allow(non_camel_case_types)]
+#[allow(non_camel_case_types, unused)]
 pub enum JCCKinds {
     JCC_JNE,
     JCC_JNZ,
@@ -663,7 +655,7 @@ fn jump_to_next_insn(
 ) {
     // Reset the depth since in current usages we only ever jump to to
     // chain_depth > 0 from the same instruction.
-    let mut reset_depth = current_context.clone();
+    let mut reset_depth = *current_context;
     reset_depth.reset_chain_depth();
 
     let jump_block = BlockId {
@@ -749,8 +741,7 @@ pub fn gen_single_block(
         }
 
         // In debug mode, verify our existing assumption
-        #[cfg(debug_assertions)]
-        if get_option!(verify_ctx) && jit_at_current_insn(&jit) {
+        if cfg!(debug_assertions) && get_option!(verify_ctx) && jit_at_current_insn(&jit) {
             verify_ctx(&jit, &ctx);
         }
 
@@ -1808,7 +1799,7 @@ fn jit_chain_guard(
     };
 
     if (ctx.get_chain_depth() as i32) < depth_limit {
-        let mut deeper = ctx.clone();
+        let mut deeper = *ctx;
         deeper.increment_chain_depth();
         let bid = BlockId {
             iseq: jit.iseq,
@@ -1881,7 +1872,7 @@ fn gen_get_ivar(
     side_exit: CodePtr,
 ) -> CodegenStatus {
     let comptime_val_klass = comptime_receiver.class_of();
-    let starting_context = ctx.clone(); // make a copy for use with jit_chain_guard
+    let starting_context = *ctx; // make a copy for use with jit_chain_guard
 
     // Check if the comptime class uses a custom allocator
     let custom_allocator = unsafe { rb_get_alloc_func(comptime_val_klass) };
@@ -2008,7 +1999,7 @@ fn gen_get_ivar(
         );
 
         // Check that the extended table is big enough
-        if ivar_index >= ROBJECT_EMBED_LEN_MAX + 1 {
+        if ivar_index > ROBJECT_EMBED_LEN_MAX {
             // Check that the slot is inside the extended table (num_slots > index)
             let num_slots = mem_opnd(32, REG0, RUBY_OFFSET_ROBJECT_AS_HEAP_NUMIV);
 
@@ -2552,7 +2543,7 @@ fn gen_opt_aref(
     }
 
     // Remember the context on entry for adding guard chains
-    let starting_context = ctx.clone();
+    let starting_context = *ctx;
 
     // Specialize base on compile time values
     let comptime_idx = jit_peek_at_stack(jit, ctx, 0);
@@ -3747,8 +3738,7 @@ fn gen_send_cfunc(
     // Delegate to codegen for C methods if we have it.
     if kw_arg.is_null() {
         let codegen_p = lookup_cfunc_codegen(unsafe { (*cme).def });
-        if codegen_p.is_some() {
-            let known_cfunc_codegen = codegen_p.unwrap();
+        if let Some(known_cfunc_codegen) = codegen_p {
             if known_cfunc_codegen(jit, ctx, cb, ocb, ci, cme, block, argc, recv_known_klass) {
                 // cfunc codegen generated code. Terminate the block so
                 // there isn't multiple calls in the same block.
@@ -4323,9 +4313,7 @@ fn gen_send_iseq(
                     // Next we're going to do some bookkeeping on our end so
                     // that we know the order that the arguments are
                     // actually in now.
-                    let tmp = caller_kwargs[kwarg_idx];
-                    caller_kwargs[kwarg_idx] = caller_kwargs[swap_idx];
-                    caller_kwargs[swap_idx] = tmp;
+                    caller_kwargs.swap(kwarg_idx, swap_idx);
 
                     break;
                 }
@@ -4465,7 +4453,7 @@ fn gen_send_iseq(
     // Pop arguments and receiver in return context, push the return value
     // After the return, sp_offset will be 1. The codegen for leave writes
     // the return value in case of JIT-to-JIT return.
-    let mut return_ctx = ctx.clone();
+    let mut return_ctx = *ctx;
     return_ctx.stack_pop((argc + 1).try_into().unwrap());
     return_ctx.stack_push(Type::Unknown);
     return_ctx.set_sp_offset(1);
@@ -6010,7 +5998,7 @@ mod tests {
 
         let mut value_array: [u64; 2] = [0, 2]; // We only compile for n == 2
         let pc: *mut VALUE = &mut value_array as *mut u64 as *mut VALUE;
-        jit.set_pc(pc);
+        jit.pc = pc;
 
         let status = gen_dupn(&mut jit, &mut context, &mut cb, &mut ocb);
 
@@ -6059,7 +6047,7 @@ mod tests {
 
         let mut value_array: [u64; 2] = [0, Qtrue.into()];
         let pc: *mut VALUE = &mut value_array as *mut u64 as *mut VALUE;
-        jit.set_pc(pc);
+        jit.pc = pc;
 
         let status = gen_putobject(&mut jit, &mut context, &mut cb, &mut ocb);
 
@@ -6078,7 +6066,7 @@ mod tests {
         // The Fixnum 7 is encoded as 7 * 2 + 1, or 15
         let mut value_array: [u64; 2] = [0, 15];
         let pc: *mut VALUE = &mut value_array as *mut u64 as *mut VALUE;
-        jit.set_pc(pc);
+        jit.pc = pc;
 
         let status = gen_putobject(&mut jit, &mut context, &mut cb, &mut ocb);
 
@@ -6120,7 +6108,7 @@ mod tests {
 
         let mut value_array: [u64; 2] = [0, 2];
         let pc: *mut VALUE = &mut value_array as *mut u64 as *mut VALUE;
-        jit.set_pc(pc);
+        jit.pc = pc;
 
         let status = gen_setn(&mut jit, &mut context, &mut cb, &mut ocb);
 
@@ -6141,7 +6129,7 @@ mod tests {
 
         let mut value_array: [u64; 2] = [0, 1];
         let pc: *mut VALUE = &mut value_array as *mut u64 as *mut VALUE;
-        jit.set_pc(pc);
+        jit.pc = pc;
 
         let status = gen_topn(&mut jit, &mut context, &mut cb, &mut ocb);
 
@@ -6163,7 +6151,7 @@ mod tests {
 
         let mut value_array: [u64; 3] = [0, 2, 0];
         let pc: *mut VALUE = &mut value_array as *mut u64 as *mut VALUE;
-        jit.set_pc(pc);
+        jit.pc = pc;
 
         let status = gen_adjuststack(&mut jit, &mut context, &mut cb, &mut ocb);
 
