@@ -1477,7 +1477,7 @@ fn gen_get_ep(cb: &mut CodeBlock, reg: X86Opnd, level: u32) {
         // See GET_PREV_EP(ep) macro
         // VALUE *prev_ep = ((VALUE *)((ep)[VM_ENV_DATA_INDEX_SPECVAL] & ~0x03))
         let offs = (SIZEOF_VALUE as i32) * (VM_ENV_DATA_INDEX_SPECVAL as i32);
-        mov(cb, reg, mem_opnd(64, REG0, offs));
+        mov(cb, reg, mem_opnd(64, reg, offs));
         and(cb, reg, imm_opnd(!0x03));
     }
 }
@@ -3626,6 +3626,91 @@ fn jit_rb_str_to_s(
     false
 }
 
+// Codegen for rb_str_concat()
+// Frequently strings are concatenated using "out_str << next_str".
+// This is common in Erb and similar templating languages.
+fn jit_rb_str_concat(
+    jit: &mut JITState,
+    ctx: &mut Context,
+    cb: &mut CodeBlock,
+    ocb: &mut OutlinedCb,
+    _ci: *const rb_callinfo,
+    _cme: *const rb_callable_method_entry_t,
+    _block: Option<IseqPtr>,
+    _argc: i32,
+    _known_recv_class: *const VALUE,
+) -> bool {
+    let comptime_arg = jit_peek_at_stack(jit, ctx, 0);
+    let comptime_arg_type = ctx.get_opnd_type(StackOpnd(0));
+
+    // String#<< can take an integer codepoint as an argument, but we don't optimise that.
+    // Also, a non-string argument would have to call .to_str on itself before being treated
+    // as a string, and that would require saving pc/sp, which we don't do here.
+    if comptime_arg_type != Type::String {
+        return false;
+    }
+
+    // Generate a side exit
+    let side_exit = get_side_exit(jit, ocb, ctx);
+
+    // Guard that the argument is of class String at runtime.
+    let arg_opnd = ctx.stack_opnd(0);
+    mov(cb, REG0, arg_opnd);
+    if !jit_guard_known_klass(
+        jit,
+        ctx,
+        cb,
+        ocb,
+        unsafe { rb_cString },
+        StackOpnd(0),
+        comptime_arg,
+        SEND_MAX_DEPTH,
+        side_exit,
+    ) {
+        return false;
+    }
+
+    let concat_arg = ctx.stack_pop(1);
+    let recv = ctx.stack_pop(1);
+
+    // Test if string encodings differ. If different, use rb_str_append. If the same,
+    // use rb_yjit_str_simple_append, which calls rb_str_cat.
+    add_comment(cb, "<< on strings");
+
+    // Both rb_str_append and rb_yjit_str_simple_append take identical args
+    mov(cb, C_ARG_REGS[0], recv);
+    mov(cb, C_ARG_REGS[1], concat_arg);
+
+    // Take receiver's object flags XOR arg's flags. If any
+    // string-encoding flags are different between the two,
+    // the encodings don't match.
+    mov(cb, REG0, recv);
+    mov(cb, REG1, concat_arg);
+    mov(cb, REG0, mem_opnd(64, REG0, RUBY_OFFSET_RBASIC_FLAGS));
+    xor(cb, REG0, mem_opnd(64, REG1, RUBY_OFFSET_RBASIC_FLAGS));
+    test(cb, REG0, uimm_opnd(RUBY_ENCODING_MASK as u64));
+
+    let enc_mismatch = cb.new_label("enc_mismatch".to_string());
+    jne_label(cb, enc_mismatch);
+
+    // If encodings match, call the simple append function and jump to return
+    call_ptr(cb, REG0, rb_yjit_str_simple_append as *const u8);
+    let ret_label: usize = cb.new_label("stack_return".to_string());
+    jmp_label(cb, ret_label);
+
+    // If encodings are different, use a slower encoding-aware concatenate
+    cb.write_label(enc_mismatch);
+    call_ptr(cb, REG0, rb_str_append as *const u8);
+    // Drop through to return
+
+    cb.write_label(ret_label);
+    let stack_ret = ctx.stack_push(Type::String);
+    mov(cb, stack_ret, RAX);
+
+    cb.link_labels();
+    true
+}
+
 fn jit_thread_s_current(
     _jit: &mut JITState,
     ctx: &mut Context,
@@ -3887,7 +3972,6 @@ fn gen_send_cfunc(
         // Copy the arguments from the stack to the C argument registers
         // self is the 0th argument and is at index argc from the stack top
         for i in 0..=passed_argc as usize {
-            // "as usize?" Yeah, you can't index an array by an i32.
             let stack_opnd = mem_opnd(64, RAX, -(argc + 1 - (i as i32)) * SIZEOF_VALUE_I32);
             let c_arg_reg = C_ARG_REGS[i];
             mov(cb, c_arg_reg, stack_opnd);
@@ -5489,6 +5573,98 @@ fn gen_getblockparamproxy(
     KeepCompiling
 }
 
+fn gen_getblockparam(
+    jit: &mut JITState,
+    ctx: &mut Context,
+    cb: &mut CodeBlock,
+    ocb: &mut OutlinedCb,
+) -> CodegenStatus {
+    // EP level
+    let level = jit_get_arg(jit, 1).as_u32();
+
+    // Save the PC and SP because we might allocate
+    jit_prepare_routine_call(jit, ctx, cb, REG0);
+
+    // A mirror of the interpreter code. Checking for the case
+    // where it's pushing rb_block_param_proxy.
+    let side_exit = get_side_exit(jit, ocb, ctx);
+
+    // Load environment pointer EP from CFP
+    gen_get_ep(cb, REG1, level);
+
+    // Bail when VM_ENV_FLAGS(ep, VM_FRAME_FLAG_MODIFIED_BLOCK_PARAM) is non zero
+    let flag_check = mem_opnd(
+        64,
+        REG1,
+        (SIZEOF_VALUE as i32) * (VM_ENV_DATA_INDEX_FLAGS as i32),
+    );
+    // FIXME: This is testing bits in the same place that the WB check is testing.
+    // We should combine these at some point
+    test(
+        cb,
+        flag_check,
+        uimm_opnd(VM_FRAME_FLAG_MODIFIED_BLOCK_PARAM.into()),
+    );
+
+    // If the frame flag has been modified, then the actual proc value is
+    // already in the EP and we should just use the value.
+    let frame_flag_modified = cb.new_label("frame_flag_modified".to_string());
+    jnz_label(cb, frame_flag_modified);
+
+    // This instruction writes the block handler to the EP.  If we need to
+    // fire a write barrier for the write, then exit (we'll let the
+    // interpreter handle it so it can fire the write barrier).
+    // flags & VM_ENV_FLAG_WB_REQUIRED
+    let flags_opnd = mem_opnd(
+        64,
+        REG1,
+        SIZEOF_VALUE as i32 * VM_ENV_DATA_INDEX_FLAGS as i32,
+    );
+    test(cb, flags_opnd, imm_opnd(VM_ENV_FLAG_WB_REQUIRED.into()));
+
+    // if (flags & VM_ENV_FLAG_WB_REQUIRED) != 0
+    jnz_ptr(cb, side_exit);
+
+    // Load the block handler for the current frame
+    // note, VM_ASSERT(VM_ENV_LOCAL_P(ep))
+    mov(
+        cb,
+        C_ARG_REGS[1],
+        mem_opnd(
+            64,
+            REG1,
+            (SIZEOF_VALUE as i32) * (VM_ENV_DATA_INDEX_SPECVAL as i32),
+        ),
+    );
+
+    // Convert the block handler in to a proc
+    // call rb_vm_bh_to_procval(const rb_execution_context_t *ec, VALUE block_handler)
+    mov(cb, C_ARG_REGS[0], REG_EC);
+    call_ptr(cb, REG0, rb_vm_bh_to_procval as *const u8);
+
+    // Load environment pointer EP from CFP (again)
+    gen_get_ep(cb, REG1, level);
+
+    // Set the frame modified flag
+    or(cb, flag_check, uimm_opnd(VM_FRAME_FLAG_MODIFIED_BLOCK_PARAM.into()));
+
+    // Write the value at the environment pointer
+    let idx = jit_get_arg(jit, 0).as_i32();
+    let offs = -(SIZEOF_VALUE as i32 * idx);
+    mov(cb, mem_opnd(64, REG1, offs), RAX);
+
+    cb.write_label(frame_flag_modified);
+
+    // Push the proc on the stack
+    let stack_ret = ctx.stack_push(Type::Unknown);
+    mov(cb, RAX, mem_opnd(64, REG1, offs));
+    mov(cb, stack_ret, RAX);
+
+    cb.link_labels();
+
+    KeepCompiling
+}
+
 fn gen_invokebuiltin(
     jit: &mut JITState,
     ctx: &mut Context,
@@ -5659,6 +5835,7 @@ fn get_gen_fn(opcode: VALUE) -> Option<InsnGenFn> {
         OP_JUMP => Some(gen_jump),
 
         OP_GETBLOCKPARAMPROXY => Some(gen_getblockparamproxy),
+        OP_GETBLOCKPARAM => Some(gen_getblockparam),
         OP_OPT_SEND_WITHOUT_BLOCK => Some(gen_opt_send_without_block),
         OP_SEND => Some(gen_send),
         OP_INVOKESUPER => Some(gen_invokesuper),
@@ -5839,6 +6016,7 @@ impl CodegenGlobals {
             self.yjit_reg_method(rb_cString, "to_s", jit_rb_str_to_s);
             self.yjit_reg_method(rb_cString, "to_str", jit_rb_str_to_s);
             self.yjit_reg_method(rb_cString, "bytesize", jit_rb_str_bytesize);
+            self.yjit_reg_method(rb_cString, "<<", jit_rb_str_concat);
 
             // Thread.current
             self.yjit_reg_method(

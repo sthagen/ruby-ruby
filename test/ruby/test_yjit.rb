@@ -316,6 +316,32 @@ class TestYJIT < Test::Unit::TestCase
     RUBY
   end
 
+  def test_string_concat_utf8
+    assert_compiles(<<~RUBY, frozen_string_literal: true, result: true)
+      def str_cat_utf8
+        s = String.new
+        10.times { s << "✅" }
+        s
+      end
+
+      str_cat_utf8 == "✅" * 10
+    RUBY
+  end
+
+  def test_string_concat_ascii
+    # Constant-get for classes (e.g. String, Encoding) can cause a side-exit in getinlinecache. For now, ignore exits.
+    assert_compiles(<<~RUBY, exits: :any)
+      str_arg = "b".encode(Encoding::ASCII)
+      def str_cat_ascii(arg)
+        s = String.new(encoding: Encoding::ASCII)
+        10.times { s << arg }
+        s
+      end
+
+      str_cat_ascii(str_arg) == str_arg * 10
+    RUBY
+  end
+
   def test_opt_length_in_method
     assert_compiles(<<~RUBY, insns: %i[opt_length], result: 5)
       def foo(str)
@@ -454,6 +480,32 @@ class TestYJIT < Test::Unit::TestCase
       Foo = Struct.new(:foo, :bar)
       foo(Foo.new(123))
       foo(Foo.new(123))
+    RUBY
+  end
+
+  def test_getblockparam
+    assert_compiles(<<~'RUBY', insns: [:getblockparam])
+      def foo &blk
+        2.times do
+          blk
+        end
+      end
+
+      foo {}
+      foo {}
+    RUBY
+  end
+
+  def test_getblockparamproxy
+    # Currently two side exits as OPTIMIZED_METHOD_TYPE_CALL is unimplemented
+    assert_compiles(<<~'RUBY', insns: [:getblockparamproxy], exits: { opt_send_without_block: 2 })
+      def foo &blk
+        p blk.call
+        p blk.call
+      end
+
+      foo { 1 }
+      foo { 2 }
     RUBY
   end
 
@@ -646,7 +698,7 @@ class TestYJIT < Test::Unit::TestCase
     disasm = stats[:disasm]
 
     # Check that exit counts are as expected
-    # Full stats are only available when RUBY_DEBUG enabled
+    # Full stats are only available when --enable-yjit=dev
     if runtime_stats[:all_stats]
       recorded_exits = runtime_stats.select { |k, v| k.to_s.start_with?("exit_") }
       recorded_exits = recorded_exits.reject { |k, v| v == 0 }
@@ -658,7 +710,7 @@ class TestYJIT < Test::Unit::TestCase
       end
     end
 
-    # Only available when RUBY_DEBUG enabled
+    # Only available when --enable-yjit=dev
     if runtime_stats[:all_stats]
       missed_insns = insns.dup
 
@@ -675,13 +727,18 @@ class TestYJIT < Test::Unit::TestCase
     end
   end
 
+  def script_shell_encode(s)
+    # We can't pass utf-8-encoded characters directly in a shell arg. But we can use Ruby \u constants.
+    s.chars.map { |c| c.ascii_only? ? c : "\\u%x" % c.codepoints[0] }.join
+  end
+
   def eval_with_jit(script, call_threshold: 1, timeout: 1000)
     args = [
       "--disable-gems",
       "--yjit-call-threshold=#{call_threshold}",
       "--yjit-stats"
     ]
-    args << "-e" << script
+    args << "-e" << script_shell_encode(script)
     stats_r, stats_w = IO.pipe
     out, err, status = EnvUtil.invoke_ruby(args,
       '', true, true, timeout: timeout, ios: {3 => stats_w}
