@@ -475,7 +475,8 @@ module FileUtils
   #
   # Keyword arguments:
   #
-  # - <tt>dereference_root: false</tt> - does not follow soft links.
+  # - <tt>dereference_root: false</tt> - if +src+ is a symbolic link,
+  #   does not dereference it.
   # - <tt>noop: true</tt> - does not create links.
   # - <tt>remove_destination: true</tt> - removes +dest+ before creating links.
   # - <tt>verbose: true</tt> - prints an equivalent command:
@@ -488,8 +489,8 @@ module FileUtils
   #     cp -lr tmp0 tmp1
   #     cp -lr tmp0/tmp3/t2.txt tmp0/tmp3/t3.txt tmp1
   #
-  # Raises an exception if +dest+ is the path to an existing file
-  # and keyword argument +remove_destination+ is not +true+.
+  # Raises an exception if +dest+ is the path to an existing file or directory
+  # and keyword argument <tt>remove_destination: true</tt> is not given.
   #
   def cp_lr(src, dest, noop: nil, verbose: nil,
             dereference_root: true, remove_destination: false)
@@ -501,25 +502,69 @@ module FileUtils
   end
   module_function :cp_lr
 
+  # Creates {symbolic links}[https://en.wikipedia.org/wiki/Symbolic_link].
   #
-  # :call-seq:
-  #   FileUtils.ln_s(target, link, force: nil, noop: nil, verbose: nil)
-  #   FileUtils.ln_s(target,  dir, force: nil, noop: nil, verbose: nil)
-  #   FileUtils.ln_s(targets, dir, force: nil, noop: nil, verbose: nil)
+  # When +src+ is the path to an existing file:
   #
-  # In the first form, creates a symbolic link +link+ which points to +target+.
-  # If +link+ already exists, raises Errno::EEXIST.
-  # But if the <tt>force</tt> option is set, overwrites +link+.
+  # - When +dest+ is the path to a non-existent file,
+  #   creates a symbolic link at +dest+ pointing to +src+:
   #
-  #   FileUtils.ln_s '/usr/bin/ruby', '/usr/local/bin/ruby'
-  #   FileUtils.ln_s 'verylongsourcefilename.c', 'c', force: true
+  #     FileUtils.touch('src0.txt')
+  #     File.exist?('dest0.txt')   # => false
+  #     FileUtils.ln_s('src0.txt', 'dest0.txt')
+  #     File.symlink?('dest0.txt') # => true
   #
-  # In the second form, creates a link +dir/target+ pointing to +target+.
-  # In the third form, creates several symbolic links in the directory +dir+,
-  # pointing to each item in +targets+.
-  # If +dir+ is not a directory, raises Errno::ENOTDIR.
+  # - When +dest+ is the path to an existing file,
+  #   creates a symbolic link at +dest+ pointing to +src+
+  #   if and only if keyword argument <tt>force: true</tt> is given
+  #   (raises an exception otherwise):
   #
-  #   FileUtils.ln_s Dir.glob('/bin/*.rb'), '/home/foo/bin'
+  #     FileUtils.touch('src1.txt')
+  #     FileUtils.touch('dest1.txt')
+  #     FileUtils.ln_s('src1.txt', 'dest1.txt', force: true)
+  #     FileTest.symlink?('dest1.txt') # => true
+  #
+  #     FileUtils.ln_s('src1.txt', 'dest1.txt') # Raises Errno::EEXIST.
+  #
+  # When +dest+ is the path to a directory,
+  # creates a symbolic link at <tt>dest/src</tt> pointing to +src+:
+  #
+  #   FileUtils.touch('src2.txt')
+  #   FileUtils.mkdir('destdir2')
+  #   FileUtils.ln_s('src2.txt', 'destdir2')
+  #   File.symlink?('destdir2/src2.txt') # => true
+  #
+  # When +src+ is an array of paths to existing files and +dest+ is a directory,
+  # for each child +child+ in +src+ creates a symbolic link <tt>dest/child</tt>
+  # pointing to +child+:
+  #
+  #   FileUtils.mkdir('srcdir3')
+  #   FileUtils.touch('srcdir3/src0.txt')
+  #   FileUtils.touch('srcdir3/src1.txt')
+  #   FileUtils.mkdir('destdir3')
+  #   FileUtils.ln_s(['srcdir3/src0.txt', 'srcdir3/src1.txt'], 'destdir3')
+  #   File.symlink?('destdir3/src0.txt') # => true
+  #   File.symlink?('destdir3/src1.txt') # => true
+  #
+  # Keyword arguments:
+  #
+  # - <tt>force: true</tt> - overwrites +dest+ if it exists.
+  # - <tt>noop: true</tt> - does not create links.
+  # - <tt>verbose: true</tt> - prints an equivalent command:
+  #
+  #     FileUtils.ln_s('src0.txt', 'dest0.txt', noop: true, verbose: true)
+  #     FileUtils.ln_s('src1.txt', 'destdir1', noop: true, verbose: true)
+  #     FileUtils.ln_s('src2.txt', 'dest2.txt', force: true, noop: true, verbose: true)
+  #     FileUtils.ln_s(['srcdir3/src0.txt', 'srcdir3/src1.txt'], 'destdir3', noop: true, verbose: true)
+  #
+  #   Output:
+  #
+  #     ln -s src0.txt dest0.txt
+  #     ln -s src1.txt destdir1
+  #     ln -sf src2.txt dest2.txt
+  #     ln -s srcdir3/src0.txt srcdir3/src1.txt destdir3
+  #
+  # FileUtils.symlink is an alias for FileUtils.ln_s.
   #
   def ln_s(src, dest, force: nil, noop: nil, verbose: nil)
     fu_output_message "ln -s#{force ? 'f' : ''} #{[src,dest].flatten.join ' '}" if verbose
@@ -534,29 +579,48 @@ module FileUtils
   alias symlink ln_s
   module_function :symlink
 
-  #
-  # :call-seq:
-  #   FileUtils.ln_sf(*args)
-  #
-  # Same as
-  #
-  #   FileUtils.ln_s(*args, force: true)
+  # Like FileUtils.ln_s, but always with keyword argument <tt>force: true</tt> given.
   #
   def ln_sf(src, dest, noop: nil, verbose: nil)
     ln_s src, dest, force: true, noop: noop, verbose: verbose
   end
   module_function :ln_sf
 
+  # Creates {hard links}[https://en.wikipedia.org/wiki/Hard_link]; returns +nil+.
   #
-  # Hard links a file system entry +src+ to +dest+.
-  # If +src+ is a directory, this method links its contents recursively.
+  # If +src+ is the path to a file and +dest+ does not exist,
+  # creates a hard link at +dest+ pointing to +src+:
   #
-  # Both of +src+ and +dest+ must be a path name.
-  # +src+ must exist, +dest+ must not exist.
+  #   FileUtils.touch('src0.txt')
+  #   File.exist?('dest0.txt')   # => false
+  #   FileUtils.link_entry('src0.txt', 'dest0.txt')
+  #   File.exist?('dest0.txt') # => true
   #
-  # If +dereference_root+ is true, this method dereferences the tree root.
+  # If +src+ is the path to a directory and +dest+ does not exist,
+  # recursively creates hard links at +dest+ pointing to paths in +src+:
   #
-  # If +remove_destination+ is true, this method removes each destination file before copy.
+  #   FileUtils.mkdir_p(['src1/dir0', 'src1/dir1'])
+  #   src_file_paths = [
+  #     'src1/dir0/t0.txt',
+  #     'src1/dir0/t1.txt',
+  #     'src1/dir1/t2.txt',
+  #     'src1/dir1/t3.txt',
+  #     ]
+  #   FileUtils.touch(src_file_paths)
+  #   File.exist?('dest1')             # => true
+  #   FileUtils.link_entry('src1', 'dest1')
+  #   File.exist?('dest1/dir0/t0.txt') # => true
+  #   File.exist?('dest1/dir0/t1.txt') # => true
+  #   File.exist?('dest1/dir1/t2.txt') # => true
+  #   File.exist?('dest1/dir1/t3.txt') # => true
+  #
+  # Keyword arguments:
+  #
+  # - <tt>dereference_root: true</tt> - dereferences +src+ if it is a symbolic link.
+  # - <tt>remove_destination: true</tt> - removes +dest+ before creating links.
+  #
+  # Raises an exception if +dest+ is the path to an existing file or directory
+  # and keyword argument <tt>remove_destination: true</tt> is not given.
   #
   def link_entry(src, dest, dereference_root = false, remove_destination = false)
     Entry_.new(src, nil, dereference_root).traverse do |ent|
@@ -567,16 +631,55 @@ module FileUtils
   end
   module_function :link_entry
 
+  # Copies files from +src+ to +dest+.
   #
-  # Copies a file content +src+ to +dest+.  If +dest+ is a directory,
-  # copies +src+ to +dest/src+.
+  # If +src+ is the path to a file and +dest+ is not the path to a directory,
+  # copies +src+ to +dest+:
   #
-  # If +src+ is a list of files, then +dest+ must be a directory.
+  #   FileUtils.touch('src0.txt')
+  #   File.exist?('dest0.txt') # => false
+  #   FileUtils.cp('src0.txt', 'dest0.txt')
+  #   File.exist?('dest0.txt') # => true
   #
-  #   FileUtils.cp 'eval.c', 'eval.c.org'
-  #   FileUtils.cp %w(cgi.rb complex.rb date.rb), '/usr/lib/ruby/1.6'
-  #   FileUtils.cp %w(cgi.rb complex.rb date.rb), '/usr/lib/ruby/1.6', verbose: true
-  #   FileUtils.cp 'symlink', 'dest'   # copy content, "dest" is not a symlink
+  # If +src+ is the path to a file and +dest+ is the path to a directory,
+  # copies +src+ to <tt>dest/src</tt>:
+  #
+  #   FileUtils.touch('src1.txt')
+  #   FileUtils.mkdir('dest1')
+  #   FileUtils.cp('src1.txt', 'dest1')
+  #   File.exist?('dest1/src1.txt') # => true
+  #
+  # If +src+ is an array of paths to files and +dest+ is the path to a directory,
+  # copies from each +src+ to +dest+:
+  #
+  #   src_file_paths = ['src2.txt', 'src2.dat']
+  #   FileUtils.touch(src_file_paths)
+  #   FileUtils.mkdir('dest2')
+  #   FileUtils.cp(src_file_paths, 'dest2')
+  #   File.exist?('dest2/src2.txt') # => true
+  #   File.exist?('dest2/src2.dat') # => true
+  #
+  # Keyword arguments:
+  #
+  # - <tt>preserve: true</tt> - preserves file times.
+  # - <tt>noop: true</tt> - does not copy files.
+  # - <tt>verbose: true</tt> - prints an equivalent command:
+  #
+  #     FileUtils.cp('src0.txt', 'dest0.txt', noop: true, verbose: true)
+  #     FileUtils.cp('src1.txt', 'dest1', noop: true, verbose: true)
+  #     FileUtils.cp(src_file_paths, 'dest2', noop: true, verbose: true)
+  #
+  #   Output:
+  #
+  #     cp src0.txt dest0.txt
+  #     cp src1.txt dest1
+  #     cp src2.txt src2.dat dest2
+  #
+  # Raises an exception if +src+ is a directory.
+  #
+  # Related: FileUtils.cp_r (recursive).
+  #
+  # FileUtils.copy is an alias for FileUtils.cp.
   #
   def cp(src, dest, preserve: nil, noop: nil, verbose: nil)
     fu_output_message "cp#{preserve ? ' -p' : ''} #{[src,dest].flatten.join ' '}" if verbose
@@ -590,30 +693,79 @@ module FileUtils
   alias copy cp
   module_function :copy
 
+  # Recursively copies files from +src+ to +dest+.
   #
-  # Copies +src+ to +dest+. If +src+ is a directory, this method copies
-  # all its contents recursively. If +dest+ is a directory, copies
-  # +src+ to +dest/src+.
   #
-  # +src+ can be a list of files.
+  # If +src+ is the path to a file and +dest+ is not the path to a directory,
+  # copies +src+ to +dest+:
   #
-  # If +dereference_root+ is true, this method dereference tree root.
+  #   FileUtils.touch('src0.txt')
+  #   File.exist?('dest0.txt') # => false
+  #   FileUtils.cp_r('src0.txt', 'dest0.txt')
+  #   File.exist?('dest0.txt') # => true
   #
-  # If +remove_destination+ is true, this method removes each destination file before copy.
+  # If +src+ is the path to a file and +dest+ is the path to a directory,
+  # copies +src+ to <tt>dest/src</tt>:
   #
-  #   # Installing Ruby library "mylib" under the site_ruby
-  #   FileUtils.rm_r site_ruby + '/mylib', force: true
-  #   FileUtils.cp_r 'lib/', site_ruby + '/mylib'
+  #   FileUtils.touch('src1.txt')
+  #   FileUtils.mkdir('dest1')
+  #   FileUtils.cp_r('src1.txt', 'dest1')
+  #   File.exist?('dest1/src1.txt') # => true
   #
-  #   # Examples of copying several files to target directory.
-  #   FileUtils.cp_r %w(mail.rb field.rb debug/), site_ruby + '/tmail'
-  #   FileUtils.cp_r Dir.glob('*.rb'), '/home/foo/lib/ruby', noop: true, verbose: true
+  # If +src+ is the path to a directory and +dest+ does not exist,
+  # recursively copies +src+ to +dest+:
   #
-  #   # If you want to copy all contents of a directory instead of the
-  #   # directory itself, c.f. src/x -> dest/x, src/y -> dest/y,
-  #   # use following code.
-  #   FileUtils.cp_r 'src/.', 'dest'     # cp_r('src', 'dest') makes dest/src,
-  #                                      # but this doesn't.
+  #   FileUtils.mkdir_p(['src2/dir0', 'src2/dir1'])
+  #   FileUtils.touch('src2/dir0/src0.txt')
+  #   FileUtils.touch('src2/dir0/src1.txt')
+  #   FileUtils.touch('src2/dir1/src2.txt')
+  #   FileUtils.touch('src2/dir1/src3.txt')
+  #   FileUtils.cp_r('src2', 'dest2')
+  #   File.exist?('dest2/dir0/src0.txt') # => true
+  #   File.exist?('dest2/dir0/src1.txt') # => true
+  #   File.exist?('dest2/dir1/src2.txt') # => true
+  #   File.exist?('dest2/dir1/src3.txt') # => true
+  #
+  # If +src+ and +dest+ are paths to directories,
+  # recursively copies +src+ to <tt>dest/src</tt>:
+  #
+  #   FileUtils.mkdir_p(['src3/dir0', 'src3/dir1'])
+  #   FileUtils.touch('src3/dir0/src0.txt')
+  #   FileUtils.touch('src3/dir0/src1.txt')
+  #   FileUtils.touch('src3/dir1/src2.txt')
+  #   FileUtils.touch('src3/dir1/src3.txt')
+  #   FileUtils.mkdir('dest3')
+  #   FileUtils.cp_r('src3', 'dest3')
+  #   File.exist?('dest3/src3/dir0/src0.txt') # => true
+  #   File.exist?('dest3/src3/dir0/src1.txt') # => true
+  #   File.exist?('dest3/src3/dir1/src2.txt') # => true
+  #   File.exist?('dest3/src3/dir1/src3.txt') # => true
+  #
+  # Keyword arguments:
+  #
+  # - <tt>dereference_root: false</tt> - if +src+ is a symbolic link,
+  #   does not dereference it.
+  # - <tt>noop: true</tt> - does not copy files.
+  # - <tt>preserve</tt> - preserves file times.
+  # - <tt>remove_destination: true</tt> - removes +dest+ before copying files.
+  # - <tt>verbose: true</tt> - prints an equivalent command:
+  #
+  #     FileUtils.cp_r('src0.txt', 'dest0.txt', noop: true, verbose: true)
+  #     FileUtils.cp_r('src1.txt', 'dest1', noop: true, verbose: true)
+  #     FileUtils.cp_r('src2', 'dest2', noop: true, verbose: true)
+  #     FileUtils.cp_r('src3', 'dest3', noop: true, verbose: true)
+  #
+  #   Output:
+  #
+  #     cp -r src0.txt dest0.txt
+  #     cp -r src1.txt dest1
+  #     cp -r src2 dest2
+  #     cp -r src3 dest3
+  #
+  # Raises an exception of +src+ is the path to a directory
+  # and +dest+ is the path to a file.
+  #
+  # Related: FileUtils.cp (not recursive).
   #
   def cp_r(src, dest, preserve: nil, noop: nil, verbose: nil,
            dereference_root: true, remove_destination: nil)
@@ -625,21 +777,43 @@ module FileUtils
   end
   module_function :cp_r
 
+  # Recursively copies files from +src+ to +dest+.
   #
-  # Copies a file system entry +src+ to +dest+.
-  # If +src+ is a directory, this method copies its contents recursively.
-  # This method preserves file types, c.f. symlink, directory...
-  # (FIFO, device files and etc. are not supported yet)
+  # If +src+ is the path to a file, copies +src+ to +dest+:
   #
-  # Both of +src+ and +dest+ must be a path name.
-  # +src+ must exist, +dest+ must not exist.
+  #   FileUtils.touch('src0.txt')
+  #   File.exist?('dest0.txt') # => false
+  #   FileUtils.copy_entry('src0.txt', 'dest0.txt')
+  #   File.file?('dest0.txt')  # => true
   #
-  # If +preserve+ is true, this method preserves owner, group, and
-  # modified time.  Permissions are copied regardless +preserve+.
+  # If +src+ is a directory, recursively copies +src+ to +dest+:
   #
-  # If +dereference_root+ is true, this method dereference tree root.
+  #   src1
+  #   |-- dir0
+  #   |   |-- src0.txt
+  #   |   `-- src1.txt
+  #   `-- dir1
+  #       |-- src2.txt
+  #       `-- src3.txt
+  #   FileUtils.copy_entry('src1', 'dest1')
+  #   dest1
+  #   |-- dir0
+  #   |   |-- src0.txt
+  #   |   `-- src1.txt
+  #   `-- dir1
+  #       |-- src2.txt
+  #       `-- src3.txt
   #
-  # If +remove_destination+ is true, this method removes each destination file before copy.
+  # The recursive copying preserves file types for regular files,
+  # directories, and symbolic links;
+  # other file types (FIFO streams, device files, etc.) are not supported.
+  #
+  # Keyword arguments:
+  #
+  # - <tt>dereference_root: true</tt> - if +src+ is a symbolic link,
+  #   follows the link.
+  # - <tt>preserve</tt> - preserves file times.
+  # - <tt>remove_destination: true</tt> - removes +dest+ before copying files.
   #
   def copy_entry(src, dest, preserve = false, dereference_root = false, remove_destination = false)
     if dereference_root
