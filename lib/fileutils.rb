@@ -18,6 +18,38 @@ end
 #
 # Namespace for several file utility methods for copying, moving, removing, etc.
 #
+# == About the Examples
+#
+# Some examples here involve trees of file entries.
+# For these, we sometimes display trees using the
+# {tree command-line utility}[https://en.wikipedia.org/wiki/Tree_(command)],
+# which is a recursive directory-listing utility that produces
+# a depth-indented listing of files and directories.
+#
+# We use a helper method to launch the command and control the format:
+#
+#   def tree(dirpath = '.')
+#     command = "tree --noreport --charset=ascii #{dirpath}"
+#     system(command)
+#   end
+#
+# To illustrate, here's the tree for the test directory for \FileUtils:
+#   tree('test')
+#   test
+#   |-- fileutils
+#   |   |-- clobber.rb
+#   |   |-- fileasserts.rb
+#   |   |-- test_dryrun.rb
+#   |   |-- test_fileutils.rb
+#   |   |-- test_nowrite.rb
+#   |   |-- test_verbose.rb
+#   |   `-- visibility_tests.rb
+#   `-- lib
+#       |-- core_assertions.rb
+#       |-- envutil.rb
+#       |-- find_executable.rb
+#       `-- helper.rb
+#
 # === Module Functions
 #
 #   require 'fileutils'
@@ -259,7 +291,7 @@ module FileUtils
   #
   # Keyword arguments:
   #
-  # - <tt>mode: <i>integer</i></tt> - also calls <tt>File.chmod(mode, path)</tt>;
+  # - <tt>mode: <i>mode</i></tt> - also calls <tt>File.chmod(mode, path)</tt>;
   #   see {File.chmod}[https://docs.ruby-lang.org/en/master/File.html#method-c-chmod].
   # - <tt>noop: true</tt> - does not create directories.
   # - <tt>verbose: true</tt> - prints an equivalent command:
@@ -302,7 +334,7 @@ module FileUtils
   #
   # Keyword arguments:
   #
-  # - <tt>mode: <i>integer</i></tt> - also calls <tt>File.chmod(mode, path)</tt>;
+  # - <tt>mode: <i>mode</i></tt> - also calls <tt>File.chmod(mode, path)</tt>;
   #   see {File.chmod}[https://docs.ruby-lang.org/en/master/File.html#method-c-chmod].
   # - <tt>noop: true</tt> - does not create directories.
   # - <tt>verbose: true</tt> - prints an equivalent command:
@@ -839,7 +871,7 @@ module FileUtils
   #
   # If +src+ is a directory, recursively copies +src+ to +dest+:
   #
-  #   system('tree --charset=ascii src1')
+  #   tree('src1')
   #   src1
   #   |-- dir0
   #   |   |-- src0.txt
@@ -848,7 +880,7 @@ module FileUtils
   #       |-- src2.txt
   #       `-- src3.txt
   #   FileUtils.copy_entry('src1', 'dest1')
-  #   system('tree --charset=ascii dest1')
+  #   tree('dest1')
   #   dest1
   #   |-- dir0
   #   |   |-- src0.txt
@@ -923,14 +955,14 @@ module FileUtils
   # If +src+ is the path to a single file or directory and +dest+ does not exist,
   # moves +src+ to +dest+:
   #
-  #   system('tree --charset=ascii src0')
+  #   tree('src0')
   #   src0
   #   |-- src0.txt
   #   `-- src1.txt
   #   File.exist?('dest0') # => false
   #   FileUtils.mv('src0', 'dest0')
   #   File.exist?('src0')  # => false
-  #   system('tree --charset=ascii dest0')
+  #   tree('dest0')
   #   dest0
   #   |-- src0.txt
   #   `-- src1.txt
@@ -940,13 +972,13 @@ module FileUtils
   # copies from each path in the array to +dest+:
   #
   #   File.file?('src1.txt') # => true
-  #   system('tree --charset=ascii src1')
+  #   tree('src1')
   #   src1
   #   |-- src.dat
   #   `-- src.txt
   #   Dir.empty?('dest1') # => true
   #   FileUtils.mv(['src1.txt', 'src1'], 'dest1')
-  #   system('tree --charset=ascii dest1')
+  #   tree('dest1')
   #   dest1
   #   |-- src1
   #   |   |-- src.dat
@@ -1076,7 +1108,7 @@ module FileUtils
   #
   # For each directory path, recursively removes files and directories:
   #
-  #   system('tree --charset=ascii src1')
+  #   tree('src1')
   #   src1
   #   |-- dir0
   #   |   |-- src0.txt
@@ -1144,6 +1176,9 @@ module FileUtils
   #
   # Avoids a local vulnerability that can exist in certain circumstances;
   # see {Avoiding the TOCTTOU Vulnerability}[rdoc-ref:FileUtils@Avoiding+the+TOCTTOU+Vulnerability].
+  #
+  # Optional argument +force+ specifies whether to ignore
+  # raised exceptions of StandardError and its descendants.
   #
   def remove_entry_secure(path, force = false)
     unless fu_have_symlink?
@@ -1231,12 +1266,14 @@ module FileUtils
   end
   private_module_function :fu_stat_identical_entry?
 
+  # Removes the entry given by +path+,
+  # which should be the entry for a regular file, a symbolic link,
+  # or a directory.
   #
-  # This method removes a file system entry +path+.
-  # +path+ might be a regular file, a directory, or something.
-  # If +path+ is a directory, remove it recursively.
+  # Optional argument +force+ specifies whether to ignore
+  # raised exceptions of StandardError and its descendants.
   #
-  # See also remove_entry_secure.
+  # Related: FileUtils.remove_entry_secure.
   #
   def remove_entry(path, force = false)
     Entry_.new(path).postorder_traverse do |ent|
@@ -1251,9 +1288,11 @@ module FileUtils
   end
   module_function :remove_entry
 
+  # Removes the file entry given by +path+,
+  # which should be the entry for a regular file or a symbolic link.
   #
-  # Removes a file +path+.
-  # This method ignores StandardError if +force+ is true.
+  # Optional argument +force+ specifies whether to ignore
+  # raised exceptions of StandardError and its descendants.
   #
   def remove_file(path, force = false)
     Entry_.new(path).remove_file
@@ -1262,20 +1301,20 @@ module FileUtils
   end
   module_function :remove_file
 
+  # Recursively removes the directory entry given by +path+,
+  # which should be the entry for a regular file, a symbolic link,
+  # or a directory.
   #
-  # Removes a directory +dir+ and its contents recursively.
-  # This method ignores StandardError if +force+ is true.
+  # Optional argument +force+ specifies whether to ignore
+  # raised exceptions of StandardError and its descendants.
   #
   def remove_dir(path, force = false)
     remove_entry path, force   # FIXME?? check if it is a directory
   end
   module_function :remove_dir
 
-  #
-  # Returns true if the contents of a file +a+ and a file +b+ are identical.
-  #
-  #   FileUtils.compare_file('somefile', 'somefile')       #=> true
-  #   FileUtils.compare_file('/dev/null', '/dev/urandom')  #=> false
+  # Returns +true+ if the contents of files +a+ and +b+ are identical,
+  # +false+ otherwise.
   #
   def compare_file(a, b)
     return false unless File.size(a) == File.size(b)
@@ -1292,8 +1331,8 @@ module FileUtils
   module_function :identical?
   module_function :cmp
 
-  #
-  # Returns true if the contents of a stream +a+ and +b+ are identical.
+  # Returns +true+ if the contents of streams +a+ and +b+ are identical,
+  # +false+ otherwise.
   #
   def compare_stream(a, b)
     bsize = fu_stream_blksize(a, b)
@@ -1310,13 +1349,60 @@ module FileUtils
   end
   module_function :compare_stream
 
+  # Copies the file entry at path +src+ to the entry at path +dest+;
+  # each of +src+ and +dest+ may be a string or a
+  # {Pathname}[https://docs.ruby-lang.org/en/master/Pathname.html].
   #
-  # If +src+ is not same as +dest+, copies it and changes the permission
-  # mode to +mode+.  If +dest+ is a directory, destination is +dest+/+src+.
-  # This method removes destination before copy.
+  # See {install(1)}[https://man7.org/linux/man-pages/man1/install.1.html].
   #
-  #   FileUtils.install 'ruby', '/usr/local/bin/ruby', mode: 0755, verbose: true
-  #   FileUtils.install 'lib.rb', '/usr/local/lib/ruby/site_ruby', verbose: true
+  # If the entry at +dest+ does not exist, copies from +src+ to +dest+:
+  #
+  #   File.read('src0.txt')    # => "aaa\n"
+  #   File.exist?('dest0.txt') # => false
+  #   FileUtils.install('src0.txt', 'dest0.txt')
+  #   File.read('dest0.txt')   # => "aaa\n"
+  #
+  # If +dest+ is a file entry, copies from +src+ to +dest+, overwriting:
+  #
+  #   File.read('src1.txt')  # => "aaa\n"
+  #   File.read('dest1.txt') # => "bbb\n"
+  #   FileUtils.install('src1.txt', 'dest1.txt')
+  #   File.read('dest1.txt') # => "aaa\n"
+  #
+  # If +dest+ is a directory entry, copies from +src+ to <tt>dest/src</tt>,
+  # overwriting if necessary:
+  #
+  #   File.read('src2.txt')       # => "aaa\n"
+  #   File.read('dest2/src2.txt') # => "bbb\n"
+  #   FileUtils.install('src2.txt', 'dest2')
+  #   File.read('dest2/src2.txt') # => "aaa\n"
+  #
+  # Keyword arguments:
+  #
+  #   {chown(2)}[https://man7.org/linux/man-pages/man2/chown.2.html]
+  #   and {chmod(2)}[https://man7.org/linux/man-pages/man2/chmod.2.html]
+  #
+  #
+  # - <tt>group: <i>group</i></tt> - changes the group if not +nil+,
+  #   using {File.chown}[https://docs.ruby-lang.org/en/master/File.html#method-c-chown].
+  # - <tt>mode: <i>permissions</i></tt> - changes the permissions.
+  #   using {File.chmod}[https://docs.ruby-lang.org/en/master/File.html#method-c-chmod].
+  # - <tt>noop: true</tt> - does not remove entries; returns +nil+.
+  # - <tt>owner: <i>owner</i></tt> - changes the owner if not +nil+,
+  #   using {File.chown}[https://docs.ruby-lang.org/en/master/File.html#method-c-chown].
+  # - <tt>preserve: true</tt> - preserve timestamps
+  #   using {File.utime}[https://docs.ruby-lang.org/en/master/File.html#method-c-utime].
+  # - <tt>verbose: true</tt> - prints an equivalent command:
+  #
+  #     FileUtils.install('src0.txt', 'dest0.txt', noop: true, verbose: true)
+  #     FileUtils.install('src1.txt', 'dest1.txt', noop: true, verbose: true)
+  #     FileUtils.install('src2.txt', 'dest2', noop: true, verbose: true)
+  #
+  #   Output:
+  #
+  #     install -c src0.txt dest0.txt
+  #     install -c src1.txt dest1.txt
+  #     install -c src2.txt dest2
   #
   def install(src, dest, mode: nil, owner: nil, group: nil, preserve: nil,
               noop: nil, verbose: nil)
