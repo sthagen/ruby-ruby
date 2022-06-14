@@ -336,7 +336,7 @@ module FileUtils
 
   #
   # Creates directories at the paths in the given +list+
-  # (an array of strings or a single string),
+  # (a single path or an array of paths),
   # also creating ancestor directories as needed;
   # returns +list+ if it is an array, <tt>[list]</tt> otherwise.
   #
@@ -412,7 +412,7 @@ module FileUtils
 
   #
   # Removes directories at the paths in the given +list+
-  # (an array of strings or a single string);
+  # (a single path or an array of paths);
   # returns +list+, if it is an array, <tt>[list]</tt> otherwise.
   #
   # Argument +list+ or its elements
@@ -464,7 +464,8 @@ module FileUtils
 
   # Creates {hard links}[https://en.wikipedia.org/wiki/Hard_link].
   #
-  # Arguments +src+ and +dest+
+  # Arguments +src+ (a single path or an array of paths)
+  # and +dest+ (a single path)
   # should be {interpretable as paths}[rdoc-ref:FileUtils@Path+Arguments].
   #
   # When +src+ is the path to an existing file
@@ -531,7 +532,8 @@ module FileUtils
 
   # Creates {hard links}[https://en.wikipedia.org/wiki/Hard_link].
   #
-  # Arguments +src+ and +dest+
+  # Arguments +src+ (a single path or an array of paths)
+  # and +dest+ (a single path)
   # should be {interpretable as paths}[rdoc-ref:FileUtils@Path+Arguments].
   #
   # If +src+ is the path to a directory and +dest+ does not exist,
@@ -615,7 +617,8 @@ module FileUtils
 
   # Creates {symbolic links}[https://en.wikipedia.org/wiki/Symbolic_link].
   #
-  # Arguments +src+ and +dest+
+  # Arguments +src+ (a single path or an array of paths)
+  # and +dest+ (a single path)
   # should be {interpretable as paths}[rdoc-ref:FileUtils@Path+Arguments].
   #
   # When +src+ is the path to an existing file:
@@ -750,7 +753,8 @@ module FileUtils
 
   # Copies files from +src+ to +dest+.
   #
-  # Arguments +src+ and +dest+
+  # Arguments +src+ (a single path or an array of paths)
+  # and +dest+ (a single path)
   # should be {interpretable as paths}[rdoc-ref:FileUtils@Path+Arguments].
   #
   # If +src+ is the path to a file and +dest+ is not the path to a directory,
@@ -813,9 +817,10 @@ module FileUtils
   alias copy cp
   module_function :copy
 
-  # Recursively copies files from +src+ to +dest+.
+  # Recursively copies files.
   #
-  # Arguments +src+ and +dest+
+  # Arguments +src+ (a single path or an array of paths)
+  # and +dest+ (a single path)
   # should be {interpretable as paths}[rdoc-ref:FileUtils@Path+Arguments].
   #
   # If +src+ is the path to a file and +dest+ is not the path to a directory,
@@ -837,31 +842,53 @@ module FileUtils
   # If +src+ is the path to a directory and +dest+ does not exist,
   # recursively copies +src+ to +dest+:
   #
-  #   FileUtils.mkdir_p(['src2/dir0', 'src2/dir1'])
-  #   FileUtils.touch('src2/dir0/src0.txt')
-  #   FileUtils.touch('src2/dir0/src1.txt')
-  #   FileUtils.touch('src2/dir1/src2.txt')
-  #   FileUtils.touch('src2/dir1/src3.txt')
+  #   tree('src2')
+  #   src2
+  #   |-- dir0
+  #   |   |-- src0.txt
+  #   |   `-- src1.txt
+  #   `-- dir1
+  #   |-- src2.txt
+  #   `-- src3.txt
+  #   FileUtils.exist?('dest2') # => false
+  #
   #   FileUtils.cp_r('src2', 'dest2')
-  #   File.exist?('dest2/dir0/src0.txt') # => true
-  #   File.exist?('dest2/dir0/src1.txt') # => true
-  #   File.exist?('dest2/dir1/src2.txt') # => true
-  #   File.exist?('dest2/dir1/src3.txt') # => true
+  #   tree('dest2')
+  #   dest2
+  #   |-- dir0
+  #   |   |-- src0.txt
+  #   |   `-- src1.txt
+  #   `-- dir1
+  #   |-- src2.txt
+  #   `-- src3.txt
   #
   # If +src+ and +dest+ are paths to directories,
   # recursively copies +src+ to <tt>dest/src</tt>:
   #
-  #   FileUtils.mkdir_p(['src3/dir0', 'src3/dir1'])
-  #   FileUtils.touch('src3/dir0/src0.txt')
-  #   FileUtils.touch('src3/dir0/src1.txt')
-  #   FileUtils.touch('src3/dir1/src2.txt')
-  #   FileUtils.touch('src3/dir1/src3.txt')
+  #   tree('src3')
+  #   src3
+  #   |-- dir0
+  #   |   |-- src0.txt
+  #   |   `-- src1.txt
+  #   `-- dir1
+  #   |-- src2.txt
+  #   `-- src3.txt
   #   FileUtils.mkdir('dest3')
+  #
   #   FileUtils.cp_r('src3', 'dest3')
-  #   File.exist?('dest3/src3/dir0/src0.txt') # => true
-  #   File.exist?('dest3/src3/dir0/src1.txt') # => true
-  #   File.exist?('dest3/src3/dir1/src2.txt') # => true
-  #   File.exist?('dest3/src3/dir1/src3.txt') # => true
+  #   tree('dest3')
+  #   dest3
+  #   `-- src3
+  #     |-- dir0
+  #     |   |-- src0.txt
+  #     |   `-- src1.txt
+  #     `-- dir1
+  #         |-- src2.txt
+  #         `-- src3.txt
+  #
+  # If +src+ is an array of paths and +dest+ is a directory,
+  # recursively copies from each path in +src+ to +dest+;
+  # the paths in +src+ may point to files and/or directories.
   #
   # Keyword arguments:
   #
@@ -991,7 +1018,8 @@ module FileUtils
   end
   module_function :copy_stream
 
-  # Moves files from +src+ to +dest+.
+  # Moves files from +src+ (a single path or an array of paths)
+  # to +dest+ (a single path).
   # If +src+ and +dest+ are on different devices,
   # first copies, then removes +src+.
   #
@@ -1087,7 +1115,8 @@ module FileUtils
   alias move mv
   module_function :move
 
-  # Removes entries at the paths in the given +list+;
+  # Removes entries at the paths in the given +list+
+  # (a single path or an array of paths)
   # returns +list+, if it is an array, <tt>[list]</tt> otherwise.
   #
   # Argument +list+ or its elements
@@ -1147,7 +1176,7 @@ module FileUtils
   module_function :safe_unlink
 
   # Removes entries at the paths in the given +list+
-  # (an array of strings or a single string);
+  # (a single path or an array of paths);
   # returns +list+, if it is an array, <tt>[list]</tt> otherwise.
   #
   # Argument +list+ or its elements
@@ -1596,6 +1625,7 @@ module FileUtils
   private_module_function :mode_to_s
 
   # Changes permissions on the entries at the paths given in +list+
+  # (a single path or an array of paths)
   # to the permissions given by +mode+:
   #
   # - Modifies each entry that is a regular file using
@@ -1694,6 +1724,7 @@ module FileUtils
   module_function :chmod_R
 
   # Changes the owner and group on the entries at the paths given in +list+
+  # (a single path or an array of paths)
   # to the given +user+ and +group+:
   #
   # - Modifies each entry that is a regular file using
@@ -1818,7 +1849,8 @@ module FileUtils
   private_module_function :fu_get_gid
 
   # Updates modification times (mtime) and access times (atime)
-  # of the entries given by the paths in +list+;
+  # of the entries given by the paths in +list+
+  # (a single path or an array of paths);
   # by default, creates an empty file for any path to a non-existent entry.
   #
   # Argument +list+ or its elements
