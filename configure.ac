@@ -780,6 +780,17 @@ AS_IF([test "$GCC" = yes], [
 	RUBY_APPEND_OPTION(LDFLAGS, $stack_protector)
     ])
 
+    # aarch64 branch protection
+    AS_CASE(["$target_cpu"], [aarch64], [
+	AS_FOR(option, opt, [-mbranch-protection=pac-ret -msign-return-address=all], [
+            RUBY_TRY_CFLAGS(option, [branch_protection=yes], [branch_protection=no])
+            AS_IF([test "x$branch_protection" = xyes], [
+                RUBY_APPEND_OPTION(XCFLAGS, option)
+                break
+            ])
+        ])
+    ])
+
     AS_CASE("${compress_debug_sections:-zlib}",
     [none|no], [], [
     RUBY_TRY_LDFLAGS(${linker_flag}--compress-debug-sections=${compress_debug_sections:-zlib},
@@ -3118,6 +3129,15 @@ AS_CASE(["$target_cpu-$target_os"],
     AS_IF([test "x$ac_cv_header_execinfo_h" = xyes], [
 	AC_CHECK_LIB([execinfo], [backtrace])
 	AC_CHECK_HEADERS([libunwind.h])
+
+    AC_CHECK_HEADERS([mach/task.h mach/mach_init.h mach/mach_port.h])
+    AS_IF([ test \
+        "x${ac_cv_header_mach_task_h}" = xyes -a \
+        "x${ac_cv_header_mach_mach_init_h}" = xyes -a \
+        "x${ac_cv_header_mach_mach_port_h}" = xyes \
+    ], [
+        AC_DEFINE([HAVE_MACH_TASK_EXCEPTION_PORTS], [1])
+    ])
     ])],
 [*-freebsd*|x86_64-netbsd*], [
     AC_CHECK_HEADERS([execinfo.h])
