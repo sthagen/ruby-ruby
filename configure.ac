@@ -370,12 +370,12 @@ AS_IF([test "$GCC" = yes], [
     icc_version=`echo =__ICC | $CC -E -xc - | sed '/^=/!d;s///;/^__ICC/d'`
     test -n "$icc_version" || icc_version=0
     # RUBY_APPEND_OPTIONS(XCFLAGS, ["-include ruby/config.h" "-include ruby/missing.h"])
+
+    AS_IF([test "$gcc_major" -lt 3], [
+        AC_MSG_ERROR([too old GCC: $gcc_major.$gcc_minor])
+    ])
 ], [
     linker_flag=
-])
-
-AS_IF([test "$GCC" = yes -a "$gcc_major" -lt 3 ], [
-    AC_MSG_ERROR([too old GCC])
 ])
 
 RUBY_PROG_GNU_LD
@@ -642,7 +642,7 @@ AS_CASE(["$GCC:${warnflags+set}:${extra_warnflags:+set}:"],
     AS_IF([test $gcc_major -ge 4], [
 	extra_warnflags="$extra_warnflags -Werror=extra-tokens"
     ])
-    AS_IF([test $gcc_major -ge 5 -a $gcc_major -le 6], [
+    AS_IF([test $gcc_major -ge 4 -a $gcc_major -le 6], [
 	extra_warnflags="$extra_warnflags -Wno-maybe-uninitialized"
     ])
     # ICC doesn't support -Werror=
