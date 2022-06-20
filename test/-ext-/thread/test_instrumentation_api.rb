@@ -1,4 +1,6 @@
 # frozen_string_literal: false
+require 'envutil'
+
 class TestThreadInstrumentation < Test::Unit::TestCase
   def setup
     pend("TODO: No windows support yet") if /mswin|mingw|bccwin/ =~ RUBY_PLATFORM
@@ -16,11 +18,11 @@ class TestThreadInstrumentation < Test::Unit::TestCase
       assert_equal [false] * THREADS_COUNT, threads.map(&:status)
       counters = Bug::ThreadInstrumentation.counters
       counters.each do |c|
-        assert_predicate c,:nonzero?, "Call counters: #{counters.inspect}"
+        assert_predicate c, :nonzero?, "Call counters: #{counters.inspect}"
       end
 
-      sleep 0.01 # Give more time to the native threads to execute their EXIT hook
-      assert_equal counters.first, counters.last # exited as many times as we entered
+      assert_equal THREADS_COUNT, counters.first
+      assert_in_delta THREADS_COUNT, counters.last, 1 # It's possible that a thread didn't execute its EXIT hook yet.
     ensure
       Bug::ThreadInstrumentation::unregister_callback
     end
@@ -39,7 +41,6 @@ class TestThreadInstrumentation < Test::Unit::TestCase
         Bug::ThreadInstrumentation.reset_counters
         threads = threaded_cpu_work
         write_pipe.write(Marshal.dump(threads.map(&:status)))
-        sleep 0.01 # Give more time to the native threads to execute their EXIT hook
         write_pipe.write(Marshal.dump(Bug::ThreadInstrumentation.counters))
         write_pipe.close
         exit!(0)
@@ -57,7 +58,8 @@ class TestThreadInstrumentation < Test::Unit::TestCase
         assert_predicate c, :nonzero?, "Call counters: #{counters.inspect}"
       end
 
-      assert_equal counters.first, counters.last # exited as many times as we entered
+      assert_equal THREADS_COUNT, counters.first
+      assert_in_delta THREADS_COUNT, counters.last, 1 # It's possible that a thread didn't execute its EXIT hook yet.
     ensure
       Bug::ThreadInstrumentation::unregister_callback
     end
