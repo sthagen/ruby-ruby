@@ -6,6 +6,15 @@ class TestThreadInstrumentation < Test::Unit::TestCase
     pend("No windows support") if /mswin|mingw|bccwin/ =~ RUBY_PLATFORM
 
     require '-test-/thread/instrumentation'
+
+    Thread.list.each do |thread|
+      if thread != Thread.current
+        thread.kill
+        thread.join rescue nil
+      end
+    end
+    assert_equal [Thread.current], Thread.list
+
     Bug::ThreadInstrumentation.reset_counters
     Bug::ThreadInstrumentation::register_callback
   end
@@ -78,6 +87,5 @@ class TestThreadInstrumentation < Test::Unit::TestCase
 
   def assert_global_join_counters(counters)
     assert_equal THREADS_COUNT, counters.first
-    assert_include 0..THREADS_COUNT, counters.last # It's possible that a thread didn't execute its EXIT hook yet.
   end
 end
