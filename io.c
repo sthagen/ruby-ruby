@@ -4207,7 +4207,7 @@ static VALUE io_readlines(const struct getline_arg *arg, VALUE io);
  *
  *  With only integer argument +limit+ given,
  *  limits the number of bytes in each line;
- *  see {Line Limit}}[rdoc-ref:IO@Line+Limit]:
+ *  see {Line Limit}[rdoc-ref:IO@Line+Limit]:
  *
  *    f = File.new('t.txt')
  *    f.readlines(8)
@@ -10102,16 +10102,16 @@ rb_f_readlines(int argc, VALUE *argv, VALUE recv)
 
 /*
  *  call-seq:
- *     ARGF.readlines(sep=$/)     -> array
+ *     ARGF.readlines(sep = $/)     -> array
  *     ARGF.readlines(limit)      -> array
  *     ARGF.readlines(sep, limit) -> array
  *
- *     ARGF.to_a(sep=$/)     -> array
+ *     ARGF.to_a(sep = $/)     -> array
  *     ARGF.to_a(limit)      -> array
  *     ARGF.to_a(sep, limit) -> array
  *
- *  Reads +ARGF+'s current file in its entirety, returning an +Array+ of its
- *  lines, one line per element. Lines are assumed to be separated by _sep_.
+ *  Reads each file in +ARGF+ in its entirety, returning an +Array+ containing
+ *  lines from the files. Lines are assumed to be separated by _sep_.
  *
  *     lines = ARGF.readlines
  *     lines[0]                #=> "This is line one\n"
