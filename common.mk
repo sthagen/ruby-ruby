@@ -1323,6 +1323,7 @@ up::
 yes::
 no::
 
+after-update:: common-srcs
 after-update:: $(REVISION_H)
 after-update:: extract-extlibs
 after-update:: extract-gems
@@ -15797,6 +15798,7 @@ transcode.$(OBJEXT): {$(VPATH)}subst.h
 transcode.$(OBJEXT): {$(VPATH)}transcode.c
 transcode.$(OBJEXT): {$(VPATH)}transcode_data.h
 transient_heap.$(OBJEXT): $(hdrdir)/ruby/ruby.h
+transient_heap.$(OBJEXT): $(top_srcdir)/internal/array.h
 transient_heap.$(OBJEXT): $(top_srcdir)/internal/compilers.h
 transient_heap.$(OBJEXT): $(top_srcdir)/internal/gc.h
 transient_heap.$(OBJEXT): $(top_srcdir)/internal/hash.h
