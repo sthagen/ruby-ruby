@@ -9,16 +9,28 @@ require 'rdoc'
 #
 # = \RDoc Markup Reference
 #
-# [Note]
+# Notes:
 #
-#   Examples in this reference are Ruby code and comments.
-#   Certain differences among the sources are noted.
+# - Examples in this reference are Ruby code and comments;
+#   certain differences from other sources
+#   (such as C code and comments) are noted.
+# - An example that shows rendered HTML output
+#   displays that output in a blockquote:
+#
+#   Rendered HTML:
+#   >>>
+#     Some stuff
 #
 # \RDoc-generated documentation is derived from and controlled by:
 #
-# - Single-line or multi-line comments that precede certain definitions.
-# - \RDoc directives in trailing comments (on the same line as code).
-# - The Ruby code itself.
+# - Single-line or multi-line comments that precede certain definitions;
+#   see {Markup in Comments}[rdoc-ref:RDoc::MarkupReference@Markup+in+Comments].
+# - \RDoc directives in trailing comments (on the same line as code);
+#   see <tt>:nodoc:</tt>, <tt>:doc:</tt>, and <tt>:notnew</tt>.
+# - \RDoc directives in single-line comments;
+#   see other {Directives}[rdoc-ref:RDoc::MarkupReference@Directives].
+# - The Ruby code itself;
+#   see {Documentation Derived from Ruby Code}[rdoc-ref:RDoc::MarkupReference@Documentation+Derived+from+Ruby+Code]
 #
 # == Markup in Comments
 #
@@ -45,6 +57,7 @@ require 'rdoc'
 # - {Paragraphs}[rdoc-ref:RDoc::MarkupReference@Paragraphs].
 # - {Verbatim text blocks}[rdoc-ref:RDoc::MarkupReference@Verbatim+Text+Blocks].
 # - {Code blocks}[rdoc-ref:RDoc::MarkupReference@Code+Blocks].
+# - {Block quotes}[rdoc-ref:RDoc::MarkupReference@Block+Quotes].
 # - {Bullet lists}[rdoc-ref:RDoc::MarkupReference@Bullet+Lists].
 # - {Numbered lists}[rdoc-ref:RDoc::MarkupReference@Numbered+Lists].
 # - {Lettered lists}[rdoc-ref:RDoc::MarkupReference@Lettered+Lists].
@@ -76,18 +89,21 @@ require 'rdoc'
 #   # You'll love it.
 #
 # Rendered HTML:
+# >>>
+#   \RDoc produces HTML and command-line documentation for Ruby projects.
+#   \RDoc includes the rdoc and ri tools for generating and displaying
+#   documentation from the command-line.
 #
-# \RDoc produces HTML and command-line documentation for Ruby projects.
-# \RDoc includes the rdoc and ri tools for generating and displaying
-# documentation from the command-line.
-#
-# You'll love it.
+#   You'll love it.
 #
 # A paragraph may contain nested blocks, including:
 #
 # - Verbatim text blocks.
 # - Code blocks.
+# - Block quotes.
 # - Lists of any type.
+# - Headings.
+# - Horizontal rules.
 #
 # ==== Verbatim Text Blocks
 #
@@ -113,16 +129,17 @@ require 'rdoc'
 #   # This is not verbatim text.
 #
 # Rendered HTML:
+# >>>
+#   This is not verbatim text.
 #
-# This is not verbatim text.
-#
-#   This is verbatim text.
-#     Whitespace is honored.     # See?
+#     This is verbatim text.
 #       Whitespace is honored.     # See?
+#         Whitespace is honored.     # See?
 #
-#   This is still the same verbatim text block.
+#     This is still the same verbatim text block.
 #
-# This is not verbatim text.
+#   This is not verbatim text.
+#
 # ==== Code Blocks
 #
 # A special case of verbatim text is the <em>code block</em>,
@@ -134,15 +151,70 @@ require 'rdoc'
 # - Has a contrasting background color.
 # - Has syntax highlighting.
 #
-# Example:
+# Example input:
 #
-#   def foo(name = '', value = 0)
-#     @name = name      # Whitespace is still honored.
-#     @value = value
-#   end
+#   Consider this method:
+#
+#     def foo(name = '', value = 0)
+#       @name = name      # Whitespace is still honored.
+#       @value = value
+#     end
+#
+#
+# Rendered HTML:
+# >>>
+#   Consider this method:
+#
+#     def foo(name = '', value = 0)
+#       @name = name      # Whitespace is still honored.
+#       @value = value
+#     end
 #
 # Pro tip:  If your indented Ruby code does not get highlighted,
 # it may contain a syntax error.
+#
+# ==== Block Quotes
+#
+# You can use the characters <tt>>>></tt> (unindented),
+# followed by indented text, to treat the text
+# as a {block quote}[https://en.wikipedia.org/wiki/Block_quotation]:
+#
+# Example input:
+#
+#   >>>
+#     Lorem ipsum dolor sit amet, consectetur adipiscing elit. Integer
+#     commodo quam iaculis massa posuere, dictum fringilla justo pulvinar.
+#     Quisque turpis erat, pharetra eu dui at, sollicitudin accumsan nulla.
+#
+#     Aenean congue ligula eu ligula molestie, eu pellentesque purus
+#     faucibus. In id leo non ligula condimentum lobortis. Duis vestibulum,
+#     diam in pellentesque aliquet, mi tellus placerat sapien, id euismod
+#     purus magna ut tortor.
+#
+# Rendered HTML:
+#
+# >>>
+#   Lorem ipsum dolor sit amet, consectetur adipiscing elit. Integer
+#   commodo quam iaculis massa posuere, dictum fringilla justo pulvinar.
+#   Quisque turpis erat, pharetra eu dui at, sollicitudin accumsan nulla.
+#
+#   Aenean congue ligula eu ligula molestie, eu pellentesque purus
+#   faucibus. In id leo non ligula condimentum lobortis. Duis vestibulum,
+#   diam in pellentesque aliquet, mi tellus placerat sapien, id euismod
+#   purus magna ut tortor.
+#
+# A block quote may contain nested blocks, including:
+#
+# - Other block quotes.
+# - Paragraphs.
+# - Verbatim text blocks.
+# - Code blocks.
+# - Lists of any type.
+# - Headings.
+# - Horizontal rules.
+#
+# Note that, unlike verbatim text, single newlines are not honored,
+# but that a double newline begins a new paragraph in the block quote.
 #
 # ==== Lists
 #
@@ -165,6 +237,16 @@ require 'rdoc'
 # A list item may be continued on additional lines that are aligned
 # with the first line.  See examples below.
 #
+# A list item may contain nested blocks, including:
+#
+# - Other lists of any type.
+# - Paragraphs.
+# - Verbatim text blocks.
+# - Code blocks.
+# - Block quotes.
+# - Headings.
+# - Horizontal rules.
+#
 # ===== Bullet Lists
 #
 # A bullet list item begins with a hyphen or asterisk.
@@ -180,14 +262,14 @@ require 'rdoc'
 #   # - Last one.
 #
 # Rendered HTML:
+# >>>
+#   - An item.
+#   - Another.
+#   - An item spanning
+#     multiple lines.
 #
-# - An item.
-# - Another.
-# - An item spanning
-#   multiple lines.
-#
-# * Yet another.
-# - Last one.
+#   * Yet another.
+#   - Last one.
 #
 # ===== Numbered Lists
 #
@@ -206,14 +288,14 @@ require 'rdoc'
 #   # 1000. Last one.
 #
 # Rendered HTML:
+# >>>
+#   100. An item.
+#   10. Another.
+#   1. An item spanning
+#      multiple lines.
 #
-# 100. An item.
-# 10. Another.
-# 1. An item spanning
-#    multiple lines.
-#
-# 1. Yet another.
-# 1000. Last one.
+#   1. Yet another.
+#   1000. Last one.
 #
 # ===== Lettered Lists
 #
@@ -232,12 +314,12 @@ require 'rdoc'
 #   # a. Last one.
 #
 # Rendered HTML:
+# >>>
+#   z. An item.
+#   y. Another.
 #
-# z. An item.
-# y. Another.
-#
-# x. Yet another.
-# a. Last one.
+#   x. Yet another.
+#   a. Last one.
 #
 # ===== Labeled Lists
 #
@@ -257,23 +339,14 @@ require 'rdoc'
 #   # bam:: Last one.
 #
 # Rendered HTML:
+# >>>
+#   [foo] An item.
+#   bat:: Another.
+#   [bag] An item spanning
+#         multiple lines.
 #
-# [foo] An item.
-# bat:: Another.
-# [bag] An item spanning
-#       multiple lines.
-#
-# [bar baz] Yet another.
-# bam:: Last one.
-#
-# ===== Blocks Nested in Lists
-#
-# A list item may contain nested blocks, including:
-#
-# - Paragraphs.
-# - Verbatim text blocks.
-# - Code blocks.
-# - Other lists of any type.
+#   [bar baz] Yet another.
+#   bam:: Last one.
 #
 # ==== Headings
 #
@@ -313,15 +386,15 @@ require 'rdoc'
 #   # ---
 #
 # Rendered HTML:
+# >>>
+#   ------
+#   Stuff between.
 #
-# ------
-# Stuff between.
+#   \--- Not a horizontal rule.
 #
-# \--- Not a horizontal rule.
+#   -- Also not a horizontal rule.
 #
-# -- Also not a horizontal rule.
-#
-# ---
+#   ---
 #
 # ==== Directives
 #
