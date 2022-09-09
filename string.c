@@ -3393,8 +3393,7 @@ rb_str_concat_literals(size_t num, const VALUE *strary)
         const VALUE v = strary[i];
         int encidx = ENCODING_GET(v);
 
-        rb_enc_cr_str_buf_cat(str, RSTRING_PTR(v), RSTRING_LEN(v),
-                              encidx, ENC_CODERANGE(v), NULL);
+        rb_str_buf_append(str, v);
         if (encidx != ENCINDEX_US_ASCII) {
             if (ENCODING_GET_INLINED(str) == ENCINDEX_US_ASCII)
                 rb_enc_set_index(str, encidx);
@@ -3481,17 +3480,13 @@ rb_str_concat(VALUE str1, VALUE str2)
         return rb_str_append(str1, str2);
     }
 
-    encidx = rb_enc_to_index(enc);
-    if (encidx == ENCINDEX_ASCII_8BIT || encidx == ENCINDEX_US_ASCII) {
-        /* US-ASCII automatically extended to ASCII-8BIT */
+    encidx = rb_ascii8bit_appendable_encoding_index(enc, code);
+    if (encidx >= 0) {
         char buf[1];
         buf[0] = (char)code;
-        if (code > 0xFF) {
-            rb_raise(rb_eRangeError, "%u out of char range", code);
-        }
         rb_str_cat(str1, buf, 1);
-        if (encidx == ENCINDEX_US_ASCII && code > 127) {
-            rb_enc_associate_index(str1, ENCINDEX_ASCII_8BIT);
+        if (encidx != rb_enc_to_index(enc)) {
+            rb_enc_associate_index(str1, encidx);
             ENC_CODERANGE_SET(str1, ENC_CODERANGE_VALID);
         }
     }
@@ -3522,6 +3517,26 @@ rb_str_concat(VALUE str1, VALUE str2)
         ENC_CODERANGE_SET(str1, cr);
     }
     return str1;
+}
+
+int
+rb_ascii8bit_appendable_encoding_index(rb_encoding *enc, unsigned int code)
+{
+    int encidx = rb_enc_to_index(enc);
+
+    if (encidx == ENCINDEX_ASCII_8BIT || encidx == ENCINDEX_US_ASCII) {
+        /* US-ASCII automatically extended to ASCII-8BIT */
+        if (code > 0xFF) {
+            rb_raise(rb_eRangeError, "%u out of char range", code);
+        }
+        if (encidx == ENCINDEX_US_ASCII && code > 127) {
+            return ENCINDEX_ASCII_8BIT;
+        }
+        return encidx;
+    }
+    else {
+        return -1;
+    }
 }
 
 /*
@@ -5344,7 +5359,6 @@ rb_str_update(VALUE str, long beg, long len, VALUE val)
     if (len > slen - beg) {
         len = slen - beg;
     }
-    str_modify_keep_cr(str);
     p = str_nth(RSTRING_PTR(str), RSTRING_END(str), beg, enc, singlebyte);
     if (!p) p = RSTRING_END(str);
     e = str_nth(p, RSTRING_END(str), len, enc, singlebyte);
@@ -6497,10 +6511,20 @@ rb_str_include(VALUE str, VALUE arg)
  *    to_i(base = 10) -> integer
  *
  *  Returns the result of interpreting leading characters in +self+
- *  as an integer in the given +base+ (which must be in (2..36)):
+ *  as an integer in the given +base+ (which must be in (0, 2..36)):
  *
  *    '123456'.to_i     # => 123456
  *    '123def'.to_i(16) # => 1195503
+ *
+ *  With +base+ zero, string +object+ may contain leading characters
+ *  to specify the actual base:
+ *
+ *    '123def'.to_i(0)   # => 123
+ *    '0123def'.to_i(0)  # => 83
+ *    '0b123def'.to_i(0) # => 1
+ *    '0o123def'.to_i(0) # => 83
+ *    '0d123def'.to_i(0) # => 123
+ *    '0x123def'.to_i(0) # => 1195503
  *
  *  Characters past a leading valid number (in the given +base+) are ignored:
  *
@@ -10067,9 +10091,9 @@ rb_str_hex(VALUE str)
  *  returns zero if there is no such leading substring:
  *
  *    '123'.oct             # => 83
-      '-377'.oct            # => -255
-      '0377non-numeric'.oct # => 255
-      'non-numeric'.oct     # => 0
+ *    '-377'.oct            # => -255
+ *    '0377non-numeric'.oct # => 255
+ *    'non-numeric'.oct     # => 0
  *
  *  If +self+ starts with <tt>0</tt>, radix indicators are honored;
  *  see Kernel#Integer.

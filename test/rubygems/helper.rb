@@ -334,8 +334,6 @@ class Gem::TestCase < Test::Unit::TestCase
     # capture output
     Gem::DefaultUserInteraction.ui = Gem::MockGemUi.new
 
-    ENV["TMPDIR"] = @tempdir
-
     @orig_SYSTEM_WIDE_CONFIG_FILE = Gem::ConfigFile::SYSTEM_WIDE_CONFIG_FILE
     Gem::ConfigFile.send :remove_const, :SYSTEM_WIDE_CONFIG_FILE
     Gem::ConfigFile.send :const_set, :SYSTEM_WIDE_CONFIG_FILE,
@@ -465,12 +463,7 @@ class Gem::TestCase < Test::Unit::TestCase
 
     Dir.chdir @current_dir
 
-    # FileUtils.rm_rf randomly fails on ci.rvm.jp trunk-mjit
-    if ENV['RUBY_DEBUG']&.include?('ci')
-      system('rm', '-rf', @tempdir.shellescape, exception: true)
-    else
-      FileUtils.rm_rf @tempdir
-    end
+    FileUtils.rm_rf @tempdir
 
     ENV.replace(@orig_env)
 

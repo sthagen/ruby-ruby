@@ -1774,14 +1774,18 @@ expr		: command_call
 			p->ctxt.in_kwarg = 1;
 			$<tbl>$ = push_pvtbl(p);
 		    }
+		    {
+			$<tbl>$ = push_pktbl(p);
+		    }
 		  p_top_expr_body
 		    {
+			pop_pktbl(p, $<tbl>4);
 			pop_pvtbl(p, $<tbl>3);
 			p->ctxt.in_kwarg = $<ctxt>2.in_kwarg;
 		    /*%%%*/
-			$$ = NEW_CASE3($1, NEW_IN($4, 0, 0, &@4), &@$);
+			$$ = NEW_CASE3($1, NEW_IN($5, 0, 0, &@5), &@$);
 		    /*% %*/
-		    /*% ripper: case!($1, in!($4, Qnil, Qnil)) %*/
+		    /*% ripper: case!($1, in!($5, Qnil, Qnil)) %*/
 		    }
 		| arg keyword_in
 		    {
@@ -1792,14 +1796,18 @@ expr		: command_call
 			p->ctxt.in_kwarg = 1;
 			$<tbl>$ = push_pvtbl(p);
 		    }
+		    {
+			$<tbl>$ = push_pktbl(p);
+		    }
 		  p_top_expr_body
 		    {
+			pop_pktbl(p, $<tbl>4);
 			pop_pvtbl(p, $<tbl>3);
 			p->ctxt.in_kwarg = $<ctxt>2.in_kwarg;
 		    /*%%%*/
-			$$ = NEW_CASE3($1, NEW_IN($4, NEW_TRUE(&@4), NEW_FALSE(&@4), &@4), &@$);
+			$$ = NEW_CASE3($1, NEW_IN($5, NEW_TRUE(&@5), NEW_FALSE(&@5), &@5), &@$);
 		    /*% %*/
-		    /*% ripper: case!($1, in!($4, Qnil, Qnil)) %*/
+		    /*% ripper: case!($1, in!($5, Qnil, Qnil)) %*/
 		    }
 		| arg %prec tLBRACE_ARG
 		;
@@ -7196,6 +7204,10 @@ tokadd_string(struct parser_params *p,
 {
     int c;
     bool erred = false;
+#ifdef RIPPER
+    const int heredoc_end = (p->heredoc_end ? p->heredoc_end + 1 : 0);
+    int top_of_line = FALSE;
+#endif
 
 #define mixed_error(enc1, enc2) \
     (void)(erred || (parser_mixed_error(p, enc1, enc2), erred = true))
@@ -7206,6 +7218,12 @@ tokadd_string(struct parser_params *p,
 	if (p->heredoc_indent > 0) {
 	    parser_update_heredoc_indent(p, c);
 	}
+#ifdef RIPPER
+        if (top_of_line && heredoc_end == p->ruby_sourceline) {
+            pushback(p, c);
+            break;
+        }
+#endif
 
 	if (paren && c == paren) {
 	    ++*nest;
@@ -7332,6 +7350,9 @@ tokadd_string(struct parser_params *p,
 	    }
         }
 	tokadd(p, c);
+#ifdef RIPPER
+	top_of_line = (c == '\n');
+#endif
     }
   terminate:
     if (*enc) *encp = *enc;

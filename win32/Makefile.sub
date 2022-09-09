@@ -4,7 +4,7 @@ SHELL = $(COMSPEC)
 ECHO1 = $(V:1=@:)
 RUNCMD = $(COMSPEC) /c
 MKFILES = Makefile verconf.mk
-NULLCMD = type nul
+NULLCMD = exit /b0.		# exit ignores the rest
 NULL = nul
 CHDIR = cd
 PATH_SEPARATOR = ;
@@ -24,6 +24,14 @@ REVISION_FORCE = PHONY
 
 !ifndef CROSS_COMPILING
 CROSS_COMPILING = no
+!else if "$(CROSS_COMPILING)" == "yes"
+! if "$(HAVE_BASERUBY)" != "yes"
+!   error executable host ruby is required for cross-compiling
+! endif
+!else
+! if "$(CROSS_COMPILING)" != "no"
+!   error Bad CROSS_COMPILING
+! endif
 !endif
 !ifndef win_srcdir
 win_srcdir = $(srcdir)/win32
@@ -355,11 +363,15 @@ RUNRUBY = .\$(PROGRAM) -I$(srcdir)/lib -I"$(EXTOUT)/$(arch)" -I.
 !endif
 MINIRUBY = $(MINIRUBY) $(MINIRUBYOPT)
 RUNRUBY = $(RUNRUBY) "$(tooldir)/runruby.rb" --extout="$(EXTOUT)" $(RUNRUBYOPT) -- $(RUN_OPTS)
+yes_baseruby = $(HAVE_BASERUBY:no=)
+no_baseruby = $(HAVE_BASERUBY:yes=)
 !if "$(CROSS_COMPILING)" == "yes"
 XRUBY = $(MINIRUBY)
 BOOTSTRAPRUBY = $(BASERUBY)
+BOOTSTRAPRUBY_OPT = -r./$(arch)-fake
 !else
 BOOTSTRAPRUBY = $(MINIRUBY)
+BOOTSTRAPRUBY_OPT =
 XRUBY = $(RUNRUBY)
 !endif
 BTESTRUBY = $(MINIRUBY) -r./$(arch)-fake
@@ -620,6 +632,10 @@ $(CONFIG_H): $(MKFILES) $(srcdir)/win32/Makefile.sub $(win_srcdir)/Makefile.sub
 #define ULL_TO_DOUBLE(n) ((double)(unsigned long)((n)>>32) * (1I64 << 32) + (unsigned long)(n))
 !endif
 #define HAVE_OFF_T 1
+#define rb_off_t __int64
+#define SIGNEDNESS_OF_OFF_T -1
+#define OFFT2NUM(v) LL2NUM(v)
+#define NUM2OFFT(v) NUM2LL(v)
 #define SIZEOF_INT 4
 #define SIZEOF_SHORT 2
 #define SIZEOF_LONG 4
@@ -1088,6 +1104,10 @@ s,@ruby_pc@,$(ruby_pc),;t t
 s,@MJIT_SUPPORT@,$(MJIT_SUPPORT),;t t
 <<KEEP
 
+!if "$(HAVE_BASERUBY)" != "yes" || "$(CROSS_COMPILING)" == "yes"
+$(RBCONFIG): $(PREP)
+!endif
+
 miniruby: miniruby$(EXEEXT)
 
 miniruby$(EXEEXT):
@@ -1167,7 +1187,7 @@ $(LIBRUBY_SO):	$(LIBRUBY_A) $(DLDOBJS) $(RUBYDEF) $(RUBY_SO_NAME).res
 
 $(RUBYDEF):	$(LIBRUBY_A) $(RBCONFIG)
 		$(ECHO) generating $(@:\=/)
-		$(Q) $(MINIRUBY) $(srcdir)/win32/mkexports.rb \
+		$(Q) $(BOOTSTRAPRUBY_COMMAND) $(srcdir)/win32/mkexports.rb \
 		  -output=$@ -arch=$(ARCH) $(LIBRUBY_A)
 
 {$(win_srcdir)}.def.lib:
@@ -1211,10 +1231,8 @@ clean-enc distclean-enc realclean-enc:
 	-$(Q)$(MAKE) $(MAKE_ENC) $(@:-enc=)
 !endif
 
-$(RBCONFIG): $(PREP)
-
 $(RCFILES): $(RBCONFIG) $(srcdir)/revision.h $(srcdir)/win32/resource.rb
-		@$(MINIRUBY) $(srcdir)/win32/resource.rb \
+		@$(BOOTSTRAPRUBY_COMMAND) $(srcdir)/win32/resource.rb \
 			-ruby_name=$(RUBY_INSTALL_NAME) \
 			-rubyw_name=$(RUBYW_INSTALL_NAME) \
 			-so_name=$(RUBY_SO_NAME) \
@@ -1309,7 +1327,7 @@ probes.h: {$(VPATH)}probes.dmyh
 <<KEEP
 
 INSNS	= opt_sc.inc optinsn.inc optunifs.inc insns.inc insns_info.inc \
-	  vmtc.inc vm.inc mjit_compile.inc
+	  vmtc.inc vm.inc mjit_compile_attr.inc
 
 !if [exit > insns_rules.mk]
 !else if [for %I in ($(INSNS)) do \
@@ -1326,6 +1344,10 @@ INSNS	= opt_sc.inc optinsn.inc optunifs.inc insns.inc insns_info.inc \
 ! if [del insns_rules.mk > nul]
 ! endif
 !endif
+
+$(srcdir)/mjit_instruction.rb: $(tooldir)/ruby_vm/views/mjit_instruction.rb.erb
+	$(ECHO) generating $@
+	$(Q) $(BASERUBY) -Ku $(tooldir)/insns2vm.rb $(INSNS2VMOPT) $@
 
 verconf.h: verconf.mk
 
