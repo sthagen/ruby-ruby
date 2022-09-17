@@ -26,6 +26,9 @@ pub type rb_alloc_func_t = ::std::option::Option<unsafe extern "C" fn(klass: VAL
 extern "C" {
     pub fn rb_get_alloc_func(klass: VALUE) -> rb_alloc_func_t;
 }
+extern "C" {
+    pub fn rb_method_basic_definition_p(klass: VALUE, mid: ID) -> ::std::os::raw::c_int;
+}
 #[repr(C)]
 pub struct RBasic {
     pub flags: VALUE,
@@ -574,6 +577,12 @@ extern "C" {
 }
 extern "C" {
     pub fn rb_callable_method_entry(klass: VALUE, id: ID) -> *const rb_callable_method_entry_t;
+}
+extern "C" {
+    pub fn rb_callable_method_entry_or_negative(
+        klass: VALUE,
+        id: ID,
+    ) -> *const rb_callable_method_entry_t;
 }
 pub type rb_num_t = ::std::os::raw::c_ulong;
 #[repr(C)]
@@ -1144,6 +1153,9 @@ extern "C" {
 }
 extern "C" {
     pub fn rb_get_iseq_flags_has_rest(iseq: *const rb_iseq_t) -> bool;
+}
+extern "C" {
+    pub fn rb_get_iseq_flags_ruby2_keywords(iseq: *const rb_iseq_t) -> bool;
 }
 extern "C" {
     pub fn rb_get_iseq_flags_has_block(iseq: *const rb_iseq_t) -> bool;

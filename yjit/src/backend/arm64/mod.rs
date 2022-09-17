@@ -140,7 +140,14 @@ impl Assembler
                 Opnd::Reg(_) | Opnd::InsnOut { .. } => opnd,
                 Opnd::Mem(_) => {
                     let split_opnd = split_memory_address(asm, opnd);
-                    asm.load(split_opnd)
+                    let out_opnd = asm.load(split_opnd);
+                    // Many Arm insns support only 32-bit or 64-bit operands. asm.load with fewer
+                    // bits zero-extends the value, so it's safe to recognize it as a 32-bit value.
+                    if out_opnd.rm_num_bits() < 32 {
+                        out_opnd.with_num_bits(32).unwrap()
+                    } else {
+                        out_opnd
+                    }
                 },
                 _ => asm.load(opnd)
             }
@@ -747,7 +754,11 @@ impl Assembler
                             emit_load_value(cb, out.into(), imm as u64);
                         },
                         Opnd::Mem(_) => {
-                            ldur(cb, out.into(), opnd.into());
+                            match opnd.rm_num_bits() {
+                                64 | 32 => ldur(cb, out.into(), opnd.into()),
+                                8 => ldurb(cb, out.into(), opnd.into()),
+                                num_bits => panic!("unexpected num_bits: {}", num_bits)
+                            };
                         },
                         Opnd::Value(value) => {
                             // We dont need to check if it's a special const
@@ -960,17 +971,6 @@ impl Assembler
             };
         }
 
-        // Invalidate icache for newly written out region so we don't run
-        // stale code.
-        #[cfg(not(test))]
-        {
-            let start = cb.get_ptr(start_write_pos).raw_ptr();
-            let write_ptr = cb.get_write_ptr().raw_ptr();
-            let codeblock_end = cb.get_ptr(cb.get_mem_size()).raw_ptr();
-            let end = std::cmp::min(write_ptr, codeblock_end);
-            unsafe { rb_yjit_icache_invalidate(start as _, end as _) };
-        }
-
         gc_offsets
     }
 
@@ -985,10 +985,21 @@ impl Assembler
             assert!(label_idx == idx);
         }
 
+        let start_write_pos = cb.get_write_pos();
         let gc_offsets = asm.arm64_emit(cb);
 
         if !cb.has_dropped_bytes() {
             cb.link_labels();
+        }
+
+        // Invalidate icache for newly written out region so we don't run stale code.
+        #[cfg(not(test))]
+        {
+            let start = cb.get_ptr(start_write_pos).raw_ptr();
+            let write_ptr = cb.get_write_ptr().raw_ptr();
+            let codeblock_end = cb.get_ptr(cb.get_mem_size()).raw_ptr();
+            let end = std::cmp::min(write_ptr, codeblock_end);
+            unsafe { rb_yjit_icache_invalidate(start as _, end as _) };
         }
 
         gc_offsets
