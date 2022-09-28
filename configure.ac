@@ -3767,6 +3767,10 @@ AS_CASE(["${YJIT_SUPPORT}"],
              ]))
 
     YJIT_LIBS="yjit/target/${rb_rust_target_subdir}/libyjit.a"
+    AS_CASE(["$target_os"],[openbsd*],[
+        # Link libc++abi (which requires libpthread) for _Unwind_* functions needed by yjit
+        LDFLAGS="$LDFLAGS -lpthread -lc++abi"
+    ])
     YJIT_OBJ='yjit.$(OBJEXT)'
     AC_DEFINE(USE_YJIT, 1)
 ], [AC_DEFINE(USE_YJIT, 0)])
@@ -4343,6 +4347,14 @@ AC_SUBST(XCC_WRAPPER)
 
 AS_CASE([" $CPP "], [*" $CC "*], [CPP=`echo " $CPP " | sed "s| $CC |"' $(CC) |;s/^ *//;s/  *$//'`])
 
+AS_IF([test ! -f "$srcdir/revision.h"], [
+    AS_IF([test "x$HAVE_BASERUBY" = xyes], [
+	${BASERUBY} -C "$srcdir" tool/file2lastrev.rb -q --revision.h > "$srcdir/revision.h"
+    ], [
+	touch "$srcdir/revision.h"
+    ])
+])
+
 AS_IF([test x"$firstmf" != x], [
     AC_CONFIG_FILES($firstmf:$firsttmpl, [], [firstmf="$firstmf" firsttmpl="$firsttmpl"])
 ])
@@ -4359,17 +4371,24 @@ AC_CONFIG_FILES(Makefile:template/Makefile.in, [
 	AS_CASE("$VCS",
 		['$(GIT)'|git], [VCSUP='$(VCS) pull --rebase $(GITPULLOPTIONS)'],
 		[VCSUP='$(VCS)'])
-	sed -n \
-	    -e '[/^@%:@define \(RUBY_RELEASE_[A-Z]*\) \([0-9][0-9]*\)/]{' \
-	    -e   's//\1 = \2/' \
-	    -e   '[s/ \([0-9]\)$/ 0\1/]' \
-	    -e   p \
-	    -e '}' "$srcdir/version.h"
+	for f in "$srcdir/version.h" "$srcdir/revision.h"; do
+            test -f "$f" || continue
+	    sed -n \
+	        -e '[/^@%:@define \(RUBY_RELEASE_[A-Z]*\) \([0-9][0-9]*\)/]{' \
+	        -e   's//\1 = \2/' \
+	        -e   '[s/ \([0-9]\)$/ 0\1/]' \
+	        -e   p \
+	        -e '}' "$f"
+        done
 	sed '/^MISSING/s/\$U\././g;/^VCS *=/s#@VCS@#'"$VCS"'#;/^VCSUP *=/s#@VCSUP@#'"$VCSUP"'#' Makefile
 	echo; test x"$EXEEXT" = x || echo 'miniruby: miniruby$(EXEEXT)'
 	AS_IF([test "$gnumake" != yes], [
 	    echo ['$(MKFILES): $(srcdir)/common.mk']
 	    sed ['s/{\$([^(){}]*)[^{}]*}//g'] ${srcdir}/common.mk
+            AS_IF([test "$YJIT_SUPPORT" = yes], [
+                cat ${srcdir}/yjit/not_gmake.mk
+                echo ['$(MKFILES): ${srcdir}/yjit/not_gmake.mk']
+            ])
 	], [
 	    echo 'distclean-local::; @$(RM) GNUmakefile uncommon.mk'
 	])
@@ -4387,7 +4406,7 @@ AC_CONFIG_FILES(Makefile:template/Makefile.in, [
 	echo 'ruby: $(PROGRAM);' >> $tmpmk
 	test "$tmpmk" = "$tmpgmk" || rm -f "$tmpgmk"
     ]) && mv -f $tmpmk Makefile],
-[EXEEXT='$EXEEXT' MAKE='${MAKE-make}' gnumake='$gnumake' GIT='$GIT'])
+[EXEEXT='$EXEEXT' MAKE='${MAKE-make}' gnumake='$gnumake' GIT='$GIT' YJIT_SUPPORT='$YJIT_SUPPORT'])
 
 AC_ARG_WITH([ruby-pc],
 	    AS_HELP_STRING([--with-ruby-pc=FILENAME], [pc file basename]),

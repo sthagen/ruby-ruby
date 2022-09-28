@@ -61,7 +61,7 @@ if !Dir.respond_to?(:mktmpdir)
 end
 
 # Configuration
-BT = Struct.new(:ruby,
+bt = Struct.new(:ruby,
                 :verbose,
                 :color,
                 :tty,
@@ -73,9 +73,67 @@ BT = Struct.new(:ruby,
                 :failed,
                 :reset,
                 :columns,
+                :window_width,
                 :width,
                 :platform,
-                ).new
+                )
+BT = Class.new(bt) do
+  def putc(c)
+    unless self.quiet
+      if self.window_width == nil
+        if BT.tty
+          unless w = ENV["COLUMNS"] and (w = w.to_i) > 0
+            w = 80
+          end
+          w -= 1
+        else
+          w = false
+        end
+        self.window_width = w
+      end
+      if self.window_width and self.columns >= self.window_width
+        $stderr.puts
+        self.columns = 0
+      end
+      $stderr.print c
+      self.columns += 1
+    end
+  end
+
+  def wn=(wn)
+    if wn <= 0
+      wn = nil
+      if /(?:\A|\s)--jobserver-(?:auth|fds)=\K(\d+),(\d+)/ =~ ENV.delete("MAKEFLAGS")
+        begin
+          r = IO.for_fd($1.to_i(10), "rb", autoclose: false)
+          w = IO.for_fd($2.to_i(10), "wb", autoclose: false)
+        rescue => e
+          r.close if r
+        else
+          r.close_on_exec = true
+          w.close_on_exec = true
+          tokens = r.read_nonblock(1024, exception: false)
+          r.close
+          if String === tokens
+            tokens.freeze
+            auth = w
+            w = nil
+            at_exit {auth << tokens; auth.close}
+            wn = tokens.size + 1
+          else
+            w.close
+            wn = 1
+          end
+        end
+      end
+      unless wn
+        require 'etc'
+        wn = [Etc.nprocessors / 2, 1].max
+      end
+    end
+    super wn
+  end
+end.new
 
 BT_STATE = Struct.new(:count, :error).new
 
@@ -122,12 +180,7 @@ def main
       BT.quiet = true
       true
     when /\A-j(\d+)?/
-      wn = $1.to_i
-      if wn <= 0
-        require 'etc'
-        wn = [Etc.nprocessors / 2, 1].max
-      end
-      BT.wn = wn
+      BT.wn = $1.to_i
       true
     when /\A(-v|--v(erbose))\z/
       BT.verbose = true
@@ -154,8 +207,7 @@ End
     end
   }
   if tests and not ARGV.empty?
-    $stderr.puts "--tests and arguments are exclusive"
-    exit false
+    abort "--sets and arguments are exclusive"
   end
   tests ||= ARGV
   tests = Dir.glob("#{File.dirname($0)}/test_*.rb").sort if tests.empty?
@@ -241,7 +293,7 @@ def concurrent_exec_test
     end
   end
 
-  $stderr.print ' ' unless BT.quiet
+  BT.putc ' '
   aq.close
   i = 1
   term_wn = 0
@@ -253,7 +305,7 @@ def concurrent_exec_test
         when BT.tty
           $stderr.print "#{BT.progress_bs}#{BT.progress[(i+=1) % BT.progress.size]}"
         else
-          $stderr.print '.'
+          BT.putc '.'
         end
       else
         term_wn += 1
@@ -275,7 +327,7 @@ def exec_test(pathes)
 
   # execute tests
   if BT.wn > 1
-    concurrent_exec_test if BT.wn > 1
+    concurrent_exec_test
   else
     prev_basename = nil
     Assertion.all.each do |basename, assertions|
@@ -428,7 +480,7 @@ class Assertion < Struct.new(:src, :path, :lineno, :proc)
       elsif BT.verbose
         $stderr.printf(". %.3f\n", t)
       else
-        $stderr.print '.'
+        BT.putc '.'
       end
     else
       $stderr.print "#{BT.failed}F"

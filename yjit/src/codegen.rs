@@ -209,6 +209,7 @@ macro_rules! gen_counter_incr {
             let ptr = ptr_to_counter!($counter_name);
 
             // Load the pointer into a register
+            $asm.comment(&format!("increment counter {}", stringify!($counter_name)));
             let ptr_reg = $asm.load(Opnd::const_ptr(ptr as *const u8));
             let counter_opnd = Opnd::mem(64, ptr_reg, 0);
 
@@ -1149,7 +1150,7 @@ fn gen_opt_plus(
         }
 
         // Check that both operands are fixnums
-        guard_two_fixnums(ctx, asm, side_exit);
+        guard_two_fixnums(jit, ctx, asm, ocb, side_exit);
 
         // Get the operands from the stack
         let arg1 = ctx.stack_pop(1);
@@ -1937,14 +1938,12 @@ fn gen_set_ivar(
     let val_opnd = ctx.stack_pop(1);
     let recv_opnd = ctx.stack_pop(1);
 
-    let ivar_index: u32 = unsafe { rb_obj_ensure_iv_index_mapping(recv, ivar_name) };
-
-    // Call rb_vm_set_ivar_idx with the receiver, the index of the ivar, and the value
+    // Call rb_vm_set_ivar_id with the receiver, the ivar name, and the value
     let val = asm.ccall(
-        rb_vm_set_ivar_idx as *const u8,
+        rb_vm_set_ivar_id as *const u8,
         vec![
             recv_opnd,
-            Opnd::Imm(ivar_index.into()),
+            Opnd::UImm(ivar_name.into()),
             val_opnd,
         ],
     );
@@ -2022,81 +2021,82 @@ fn gen_get_ivar(
         return EndBlock;
     }
 
-    // FIXME: Mapping the index could fail when there is too many ivar names. If we're
-    // compiling for a branch stub that can cause the exception to be thrown from the
-    // wrong PC.
-    let ivar_index =
-        unsafe { rb_obj_ensure_iv_index_mapping(comptime_receiver, ivar_name) }.as_usize();
+    let ivar_index = unsafe {
+        let shape_id = comptime_receiver.shape_of();
+        let shape = rb_shape_get_shape_by_id(shape_id);
+        let mut ivar_index: u32 = 0;
+        if rb_shape_get_iv_index(shape, ivar_name, &mut ivar_index) {
+            Some(ivar_index as usize)
+        } else {
+            None
+        }
+    };
+
+    // must be before stack_pop
+    let recv_type = ctx.get_opnd_type(recv_opnd);
+
+    // Upgrade type
+    if !recv_type.is_heap() {
+        ctx.upgrade_opnd_type(recv_opnd, Type::UnknownHeap);
+    }
 
     // Pop receiver if it's on the temp stack
     if recv_opnd != SelfOpnd {
         ctx.stack_pop(1);
     }
 
-    if USE_RVARGC != 0 {
-        // Check that the ivar table is big enough
-        // Check that the slot is inside the ivar table (num_slots > index)
-        let num_slots = Opnd::mem(32, recv, ROBJECT_OFFSET_NUMIV);
-        asm.cmp(num_slots, Opnd::UImm(ivar_index as u64));
-        asm.jbe(counted_exit!(ocb, side_exit, getivar_idx_out_of_range).into());
+    // Guard heap object
+    if !recv_type.is_heap() {
+        guard_object_is_heap(asm, recv, side_exit);
     }
 
     // Compile time self is embedded and the ivar index lands within the object
-    let test_result = unsafe { FL_TEST_RAW(comptime_receiver, VALUE(ROBJECT_EMBED.as_usize())) != VALUE(0) };
-    if test_result {
+    let embed_test_result = unsafe { FL_TEST_RAW(comptime_receiver, VALUE(ROBJECT_EMBED.as_usize())) != VALUE(0) };
+
+    let flags_mask: usize = unsafe { rb_shape_flags_mask() }.as_usize();
+    let expected_flags_mask: usize = (RUBY_T_MASK as usize) | !flags_mask | (ROBJECT_EMBED as usize);
+    let expected_flags = comptime_receiver.builtin_flags() & expected_flags_mask;
+
+    // Combined guard for all flags: shape, embeddedness, and T_OBJECT
+    let flags_opnd = Opnd::mem(64, recv, RUBY_OFFSET_RBASIC_FLAGS);
+
+    asm.comment("guard shape, embedded, and T_OBJECT");
+    let flags_opnd = asm.and(flags_opnd, Opnd::UImm(expected_flags_mask as u64));
+    asm.cmp(flags_opnd, Opnd::UImm(expected_flags as u64));
+    jit_chain_guard(
+        JCC_JNE,
+        jit,
+        &starting_context,
+        asm,
+        ocb,
+        max_chain_depth,
+        side_exit,
+    );
+
+    // If there is no IVAR index, then the ivar was undefined
+    // when we entered the compiler.  That means we can just return
+    // nil for this shape + iv name
+    if ivar_index.is_none() {
+        let out_opnd = ctx.stack_push(Type::Nil);
+        asm.mov(out_opnd, Qnil.into());
+    } else if embed_test_result {
         // See ROBJECT_IVPTR() from include/ruby/internal/core/robject.h
 
-        // Guard that self is embedded
-        // TODO: BT and JC is shorter
-        asm.comment("guard embedded getivar");
-        let flags_opnd = Opnd::mem(64, recv, RUBY_OFFSET_RBASIC_FLAGS);
-        asm.test(flags_opnd, Opnd::UImm(ROBJECT_EMBED as u64));
-        let side_exit = counted_exit!(ocb, side_exit, getivar_megamorphic);
-        jit_chain_guard(
-            JCC_JZ,
-            jit,
-            &starting_context,
-            asm,
-            ocb,
-            max_chain_depth,
-            side_exit,
-        );
-
         // Load the variable
-        let offs = ROBJECT_OFFSET_AS_ARY + (ivar_index * SIZEOF_VALUE) as i32;
+        let offs = ROBJECT_OFFSET_AS_ARY + (ivar_index.unwrap() * SIZEOF_VALUE) as i32;
         let ivar_opnd = Opnd::mem(64, recv, offs);
-
-        // Guard that the variable is not Qundef
-        asm.cmp(ivar_opnd, Qundef.into());
-        let out_val = asm.csel_e(Qnil.into(), ivar_opnd);
 
         // Push the ivar on the stack
         let out_opnd = ctx.stack_push(Type::Unknown);
-        asm.mov(out_opnd, out_val);
+        asm.mov(out_opnd, ivar_opnd);
     } else {
         // Compile time value is *not* embedded.
-
-        // Guard that value is *not* embedded
-        // See ROBJECT_IVPTR() from include/ruby/internal/core/robject.h
-        asm.comment("guard extended getivar");
-        let flags_opnd = Opnd::mem(64, recv, RUBY_OFFSET_RBASIC_FLAGS);
-        asm.test(flags_opnd, Opnd::UImm(ROBJECT_EMBED as u64));
-        let megamorphic_side_exit = counted_exit!(ocb, side_exit, getivar_megamorphic);
-        jit_chain_guard(
-            JCC_JNZ,
-            jit,
-            &starting_context,
-            asm,
-            ocb,
-            max_chain_depth,
-            megamorphic_side_exit,
-        );
 
         if USE_RVARGC == 0 {
             // Check that the extended table is big enough
             // Check that the slot is inside the extended table (num_slots > index)
             let num_slots = Opnd::mem(32, recv, ROBJECT_OFFSET_NUMIV);
-            asm.cmp(num_slots, Opnd::UImm(ivar_index as u64));
+            asm.cmp(num_slots, Opnd::UImm(ivar_index.unwrap() as u64));
             asm.jbe(counted_exit!(ocb, side_exit, getivar_idx_out_of_range).into());
         }
 
@@ -2104,15 +2104,10 @@ fn gen_get_ivar(
         let tbl_opnd = asm.load(Opnd::mem(64, recv, ROBJECT_OFFSET_AS_HEAP_IVPTR));
 
         // Read the ivar from the extended table
-        let ivar_opnd = Opnd::mem(64, tbl_opnd, (SIZEOF_VALUE * ivar_index) as i32);
+        let ivar_opnd = Opnd::mem(64, tbl_opnd, (SIZEOF_VALUE * ivar_index.unwrap()) as i32);
 
-        // Check that the ivar is not Qundef
-        asm.cmp(ivar_opnd, Qundef.into());
-        let out_val = asm.csel_ne(ivar_opnd, Qnil.into());
-
-        // Push the ivar on the stack
         let out_opnd = ctx.stack_push(Type::Unknown);
-        asm.mov(out_opnd, out_val);
+        asm.mov(out_opnd, ivar_opnd);
     }
 
     // Jump to next instruction. This allows guard chains to share the same successor.
@@ -2135,25 +2130,12 @@ fn gen_getinstancevariable(
     let ivar_name = jit_get_arg(jit, 0).as_u64();
 
     let comptime_val = jit_peek_at_self(jit);
-    let comptime_val_klass = comptime_val.class_of();
 
     // Generate a side exit
     let side_exit = get_side_exit(jit, ocb, ctx);
 
     // Guard that the receiver has the same class as the one from compile time.
     let self_asm_opnd = Opnd::mem(64, CFP, RUBY_OFFSET_CFP_SELF);
-    jit_guard_known_klass(
-        jit,
-        ctx,
-        asm,
-        ocb,
-        comptime_val_klass,
-        self_asm_opnd,
-        SelfOpnd,
-        comptime_val,
-        GET_IVAR_MAX_DEPTH,
-        side_exit,
-    );
 
     gen_get_ivar(
         jit,
@@ -2319,7 +2301,13 @@ fn gen_concatstrings(
     KeepCompiling
 }
 
-fn guard_two_fixnums(ctx: &mut Context, asm: &mut Assembler, side_exit: CodePtr) {
+fn guard_two_fixnums(
+    jit: &mut JITState,
+    ctx: &mut Context,
+    asm: &mut Assembler,
+    ocb: &mut OutlinedCb,
+    side_exit: CodePtr
+) {
     // Get the stack operand types
     let arg1_type = ctx.get_opnd_type(StackOpnd(0));
     let arg0_type = ctx.get_opnd_type(StackOpnd(1));
@@ -2351,16 +2339,34 @@ fn guard_two_fixnums(ctx: &mut Context, asm: &mut Assembler, side_exit: CodePtr)
     let arg1 = ctx.stack_opnd(0);
     let arg0 = ctx.stack_opnd(1);
 
-    // If not fixnums, fall back
+    // If not fixnums at run-time, fall back
     if arg0_type != Type::Fixnum {
         asm.comment("guard arg0 fixnum");
         asm.test(arg0, Opnd::UImm(RUBY_FIXNUM_FLAG as u64));
-        asm.jz(side_exit.into());
+
+        jit_chain_guard(
+            JCC_JZ,
+            jit,
+            &ctx,
+            asm,
+            ocb,
+            SEND_MAX_DEPTH,
+            side_exit,
+        );
     }
     if arg1_type != Type::Fixnum {
         asm.comment("guard arg1 fixnum");
         asm.test(arg1, Opnd::UImm(RUBY_FIXNUM_FLAG as u64));
-        asm.jz(side_exit.into());
+
+        jit_chain_guard(
+            JCC_JZ,
+            jit,
+            &ctx,
+            asm,
+            ocb,
+            SEND_MAX_DEPTH,
+            side_exit,
+        );
     }
 
     // Set stack types in context
@@ -2397,7 +2403,7 @@ fn gen_fixnum_cmp(
         }
 
         // Check that both operands are fixnums
-        guard_two_fixnums(ctx, asm, side_exit);
+        guard_two_fixnums(jit, ctx, asm, ocb, side_exit);
 
         // Get the operands from the stack
         let arg1 = ctx.stack_pop(1);
@@ -2474,7 +2480,7 @@ fn gen_equality_specialized(
             return false;
         }
 
-        guard_two_fixnums(ctx, asm, side_exit);
+        guard_two_fixnums(jit, ctx, asm, ocb, side_exit);
 
         asm.cmp(a_opnd, b_opnd);
 
@@ -2486,7 +2492,8 @@ fn gen_equality_specialized(
         asm.mov(dst, val);
 
         true
-    } else if unsafe { comptime_a.class_of() == rb_cString && comptime_b.class_of() == rb_cString }
+    }
+    else if unsafe { comptime_a.class_of() == rb_cString && comptime_b.class_of() == rb_cString }
     {
         if !assume_bop_not_redefined(jit, ocb, STRING_REDEFINED_OP_FLAG, BOP_EQ) {
             // if overridden, emit the generic version
@@ -2850,7 +2857,7 @@ fn gen_opt_and(
         }
 
         // Check that both operands are fixnums
-        guard_two_fixnums(ctx, asm, side_exit);
+        guard_two_fixnums(jit, ctx, asm, ocb, side_exit);
 
         // Get the operands and destination from the stack
         let arg1 = ctx.stack_pop(1);
@@ -2895,7 +2902,7 @@ fn gen_opt_or(
         }
 
         // Check that both operands are fixnums
-        guard_two_fixnums(ctx, asm, side_exit);
+        guard_two_fixnums(jit, ctx, asm, ocb, side_exit);
 
         // Get the operands and destination from the stack
         let arg1 = ctx.stack_pop(1);
@@ -2940,7 +2947,7 @@ fn gen_opt_minus(
         }
 
         // Check that both operands are fixnums
-        guard_two_fixnums(ctx, asm, side_exit);
+        guard_two_fixnums(jit, ctx, asm, ocb, side_exit);
 
         // Get the operands and destination from the stack
         let arg1 = ctx.stack_pop(1);
@@ -3007,7 +3014,7 @@ fn gen_opt_mod(
         }
 
         // Check that both operands are fixnums
-        guard_two_fixnums(ctx, asm, side_exit);
+        guard_two_fixnums(jit, ctx, asm, ocb, side_exit);
 
         // Get the operands and destination from the stack
         let arg1 = ctx.stack_pop(1);
@@ -3997,6 +4004,135 @@ unsafe extern "C" fn build_kwhash(ci: *const rb_callinfo, sp: *const VALUE) -> V
     hash
 }
 
+enum BlockHandler {
+    None,
+    CurrentFrame,
+}
+
+struct ControlFrame {
+    recv: Opnd,
+    sp: Opnd,
+    iseq: Option<IseqPtr>,
+    pc: Option<u64>,
+    frame_type: u32,
+    block_handler: BlockHandler,
+    cme: *const rb_callable_method_entry_t,
+    local_size: i32
+}
+
+// Codegen performing a similar (but not identical) function to vm_push_frame
+//
+// This will generate the code to:
+//   * initialize locals to Qnil
+//   * push the environment (cme, block handler, frame type)
+//   * push a new CFP
+//   * save the new CFP to ec->cfp
+//
+// Notes:
+//   * Provided sp should point to the new frame's sp, immediately following locals and the environment
+//   * At entry, CFP points to the caller (not callee) frame
+//   * At exit, ec->cfp is updated to the pushed CFP
+//   * CFP and SP registers are updated only if switch_in_jit is set
+//   * Stack overflow is not checked (should be done by the caller)
+//   * Interrupts are not checked (should be done by the caller)
+fn gen_push_frame(
+    jit: &mut JITState,
+    ctx: &mut Context,
+    asm: &mut Assembler,
+    set_pc_cfp: bool, // if true CFP and SP will be switched to the callee
+    frame: ControlFrame,
+) {
+    assert!(frame.local_size >= 0);
+
+    let sp = frame.sp;
+
+    let num_locals = frame.local_size;
+    if num_locals > 0 {
+        asm.comment("initialize locals");
+
+        // Initialize local variables to Qnil
+        for i in 0..num_locals {
+            let offs = (SIZEOF_VALUE as i32) * (i - num_locals - 3);
+            asm.store(Opnd::mem(64, sp, offs), Qnil.into());
+        }
+    }
+
+    asm.comment("push cme, block handler, frame type");
+
+    // Write method entry at sp[-3]
+    // sp[-3] = me;
+    // Use compile time cme. It's assumed to be valid because we are notified when
+    // any cme we depend on become outdated. See yjit_method_lookup_change().
+    asm.store(Opnd::mem(64, sp, SIZEOF_VALUE_I32 * -3), VALUE::from(frame.cme).into());
+
+    // Write block handler at sp[-2]
+    // sp[-2] = block_handler;
+    let block_handler: Opnd = match frame.block_handler {
+        BlockHandler::None => {
+            VM_BLOCK_HANDLER_NONE.into()
+        },
+        BlockHandler::CurrentFrame => {
+            let cfp_self = asm.lea(Opnd::mem(64, CFP, RUBY_OFFSET_CFP_SELF));
+            asm.or(cfp_self, Opnd::Imm(1))
+        },
+    };
+    asm.store(Opnd::mem(64, sp, SIZEOF_VALUE_I32 * -2), block_handler);
+
+    // Write env flags at sp[-1]
+    // sp[-1] = frame_type;
+    asm.store(Opnd::mem(64, sp, SIZEOF_VALUE_I32 * -1), frame.frame_type.into());
+
+    // Allocate a new CFP (ec->cfp--)
+    fn cfp_opnd(offset: i32) -> Opnd {
+        Opnd::mem(64, CFP, offset - (RUBY_SIZEOF_CONTROL_FRAME as i32))
+    }
+
+    // Setup the new frame
+    // *cfp = (const struct rb_control_frame_struct) {
+    //    .pc         = <unset for iseq, 0 for cfunc>,
+    //    .sp         = sp,
+    //    .iseq       = <iseq for iseq, 0 for cfunc>,
+    //    .self       = recv,
+    //    .ep         = <sp - 1>,
+    //    .block_code = 0,
+    //    .__bp__     = sp,
+    // };
+    asm.comment("push callee control frame");
+
+    // For an iseq call PC may be None, in which case we will not set PC and will allow jitted code
+    // to set it as necessary.
+    let pc = if let Some(pc) = frame.pc {
+        asm.mov(cfp_opnd(RUBY_OFFSET_CFP_PC), pc.into());
+    };
+    asm.mov(cfp_opnd(RUBY_OFFSET_CFP_BP), sp);
+    asm.mov(cfp_opnd(RUBY_OFFSET_CFP_SP), sp);
+    let iseq: Opnd = if let Some(iseq) = frame.iseq {
+        VALUE::from(iseq).into()
+    } else {
+        0.into()
+    };
+    asm.mov(cfp_opnd(RUBY_OFFSET_CFP_ISEQ), iseq);
+    asm.mov(cfp_opnd(RUBY_OFFSET_CFP_SELF), frame.recv);
+    asm.mov(cfp_opnd(RUBY_OFFSET_CFP_BLOCK_CODE), 0.into());
+
+    if set_pc_cfp {
+        // Saving SP before calculating ep avoids a dependency on a register
+        // However this must be done after referencing frame.recv, which may be SP-relative
+        asm.mov(SP, sp);
+    }
+    let ep = asm.sub(sp, SIZEOF_VALUE.into());
+    asm.mov(cfp_opnd(RUBY_OFFSET_CFP_EP), ep);
+
+    asm.comment("switch to new CFP");
+    let new_cfp = asm.lea(cfp_opnd(0));
+    if set_pc_cfp {
+        asm.mov(CFP, new_cfp);
+        asm.store(Opnd::mem(64, EC, RUBY_OFFSET_EC_CFP), CFP);
+    } else {
+        asm.store(Opnd::mem(64, EC, RUBY_OFFSET_EC_CFP), new_cfp);
+    }
+}
+
 fn gen_send_cfunc(
     jit: &mut JITState,
     ctx: &mut Context,
@@ -4102,60 +4238,27 @@ fn gen_send_cfunc(
     // sp += 3
     let sp = asm.lea(ctx.sp_opnd((SIZEOF_VALUE as isize) * 3));
 
-    // Write method entry at sp[-3]
-    // sp[-3] = me;
-    // Put compile time cme into REG1. It's assumed to be valid because we are notified when
-    // any cme we depend on become outdated. See yjit_method_lookup_change().
-    asm.comment("push cme, block handler, frame type");
-    asm.mov(Opnd::mem(64, sp, SIZEOF_VALUE_I32 * -3), Opnd::UImm(cme as u64));
-
-    // Write block handler at sp[-2]
-    // sp[-2] = block_handler;
-    if let Some(_block_iseq) = block {
-        // reg1 = VM_BH_FROM_ISEQ_BLOCK(VM_CFP_TO_CAPTURED_BLOCK(reg_cfp));
-        let cfp_self = asm.lea(Opnd::mem(64, CFP, RUBY_OFFSET_CFP_SELF));
-        let block_handler = asm.or(cfp_self, Opnd::Imm(1));
-        asm.store(Opnd::mem(64, sp, SIZEOF_VALUE_I32 * -2), block_handler);
+    let frame_block_handler = if let Some(_block_iseq) = block {
+        BlockHandler::CurrentFrame
     } else {
-        let dst_opnd = Opnd::mem(64, sp, SIZEOF_VALUE_I32 * -2);
-        asm.store(dst_opnd, Opnd::UImm(VM_BLOCK_HANDLER_NONE.into()));
-    }
+        BlockHandler::None
+    };
 
-    // Write env flags at sp[-1]
-    // sp[-1] = frame_type;
     let mut frame_type = VM_FRAME_MAGIC_CFUNC | VM_FRAME_FLAG_CFRAME | VM_ENV_FLAG_LOCAL;
     if !kw_arg.is_null() {
         frame_type |= VM_FRAME_FLAG_CFRAME_KW
     }
-    asm.store(Opnd::mem(64, sp, SIZEOF_VALUE_I32 * -1), Opnd::UImm(frame_type.into()));
 
-    // Allocate a new CFP (ec->cfp--)
-    asm.comment("push callee control frame");
-    let ec_cfp_opnd = Opnd::mem(64, EC, RUBY_OFFSET_EC_CFP);
-    let new_cfp = asm.sub(ec_cfp_opnd, Opnd::UImm(RUBY_SIZEOF_CONTROL_FRAME as u64));
-    asm.mov(ec_cfp_opnd, new_cfp);
-
-    // Setup the new frame
-    // *cfp = (const struct rb_control_frame_struct) {
-    //    .pc         = 0,
-    //    .sp         = sp,
-    //    .iseq       = 0,
-    //    .self       = recv,
-    //    .ep         = sp - 1,
-    //    .block_code = 0,
-    //    .__bp__     = sp,
-    // };
-
-    // Can we re-use ec_cfp_opnd from above?
-    let ec_cfp_opnd = asm.load(Opnd::mem(64, EC, RUBY_OFFSET_EC_CFP));
-    asm.mov(Opnd::mem(64, ec_cfp_opnd, RUBY_OFFSET_CFP_PC), Opnd::Imm(0));
-    asm.mov(Opnd::mem(64, ec_cfp_opnd, RUBY_OFFSET_CFP_SP), sp);
-    asm.mov(Opnd::mem(64, ec_cfp_opnd, RUBY_OFFSET_CFP_ISEQ), Opnd::Imm(0));
-    asm.mov(Opnd::mem(64, ec_cfp_opnd, RUBY_OFFSET_CFP_BLOCK_CODE), Opnd::Imm(0));
-    asm.mov(Opnd::mem(64, ec_cfp_opnd, RUBY_OFFSET_CFP_BP), sp);
-    let ep = asm.sub(sp, Opnd::UImm(SIZEOF_VALUE as u64));
-    asm.mov(Opnd::mem(64, ec_cfp_opnd, RUBY_OFFSET_CFP_EP), ep);
-    asm.mov(Opnd::mem(64, ec_cfp_opnd, RUBY_OFFSET_CFP_SELF), recv);
+    gen_push_frame(jit, ctx, asm, false, ControlFrame {
+        frame_type,
+        block_handler: frame_block_handler,
+        cme,
+        recv,
+        sp,
+        pc: Some(0),
+        iseq: None,
+        local_size: 0,
+    });
 
     if !kw_arg.is_null() {
         // Build a hash from all kwargs passed
@@ -4218,10 +4321,10 @@ fn gen_send_cfunc(
     asm.mov(stack_ret, ret);
 
     // Pop the stack frame (ec->cfp++)
-    // Can we reuse ec_cfp_opnd from above?
+    // Instead of recalculating, we can reuse the previous CFP, which is stored in a callee-saved
+    // register
     let ec_cfp_opnd = Opnd::mem(64, EC, RUBY_OFFSET_EC_CFP);
-    let new_cfp = asm.add(ec_cfp_opnd, Opnd::UImm(RUBY_SIZEOF_CONTROL_FRAME as u64));
-    asm.store(ec_cfp_opnd, new_cfp);
+    asm.store(ec_cfp_opnd, CFP);
 
     // cfunc calls may corrupt types
     ctx.clear_local_types();
@@ -4370,7 +4473,7 @@ fn gen_send_iseq(
     // We are just going to not compile these.
     // https://www.rubydoc.info/stdlib/core/Proc:ruby2_keywords
     if unsafe {
-        get_iseq_flags_ruby2_keywords(jit.iseq)
+        get_iseq_flags_ruby2_keywords(jit.iseq) && flags & VM_CALL_ARGS_SPLAT != 0
     } {
         gen_counter_incr!(asm, send_iseq_ruby2_keywords);
         return CantCompile;
@@ -4765,62 +4868,25 @@ fn gen_send_iseq(
         (SIZEOF_VALUE as isize) * (3 + (num_locals as isize) + if doing_kw_call { 1 } else { 0 });
     let callee_sp = asm.lea(ctx.sp_opnd(offs));
 
-    // Initialize local variables to Qnil
-    for i in 0..num_locals {
-        let offs = (SIZEOF_VALUE as i32) * (i - num_locals - 3);
-        asm.store(Opnd::mem(64, callee_sp, offs), Qnil.into());
-    }
+    let frame_block_handler = if let Some(_) = block {
+        BlockHandler::CurrentFrame
+    } else {
+        BlockHandler::None
+    };
 
-    // Write the callee CME on the stack. It's assumed to be valid because we are notified when
-    // any cme we depend on become outdated. See yjit_method_lookup_change().
-    // Write method entry at sp[-3]
-    // sp[-3] = me;
-    asm.comment("push cme, block handler, frame type");
-    asm.store(Opnd::mem(64, callee_sp, SIZEOF_VALUE_I32 * -3), VALUE(cme as usize).into());
-
-    // Write block handler at sp[-2]
-    // sp[-2] = block_handler;
-    match block {
-        Some(_) => {
-            // reg1 = VM_BH_FROM_ISEQ_BLOCK(VM_CFP_TO_CAPTURED_BLOCK(reg_cfp));
-            let block_handler = asm.lea(Opnd::mem(64, CFP, RUBY_OFFSET_CFP_SELF));
-            let block_handler = asm.or(block_handler, 1.into());
-            asm.store(Opnd::mem(64, callee_sp, SIZEOF_VALUE_I32 * -2), block_handler);
-        }
-        None => {
-            asm.store(Opnd::mem(64, callee_sp, SIZEOF_VALUE_I32 * -2), VM_BLOCK_HANDLER_NONE.into());
-        }
-    }
-
-    // Write env flags at sp[-1]
-    // sp[-1] = frame_type;
     let frame_type = VM_FRAME_MAGIC_METHOD | VM_ENV_FLAG_LOCAL;
-    asm.store(Opnd::mem(64, callee_sp, SIZEOF_VALUE_I32 * -1), frame_type.into());
-
-    asm.comment("push callee control frame");
-    // Allocate a new CFP (ec->cfp--)
-    let new_cfp = asm.sub(CFP, (RUBY_SIZEOF_CONTROL_FRAME as u64).into());
-    asm.mov(CFP, new_cfp);
-    asm.store(Opnd::mem(64, EC, RUBY_OFFSET_EC_CFP), CFP);
 
     // Setup the new frame
-    // *cfp = (const struct rb_control_frame_struct) {
-    //    .pc         = pc,
-    //    .sp         = sp,
-    //    .iseq       = iseq,
-    //    .self       = recv,
-    //    .ep         = sp - 1,
-    //    .block_code = 0,
-    //    .__bp__     = sp,
-    // };
-    asm.mov(Opnd::mem(64, CFP, RUBY_OFFSET_CFP_SELF), recv);
-    asm.mov(SP, callee_sp);
-    asm.mov(Opnd::mem(64, CFP, RUBY_OFFSET_CFP_SP), callee_sp);
-    asm.mov(Opnd::mem(64, CFP, RUBY_OFFSET_CFP_BP), callee_sp);
-    let callee_ep = asm.sub(callee_sp, (SIZEOF_VALUE as u64).into());
-    asm.mov(Opnd::mem(64, CFP, RUBY_OFFSET_CFP_EP), callee_ep);
-    asm.mov(Opnd::mem(64, CFP, RUBY_OFFSET_CFP_ISEQ), VALUE(iseq as usize).into());
-    asm.mov(Opnd::mem(64, CFP, RUBY_OFFSET_CFP_BLOCK_CODE), 0.into());
+    gen_push_frame(jit, ctx, asm, true, ControlFrame {
+        frame_type,
+        block_handler: frame_block_handler,
+        cme,
+        recv,
+        sp: callee_sp,
+        iseq: Some(iseq),
+        pc: None, // We are calling into jitted code, which will set the PC as necessary
+        local_size: num_locals
+    });
 
     // No need to set cfp->pc since the callee sets it whenever calling into routines
     // that could look at it through jit_save_pc().
@@ -5007,7 +5073,6 @@ fn gen_send_general(
         gen_counter_incr!(asm, send_kw_splat);
         return CantCompile;
     }
-
 
     if flags & VM_CALL_ARGS_BLOCKARG != 0 {
         gen_counter_incr!(asm, send_block_arg);

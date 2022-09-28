@@ -2895,8 +2895,7 @@ rb_class_instance_allocate_internal(VALUE klass, VALUE flags, bool wb_protected)
     GC_ASSERT((flags & RUBY_T_MASK) == T_OBJECT);
     GC_ASSERT(flags & ROBJECT_EMBED);
 
-    st_table *index_tbl = RCLASS_IV_INDEX_TBL(klass);
-    uint32_t index_tbl_num_entries = index_tbl == NULL ? 0 : (uint32_t)index_tbl->num_entries;
+    uint32_t index_tbl_num_entries = RCLASS_EXT(klass)->max_iv_count;
 
     size_t size;
     bool embed = true;
@@ -2931,7 +2930,7 @@ rb_class_instance_allocate_internal(VALUE klass, VALUE flags, bool wb_protected)
 #endif
     }
     else {
-        rb_init_iv_list(obj);
+        rb_ensure_iv_list_size(obj, 0, index_tbl_num_entries);
     }
 
     return obj;
@@ -3206,20 +3205,6 @@ rb_free_const_table(struct rb_id_table *tbl)
     rb_id_table_free(tbl);
 }
 
-static int
-free_iv_index_tbl_free_i(st_data_t key, st_data_t value, st_data_t data)
-{
-    xfree((void *)value);
-    return ST_CONTINUE;
-}
-
-static void
-iv_index_tbl_free(struct st_table *tbl)
-{
-    st_foreach(tbl, free_iv_index_tbl_free_i, 0);
-    st_free_table(tbl);
-}
-
 // alive: if false, target pointers can be freed already.
 //        To check it, we need objspace parameter.
 static void
@@ -3435,6 +3420,16 @@ obj_free(rb_objspace_t *objspace, VALUE obj)
             RB_DEBUG_COUNTER_INC(obj_obj_transient);
         }
         else {
+            rb_shape_t *shape = rb_shape_get_shape_by_id(ROBJECT_SHAPE_ID(obj));
+            if (shape) {
+                VALUE klass = RBASIC_CLASS(obj);
+
+                // Increment max_iv_count if applicable, used to determine size pool allocation
+                uint32_t num_of_ivs = shape->iv_count;
+                if (RCLASS_EXT(klass)->max_iv_count < num_of_ivs) {
+                    RCLASS_EXT(klass)->max_iv_count = num_of_ivs;
+                }
+            }
             xfree(RANY(obj)->as.object.as.heap.ivptr);
             RB_DEBUG_COUNTER_INC(obj_obj_ptr);
         }
@@ -3448,9 +3443,6 @@ obj_free(rb_objspace_t *objspace, VALUE obj)
         }
         if (RCLASS_CONST_TBL(obj)) {
             rb_free_const_table(RCLASS_CONST_TBL(obj));
-        }
-        if (RCLASS_IV_INDEX_TBL(obj)) {
-            iv_index_tbl_free(RCLASS_IV_INDEX_TBL(obj));
         }
         if (RCLASS_CVC_TBL(obj)) {
             rb_id_table_foreach_values(RCLASS_CVC_TBL(obj), cvar_table_free_i, NULL);
@@ -4872,10 +4864,6 @@ obj_memsize_of(VALUE obj, int use_all_types)
             }
             if (RCLASS_CVC_TBL(obj)) {
                 size += rb_id_table_memsize(RCLASS_CVC_TBL(obj));
-            }
-            if (RCLASS_IV_INDEX_TBL(obj)) {
-                // TODO: more correct value
-                size += st_memsize(RCLASS_IV_INDEX_TBL(obj));
             }
             if (RCLASS_EXT(obj)->iv_tbl) {
                 size += st_memsize(RCLASS_EXT(obj)->iv_tbl);
@@ -10407,15 +10395,6 @@ update_subclass_entries(rb_objspace_t *objspace, rb_subclass_entry_t *entry)
     }
 }
 
-static int
-update_iv_index_tbl_i(st_data_t key, st_data_t value, st_data_t arg)
-{
-    rb_objspace_t *objspace = (rb_objspace_t *)arg;
-    struct rb_iv_index_tbl_entry *ent = (struct rb_iv_index_tbl_entry *)value;
-    UPDATE_IF_MOVED(objspace, ent->class_value);
-    return ST_CONTINUE;
-}
-
 static void
 update_class_ext(rb_objspace_t *objspace, rb_classext_t *ext)
 {
@@ -10423,11 +10402,6 @@ update_class_ext(rb_objspace_t *objspace, rb_classext_t *ext)
     UPDATE_IF_MOVED(objspace, ext->includer);
     UPDATE_IF_MOVED(objspace, ext->refined_class);
     update_subclass_entries(objspace, ext->subclasses);
-
-    // ext->iv_index_tbl
-    if (ext->iv_index_tbl) {
-        st_foreach(ext->iv_index_tbl, update_iv_index_tbl_i, (st_data_t)objspace);
-    }
 }
 
 static void
@@ -12121,10 +12095,16 @@ objspace_malloc_fixup(rb_objspace_t *objspace, void *mem, size_t size)
 }
 
 #if defined(__GNUC__) && RUBY_DEBUG
-#define RB_BUG_INSTEAD_OF_RB_MEMERROR
+#define RB_BUG_INSTEAD_OF_RB_MEMERROR 1
 #endif
 
-#ifdef RB_BUG_INSTEAD_OF_RB_MEMERROR
+#ifndef RB_BUG_INSTEAD_OF_RB_MEMERROR
+# define RB_BUG_INSTEAD_OF_RB_MEMERROR 0
+#endif
+
+#define GC_MEMERROR(...) \
+    ((RB_BUG_INSTEAD_OF_RB_MEMERROR+0) ? rb_bug("" __VA_ARGS__) : rb_memerror())
+
 #define TRY_WITH_GC(siz, expr) do {                          \
         const gc_profile_record_flag gpr =                   \
             GPR_FLAG_FULL_MARK           |                   \
@@ -12138,29 +12118,17 @@ objspace_malloc_fixup(rb_objspace_t *objspace, void *mem, size_t size)
         }                                                    \
         else if (!garbage_collect_with_gvl(objspace, gpr)) { \
             /* @shyouhei thinks this doesn't happen */       \
-            rb_bug("TRY_WITH_GC: could not GC");             \
+            GC_MEMERROR("TRY_WITH_GC: could not GC");        \
         }                                                    \
         else if ((expr)) {                                   \
             /* Success on 2nd try */                         \
         }                                                    \
         else {                                               \
-            rb_bug("TRY_WITH_GC: could not allocate:"        \
-                   "%"PRIdSIZE" bytes for %s",               \
-                   siz, # expr);                             \
+            GC_MEMERROR("TRY_WITH_GC: could not allocate:"   \
+                        "%"PRIdSIZE" bytes for %s",          \
+                        siz, # expr);                        \
         }                                                    \
     } while (0)
-#else
-#define TRY_WITH_GC(siz, alloc) do { \
-        objspace_malloc_gc_stress(objspace); \
-        if (!(alloc) && \
-            (!garbage_collect_with_gvl(objspace, GPR_FLAG_FULL_MARK | \
-                GPR_FLAG_IMMEDIATE_MARK | GPR_FLAG_IMMEDIATE_SWEEP | \
-                GPR_FLAG_MALLOC) || \
-             !(alloc))) { \
-            ruby_memerror(); \
-        } \
-    } while (0)
-#endif
 
 /* these shouldn't be called directly.
  * objspace_* functions do not check allocation size.
@@ -13804,11 +13772,10 @@ rb_raw_iseq_info(char *const buff, const size_t buff_size, const rb_iseq_t *iseq
 {
     if (buff_size > 0 && ISEQ_BODY(iseq) && ISEQ_BODY(iseq)->location.label && !RB_TYPE_P(ISEQ_BODY(iseq)->location.pathobj, T_MOVED)) {
         VALUE path = rb_iseq_path(iseq);
-        VALUE n = ISEQ_BODY(iseq)->location.first_lineno;
+        int n = ISEQ_BODY(iseq)->location.first_lineno;
         snprintf(buff, buff_size, " %s@%s:%d",
                  RSTRING_PTR(ISEQ_BODY(iseq)->location.label),
-                 RSTRING_PTR(path),
-                 n ? FIX2INT(n) : 0 );
+                 RSTRING_PTR(path), n);
     }
 }
 
