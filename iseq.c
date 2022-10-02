@@ -230,8 +230,18 @@ rb_iseq_each_value(const rb_iseq_t *iseq, iseq_value_itr_t * func, void *data)
     union iseq_inline_storage_entry *is_entries = body->is_entries;
 
     if (body->is_entries) {
-        // Skip iterating over ivc caches
-        is_entries += body->ivc_size;
+        // IVC entries
+        for (unsigned int i = 0; i < body->ivc_size; i++, is_entries++) {
+            IVC ivc = (IVC)is_entries;
+            if (ivc->entry) {
+                RUBY_ASSERT(!RB_TYPE_P(ivc->entry->class_value, T_NONE));
+
+                VALUE nv = func(data, ivc->entry->class_value);
+                if (ivc->entry->class_value != nv) {
+                    ivc->entry->class_value = nv;
+                }
+            }
+        }
 
         // ICVARC entries
         for (unsigned int i = 0; i < body->icvarc_size; i++, is_entries++) {
@@ -929,9 +939,11 @@ rb_iseq_new_main(const rb_ast_body_t *ast, VALUE path, VALUE realpath, const rb_
 rb_iseq_t *
 rb_iseq_new_eval(const rb_ast_body_t *ast, VALUE name, VALUE path, VALUE realpath, int first_lineno, const rb_iseq_t *parent, int isolated_depth)
 {
-    VALUE coverages = rb_get_coverages();
-    if (RTEST(coverages) && RTEST(path) && !RTEST(rb_hash_has_key(coverages, path))) {
-        iseq_setup_coverage(coverages, path, ast, first_lineno - 1);
+    if (rb_get_coverage_mode() & COVERAGE_TARGET_EVAL) {
+        VALUE coverages = rb_get_coverages();
+        if (RTEST(coverages) && RTEST(path) && !RTEST(rb_hash_has_key(coverages, path))) {
+            iseq_setup_coverage(coverages, path, ast, first_lineno - 1);
+        }
     }
 
     return rb_iseq_new_with_opt(ast, name, path, realpath, first_lineno,

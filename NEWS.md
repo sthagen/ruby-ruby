@@ -90,14 +90,22 @@ Note that each entry is kept to a minimum, see links for details.
     foo(k: 1)
     ```
 
-* `eval` and related methods are able to generate code coverage.
-  [[Feature #19008]]
+* `eval` and related methods are able to generate code coverage. Enabled using
+  `Coverage.setup(:all)` or `Coverge.setup(eval: true)`. [[Feature #19008]]
+
+* `Coverage.supported?(mode)` enables detection of what coverage modes are
+  supported. [[Feature #19026]]
 
 ## Command line options
 
 ## Core classes updates
 
 Note: We're only listing outstanding class updates.
+
+* Data
+    * New core class to represent simple immutable value object. The class is
+      similar to `Struct` and partially shares an implementation, but has more
+      lean and strict API. [[Feature #16122]]
 
 * Encoding
     * Encoding#replicate has been deprecated and will be removed in 3.3. [[Feature #18949]]
@@ -210,7 +218,9 @@ Note: We're only listing outstanding class updates.
     * timeout 0.3.0
 *   The following bundled gems are updated.
     * minitest 5.16.3
-    * net-imap 0.2.3
+    * net-imap 0.3.1
+    * net-pop 0.1.2
+    * net-smtp 0.3.2
     * rbs 2.6.0
     * typeprof 0.21.3
     * debug 1.6.2
@@ -317,3 +327,5 @@ The following deprecated APIs are removed.
 [Feature #18481]: https://bugs.ruby-lang.org/issues/18481
 [Feature #18949]: https://bugs.ruby-lang.org/issues/18949
 [Feature #19008]: https://bugs.ruby-lang.org/issues/19008
+[Feature #19026]: https://bugs.ruby-lang.org/issues/19026
+[Feature #16122]: https://bugs.ruby-lang.org/issues/16122

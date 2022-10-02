@@ -75,34 +75,39 @@ bt = Struct.new(:ruby,
                 :columns,
                 :window_width,
                 :width,
+                :indent,
                 :platform,
                 )
 BT = Class.new(bt) do
+  def indent=(n)
+    super
+    if (self.columns ||= 0) < n
+      $stderr.print(' ' * (n - self.columns))
+    end
+    self.columns = indent
+  end
+
   def putc(c)
     unless self.quiet
       if self.window_width == nil
-        if BT.tty
-          unless w = ENV["COLUMNS"] and (w = w.to_i) > 0
-            w = 80
-          end
-          w -= 1
-        else
-          w = false
+        unless w = ENV["COLUMNS"] and (w = w.to_i) > 0
+          w = 80
         end
+        w -= 1
         self.window_width = w
       end
       if self.window_width and self.columns >= self.window_width
-        $stderr.puts
-        self.columns = 0
+        $stderr.print "\n", " " * (self.indent ||= 0)
+        self.columns = indent
       end
       $stderr.print c
+      $stderr.flush
       self.columns += 1
     end
   end
 
   def wn=(wn)
-    if wn <= 0
-      wn = nil
+    unless wn == 1
       if /(?:\A|\s)--jobserver-(?:auth|fds)=\K(\d+),(\d+)/ =~ ENV.delete("MAKEFLAGS")
         begin
           r = IO.for_fd($1.to_i(10), "rb", autoclose: false)
@@ -112,7 +117,7 @@ BT = Class.new(bt) do
         else
           r.close_on_exec = true
           w.close_on_exec = true
-          tokens = r.read_nonblock(1024, exception: false)
+          tokens = r.read_nonblock(wn > 0 ? wn : 1024, exception: false)
           r.close
           if String === tokens
             tokens.freeze
@@ -126,7 +131,7 @@ BT = Class.new(bt) do
           end
         end
       end
-      unless wn
+      if wn <= 0
         require 'etc'
         wn = [Etc.nprocessors / 2, 1].max
       end
@@ -145,7 +150,7 @@ def main
   BT.color = nil
   BT.tty = nil
   BT.quiet = false
-  BT.wn = 1
+  # BT.wn = 1
   dir = nil
   quiet = false
   tests = nil
@@ -216,6 +221,7 @@ End
   BT.progress = %w[- \\ | /]
   BT.progress_bs = "\b" * BT.progress[0].size
   BT.tty = $stderr.tty? if BT.tty.nil?
+  BT.wn ||= /-j(\d+)?/ =~ (ENV["MAKEFLAGS"] || ENV["MFLAGS"]) ? $1.to_i : 1
 
   case BT.color
   when nil
@@ -293,7 +299,7 @@ def concurrent_exec_test
     end
   end
 
-  BT.putc ' '
+  BT.indent = 1
   aq.close
   i = 1
   term_wn = 0
