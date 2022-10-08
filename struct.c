@@ -384,10 +384,12 @@ setup_data(VALUE subclass, VALUE members)
     members = struct_set_members(subclass, members);
 
     rb_define_alloc_func(subclass, struct_alloc);
-    rb_define_singleton_method(subclass, "new", rb_data_s_new, -1);
-    rb_define_singleton_method(subclass, "[]", rb_data_s_new, -1);
-    rb_define_singleton_method(subclass, "members", rb_struct_s_members_m, 0);
-    rb_define_singleton_method(subclass, "inspect", rb_struct_s_inspect, 0); // FIXME: just a separate method?..
+    VALUE sclass = rb_singleton_class(subclass);
+    rb_undef_method(sclass, "define");
+    rb_define_method(sclass, "new", rb_data_s_new, -1);
+    rb_define_method(sclass, "[]", rb_data_s_new, -1);
+    rb_define_method(sclass, "members", rb_struct_s_members_m, 0);
+    rb_define_method(sclass, "inspect", rb_struct_s_inspect, 0); // FIXME: just a separate method?..
 
     len = RARRAY_LEN(members);
     for (i=0; i< len; i++) {
@@ -1853,13 +1855,13 @@ rb_data_inspect(VALUE s)
  *
  *  Examples:
  *
- *    Measure = Data.new(:amount, :unit)
+ *    Measure = Data.define(:amount, :unit)
  *
  *    Measure[1, 'km'] == Measure[1, 'km'] #=> true
  *    Measure[1, 'km'] == Measure[2, 'km'] #=> false
  *    Measure[1, 'km'] == Measure[1, 'm']  #=> false
  *
- *    Measurement = Data.new(:amount, :unit)
+ *    Measurement = Data.define(:amount, :unit)
  *    # Even though Measurement and Measure have the same "shape"
  *    # their instances are never equal
  *    Measure[1, 'km'] == Measurement[1, 'km'] #=> false
@@ -1876,7 +1878,7 @@ rb_data_inspect(VALUE s)
  *  The subtle difference with #== is that members are also compared with their
  *  #eql? method, which might be important in some cases:
  *
- *    Measure = Data.new(:amount, :unit)
+ *    Measure = Data.define(:amount, :unit)
  *
  *    Measure[1, 'km'] == Measure[1.0, 'km'] #=> true, they are equal as values
  *    # ...but...

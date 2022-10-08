@@ -7303,6 +7303,7 @@ gc_mark_children(rb_objspace_t *objspace, VALUE obj)
             gc_mark(objspace, any->as.file.fptr->writeconv_pre_ecopts);
             gc_mark(objspace, any->as.file.fptr->encs.ecopts);
             gc_mark(objspace, any->as.file.fptr->write_lock);
+            gc_mark(objspace, any->as.file.fptr->timeout);
         }
         break;
 
@@ -12236,7 +12237,7 @@ objspace_xrealloc(rb_objspace_t *objspace, void *ptr, size_t new_size, size_t ol
 #endif
 
     old_size = objspace_malloc_size(objspace, ptr, old_size);
-    TRY_WITH_GC(new_size, mem = realloc(ptr, new_size));
+    TRY_WITH_GC(new_size, mem = RB_GNUC_EXTENSION_BLOCK(realloc(ptr, new_size)));
     new_size = objspace_malloc_size(objspace, mem, new_size);
 
 #if CALC_EXACT_MALLOC_SIZE
