@@ -3571,7 +3571,7 @@ io_read_nonblock(rb_execution_context_t *ec, VALUE io, VALUE length, VALUE str, 
 
     n = read_buffered_data(RSTRING_PTR(str), len, fptr);
     if (n <= 0) {
-        rb_io_set_nonblock(fptr);
+        rb_fd_set_nonblock(fptr->fd);
         shrinkable |= io_setstrbuf(&str, len);
         iis.fptr = fptr;
         iis.nonblock = 1;
@@ -3618,7 +3618,7 @@ io_write_nonblock(rb_execution_context_t *ec, VALUE io, VALUE str, VALUE ex)
     if (io_fflush(fptr) < 0)
         rb_sys_fail_on_write(fptr);
 
-    rb_io_set_nonblock(fptr);
+    rb_fd_set_nonblock(fptr->fd);
     n = write(fptr->fd, RSTRING_PTR(str), RSTRING_LEN(str));
     RB_GC_GUARD(str);
 
@@ -8407,6 +8407,7 @@ rb_io_init_copy(VALUE dest, VALUE io)
     fptr->encs = orig->encs;
     fptr->pid = orig->pid;
     fptr->lineno = orig->lineno;
+    fptr->timeout = orig->timeout;
     if (!NIL_P(orig->pathv)) fptr->pathv = orig->pathv;
     fptr_copy_finalizer(fptr, orig);
 
@@ -10850,6 +10851,13 @@ rb_io_advise(int argc, VALUE *argv, VALUE io)
 static VALUE
 rb_f_select(int argc, VALUE *argv, VALUE obj)
 {
+    VALUE scheduler = rb_fiber_scheduler_current();
+    if (scheduler != Qnil) {
+        // It's optionally supported.
+        VALUE result = rb_fiber_scheduler_io_selectv(scheduler, argc, argv);
+        if (result != Qundef) return result;
+    }
+
     VALUE timeout;
     struct select_args args;
     struct timeval timerec;

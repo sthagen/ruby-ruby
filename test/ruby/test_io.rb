@@ -1441,6 +1441,16 @@ class TestIO < Test::Unit::TestCase
     End
   end
 
+  def test_dup_timeout
+    with_pipe do |r, w|
+      r.timeout = 0.1
+      r2 = r.dup
+      assert_equal(0.1, r2.timeout)
+    ensure
+      r2&.close
+    end
+  end
+
   def test_inspect
     with_pipe do |r, w|
       assert_match(/^#<IO:fd \d+>$/, r.inspect)
@@ -1594,6 +1604,22 @@ class TestIO < Test::Unit::TestCase
     File.open(IO::NULL) do |r|
       assert_empty(r.read_nonblock(0, s = "01234567"))
       assert_empty(s)
+    end
+  end
+
+  def test_read_nonblock_file
+    make_tempfile do |path|
+      File.open(path, 'r') do |file|
+        file.read_nonblock(4)
+      end
+    end
+  end
+
+  def test_write_nonblock_file
+    make_tempfile do |path|
+      File.open(path, 'w') do |file|
+        file.write_nonblock("Ruby")
+      end
     end
   end
 

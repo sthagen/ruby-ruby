@@ -102,6 +102,9 @@ Note that each entry is kept to a minimum, see links for details.
 
 Note: We're only listing outstanding class updates.
 
+* Fiber::Scheduler
+    * Introduce `Fiber::Scheduler#io_select` for non-blocking `IO.select`. [[Feature #19060]]
+
 * IO
     * Introduce `IO#timeout=` and `IO#timeout` which can cause
     `IO::TimeoutError` to be raised if a blocking operation exceeds the
@@ -141,6 +144,8 @@ Note: We're only listing outstanding class updates.
 
 * MatchData
     * MatchData#byteoffset has been added. [[Feature #13110]]
+    * MatchData#deconstruct has been added. [[Feature #18821]]
+    * MatchData#deconstruct_keys has been added. [[Feature #18821]]
 
 * Module
     * Module.used_refinements has been added. [[Feature #14332]]
@@ -352,3 +357,4 @@ The following deprecated APIs are removed.
 [Feature #16122]: https://bugs.ruby-lang.org/issues/16122
 [Feature #18630]: https://bugs.ruby-lang.org/issues/18630
 [Feature #18589]: https://bugs.ruby-lang.org/issues/18589
+[Feature #19060]: https://bugs.ruby-lang.org/issues/19060
