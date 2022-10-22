@@ -41,6 +41,10 @@ static void dln_loaderror(const char *format, ...);
 # include <strings.h>
 #endif
 
+#if defined __APPLE__
+# include <AvailabilityMacros.h>
+#endif
+
 #ifndef xmalloc
 void *xmalloc();
 void *xcalloc();
@@ -58,7 +62,7 @@ void *xrealloc();
 #include <sys/stat.h>
 
 #ifndef S_ISDIR
-#   define S_ISDIR(m) (((m) & S_IFMT) == S_IFDIR)
+# define S_ISDIR(m) (((m) & S_IFMT) == S_IFDIR)
 #endif
 
 #ifdef HAVE_SYS_PARAM_H
@@ -298,14 +302,14 @@ COMPILER_WARNING_POP
 /* assume others than old Mac OS X have no problem */
 # define dln_disable_dlclose() false
 
-#elif MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_11
-/* targeting newer versions only */
-# define dln_disable_dlclose() false
-
 #elif !defined(MAC_OS_X_VERSION_10_11) || \
     (MAC_OS_X_VERSION_MAX_ALLOWED < MAC_OS_X_VERSION_10_11)
 /* targeting older versions only */
 # define dln_disable_dlclose() true
+
+#elif MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_11
+/* targeting newer versions only */
+# define dln_disable_dlclose() false
 
 #else
 /* support both versions, and check at runtime */

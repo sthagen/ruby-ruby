@@ -45,7 +45,7 @@ typedef uint16_t shape_id_t;
 struct rb_shape {
     struct rb_id_table * edges; // id_table from ID (ivar) to next shape
     ID edge_name; // ID (ivar) for transition from parent to rb_shape
-    attr_index_t iv_count;
+    attr_index_t next_iv_index;
     uint8_t type;
     shape_id_t parent_id;
 };
@@ -124,6 +124,15 @@ rb_shape_t* rb_shape_get_next(rb_shape_t* shape, VALUE obj, ID id);
 bool rb_shape_get_iv_index(rb_shape_t * shape, ID id, attr_index_t * value);
 shape_id_t rb_shape_id(rb_shape_t * shape);
 MJIT_SYMBOL_EXPORT_END
+
+static inline uint32_t
+ROBJECT_IV_COUNT(VALUE obj)
+{
+    RBIMPL_ASSERT_TYPE(obj, RUBY_T_OBJECT);
+    uint32_t ivc = rb_shape_get_shape_by_id(ROBJECT_SHAPE_ID(obj))->next_iv_index;
+    RUBY_ASSERT(ivc <= ROBJECT_NUMIV(obj));
+    return ivc;
+}
 
 rb_shape_t * rb_shape_alloc(ID edge_name, rb_shape_t * parent);
 rb_shape_t * rb_shape_alloc_with_parent_id(ID edge_name, shape_id_t parent_id);

@@ -1018,7 +1018,7 @@ generic_ivar_update(st_data_t *k, st_data_t *v, st_data_t u, int existing)
         }
     }
     FL_SET((VALUE)*k, FL_EXIVAR);
-    ivtbl = gen_ivtbl_resize(ivtbl, ivup->shape->iv_count);
+    ivtbl = gen_ivtbl_resize(ivtbl, ivup->shape->next_iv_index);
     // Reinsert in to the hash table because ivtbl might be a newly resized chunk of memory
     *v = (st_data_t)ivtbl;
     ivup->ivtbl = ivtbl;
@@ -1404,9 +1404,6 @@ rb_ensure_iv_list_size(VALUE obj, uint32_t len, uint32_t newsize)
         newptr = obj_ivar_heap_realloc(obj, len, newsize);
     }
 
-    for (; len < newsize; len++) {
-        newptr[len] = Qundef;
-    }
 #if USE_RVARGC
     ROBJECT(obj)->numiv = newsize;
 #else
@@ -1438,48 +1435,37 @@ rb_ensure_generic_iv_list_size(VALUE obj, uint32_t newsize)
 void
 rb_init_iv_list(VALUE obj)
 {
-    uint32_t newsize = (uint32_t)(rb_shape_get_shape(obj)->iv_count * 2.0);
+    uint32_t newsize = (uint32_t)(rb_shape_get_shape(obj)->next_iv_index * 2.0);
     uint32_t len = ROBJECT_NUMIV(obj);
     rb_ensure_iv_list_size(obj, len, newsize < len ? len : newsize);
-}
-
-// Return the instance variable index for a given name and T_OBJECT object. The
-// mapping between name and index lives on `rb_obj_class(obj)` and is created
-// if not already present.
-//
-// @note May raise when there are too many instance variables.
-// @note YJIT uses this function at compile time to simplify the work needed to
-//       access the variable at runtime.
-static uint32_t
-rb_obj_ensure_iv_index_mapping(VALUE obj, ID id)
-{
-    RUBY_ASSERT(RB_TYPE_P(obj, T_OBJECT));
-    attr_index_t index;
-
-    // Ensure there is a transition for IVAR +id+
-    rb_shape_transition_shape(obj, id, rb_shape_get_shape_by_id(ROBJECT_SHAPE_ID(obj)));
-
-    // Get the current shape
-    rb_shape_t * shape = rb_shape_get_shape_by_id(ROBJECT_SHAPE_ID(obj));
-
-    if (!rb_shape_get_iv_index(shape, id, &index)) {
-        rb_bug("unreachable.  Shape was not found for id: %s", rb_id2name(id));
-    }
-
-    uint32_t len = ROBJECT_NUMIV(obj);
-    if (len <= index) {
-        uint32_t newsize = (uint32_t)((shape->iv_count + 1) * 1.25);
-        rb_ensure_iv_list_size(obj, len, newsize);
-    }
-    RUBY_ASSERT(index <= ROBJECT_NUMIV(obj));
-    return index;
 }
 
 static VALUE
 obj_ivar_set(VALUE obj, ID id, VALUE val)
 {
-    attr_index_t index = rb_obj_ensure_iv_index_mapping(obj, id);
+    attr_index_t index;
+
+    // Get the current shape
+    rb_shape_t * shape = rb_shape_get_shape_by_id(ROBJECT_SHAPE_ID(obj));
+
+    if (!rb_shape_get_iv_index(shape, id, &index)) {
+        shape = rb_shape_get_next(shape, obj, id);
+        index = shape->next_iv_index - 1;
+    }
+
+    uint32_t len = ROBJECT_NUMIV(obj);
+
+    // Reallocating can kick off GC.  We can't set the new shape
+    // on this object until the buffer has been allocated, otherwise
+    // GC could read off the end of the buffer.
+    if (len <= index) {
+        uint32_t newsize = (uint32_t)((len + 1) * 1.25);
+        rb_ensure_iv_list_size(obj, len, newsize);
+    }
+
     RB_OBJ_WRITE(obj, &ROBJECT_IVPTR(obj)[index], val);
+    rb_shape_set_shape(obj, shape);
+
     return val;
 }
 
@@ -1629,7 +1615,7 @@ iterate_over_shapes_with_callback(rb_shape_t *shape, VALUE* iv_list, rb_ivar_for
             return;
         case SHAPE_IVAR:
             iterate_over_shapes_with_callback(rb_shape_get_shape_by_id(shape->parent_id), iv_list, callback, arg);
-            VALUE val = iv_list[shape->iv_count - 1];
+            VALUE val = iv_list[shape->next_iv_index - 1];
             if (val != Qundef) {
                 callback(shape->edge_name, val, arg);
             }
@@ -1767,8 +1753,8 @@ rb_ivar_count(VALUE obj)
 
     switch (BUILTIN_TYPE(obj)) {
       case T_OBJECT:
-        if (rb_shape_get_shape(obj)->iv_count > 0) {
-            st_index_t i, count, num = ROBJECT_NUMIV(obj);
+        if (rb_shape_get_shape(obj)->next_iv_index > 0) {
+            st_index_t i, count, num = ROBJECT_IV_COUNT(obj);
             const VALUE *const ivptr = ROBJECT_IVPTR(obj);
             for (i = count = 0; i < num; ++i) {
                 if (ivptr[i] != Qundef) {

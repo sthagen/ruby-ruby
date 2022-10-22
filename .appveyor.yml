@@ -17,16 +17,16 @@ skip_commits:
     - '**/*.md'
     - '**/*.rdoc'
     - '**/.document'
+    - '**/*.[1-8]'
+    - '**/*.ronn'
 environment:
   ruby_version: "24-%Platform%"
   matrix:
+    # Test only the oldest supported version because AppVeyor is unstable, its concurrency
+    # is limited, and compatibility issues that happen only in newer versions are rare.
+    # You may test some other stuff on GitHub Actions instead.
     - build: vs
       vs: 120
-      ssl: OpenSSL
-      APPVEYOR_BUILD_WORKER_IMAGE: Visual Studio 2015
-      GEMS_FOR_TEST: ""
-    - build: vs
-      vs: 140
       ssl: OpenSSL-v111
       APPVEYOR_BUILD_WORKER_IMAGE: Visual Studio 2015
       GEMS_FOR_TEST: ""
@@ -48,7 +48,7 @@ for:
     - git pull -q
     - .\bootstrap-vcpkg.bat
     - cd %APPVEYOR_BUILD_FOLDER%
-    - vcpkg --triplet %Platform%-windows install libffi libyaml readline zlib
+    - vcpkg --triplet %Platform%-windows install --x-use-aria2 libffi libyaml readline zlib
     - CALL SET vcvars=%%^VS%VS%COMNTOOLS^%%..\..\VC\vcvarsall.bat
     - SET vcvars
     - '"%vcvars%" %Platform:x64=amd64%'
@@ -120,7 +120,7 @@ notifications:
       {{^isPullRequest}}
         {
           "ci": "AppVeyor CI",
-          "env": "Visual Studio 2013 / 2015",
+          "env": "Visual Studio 2013",
           "url": "{{buildUrl}}",
           "commit": "{{commitId}}",
           "branch": "{{branch}}"

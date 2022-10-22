@@ -268,37 +268,21 @@ rb_obj_singleton_class(VALUE obj)
 MJIT_FUNC_EXPORTED void
 rb_obj_copy_ivar(VALUE dest, VALUE obj)
 {
-    VALUE *dest_buf = ROBJECT_IVPTR(dest);
-    VALUE *src_buf = ROBJECT_IVPTR(obj);
     uint32_t dest_len = ROBJECT_NUMIV(dest);
     uint32_t src_len = ROBJECT_NUMIV(obj);
-    uint32_t max_len = dest_len < src_len ? src_len : dest_len;
 
-    rb_ensure_iv_list_size(dest, dest_len, max_len);
-
-    dest_len = ROBJECT_NUMIV(dest);
-    uint32_t min_len = dest_len > src_len ? src_len : dest_len;
-
-    if (RBASIC(obj)->flags & ROBJECT_EMBED) {
-        src_buf = ROBJECT(obj)->as.ary;
-
-        // embedded -> embedded
-        if (RBASIC(dest)->flags & ROBJECT_EMBED) {
-            dest_buf = ROBJECT(dest)->as.ary;
-        }
-        // embedded -> extended
-        else {
-            dest_buf = ROBJECT(dest)->as.heap.ivptr;
-        }
-    }
-    // extended -> extended
-    else {
+    if (dest_len < src_len) {
+        rb_ensure_iv_list_size(dest, dest_len, src_len);
         RUBY_ASSERT(!(RBASIC(dest)->flags & ROBJECT_EMBED));
-        dest_buf = ROBJECT(dest)->as.heap.ivptr;
-        src_buf = ROBJECT(obj)->as.heap.ivptr;
+    }
+    else {
+        RUBY_ASSERT((RBASIC(dest)->flags & ROBJECT_EMBED));
     }
 
-    MEMCPY(dest_buf, src_buf, VALUE, min_len);
+    VALUE * dest_buf = ROBJECT_IVPTR(dest);
+    VALUE * src_buf = ROBJECT_IVPTR(obj);
+
+    MEMCPY(dest_buf, src_buf, VALUE, ROBJECT_IV_COUNT(obj));
 }
 
 static void
@@ -322,12 +306,12 @@ init_copy(VALUE dest, VALUE obj)
         shape_to_set = rb_shape_get_shape_by_id(shape_to_set->parent_id);
     }
 
-    // shape ids are different
-    rb_shape_set_shape(dest, shape_to_set);
-
     if (RB_TYPE_P(obj, T_OBJECT)) {
         rb_obj_copy_ivar(dest, obj);
     }
+
+    // shape ids are different
+    rb_shape_set_shape(dest, shape_to_set);
 }
 
 static VALUE immutable_obj_clone(VALUE obj, VALUE kwfreeze);
@@ -3154,6 +3138,9 @@ rb_convert_to_integer(VALUE val, int base, int raise_exception)
     tmp = rb_protect(rb_check_to_int, val, NULL);
     if (RB_INTEGER_TYPE_P(tmp)) return tmp;
     rb_set_errinfo(Qnil);
+    if (!NIL_P(tmp = rb_check_string_type(val))) {
+        return rb_str_convert_to_inum(tmp, base, TRUE, raise_exception);
+    }
 
     if (!raise_exception) {
         VALUE result = rb_protect(rb_check_to_i, val, NULL);
@@ -4477,6 +4464,7 @@ InitVM_Object(void)
     rb_define_method(rb_cClass, "initialize", rb_class_initialize, -1);
     rb_define_method(rb_cClass, "superclass", rb_class_superclass, 0);
     rb_define_method(rb_cClass, "subclasses", rb_class_subclasses, 0); /* in class.c */
+    rb_define_method(rb_cClass, "attached_object", rb_class_attached_object, 0); /* in class.c */
     rb_define_alloc_func(rb_cClass, rb_class_s_alloc);
     rb_undef_method(rb_cClass, "extend_object");
     rb_undef_method(rb_cClass, "append_features");

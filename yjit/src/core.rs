@@ -527,6 +527,16 @@ fn get_or_create_iseq_payload(iseq: IseqPtr) -> &'static mut IseqPayload {
     unsafe { payload_non_null.as_mut() }.unwrap()
 }
 
+/// Iterate over all existing ISEQs
+pub fn for_each_iseq<F: FnMut(IseqPtr)>(mut callback: F) {
+    unsafe extern "C" fn callback_wrapper(iseq: IseqPtr, data: *mut c_void) {
+        let callback: &mut &mut dyn FnMut(IseqPtr) -> bool = std::mem::transmute(&mut *data);
+        callback(iseq);
+    }
+    let mut data: &mut dyn FnMut(IseqPtr) = &mut callback;
+    unsafe { rb_yjit_for_each_iseq(Some(callback_wrapper), (&mut data) as *mut _ as *mut c_void) };
+}
+
 /// Free the per-iseq payload
 #[no_mangle]
 pub extern "C" fn rb_yjit_iseq_free(payload: *mut c_void) {
@@ -665,7 +675,7 @@ pub extern "C" fn rb_yjit_iseq_update_references(payload: *mut c_void) {
                 if new_addr != object {
                     for (byte_idx, &byte) in new_addr.as_u64().to_le_bytes().iter().enumerate() {
                         let byte_code_ptr = value_code_ptr.add_bytes(byte_idx);
-                        cb.get_mem().write_byte(byte_code_ptr, byte)
+                        cb.write_mem(byte_code_ptr, byte)
                             .expect("patching existing code should be within bounds");
                     }
                 }
@@ -1438,11 +1448,9 @@ fn gen_block_series_body(
         if result.is_err() {
             // Remove previously compiled block
             // versions from the version map
+            mem::drop(last_branch); // end borrow
             for blockref in &batch {
-                // FIXME: should be deallocating resources here too
-                // e.g. invariants, etc.
-                //free_block(blockref)
-
+                free_block(blockref);
                 remove_block_version(blockref);
             }
 
@@ -1479,7 +1487,7 @@ fn gen_block_series_body(
             if iseq_location.contains(substr) {
                 let last_block = last_blockref.borrow();
                 println!("Compiling {} block(s) for {}, ISEQ offsets [{}, {})", batch.len(), iseq_location, blockid.idx, last_block.end_idx);
-                println!("{}", disasm_iseq_insn_range(blockid.iseq, blockid.idx, last_block.end_idx));
+                print!("{}", disasm_iseq_insn_range(blockid.iseq, blockid.idx, last_block.end_idx));
             }
         }
     }
@@ -1918,7 +1926,9 @@ pub fn gen_branch(
 
     // Call the branch generation function
     asm.mark_branch_start(&branchref);
-    gen_fn(asm, branch.dst_addrs[0].unwrap(), branch.dst_addrs[1], BranchShape::Default);
+    if let Some(dst_addr) = branch.dst_addrs[0] {
+        gen_fn(asm, dst_addr, branch.dst_addrs[1], BranchShape::Default);
+    }
     asm.mark_branch_end(&branchref);
 }
 
@@ -1957,6 +1967,7 @@ pub fn gen_direct_jump(jit: &JITState, ctx: &Context, target0: BlockId, asm: &mu
         branch.shape = BranchShape::Default;
 
         // Call the branch generation function
+        asm.comment("gen_direct_jmp: existing block");
         asm.mark_branch_start(&branchref);
         gen_jump_branch(asm, branch.dst_addrs[0].unwrap(), None, BranchShape::Default);
         asm.mark_branch_end(&branchref);
@@ -1967,6 +1978,7 @@ pub fn gen_direct_jump(jit: &JITState, ctx: &Context, target0: BlockId, asm: &mu
         branch.shape = BranchShape::Next0;
 
         // The branch is effectively empty (a noop)
+        asm.comment("gen_direct_jmp: fallthrough");
         asm.mark_branch_start(&branchref);
         asm.mark_branch_end(&branchref);
     }
@@ -2005,12 +2017,14 @@ pub fn defer_compilation(
 
     // Call the branch generation function
     asm.mark_branch_start(&branch_rc);
-    gen_jump_branch(asm, branch.dst_addrs[0].unwrap(), None, BranchShape::Default);
+    if let Some(dst_addr) = branch.dst_addrs[0] {
+        gen_jump_branch(asm, dst_addr, None, BranchShape::Default);
+    }
     asm.mark_branch_end(&branch_rc);
 }
 
 // Remove all references to a block then free it.
-fn free_block(blockref: &BlockRef) {
+pub fn free_block(blockref: &BlockRef) {
     use crate::invariants::*;
 
     block_assumptions_free(blockref);

@@ -115,6 +115,21 @@ Note: We're only listing outstanding class updates.
     STDIN.read # => Blocking operation timed out! (IO::TimeoutError)
     ```
 
+* Class
+    * `Class#attached_object`, which returns the object for which
+      the receiver is the singleton class. Raises `TypeError` if the
+      receiver is not a singleton class.
+      [[Feature #12084]]
+
+      ```ruby
+      class Foo; end
+
+      Foo.singleton_class.attached_object        #=> Foo
+      Foo.new.singleton_class.attached_object    #=> #<Foo:0x000000010491a370>
+      Foo.attached_object                        #=> TypeError: `Foo' is not a singleton class
+      nil.singleton_class.attached_object        #=> TypeError: `NilClass' is not a singleton class
+      ```
+
 * Data
     * New core class to represent simple immutable value object. The class is
       similar to `Struct` and partially shares an implementation, but has more
@@ -169,6 +184,9 @@ Note: We're only listing outstanding class updates.
 * Refinement
     * Refinement#refined_class has been added. [[Feature #12737]]
 
+* RubyVM::AbstractSyntaxTree
+    * Add `error_tolerant` option for `parse`, `parse_file` and `of`. [[Feature #19013]]
+
 * Set
     * Set is now available as a built-in class without the need for `require "set"`. [[Feature #16989]]
       It is currently autoloaded via the `Set` constant or a call to `Enumerable#to_set`.
@@ -215,6 +233,7 @@ Note: We're only listing outstanding class updates.
     * date 3.2.3
     * error_highlight 0.4.0
     * etc 1.4.0
+    * fiddle 1.1.1
     * io-console 0.5.11
     * io-nonblock 0.1.1
     * io-wait 0.3.0.pre
@@ -224,6 +243,7 @@ Note: We're only listing outstanding class updates.
     * logger 1.5.1
     * net-http 0.2.2
     * net-protocol 0.1.3
+    * openssl 3.1.0.pre
     * ostruct 0.5.5
     * psych 5.0.0.dev
     * reline 0.3.1
@@ -234,6 +254,7 @@ Note: We're only listing outstanding class updates.
     * timeout 0.3.0
 *   The following bundled gems are updated.
     * minitest 5.16.3
+    * power_assert 2.0.2
     * test-unit 3.5.5
     * net-ftp 0.2.0
     * net-imap 0.3.1
@@ -320,6 +341,7 @@ The following deprecated APIs are removed.
 ## Miscellaneous changes
 
 [Feature #12005]: https://bugs.ruby-lang.org/issues/12005
+[Feature #12084]: https://bugs.ruby-lang.org/issues/12084
 [Feature #12655]: https://bugs.ruby-lang.org/issues/12655
 [Feature #12737]: https://bugs.ruby-lang.org/issues/12737
 [Feature #13110]: https://bugs.ruby-lang.org/issues/13110

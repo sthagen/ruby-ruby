@@ -1,18 +1,17 @@
 // We use the YARV bytecode constants which have a CRuby-style name
 #![allow(non_upper_case_globals)]
 
-//use crate::asm::x86_64::*;
 use crate::asm::*;
 use crate::backend::ir::*;
 use crate::core::*;
 use crate::cruby::*;
 use crate::invariants::*;
 use crate::options::*;
+#[cfg(feature = "stats")]
 use crate::stats::*;
 use crate::utils::*;
 use CodegenStatus::*;
 use InsnOpnd::*;
-
 
 use std::cmp;
 use std::collections::HashMap;
@@ -23,13 +22,6 @@ use std::ptr;
 use std::slice;
 
 pub use crate::virtualmem::CodePtr;
-
-// A block that can be invalidated needs space to write a jump.
-// We'll reserve a minimum size for any block that could
-// be invalidated. In this case the JMP takes 5 bytes, but
-// gen_send_general will always MOV the receiving object
-// into place, so 2 bytes are always written automatically.
-//pub const JUMP_SIZE_IN_BYTES: usize = 3;
 
 /// Status returned by code generation functions
 #[derive(PartialEq, Debug)]
@@ -296,6 +288,7 @@ fn jit_prepare_routine_call(
 /// Record the current codeblock write position for rewriting into a jump into
 /// the outlined block later. Used to implement global code invalidation.
 fn record_global_inval_patch(asm: &mut Assembler, outline_block_target_pos: CodePtr) {
+    asm.pad_inval_patch();
     asm.pos_marker(move |code_ptr| {
         CodegenGlobals::push_global_inval_patch(code_ptr, outline_block_target_pos);
     });
@@ -606,23 +599,10 @@ fn gen_pc_guard(asm: &mut Assembler, iseq: IseqPtr, insn_idx: u32) {
 /// Compile an interpreter entry block to be inserted into an iseq
 /// Returns None if compilation fails.
 pub fn gen_entry_prologue(cb: &mut CodeBlock, iseq: IseqPtr, insn_idx: u32) -> Option<CodePtr> {
-    const MAX_PROLOGUE_SIZE: usize = 1024;
-
-    // Check if we have enough executable memory
-    if !cb.has_capacity(MAX_PROLOGUE_SIZE) {
-        return None;
-    }
-
-    let old_write_pos = cb.get_write_pos();
-
-    // TODO: figure out if this is actually beneficial for performance
-    // Align the current write position to cache line boundaries
-    cb.align_pos(64);
-
     let code_ptr = cb.get_write_ptr();
 
     let mut asm = Assembler::new();
-    if get_option!(dump_disasm).is_enabled() {
+    if get_option_ref!(dump_disasm).is_some() {
         asm.comment(&format!("YJIT entry: {}", iseq_get_location(iseq)));
     } else {
         asm.comment("YJIT entry");
@@ -660,10 +640,11 @@ pub fn gen_entry_prologue(cb: &mut CodeBlock, iseq: IseqPtr, insn_idx: u32) -> O
 
     asm.compile(cb);
 
-    // Verify MAX_PROLOGUE_SIZE
-    assert!(cb.get_write_pos() - old_write_pos <= MAX_PROLOGUE_SIZE);
-
-    return Some(code_ptr);
+    if cb.has_dropped_bytes() {
+        None
+    } else {
+        Some(code_ptr)
+    }
 }
 
 // Generate code to check for interrupts and take a side-exit.
@@ -751,7 +732,7 @@ pub fn gen_single_block(
     let mut asm = Assembler::new();
 
     #[cfg(feature = "disasm")]
-    if get_option!(dump_disasm).is_enabled() {
+    if get_option_ref!(dump_disasm).is_some() {
         asm.comment(&format!("Block: {} (ISEQ offset: {})", iseq_get_location(blockid.iseq), blockid.idx));
     }
 
@@ -853,7 +834,7 @@ pub fn gen_single_block(
     {
         let mut block = jit.block.borrow_mut();
         if block.entry_exit.is_some() {
-            asm.pad_entry_exit();
+            asm.pad_inval_patch();
         }
 
         // Compile code into the code block
@@ -877,6 +858,7 @@ pub fn gen_single_block(
 
     // If code for the block doesn't fit, fail
     if cb.has_dropped_bytes() || ocb.unwrap().has_dropped_bytes() {
+        free_block(&blockref);
         return Err(());
     }
 
@@ -928,9 +910,7 @@ fn gen_dupn(
     asm: &mut Assembler,
     _ocb: &mut OutlinedCb,
 ) -> CodegenStatus {
-
-    let nval: VALUE = jit_get_arg(jit, 0);
-    let VALUE(n) = nval;
+    let n = jit_get_arg(jit, 0).as_usize();
 
     // In practice, seems to be only used for n==2
     if n != 2 {
@@ -1053,9 +1033,9 @@ fn gen_putspecialobject(
     asm: &mut Assembler,
     _ocb: &mut OutlinedCb,
 ) -> CodegenStatus {
-    let object_type = jit_get_arg(jit, 0);
+    let object_type = jit_get_arg(jit, 0).as_usize();
 
-    if object_type == VALUE(VM_SPECIAL_OBJECT_VMCORE.as_usize()) {
+    if object_type == VM_SPECIAL_OBJECT_VMCORE.as_usize() {
         let stack_top = ctx.stack_push(Type::UnknownHeap);
         let frozen_core = unsafe { rb_mRubyVMFrozenCore };
         asm.mov(stack_top, frozen_core.into());
@@ -1074,17 +1054,17 @@ fn gen_setn(
     asm: &mut Assembler,
     _ocb: &mut OutlinedCb,
 ) -> CodegenStatus {
-    let n: VALUE = jit_get_arg(jit, 0);
+    let n = jit_get_arg(jit, 0).as_usize();
 
     let top_val = ctx.stack_pop(0);
-    let dst_opnd = ctx.stack_opnd(n.into());
+    let dst_opnd = ctx.stack_opnd(n.try_into().unwrap());
     asm.mov(
         dst_opnd,
         top_val
     );
 
     let mapping = ctx.get_opnd_mapping(StackOpnd(0));
-    ctx.set_opnd_mapping(StackOpnd(n.into()), mapping);
+    ctx.set_opnd_mapping(StackOpnd(n.try_into().unwrap()), mapping);
 
     KeepCompiling
 }
@@ -1096,10 +1076,10 @@ fn gen_topn(
     asm: &mut Assembler,
     _ocb: &mut OutlinedCb,
 ) -> CodegenStatus {
-    let nval = jit_get_arg(jit, 0);
+    let n = jit_get_arg(jit, 0).as_usize();
 
-    let top_n_val = ctx.stack_opnd(nval.into());
-    let mapping = ctx.get_opnd_mapping(StackOpnd(nval.into()));
+    let top_n_val = ctx.stack_opnd(n.try_into().unwrap());
+    let mapping = ctx.get_opnd_mapping(StackOpnd(n.try_into().unwrap()));
     let loc0 = ctx.stack_push_mapping(mapping);
     asm.mov(loc0, top_n_val);
 
@@ -1113,8 +1093,7 @@ fn gen_adjuststack(
     _cb: &mut Assembler,
     _ocb: &mut OutlinedCb,
 ) -> CodegenStatus {
-    let nval: VALUE = jit_get_arg(jit, 0);
-    let VALUE(n) = nval;
+    let n = jit_get_arg(jit, 0).as_usize();
     ctx.stack_pop(n);
     KeepCompiling
 }
@@ -1255,7 +1234,7 @@ fn gen_splatarray(
     asm: &mut Assembler,
     _ocb: &mut OutlinedCb,
 ) -> CodegenStatus {
-    let flag = jit_get_arg(jit, 0);
+    let flag = jit_get_arg(jit, 0).as_usize();
 
     // Save the PC and SP because the callee may allocate
     // Note that this modifies REG_SP, which is why we do it first
@@ -1304,7 +1283,7 @@ fn gen_newrange(
     asm: &mut Assembler,
     _ocb: &mut OutlinedCb,
 ) -> CodegenStatus {
-    let flag = jit_get_arg(jit, 0);
+    let flag = jit_get_arg(jit, 0).as_usize();
 
     // rb_range_new() allocates and can raise
     jit_prepare_routine_call(jit, ctx, asm);
@@ -1391,33 +1370,33 @@ fn gen_expandarray(
     asm: &mut Assembler,
     ocb: &mut OutlinedCb,
 ) -> CodegenStatus {
-    let flag = jit_get_arg(jit, 1);
-    let VALUE(flag_value) = flag;
+    // Both arguments are rb_num_t which is unsigned
+    let num = jit_get_arg(jit, 0).as_usize();
+    let flag = jit_get_arg(jit, 1).as_usize();
 
     // If this instruction has the splat flag, then bail out.
-    if flag_value & 0x01 != 0 {
+    if flag & 0x01 != 0 {
         gen_counter_incr!(asm, expandarray_splat);
         return CantCompile;
     }
 
     // If this instruction has the postarg flag, then bail out.
-    if flag_value & 0x02 != 0 {
+    if flag & 0x02 != 0 {
         gen_counter_incr!(asm, expandarray_postarg);
         return CantCompile;
     }
 
     let side_exit = get_side_exit(jit, ocb, ctx);
 
-    // num is the number of requested values. If there aren't enough in the
-    // array then we're going to push on nils.
-    let num = jit_get_arg(jit, 0);
     let array_type = ctx.get_opnd_type(StackOpnd(0));
     let array_opnd = ctx.stack_pop(1);
 
+    // num is the number of requested values. If there aren't enough in the
+    // array then we're going to push on nils.
     if matches!(array_type, Type::Nil) {
         // special case for a, b = nil pattern
         // push N nils onto the stack
-        for _i in 0..(num.into()) {
+        for _ in 0..num {
             let push_opnd = ctx.stack_push(Type::Nil);
             asm.mov(push_opnd, Qnil.into());
         }
@@ -1438,7 +1417,7 @@ fn gen_expandarray(
     );
 
     // If we don't actually want any values, then just return.
-    if num == VALUE(0) {
+    if num == 0 {
         return KeepCompiling;
     }
 
@@ -1481,9 +1460,10 @@ fn gen_expandarray(
     let ary_opnd = asm.csel_nz(ary_opnd, heap_ptr_opnd);
 
     // Loop backward through the array and push each element onto the stack.
-    for i in (0..(num.as_i32())).rev() {
+    for i in (0..num).rev() {
         let top = ctx.stack_push(Type::Unknown);
-        asm.mov(top, Opnd::mem(64, ary_opnd, i * (SIZEOF_VALUE as i32)));
+        let offset = i32::try_from(i * SIZEOF_VALUE).unwrap();
+        asm.mov(top, Opnd::mem(64, ary_opnd, offset));
     }
 
     KeepCompiling
@@ -2166,7 +2146,7 @@ fn gen_setinstancevariable(
     asm: &mut Assembler,
     _ocb: &mut OutlinedCb,
 ) -> CodegenStatus {
-    let id = jit_get_arg(jit, 0);
+    let id = jit_get_arg(jit, 0).as_usize();
     let ic = jit_get_arg(jit, 1).as_u64(); // type IVC
 
     // Save the PC and SP because the callee may allocate
@@ -2182,7 +2162,7 @@ fn gen_setinstancevariable(
         vec![
             Opnd::const_ptr(jit.iseq as *const u8),
             Opnd::mem(64, CFP, RUBY_OFFSET_CFP_SELF),
-            Opnd::UImm(id.into()),
+            id.into(),
             val_opnd,
             Opnd::const_ptr(ic as *const u8),
         ]
@@ -2290,20 +2270,20 @@ fn gen_concatstrings(
     asm: &mut Assembler,
     _ocb: &mut OutlinedCb,
 ) -> CodegenStatus {
-    let n = jit_get_arg(jit, 0);
+    let n = jit_get_arg(jit, 0).as_usize();
 
     // Save the PC and SP because we are allocating
     jit_prepare_routine_call(jit, ctx, asm);
 
-    let values_ptr = asm.lea(ctx.sp_opnd(-((SIZEOF_VALUE as isize) * n.as_isize())));
+    let values_ptr = asm.lea(ctx.sp_opnd(-((SIZEOF_VALUE as isize) * n as isize)));
 
-    // call rb_str_concat_literals(long n, const VALUE *strings);
+    // call rb_str_concat_literals(size_t n, const VALUE *strings);
     let return_value = asm.ccall(
         rb_str_concat_literals as *const u8,
-        vec![Opnd::UImm(n.into()), values_ptr]
+        vec![n.into(), values_ptr]
     );
 
-    ctx.stack_pop(n.as_usize());
+    ctx.stack_pop(n);
     let stack_ret = ctx.stack_push(Type::CString);
     asm.mov(stack_ret, return_value);
 
@@ -3229,8 +3209,7 @@ fn gen_branchif(
     };
 
     // Test if any bit (outside of the Qnil bit) is on
-    // RUBY_Qfalse  /* ...0000 0000 */
-    // RUBY_Qnil    /* ...0000 1000 */
+    // See RB_TEST()
     let val_type = ctx.get_opnd_type(StackOpnd(0));
     let val_opnd = ctx.stack_pop(1);
 
@@ -3307,8 +3286,7 @@ fn gen_branchunless(
         gen_direct_jump(jit, ctx, target, asm);
     } else {
         // Test if any bit (outside of the Qnil bit) is on
-        // RUBY_Qfalse  /* ...0000 0000 */
-        // RUBY_Qnil    /* ...0000 1000 */
+        // See RB_TEST()
         let not_qnil = !Qnil.as_i64();
         asm.test(val_opnd, not_qnil.into());
 
@@ -3379,7 +3357,6 @@ fn gen_branchnil(
         gen_direct_jump(jit, ctx, target, asm);
     } else {
         // Test if the value is Qnil
-        // RUBY_Qnil    /* ...0000 1000 */
         asm.cmp(val_opnd, Opnd::UImm(Qnil.into()));
         // Generate the branch instructions
         gen_branch(
@@ -5756,7 +5733,7 @@ fn gen_getglobal(
     asm: &mut Assembler,
     _ocb: &mut OutlinedCb,
 ) -> CodegenStatus {
-    let gid = jit_get_arg(jit, 0);
+    let gid = jit_get_arg(jit, 0).as_usize();
 
     // Save the PC and SP because we might make a Ruby call for warning
     jit_prepare_routine_call(jit, ctx, asm);
@@ -5778,7 +5755,7 @@ fn gen_setglobal(
     asm: &mut Assembler,
     _ocb: &mut OutlinedCb,
 ) -> CodegenStatus {
-    let gid = jit_get_arg(jit, 0);
+    let gid = jit_get_arg(jit, 0).as_usize();
 
     // Save the PC and SP because we might make a Ruby call for
     // Kernel#set_trace_var
@@ -5892,7 +5869,7 @@ fn gen_toregexp(
         rb_ary_tmp_new_from_values as *const u8,
         vec![
             Opnd::Imm(0),
-            Opnd::UImm(jit_get_arg(jit, 1).as_u64()),
+            cnt.into(),
             values_ptr,
         ]
     );
@@ -6543,29 +6520,18 @@ static mut CODEGEN_GLOBALS: Option<CodegenGlobals> = None;
 impl CodegenGlobals {
     /// Initialize the codegen globals
     pub fn init() {
-        // Executable memory size in MiB
-        let mem_size = get_option!(exec_mem_size) * 1024 * 1024;
+        // Executable memory and code page size in bytes
+        let mem_size = get_option!(exec_mem_size);
+
 
         #[cfg(not(test))]
         let (mut cb, mut ocb) = {
-            // TODO(alan): we can error more gracefully when the user gives
-            //   --yjit-exec-mem=absurdly-large-number
-            //
-            // 2 GiB. It's likely a bug if we generate this much code.
-            const MAX_BUFFER_SIZE: usize = 2 * 1024 * 1024 * 1024;
-            assert!(mem_size <= MAX_BUFFER_SIZE);
-            let mem_size_u32 = mem_size as u32;
-            let half_size = mem_size / 2;
+            use std::cell::RefCell;
+            use std::rc::Rc;
 
-            let page_size = unsafe { rb_yjit_get_page_size() };
-            let assert_page_aligned = |ptr| assert_eq!(
-                0,
-                ptr as usize % page_size.as_usize(),
-                "Start of virtual address block should be page-aligned",
-            );
+            let code_page_size = get_option!(code_page_size);
 
-            let virt_block: *mut u8 = unsafe { rb_yjit_reserve_addr_space(mem_size_u32) };
-            let second_half = virt_block.wrapping_add(half_size);
+            let virt_block: *mut u8 = unsafe { rb_yjit_reserve_addr_space(mem_size as u32) };
 
             // Memory protection syscalls need page-aligned addresses, so check it here. Assuming
             // `virt_block` is page-aligned, `second_half` should be page-aligned as long as the
@@ -6574,26 +6540,25 @@ impl CodegenGlobals {
             //
             // Basically, we don't support x86-64 2MiB and 1GiB pages. ARMv8 can do up to 64KiB
             // (2¹⁶ bytes) pages, which should be fine. 4KiB pages seem to be the most popular though.
-            assert_page_aligned(virt_block);
-            assert_page_aligned(second_half);
+            let page_size = unsafe { rb_yjit_get_page_size() };
+            assert_eq!(
+                virt_block as usize % page_size.as_usize(), 0,
+                "Start of virtual address block should be page-aligned",
+            );
+            assert_eq!(code_page_size % page_size.as_usize(), 0, "code_page_size was not page-aligned");
 
             use crate::virtualmem::*;
 
-            let first_half = VirtualMem::new(
+            let mem_block = VirtualMem::new(
                 SystemAllocator {},
                 page_size,
                 virt_block,
-                half_size
+                mem_size,
             );
-            let second_half = VirtualMem::new(
-                SystemAllocator {},
-                page_size,
-                second_half,
-                half_size
-            );
+            let mem_block = Rc::new(RefCell::new(mem_block));
 
-            let cb = CodeBlock::new(first_half, false);
-            let ocb = OutlinedCb::wrap(CodeBlock::new(second_half, true));
+            let cb = CodeBlock::new(mem_block.clone(), code_page_size, false);
+            let ocb = OutlinedCb::wrap(CodeBlock::new(mem_block, code_page_size, true));
 
             (cb, ocb)
         };
@@ -6699,6 +6664,10 @@ impl CodegenGlobals {
     /// Get a mutable reference to the codegen globals instance
     pub fn get_instance() -> &'static mut CodegenGlobals {
         unsafe { CODEGEN_GLOBALS.as_mut().unwrap() }
+    }
+
+    pub fn has_instance() -> bool {
+        unsafe { CODEGEN_GLOBALS.as_mut().is_some() }
     }
 
     /// Get a mutable reference to the inline code block
