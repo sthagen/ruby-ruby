@@ -421,15 +421,22 @@ f_complex_new_bang2(VALUE klass, VALUE x, VALUE y)
     return nucomp_s_new_internal(klass, x, y);
 }
 
-inline static void
+WARN_UNUSED_RESULT(inline static VALUE nucomp_real_check(VALUE num));
+inline static VALUE
 nucomp_real_check(VALUE num)
 {
     if (!RB_INTEGER_TYPE_P(num) &&
         !RB_FLOAT_TYPE_P(num) &&
         !RB_TYPE_P(num, T_RATIONAL)) {
+        if (RB_TYPE_P(num, T_COMPLEX) && nucomp_real_p(num)) {
+            VALUE real = RCOMPLEX(num)->real;
+            assert(!RB_TYPE_P(real, T_COMPLEX));
+            return real;
+        }
         if (!k_numeric_p(num) || !f_real_p(num))
             rb_raise(rb_eTypeError, "not a real");
     }
+    return num;
 }
 
 inline static VALUE
@@ -480,16 +487,16 @@ nucomp_s_new(int argc, VALUE *argv, VALUE klass)
 
     switch (rb_scan_args(argc, argv, "11", &real, &imag)) {
       case 1:
-        nucomp_real_check(real);
+        real = nucomp_real_check(real);
         imag = ZERO;
         break;
       default:
-        nucomp_real_check(real);
-        nucomp_real_check(imag);
+        real = nucomp_real_check(real);
+        imag = nucomp_real_check(imag);
         break;
     }
 
-    return nucomp_s_canonicalize_internal(klass, real, imag);
+    return nucomp_s_new_internal(klass, real, imag);
 }
 
 inline static VALUE
@@ -611,16 +618,8 @@ m_sin(VALUE x)
 }
 
 static VALUE
-f_complex_polar(VALUE klass, VALUE x, VALUE y)
+f_complex_polar_real(VALUE klass, VALUE x, VALUE y)
 {
-    if (RB_TYPE_P(x, T_COMPLEX)) {
-        get_dat1(x);
-        x = dat->real;
-    }
-    if (RB_TYPE_P(y, T_COMPLEX)) {
-        get_dat1(y);
-        y = dat->real;
-    }
     if (f_zero_p(x) || f_zero_p(y)) {
         return nucomp_s_new_internal(klass, x, RFLOAT_0);
     }
@@ -654,6 +653,14 @@ f_complex_polar(VALUE klass, VALUE x, VALUE y)
     return nucomp_s_canonicalize_internal(klass,
                                           f_mul(x, m_cos(y)),
                                           f_mul(x, m_sin(y)));
+}
+
+static VALUE
+f_complex_polar(VALUE klass, VALUE x, VALUE y)
+{
+    x = nucomp_real_check(x);
+    y = nucomp_real_check(y);
+    return f_complex_polar_real(klass, x, y);
 }
 
 #ifdef HAVE___COSPI
@@ -704,16 +711,15 @@ nucomp_s_polar(int argc, VALUE *argv, VALUE klass)
 {
     VALUE abs, arg;
 
-    switch (rb_scan_args(argc, argv, "11", &abs, &arg)) {
-      case 1:
-        nucomp_real_check(abs);
-        return nucomp_s_new_internal(klass, abs, ZERO);
-      default:
-        nucomp_real_check(abs);
-        nucomp_real_check(arg);
-        break;
+    argc = rb_scan_args(argc, argv, "11", &abs, &arg);
+    abs = nucomp_real_check(abs);
+    if (argc == 2) {
+        arg = nucomp_real_check(arg);
     }
-    return f_complex_polar(klass, abs, arg);
+    else {
+        arg = ZERO;
+    }
+    return f_complex_polar_real(klass, abs, arg);
 }
 
 /*
@@ -2155,31 +2161,6 @@ nucomp_s_convert(int argc, VALUE *argv, VALUE klass)
 
 /*
  * call-seq:
- *    num.real  ->  self
- *
- * Returns self.
- */
-static VALUE
-numeric_real(VALUE self)
-{
-    return self;
-}
-
-/*
- * call-seq:
- *    num.imag       ->  0
- *    num.imaginary  ->  0
- *
- * Returns zero.
- */
-static VALUE
-numeric_imag(VALUE self)
-{
-    return INT2FIX(0);
-}
-
-/*
- * call-seq:
  *    num.abs2  ->  real
  *
  * Returns square of self.
@@ -2247,19 +2228,6 @@ numeric_polar(VALUE self)
         arg = f_arg(self);
     }
     return rb_assoc_new(abs, arg);
-}
-
-/*
- * call-seq:
- *    num.conj       ->  self
- *    num.conjugate  ->  self
- *
- * Returns self.
- */
-static VALUE
-numeric_conj(VALUE self)
-{
-    return self;
 }
 
 /*
@@ -2427,9 +2395,6 @@ Init_Complex(void)
 
     rb_define_private_method(CLASS_OF(rb_cComplex), "convert", nucomp_s_convert, -1);
 
-    rb_define_method(rb_cNumeric, "real", numeric_real, 0);
-    rb_define_method(rb_cNumeric, "imaginary", numeric_imag, 0);
-    rb_define_method(rb_cNumeric, "imag", numeric_imag, 0);
     rb_define_method(rb_cNumeric, "abs2", numeric_abs2, 0);
     rb_define_method(rb_cNumeric, "arg", numeric_arg, 0);
     rb_define_method(rb_cNumeric, "angle", numeric_arg, 0);
@@ -2437,8 +2402,6 @@ Init_Complex(void)
     rb_define_method(rb_cNumeric, "rectangular", numeric_rect, 0);
     rb_define_method(rb_cNumeric, "rect", numeric_rect, 0);
     rb_define_method(rb_cNumeric, "polar", numeric_polar, 0);
-    rb_define_method(rb_cNumeric, "conjugate", numeric_conj, 0);
-    rb_define_method(rb_cNumeric, "conj", numeric_conj, 0);
 
     rb_define_method(rb_cFloat, "arg", float_arg, 0);
     rb_define_method(rb_cFloat, "angle", float_arg, 0);

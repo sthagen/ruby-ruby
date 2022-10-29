@@ -263,6 +263,7 @@ fn main() {
         .allowlist_function("rb_yjit_reserve_addr_space")
         .allowlist_function("rb_yjit_mark_writable")
         .allowlist_function("rb_yjit_mark_executable")
+        .allowlist_function("rb_yjit_mark_unused")
         .allowlist_function("rb_yjit_get_page_size")
         .allowlist_function("rb_leaf_invokebuiltin_iseq_p")
         .allowlist_function("rb_leaf_builtin_function")
@@ -296,6 +297,9 @@ fn main() {
 
         // From internal/compile.h
         .allowlist_function("rb_vm_insn_decode")
+
+        // from internal/cont.h
+        .allowlist_function("rb_jit_cont_each_iseq")
 
         // From iseq.h
         .allowlist_function("rb_vm_insn_addr2opcode")
@@ -346,6 +350,7 @@ fn main() {
         .allowlist_function("rb_get_def_bmethod_proc")
         .allowlist_function("rb_iseq_encoded_size")
         .allowlist_function("rb_get_iseq_body_local_iseq")
+        .allowlist_function("rb_get_iseq_body_parent_iseq")
         .allowlist_function("rb_get_iseq_body_iseq_encoded")
         .allowlist_function("rb_get_iseq_body_stack_max")
         .allowlist_function("rb_get_iseq_flags_has_opt")

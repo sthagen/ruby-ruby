@@ -4,7 +4,6 @@ require 'test/unit'
 module TestIRB
   class TestRaiseNoBacktraceException < Test::Unit::TestCase
     def test_raise_exception
-      pend if RUBY_ENGINE == 'truffleruby'
       bundle_exec = ENV.key?('BUNDLE_GEMFILE') ? ['-rbundler/setup'] : []
       assert_in_out_err(bundle_exec + %w[-rirb -W0 -e IRB.start(__FILE__) -- -f --], <<-IRB, /Exception: foo/, [])
       e = Exception.new("foo")
@@ -23,7 +22,6 @@ IRB
     end
 
     def test_raise_exception_with_different_encoding_containing_invalid_byte_sequence
-      pend if RUBY_ENGINE == 'truffleruby'
       backup_home = ENV["HOME"]
       Dir.mktmpdir("test_irb_raise_no_backtrace_exception_#{$$}") do |tmpdir|
         ENV["HOME"] = tmpdir
@@ -40,6 +38,8 @@ IRB
         end
         env = {}
         %w(LC_MESSAGES LC_ALL LC_CTYPE LANG).each {|n| env[n] = "ja_JP.UTF-8" }
+        # TruffleRuby warns when the locale does not exist
+        env['TRUFFLERUBYOPT'] = "#{ENV['TRUFFLERUBYOPT']} --log.level=SEVERE" if RUBY_ENGINE == 'truffleruby'
         args = [env] + bundle_exec + %W[-rirb -C #{tmpdir} -W0 -e IRB.start(__FILE__) -- -f --]
         error = /`raise_euc_with_invalid_byte_sequence': あ\\xFF \(RuntimeError\)/
         assert_in_out_err(args, <<~IRB, error, [], encoding: "UTF-8")

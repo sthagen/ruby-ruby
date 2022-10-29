@@ -3,6 +3,8 @@ require "test/unit"
 require "irb"
 require "irb/extend-command"
 
+require_relative "helper"
+
 module TestIRB
   class ExtendCommand < Test::Unit::TestCase
     class TestInputMethod < ::IRB::InputMethod
@@ -111,7 +113,17 @@ module TestIRB
         East\sAsian\sAmbiguous\sWidth:\s\d\n
         #{@is_win ? 'Code\spage:\s\d+\n' : ''}
       }x
-      assert_match expected, irb.context.main.irb_info.to_s
+      info = irb.context.main.irb_info
+      capture_output do
+        # Reline::Core#ambiguous_width may access STDOUT, not $stdout
+        stdout = STDOUT.dup
+        STDOUT.reopen(IO::NULL, "w")
+        info = info.to_s
+      ensure
+        STDOUT.reopen(stdout)
+        stdout.close
+      end
+      assert_match expected, info
     ensure
       ENV["LANG"] = lang_backup
       ENV["LC_ALL"] = lc_all_backup
@@ -404,6 +416,50 @@ module TestIRB
           /   => nil\n/,
           /=> "hi"\n/,
         ], out)
+    end
+
+    def test_help
+      IRB.init_config(nil)
+      input = TestInputMethod.new([
+          "help 'String#gsub'\n",
+          "\n",
+        ])
+      IRB.conf[:PROMPT_MODE] = :SIMPLE
+      IRB.conf[:VERBOSE] = false
+      irb = IRB::Irb.new(IRB::WorkSpace.new(self), input)
+      out, _ = capture_output do
+        irb.eval_input
+      end
+
+      # the former is what we'd get without document content installed, like on CI
+      # the latter is what we may get locally
+      possible_rdoc_output = [/Nothing known about String#gsub/, /Returns a copy of self with all occurrences of the given pattern/]
+      assert(possible_rdoc_output.any? { |output| output.match?(out) }, "Expect the help command to match one of the possible outputs")
+    ensure
+      # this is the only way to reset the redefined method without coupling the test with its implementation
+      EnvUtil.suppress_warning { load "irb/cmd/help.rb" }
+    end
+
+    def test_help_without_rdoc
+      IRB.init_config(nil)
+      input = TestInputMethod.new([
+          "help 'String#gsub'\n",
+          "\n",
+        ])
+      IRB.conf[:PROMPT_MODE] = :SIMPLE
+      IRB.conf[:VERBOSE] = false
+      irb = IRB::Irb.new(IRB::WorkSpace.new(self), input)
+      out, _ = capture_output do
+        IRB::TestHelper.without_rdoc do
+          irb.eval_input
+        end
+      end
+
+      # if it fails to require rdoc, it only returns the command object
+      assert_match(/=> IRB::ExtendCommand::Help\n/, out)
+    ensure
+      # this is the only way to reset the redefined method without coupling the test with its implementation
+      EnvUtil.suppress_warning { load "irb/cmd/help.rb" }
     end
 
     def test_irb_load

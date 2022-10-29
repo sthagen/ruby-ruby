@@ -36,13 +36,16 @@ module TestIRB
     def test_rc_file
       tmpdir = @tmpdir
       Dir.chdir(tmpdir) do
+        ENV["XDG_CONFIG_HOME"] = "#{tmpdir}/xdg"
         IRB.conf[:RC_NAME_GENERATOR] = nil
         assert_equal(tmpdir+"/.irb#{IRB::IRBRC_EXT}", IRB.rc_file)
         assert_equal(tmpdir+"/.irb_history", IRB.rc_file("_history"))
+        assert_file.not_exist?(tmpdir+"/xdg")
         IRB.conf[:RC_NAME_GENERATOR] = nil
         FileUtils.touch(tmpdir+"/.irb#{IRB::IRBRC_EXT}")
         assert_equal(tmpdir+"/.irb#{IRB::IRBRC_EXT}", IRB.rc_file)
         assert_equal(tmpdir+"/.irb_history", IRB.rc_file("_history"))
+        assert_file.not_exist?(tmpdir+"/xdg")
       end
     end
 
@@ -79,6 +82,10 @@ module TestIRB
       ENV['NO_COLOR'] = 'true'
       IRB.setup(__FILE__)
       refute IRB.conf[:USE_COLORIZE]
+
+      ENV['NO_COLOR'] = ''
+      IRB.setup(__FILE__)
+      assert IRB.conf[:USE_COLORIZE]
 
       ENV['NO_COLOR'] = nil
       IRB.setup(__FILE__)

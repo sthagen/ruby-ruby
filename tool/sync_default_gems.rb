@@ -422,7 +422,7 @@ def message_filter(repo, sha)
   log = STDIN.read
   log.delete!("\r")
   url = "https://github.com/#{repo}"
-  subject, log = log.split("\n\n", 2)
+  subject, log = log.split(/\n(?:[\s\t]*(?:\n|\z))/, 2)
   conv = proc do |s|
     mod = true if s.gsub!(/\b(?:(?i:fix(?:e[sd])?) +)\K#(?=\d+\b)|\bGH-#?(?=\d+\b)|\(\K#(?=\d+\))/) {
       "#{url}/pull/"
@@ -439,11 +439,14 @@ def message_filter(repo, sha)
       subject.gsub!(/\G.{,67}[^\s.,][.,]*\K\s+/, "\n")
     end
   end
-  if log
+  url = "#{url}/commit/#{sha[0,10]}\n"
+  if log and !log.empty?
     conv[log]
     log.sub!(/\s*(?=(?i:\nCo-authored-by:.*)*\Z)/) {
-      "\n\n" "#{url}/commit/#{sha[0,10]}\n"
+      "\n\n#{url}"
     }
+  else
+    log = url
   end
   print subject, "\n\n", log
 end
@@ -520,7 +523,7 @@ def sync_default_gems_with_commits(gem, ranges, edit: nil)
       skipped = true
     elsif /^CONFLICT/ =~ result
       result = pipe_readlines(%W"git status --porcelain -z")
-      result.map! {|line| line[/\A.U (.*)/, 1]}
+      result.map! {|line| line[/\A(?:.U|AA) (.*)/, 1]}
       result.compact!
       ignore, conflict = result.partition {|name| IGNORE_FILE_PATTERN =~ name}
       unless ignore.empty?
