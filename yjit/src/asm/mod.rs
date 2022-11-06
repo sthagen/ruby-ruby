@@ -6,9 +6,10 @@ use std::rc::Rc;
 use crate::backend::x86_64::JMP_PTR_BYTES;
 #[cfg(target_arch = "aarch64")]
 use crate::backend::arm64::JMP_PTR_BYTES;
+use crate::core::IseqPayload;
+use crate::core::for_each_off_stack_iseq_payload;
 use crate::core::for_each_on_stack_iseq_payload;
 use crate::invariants::rb_yjit_tracing_invalidate_all;
-use crate::stats::incr_counter;
 use crate::virtualmem::WriteError;
 
 #[cfg(feature = "disasm")]
@@ -209,17 +210,25 @@ impl CodeBlock {
         self.page_size
     }
 
-    /// Return the number of code pages that have been allocated by the VirtualMemory.
-    pub fn num_pages(&self) -> usize {
+    /// Return the number of code pages that have been mapped by the VirtualMemory.
+    pub fn num_mapped_pages(&self) -> usize {
         let mapped_region_size = self.mem_block.borrow().mapped_region_size();
         // CodeBlock's page size != VirtualMem's page size on Linux,
         // so mapped_region_size % self.page_size may not be 0
         ((mapped_region_size - 1) / self.page_size) + 1
     }
 
+    /// Return the number of code pages that have been reserved by the VirtualMemory.
+    pub fn num_virtual_pages(&self) -> usize {
+        let virtual_region_size = self.mem_block.borrow().virtual_region_size();
+        // CodeBlock's page size != VirtualMem's page size on Linux,
+        // so mapped_region_size % self.page_size may not be 0
+        ((virtual_region_size - 1) / self.page_size) + 1
+    }
+
     /// Return the number of code pages that have been freed and not used yet.
     pub fn num_freed_pages(&self) -> usize {
-        (0..self.num_pages()).filter(|&page_idx| self.has_freed_page(page_idx)).count()
+        (0..self.num_mapped_pages()).filter(|&page_idx| self.has_freed_page(page_idx)).count()
     }
 
     pub fn has_freed_page(&self, page_idx: usize) -> bool {
@@ -303,7 +312,7 @@ impl CodeBlock {
     pub fn code_size(&self) -> usize {
         let mut size = 0;
         let current_page_idx = self.write_pos / self.page_size;
-        for page_idx in 0..self.num_pages() {
+        for page_idx in 0..self.num_mapped_pages() {
             if page_idx == current_page_idx {
                 // Count only actually used bytes for the current page.
                 size += (self.write_pos % self.page_size).saturating_sub(self.page_start());
@@ -408,12 +417,11 @@ impl CodeBlock {
     /// Write a single byte at the current position.
     pub fn write_byte(&mut self, byte: u8) {
         let write_ptr = self.get_write_ptr();
-        if !self.has_capacity(1) || self.mem_block.borrow_mut().write_byte(write_ptr, byte).is_err() {
+        if self.has_capacity(1) && self.mem_block.borrow_mut().write_byte(write_ptr, byte).is_ok() {
+            self.write_pos += 1;
+        } else {
             self.dropped_bytes = true;
         }
-
-        // Always advance write_pos since arm64 PadEntryExit needs this to stop the loop.
-        self.write_pos += 1;
     }
 
     /// Write multiple bytes starting from the current position.
@@ -479,10 +487,11 @@ impl CodeBlock {
         self.label_refs.push(LabelRef { pos: self.write_pos, label_idx, num_bytes, encode });
 
         // Move past however many bytes the instruction takes up
-        if !self.has_capacity(num_bytes) {
+        if self.has_capacity(num_bytes) {
+            self.write_pos += num_bytes;
+        } else {
             self.dropped_bytes = true; // retry emitting the Insn after next_page
         }
-        self.write_pos += num_bytes;
     }
 
     // Link internal label references
@@ -546,7 +555,7 @@ impl CodeBlock {
         }
 
         // Check which pages are still in use
-        let mut pages_in_use = vec![false; self.num_pages()];
+        let mut pages_in_use = vec![false; self.num_mapped_pages()];
         // For each ISEQ, we currently assume that only code pages used by inline code
         // are used by outlined code, so we mark only code pages used by inlined code.
         for_each_on_stack_iseq_payload(|iseq_payload| {
@@ -560,9 +569,17 @@ impl CodeBlock {
         }
 
         // Let VirtuamMem free the pages
-        let freed_pages: Vec<usize> = pages_in_use.iter().enumerate()
+        let mut freed_pages: Vec<usize> = pages_in_use.iter().enumerate()
             .filter(|&(_, &in_use)| !in_use).map(|(page, _)| page).collect();
         self.free_pages(&freed_pages);
+        // Avoid accumulating freed pages for future code GC
+        for_each_off_stack_iseq_payload(|iseq_payload: &mut IseqPayload| {
+            iseq_payload.pages.clear();
+        });
+
+        // Append virtual pages in case RubyVM::YJIT.code_gc is manually triggered.
+        let mut virtual_pages: Vec<usize> = (self.num_mapped_pages()..self.num_virtual_pages()).collect();
+        freed_pages.append(&mut virtual_pages);
 
         // Invalidate everything to have more compact code after code GC.
         // This currently patches every ISEQ, which works, but in the future,
@@ -587,7 +604,6 @@ impl CodeBlock {
         }
 
         CodegenGlobals::set_freed_pages(freed_pages);
-        incr_counter!(code_gc_count);
     }
 
     pub fn inline(&self) -> bool {

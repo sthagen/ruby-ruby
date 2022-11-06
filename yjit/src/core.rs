@@ -552,20 +552,39 @@ pub fn for_each_iseq<F: FnMut(IseqPtr)>(mut callback: F) {
     unsafe { rb_yjit_for_each_iseq(Some(callback_wrapper), (&mut data) as *mut _ as *mut c_void) };
 }
 
-/// Iterate over all on-stack ISEQ payloads
-#[cfg(not(test))]
-pub fn for_each_on_stack_iseq_payload<F: FnMut(&IseqPayload)>(mut callback: F) {
+/// Iterate over all on-stack ISEQs
+pub fn for_each_on_stack_iseq<F: FnMut(IseqPtr)>(mut callback: F) {
     unsafe extern "C" fn callback_wrapper(iseq: IseqPtr, data: *mut c_void) {
-        let callback: &mut &mut dyn FnMut(&IseqPayload) -> bool = std::mem::transmute(&mut *data);
+        let callback: &mut &mut dyn FnMut(IseqPtr) -> bool = std::mem::transmute(&mut *data);
+        callback(iseq);
+    }
+    let mut data: &mut dyn FnMut(IseqPtr) = &mut callback;
+    unsafe { rb_jit_cont_each_iseq(Some(callback_wrapper), (&mut data) as *mut _ as *mut c_void) };
+}
+
+/// Iterate over all on-stack ISEQ payloads
+pub fn for_each_on_stack_iseq_payload<F: FnMut(&IseqPayload)>(mut callback: F) {
+    for_each_on_stack_iseq(|iseq| {
         if let Some(iseq_payload) = get_iseq_payload(iseq) {
             callback(iseq_payload);
         }
-    }
-    let mut data: &mut dyn FnMut(&IseqPayload) = &mut callback;
-    unsafe { rb_jit_cont_each_iseq(Some(callback_wrapper), (&mut data) as *mut _ as *mut c_void) };
+    });
 }
-#[cfg(test)]
-pub fn for_each_on_stack_iseq_payload<F: FnMut(&IseqPayload)>(mut _callback: F) {}
+
+/// Iterate over all NOT on-stack ISEQ payloads
+pub fn for_each_off_stack_iseq_payload<F: FnMut(&mut IseqPayload)>(mut callback: F) {
+    let mut on_stack_iseqs: Vec<IseqPtr> = vec![];
+    for_each_on_stack_iseq(|iseq| {
+        on_stack_iseqs.push(iseq);
+    });
+    for_each_iseq(|iseq| {
+        if !on_stack_iseqs.contains(&iseq) {
+            if let Some(iseq_payload) = get_iseq_payload(iseq) {
+                callback(iseq_payload);
+            }
+        }
+    })
+}
 
 /// Free the per-iseq payload
 #[no_mangle]
@@ -846,7 +865,12 @@ pub fn limit_block_versions(blockid: BlockId, ctx: &Context) -> Context {
         generic_ctx.stack_size = ctx.stack_size;
         generic_ctx.sp_offset = ctx.sp_offset;
 
-        // Mutate the incoming context
+        debug_assert_ne!(
+            usize::MAX,
+            ctx.diff(&generic_ctx),
+            "should substitute a compatible context",
+        );
+
         return generic_ctx;
     }
 
@@ -1005,22 +1029,6 @@ impl Block {
 }
 
 impl Context {
-    pub fn new_with_stack_size(size: i16) -> Self {
-        return Context {
-            stack_size: size as u16,
-            sp_offset: size,
-            chain_depth: 0,
-            local_types: [Type::Unknown; MAX_LOCAL_TYPES],
-            temp_types: [Type::Unknown; MAX_TEMP_TYPES],
-            self_type: Type::Unknown,
-            temp_mapping: [MapToStack; MAX_TEMP_TYPES],
-        };
-    }
-
-    pub fn new() -> Self {
-        return Self::new_with_stack_size(0);
-    }
-
     pub fn get_stack_size(&self) -> u16 {
         self.stack_size
     }

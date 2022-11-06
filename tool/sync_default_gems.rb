@@ -418,8 +418,8 @@ IGNORE_FILE_PATTERN =
   |rakelib\/.*
   )\z/mx
 
-def message_filter(repo, sha)
-  log = STDIN.read
+def message_filter(repo, sha, input: ARGF)
+  log = input.read
   log.delete!("\r")
   url = "https://github.com/#{repo}"
   subject, log = log.split(/\n(?:[\s\t]*(?:\n|\z))/, 2)
@@ -441,9 +441,10 @@ def message_filter(repo, sha)
   end
   url = "#{url}/commit/#{sha[0,10]}\n"
   if log and !log.empty?
+    log.sub!(/(?<=\n)\n+\z/, '') # drop empty lines at the last
     conv[log]
-    log.sub!(/\s*(?=(?i:\nCo-authored-by:.*)*\Z)/) {
-      "\n\n#{url}"
+    log.sub!(/(?:(\A\s*)|\s*\n)(?=(?i:Co-authored-by:.*)*\Z)/) {
+      $~.begin(1) ? "#{url}\n" : "\n\n#{url}"
     }
   else
     log = url
@@ -659,8 +660,10 @@ when "list"
   end
 when "--message-filter"
   ARGV.shift
-  abort unless ARGV.size == 2
-  message_filter(*ARGV)
+  if ARGV.size < 2
+    abort "usage: #{$0} --message-filter repository commit-hash [input...]"
+  end
+  message_filter(*ARGV.shift(2))
   exit
 when "rdoc-ref"
   ARGV.shift

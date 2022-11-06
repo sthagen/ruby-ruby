@@ -260,7 +260,7 @@ Note: We're only listing outstanding class updates.
     * net-ftp 0.2.0
     * net-imap 0.3.1
     * net-pop 0.1.2
-    * net-smtp 0.3.2
+    * net-smtp 0.3.3
     * rbs 2.7.0
     * typeprof 0.21.3
     * debug 1.6.3
@@ -330,6 +330,9 @@ The following deprecated APIs are removed.
   memory pages until actually utilized by JIT code.
 * Introduce Code GC that frees all code pages when the memory consumption
   by JIT code reaches `--yjit-exec-mem-size`.
+* `RubyVM::YJIT.runtime_stats` returns Code GC metrics in addition to
+  existing `inline_code_size` and `outlined_code_size` keys:
+  `code_gc_count`, `live_page_count`, `freed_page_count`, and `freed_code_size`.
 
 ### MJIT
 

@@ -307,6 +307,10 @@ rb_yjit_reserve_addr_space(uint32_t mem_size)
     // Check that the memory mapping was successful
     if (mem_block == MAP_FAILED) {
         perror("ruby: yjit: mmap:");
+        if(errno == ENOMEM) {
+            // No crash report if it's only insufficient memory
+            exit(EXIT_FAILURE);
+        }
         rb_bug("mmap failed");
     }
 
@@ -623,6 +627,12 @@ rb_get_iseq_body_stack_max(const rb_iseq_t *iseq)
 }
 
 bool
+rb_get_iseq_flags_has_lead(const rb_iseq_t *iseq)
+{
+    return iseq->body->param.flags.has_lead;
+}
+
+bool
 rb_get_iseq_flags_has_opt(const rb_iseq_t *iseq)
 {
     return iseq->body->param.flags.has_opt;
@@ -665,7 +675,13 @@ rb_get_iseq_flags_has_block(const rb_iseq_t *iseq)
 }
 
 bool
-rb_get_iseq_flags_has_accepts_no_kwarg(const rb_iseq_t *iseq)
+rb_get_iseq_flags_ambiguous_param0(const rb_iseq_t *iseq)
+{
+    return iseq->body->param.flags.ambiguous_param0;
+}
+
+bool
+rb_get_iseq_flags_accepts_no_kwarg(const rb_iseq_t *iseq)
 {
     return iseq->body->param.flags.accepts_no_kwarg;
 }
@@ -1053,6 +1069,7 @@ VALUE rb_yjit_get_stats(rb_execution_context_t *ec, VALUE self);
 VALUE rb_yjit_reset_stats_bang(rb_execution_context_t *ec, VALUE self);
 VALUE rb_yjit_disasm_iseq(rb_execution_context_t *ec, VALUE self, VALUE iseq);
 VALUE rb_yjit_insns_compiled(rb_execution_context_t *ec, VALUE self, VALUE iseq);
+VALUE rb_yjit_code_gc(rb_execution_context_t *ec, VALUE self);
 VALUE rb_yjit_simulate_oom_bang(rb_execution_context_t *ec, VALUE self);
 VALUE rb_yjit_get_exit_locations(rb_execution_context_t *ec, VALUE self);
 
