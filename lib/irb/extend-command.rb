@@ -117,12 +117,55 @@ module IRB # :nodoc:
       ],
 
       [
+        :irb_debug, :Debug, "cmd/debug",
+        [:debug, NO_OVERRIDE],
+      ],
+      [
+        :irb_edit, :Edit, "cmd/edit",
+        [:edit, NO_OVERRIDE],
+      ],
+      [
+        :irb_break, :Break, "cmd/break",
+      ],
+      [
+        :irb_catch, :Catch, "cmd/catch",
+      ],
+      [
+        :irb_next, :Next, "cmd/next",
+      ],
+      [
+        :irb_delete, :Delete, "cmd/delete",
+        [:delete, NO_OVERRIDE],
+      ],
+      [
+        :irb_step, :Step, "cmd/step",
+        [:step, NO_OVERRIDE],
+      ],
+      [
+        :irb_continue, :Continue, "cmd/continue",
+        [:continue, NO_OVERRIDE],
+      ],
+      [
+        :irb_finish, :Finish, "cmd/finish",
+        [:finish, NO_OVERRIDE],
+      ],
+      [
+        :irb_backtrace, :Backtrace, "cmd/backtrace",
+        [:backtrace, NO_OVERRIDE],
+        [:bt, NO_OVERRIDE],
+      ],
+      [
+        :irb_debug_info, :Info, "cmd/info",
+        [:info, NO_OVERRIDE],
+      ],
+
+      [
         :irb_help, :Help, "cmd/help",
         [:help, NO_OVERRIDE],
       ],
 
       [
-        :irb_info, :Info, "cmd/info"
+        :irb_info, :IrbInfo, "cmd/irb_info"
       ],
 
       [
@@ -161,26 +204,7 @@ module IRB # :nodoc:
       nil
     end
 
-    # Installs the default irb commands:
-    #
-    # +irb_current_working_workspace+::   Context#main
-    # +irb_change_workspace+::            Context#change_workspace
-    # +irb_workspaces+::                  Context#workspaces
-    # +irb_push_workspace+::              Context#push_workspace
-    # +irb_pop_workspace+::               Context#pop_workspace
-    # +irb_load+::                        #irb_load
-    # +irb_require+::                     #irb_require
-    # +irb_source+::                      IrbLoader#source_file
-    # +irb+::                             IRB.irb
-    # +irb_jobs+::                        JobManager
-    # +irb_fg+::                          JobManager#switch
-    # +irb_kill+::                        JobManager#kill
-    # +irb_help+::                        IRB@Command+line+options
-    # +irb_info+::                        #inspect
-    # +irb_ls+::                          Output#dump
-    # +irb_measure+::                     IRB::unset_measure_callback
-    # +irb_show_source+::                 #find_source, #show_source
-    # +irb_whereami+::                    Workspace#code_around_binding
+    # Installs the default irb commands.
     def self.install_extend_commands
       for args in @EXTEND_COMMANDS
         def_extend_command(*args)

@@ -12,28 +12,18 @@ typedef uint16_t attr_index_t;
 
 #define MAX_IVARS (attr_index_t)(-1)
 
-#if RUBY_DEBUG || (defined(VM_CHECK_MODE) && VM_CHECK_MODE > 0)
-#  if SIZEOF_SHAPE_T == 4
+#if SIZEOF_SHAPE_T == 4
 typedef uint32_t shape_id_t;
-# define SHAPE_BITS 16
-#  else
-typedef uint16_t shape_id_t;
-# define SHAPE_BITS 16
-#  endif
+# define SHAPE_ID_NUM_BITS 32
 #else
-#  if SIZEOF_SHAPE_T == 4
-typedef uint32_t shape_id_t;
-# define SHAPE_BITS 32
-#  else
 typedef uint16_t shape_id_t;
-# define SHAPE_BITS 16
-#  endif
+# define SHAPE_ID_NUM_BITS 16
 #endif
 
-# define SHAPE_MASK (((uintptr_t)1 << SHAPE_BITS) - 1)
-# define SHAPE_FLAG_MASK (((VALUE)-1) >> SHAPE_BITS)
+# define SHAPE_MASK (((uintptr_t)1 << SHAPE_ID_NUM_BITS) - 1)
+# define SHAPE_FLAG_MASK (((VALUE)-1) >> SHAPE_ID_NUM_BITS)
 
-# define SHAPE_FLAG_SHIFT ((SIZEOF_VALUE * 8) - SHAPE_BITS)
+# define SHAPE_FLAG_SHIFT ((SIZEOF_VALUE * 8) - SHAPE_ID_NUM_BITS)
 
 # define SHAPE_BITMAP_SIZE 16384
 
@@ -42,7 +32,7 @@ typedef uint16_t shape_id_t;
 # define ROOT_SHAPE_ID 0x0
 // We use SIZE_POOL_COUNT number of shape IDs for transitions out of different size pools
 // The next available shapd ID will be the SPECIAL_CONST_SHAPE_ID
-# define SPECIAL_CONST_SHAPE_ID SIZE_POOL_COUNT
+# define SPECIAL_CONST_SHAPE_ID (SIZE_POOL_COUNT * 2)
 
 struct rb_shape {
     struct rb_id_table * edges; // id_table from ID (ivar) to next shape
@@ -63,6 +53,7 @@ enum shape_type {
     SHAPE_CAPACITY_CHANGE,
     SHAPE_IVAR_UNDEF,
     SHAPE_INITIAL_CAPACITY,
+    SHAPE_T_OBJECT,
 };
 
 #if SHAPE_IN_BASIC_FLAGS
@@ -131,6 +122,7 @@ static inline shape_id_t RCLASS_SHAPE_ID(VALUE obj) {
 
 bool rb_shape_root_shape_p(rb_shape_t* shape);
 rb_shape_t * rb_shape_get_root_shape(void);
+uint8_t rb_shape_id_num_bits(void);
 
 rb_shape_t* rb_shape_get_shape_by_id_without_assertion(shape_id_t shape_id);
 rb_shape_t * rb_shape_get_parent(rb_shape_t * shape);
@@ -144,7 +136,6 @@ int rb_shape_frozen_shape_p(rb_shape_t* shape);
 void rb_shape_transition_shape_frozen(VALUE obj);
 void rb_shape_transition_shape_remove_ivar(VALUE obj, ID id, rb_shape_t *shape);
 rb_shape_t * rb_shape_transition_shape_capa(rb_shape_t * shape, uint32_t new_capacity);
-void rb_shape_transition_shape(VALUE obj, ID id, rb_shape_t *shape);
 rb_shape_t * rb_shape_get_next_iv_shape(rb_shape_t * shape, ID id);
 rb_shape_t* rb_shape_get_next(rb_shape_t* shape, VALUE obj, ID id);
 bool rb_shape_get_iv_index(rb_shape_t * shape, ID id, attr_index_t * value);

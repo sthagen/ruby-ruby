@@ -317,7 +317,7 @@ impl Assembler
                     let (opnd0, opnd1) = split_boolean_operands(asm, left, right);
                     asm.xor(opnd0, opnd1);
                 },
-                Insn::CCall { opnds, target, .. } => {
+                Insn::CCall { opnds, fptr, .. } => {
                     assert!(opnds.len() <= C_ARG_OPNDS.len());
 
                     // Load each operand into the corresponding argument
@@ -339,12 +339,19 @@ impl Assembler
 
                     // Now we push the CCall without any arguments so that it
                     // just performs the call.
-                    asm.ccall(target.unwrap_fun_ptr(), vec![]);
+                    asm.ccall(fptr, vec![]);
                 },
                 Insn::Cmp { left, right } => {
                     let opnd0 = split_load_operand(asm, left);
                     let opnd0 = split_less_than_32_cmp(asm, opnd0);
-                    let opnd1 = split_shifted_immediate(asm, right);
+                    let split_right = split_shifted_immediate(asm, right);
+                    let opnd1 = match split_right {
+                        Opnd::InsnOut { .. } if opnd0.num_bits() != split_right.num_bits() => {
+                            split_right.with_num_bits(opnd0.num_bits().unwrap()).unwrap()
+                        },
+                        _ => split_right
+                    };
+
                     asm.cmp(opnd0, opnd1);
                 },
                 Insn::CRet(opnd) => {
@@ -617,7 +624,7 @@ impl Assembler
         /// called when lowering any of the conditional jump instructions.
         fn emit_conditional_jump<const CONDITION: u8>(cb: &mut CodeBlock, target: Target) {
             match target {
-                Target::CodePtr(dst_ptr) => {
+                Target::CodePtr(dst_ptr) | Target::SideExitPtr(dst_ptr) => {
                     let dst_addr = dst_ptr.into_i64();
                     let src_addr = cb.get_write_ptr().into_i64();
 
@@ -652,10 +659,12 @@ impl Assembler
                         load_insns + 2
                     };
 
-                    // We need to make sure we have at least 6 instructions for
-                    // every kind of jump for invalidation purposes, so we're
-                    // going to write out padding nop instructions here.
-                    for _ in num_insns..6 { nop(cb); }
+                    if let Target::CodePtr(_) = target {
+                        // We need to make sure we have at least 6 instructions for
+                        // every kind of jump for invalidation purposes, so we're
+                        // going to write out padding nop instructions here.
+                        for _ in num_insns..6 { nop(cb); }
+                    }
                 },
                 Target::Label(label_idx) => {
                     // Here we're going to save enough space for ourselves and
@@ -667,7 +676,6 @@ impl Assembler
                         bcond(cb, CONDITION, InstructionOffset::from_bytes(bytes));
                     });
                 },
-                Target::FunPtr(_) => unreachable!()
             };
         }
 
@@ -683,7 +691,7 @@ impl Assembler
             ldr_post(cb, opnd, A64Opnd::new_mem(64, C_SP_REG, C_SP_STEP));
         }
 
-        fn emit_jmp_ptr(cb: &mut CodeBlock, dst_ptr: CodePtr) {
+        fn emit_jmp_ptr(cb: &mut CodeBlock, dst_ptr: CodePtr, padding: bool) {
             let src_addr = cb.get_write_ptr().into_i64();
             let dst_addr = dst_ptr.into_i64();
 
@@ -700,11 +708,13 @@ impl Assembler
                 num_insns + 1
             };
 
-            // Make sure it's always a consistent number of
-            // instructions in case it gets patched and has to
-            // use the other branch.
-            for _ in num_insns..(JMP_PTR_BYTES / 4) {
-                nop(cb);
+            if padding {
+                // Make sure it's always a consistent number of
+                // instructions in case it gets patched and has to
+                // use the other branch.
+                for _ in num_insns..(JMP_PTR_BYTES / 4) {
+                    nop(cb);
+                }
             }
         }
 
@@ -716,7 +726,7 @@ impl Assembler
         fn emit_jmp_ptr_with_invalidation(cb: &mut CodeBlock, dst_ptr: CodePtr) {
             #[cfg(not(test))]
             let start = cb.get_write_ptr();
-            emit_jmp_ptr(cb, dst_ptr);
+            emit_jmp_ptr(cb, dst_ptr, true);
             #[cfg(not(test))]
             {
                 let end = cb.get_write_ptr();
@@ -828,6 +838,7 @@ impl Assembler
                         Opnd::Mem(_) => {
                             match opnd.rm_num_bits() {
                                 64 | 32 => ldur(cb, out.into(), opnd.into()),
+                                16 => ldurh(cb, out.into(), opnd.into()),
                                 8 => ldurb(cb, out.into(), opnd.into()),
                                 num_bits => panic!("unexpected num_bits: {}", num_bits)
                             };
@@ -926,10 +937,10 @@ impl Assembler
                         emit_pop(cb, A64Opnd::Reg(reg));
                     }
                 },
-                Insn::CCall { target, .. } => {
+                Insn::CCall { fptr, .. } => {
                     // The offset to the call target in bytes
                     let src_addr = cb.get_write_ptr().into_i64();
-                    let dst_addr = target.unwrap_fun_ptr() as i64;
+                    let dst_addr = *fptr as i64;
 
                     // Use BL if the offset is short enough to encode as an immediate.
                     // Otherwise, use BLR with a register.
@@ -955,7 +966,10 @@ impl Assembler
                 Insn::Jmp(target) => {
                     match target {
                         Target::CodePtr(dst_ptr) => {
-                            emit_jmp_ptr(cb, *dst_ptr);
+                            emit_jmp_ptr(cb, *dst_ptr, true);
+                        },
+                        Target::SideExitPtr(dst_ptr) => {
+                            emit_jmp_ptr(cb, *dst_ptr, false);
                         },
                         Target::Label(label_idx) => {
                             // Here we're going to save enough space for
@@ -968,7 +982,6 @@ impl Assembler
                                 b(cb, InstructionOffset::from_bytes(bytes));
                             });
                         },
-                        _ => unreachable!()
                     };
                 },
                 Insn::Je(target) | Insn::Jz(target) => {
@@ -1354,6 +1367,15 @@ mod tests {
 
         // Assert that a test instruction is written.
         assert_eq!(4, cb.get_write_pos());
+    }
+
+    #[test]
+    fn test_32_bit_register_with_some_number() {
+        let (mut asm, mut cb) = setup_asm();
+
+        let shape_opnd = Opnd::mem(32, Opnd::Reg(X0_REG), 6);
+        asm.cmp(shape_opnd, Opnd::UImm(4097));
+        asm.compile_with_num_regs(&mut cb, 2);
     }
 
     #[test]

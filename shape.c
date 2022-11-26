@@ -8,6 +8,7 @@
 #include <stdbool.h>
 
 static ID id_frozen;
+static ID id_t_object;
 static ID size_pool_edge_names[SIZE_POOL_COUNT];
 
 /*
@@ -97,73 +98,49 @@ rb_shape_get_shape(VALUE obj)
     return rb_shape_get_shape_by_id(rb_shape_get_shape_id(obj));
 }
 
-static rb_shape_t *
-rb_shape_lookup_id(rb_shape_t* shape, ID id, enum shape_type shape_type)
-{
-    while (shape->parent_id != INVALID_SHAPE_ID) {
-        if (shape->edge_name == id) {
-            // If the shape type is different, we don't
-            // want this to count as a "found" ID
-            if (shape_type == (enum shape_type)shape->type) {
-                return shape;
-            }
-            else {
-                return NULL;
-            }
-        }
-        shape = rb_shape_get_parent(shape);
-    }
-    return NULL;
-}
-
 static rb_shape_t*
 get_next_shape_internal(rb_shape_t * shape, ID id, enum shape_type shape_type)
 {
     rb_shape_t *res = NULL;
     RB_VM_LOCK_ENTER();
     {
-        if (rb_shape_lookup_id(shape, id, shape_type)) {
-            // If shape already contains the ivar that is being set, we'll return shape
-            res = shape;
+        if (!shape->edges) {
+            shape->edges = rb_id_table_create(0);
         }
-        else {
-            if (!shape->edges) {
-                shape->edges = rb_id_table_create(0);
+
+        // Lookup the shape in edges - if there's already an edge and a corresponding shape for it,
+        // we can return that. Otherwise, we'll need to get a new shape
+        if (!rb_id_table_lookup(shape->edges, id, (VALUE *)&res)) {
+            // In this case, the shape exists, but the shape is garbage, so we need to recreate it
+            if (res) {
+                rb_id_table_delete(shape->edges, id);
+                res->parent_id = INVALID_SHAPE_ID;
             }
 
-            // Lookup the shape in edges - if there's already an edge and a corresponding shape for it,
-            // we can return that. Otherwise, we'll need to get a new shape
-            if (!rb_id_table_lookup(shape->edges, id, (VALUE *)&res)) {
-                // In this case, the shape exists, but the shape is garbage, so we need to recreate it
-                if (res) {
-                    rb_id_table_delete(shape->edges, id);
-                    res->parent_id = INVALID_SHAPE_ID;
-                }
+            rb_shape_t * new_shape = rb_shape_alloc(id, shape);
 
-                rb_shape_t * new_shape = rb_shape_alloc(id, shape);
+            new_shape->type = (uint8_t)shape_type;
+            new_shape->capacity = shape->capacity;
 
-                new_shape->type = (uint8_t)shape_type;
-                new_shape->capacity = shape->capacity;
-
-                switch (shape_type) {
-                  case SHAPE_IVAR:
-                    new_shape->next_iv_index = shape->next_iv_index + 1;
-                    break;
-                  case SHAPE_CAPACITY_CHANGE:
-                  case SHAPE_IVAR_UNDEF:
-                  case SHAPE_FROZEN:
-                    new_shape->next_iv_index = shape->next_iv_index;
-                    break;
-                  case SHAPE_INITIAL_CAPACITY:
-                  case SHAPE_ROOT:
-                    rb_bug("Unreachable");
-                    break;
-                }
-
-                rb_id_table_insert(shape->edges, id, (VALUE)new_shape);
-
-                res = new_shape;
+            switch (shape_type) {
+              case SHAPE_IVAR:
+                new_shape->next_iv_index = shape->next_iv_index + 1;
+                break;
+              case SHAPE_CAPACITY_CHANGE:
+              case SHAPE_IVAR_UNDEF:
+              case SHAPE_FROZEN:
+              case SHAPE_T_OBJECT:
+                new_shape->next_iv_index = shape->next_iv_index;
+                break;
+              case SHAPE_INITIAL_CAPACITY:
+              case SHAPE_ROOT:
+                rb_bug("Unreachable");
+                break;
             }
+
+            rb_id_table_insert(shape->edges, id, (VALUE)new_shape);
+
+            res = new_shape;
         }
     }
     RB_VM_LOCK_LEAVE();
@@ -180,10 +157,6 @@ void
 rb_shape_transition_shape_remove_ivar(VALUE obj, ID id, rb_shape_t *shape)
 {
     rb_shape_t * next_shape = get_next_shape_internal(shape, id, SHAPE_IVAR_UNDEF);
-
-    if (shape == next_shape) {
-        return;
-    }
 
     rb_shape_set_shape(obj, next_shape);
 }
@@ -209,16 +182,6 @@ rb_shape_transition_shape_frozen(VALUE obj)
     next_shape = get_next_shape_internal(shape, (ID)id_frozen, SHAPE_FROZEN);
 
     RUBY_ASSERT(next_shape);
-    rb_shape_set_shape(obj, next_shape);
-}
-
-void
-rb_shape_transition_shape(VALUE obj, ID id, rb_shape_t *shape)
-{
-    rb_shape_t* next_shape = rb_shape_get_next(shape, obj, id);
-    if (shape == next_shape) {
-        return;
-    }
     rb_shape_set_shape(obj, next_shape);
 }
 
@@ -274,6 +237,7 @@ rb_shape_get_iv_index(rb_shape_t * shape, ID id, attr_index_t *value)
               case SHAPE_IVAR_UNDEF:
               case SHAPE_ROOT:
               case SHAPE_INITIAL_CAPACITY:
+              case SHAPE_T_OBJECT:
                 return false;
               case SHAPE_FROZEN:
                 rb_bug("Ivar should not exist on transition\n");
@@ -332,10 +296,10 @@ rb_shape_set_shape(VALUE obj, rb_shape_t* shape)
     rb_shape_set_shape_id(obj, rb_shape_id(shape));
 }
 
-VALUE
-rb_shape_flags_mask(void)
+uint8_t
+rb_shape_id_num_bits(void)
 {
-    return SHAPE_FLAG_MASK;
+    return SHAPE_ID_NUM_BITS;
 }
 
 rb_shape_t *
@@ -343,29 +307,33 @@ rb_shape_rebuild_shape(rb_shape_t * initial_shape, rb_shape_t * dest_shape)
 {
     rb_shape_t * midway_shape;
 
-    if (dest_shape->type != SHAPE_ROOT) {
+    RUBY_ASSERT(initial_shape->type == SHAPE_T_OBJECT);
+
+    if (dest_shape->type != initial_shape->type) {
         midway_shape = rb_shape_rebuild_shape(initial_shape, rb_shape_get_parent(dest_shape));
     }
     else {
         midway_shape = initial_shape;
     }
 
-    switch (dest_shape->type) {
-        case SHAPE_IVAR:
-            if (midway_shape->capacity < midway_shape->next_iv_index) {
-                // There isn't enough room to write this IV, so we need to increase the capacity
-                midway_shape = rb_shape_transition_shape_capa(midway_shape, midway_shape->capacity * 2);
-            }
+    switch ((enum shape_type)dest_shape->type) {
+      case SHAPE_IVAR:
+        if (midway_shape->capacity <= midway_shape->next_iv_index) {
+            // There isn't enough room to write this IV, so we need to increase the capacity
+            midway_shape = rb_shape_transition_shape_capa(midway_shape, midway_shape->capacity * 2);
+        }
 
-            midway_shape = rb_shape_get_next_iv_shape(midway_shape, dest_shape->edge_name);
-            break;
-        case SHAPE_IVAR_UNDEF:
-            midway_shape = get_next_shape_internal(midway_shape, dest_shape->edge_name, SHAPE_IVAR_UNDEF);
-            break;
-        case SHAPE_ROOT:
-        case SHAPE_FROZEN:
-        case SHAPE_CAPACITY_CHANGE:
-            break;
+        midway_shape = rb_shape_get_next_iv_shape(midway_shape, dest_shape->edge_name);
+        break;
+      case SHAPE_IVAR_UNDEF:
+        midway_shape = get_next_shape_internal(midway_shape, dest_shape->edge_name, SHAPE_IVAR_UNDEF);
+        break;
+      case SHAPE_ROOT:
+      case SHAPE_FROZEN:
+      case SHAPE_CAPACITY_CHANGE:
+      case SHAPE_INITIAL_CAPACITY:
+      case SHAPE_T_OBJECT:
+        break;
     }
 
     return midway_shape;
@@ -602,6 +570,7 @@ void
 Init_default_shapes(void)
 {
     id_frozen = rb_make_internal_id();
+    id_t_object = rb_make_internal_id();
 
     // Shapes by size pool
     for (int i = 0; i < SIZE_POOL_COUNT; i++) {
@@ -623,6 +592,16 @@ Init_default_shapes(void)
         new_shape->type = SHAPE_INITIAL_CAPACITY;
         new_shape->size_pool_index = i;
         RUBY_ASSERT(rb_shape_id(new_shape) == (shape_id_t)i);
+    }
+
+    // Make shapes for T_OBJECT
+    for (int i = 0; i < SIZE_POOL_COUNT; i++) {
+        rb_shape_t * shape = rb_shape_get_shape_by_id(i);
+#if RUBY_DEBUG
+        rb_shape_t * t_object_shape =
+#endif
+            get_next_shape_internal(shape, id_t_object, SHAPE_T_OBJECT);
+        RUBY_ASSERT(rb_shape_id(t_object_shape) == (shape_id_t)(i + SIZE_POOL_COUNT));
     }
 
     // Special const shape
@@ -654,9 +633,10 @@ Init_shape(void)
     rb_define_method(rb_cShape, "capacity", rb_shape_capacity, 0);
     rb_define_const(rb_cShape, "SHAPE_ROOT", INT2NUM(SHAPE_ROOT));
     rb_define_const(rb_cShape, "SHAPE_IVAR", INT2NUM(SHAPE_IVAR));
+    rb_define_const(rb_cShape, "SHAPE_T_OBJECT", INT2NUM(SHAPE_T_OBJECT));
     rb_define_const(rb_cShape, "SHAPE_IVAR_UNDEF", INT2NUM(SHAPE_IVAR_UNDEF));
     rb_define_const(rb_cShape, "SHAPE_FROZEN", INT2NUM(SHAPE_FROZEN));
-    rb_define_const(rb_cShape, "SHAPE_BITS", INT2NUM(SHAPE_BITS));
+    rb_define_const(rb_cShape, "SHAPE_ID_NUM_BITS", INT2NUM(SHAPE_ID_NUM_BITS));
     rb_define_const(rb_cShape, "SHAPE_FLAG_SHIFT", INT2NUM(SHAPE_FLAG_SHIFT));
     rb_define_const(rb_cShape, "SPECIAL_CONST_SHAPE_ID", INT2NUM(SPECIAL_CONST_SHAPE_ID));
 

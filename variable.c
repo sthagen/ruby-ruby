@@ -281,7 +281,7 @@ rb_path_to_class(VALUE pathname)
             goto undefined_class;
         }
         c = rb_const_search(c, id, TRUE, FALSE, FALSE);
-        if (c == Qundef) goto undefined_class;
+        if (UNDEF_P(c)) goto undefined_class;
         if (!rb_namespace_p(c)) {
             rb_raise(rb_eTypeError, "%"PRIsVALUE" does not refer to class/module",
                      pathname);
@@ -1108,7 +1108,7 @@ gen_ivtbl_count(const struct gen_ivtbl *ivtbl)
     size_t n = 0;
 
     for (i = 0; i < ivtbl->numiv; i++) {
-        if (ivtbl->ivptr[i] != Qundef) {
+        if (!UNDEF_P(ivtbl->ivptr[i])) {
             n++;
         }
     }
@@ -1276,28 +1276,33 @@ static void
 generic_ivar_set(VALUE obj, ID id, VALUE val)
 {
     struct ivar_update ivup;
+
+    attr_index_t index;
     // The returned shape will have `id` in its iv_table
-    rb_shape_t * shape = rb_shape_get_next(rb_shape_get_shape(obj), obj, id);
+    rb_shape_t *shape = rb_shape_get_shape(obj);
+    bool found = rb_shape_get_iv_index(shape, id, &index);
+    if (!found) {
+        index = shape->next_iv_index;
+        shape = rb_shape_get_next(shape, obj, id);
+        RUBY_ASSERT(index == (shape->next_iv_index - 1));
+    }
+
     ivup.shape = shape;
 
     RB_VM_LOCK_ENTER();
     {
-        attr_index_t ent_data;
-        if (rb_shape_get_iv_index(shape, id, &ent_data)) {
-            ivup.iv_index = (uint32_t) ent_data;
-        }
-        else {
-            rb_bug("unreachable.  Shape was not found for id: %s", rb_id2name(id));
-        }
+        ivup.iv_index = (uint32_t)index;
 
         st_update(generic_ivtbl(obj, id, false), (st_data_t)obj, generic_ivar_update, (st_data_t)&ivup);
     }
     RB_VM_LOCK_LEAVE();
 
     ivup.ivtbl->ivptr[ivup.iv_index] = val;
-
-    rb_shape_set_shape(obj, shape);
     RB_OBJ_WRITTEN(obj, Qundef, val);
+
+    if (!found) {
+        rb_shape_set_shape(obj, shape);
+    }
 }
 
 static VALUE *
@@ -1415,36 +1420,39 @@ rb_grow_iv_list(VALUE obj)
     return res;
 }
 
-static VALUE
-obj_ivar_set(VALUE obj, ID id, VALUE val)
+attr_index_t
+rb_obj_ivar_set(VALUE obj, ID id, VALUE val)
 {
     attr_index_t index;
 
-    // Get the current shape
-    rb_shape_t * shape = rb_shape_get_shape_by_id(ROBJECT_SHAPE_ID(obj));
+    shape_id_t next_shape_id = ROBJECT_SHAPE_ID(obj);
+    rb_shape_t *shape = rb_shape_get_shape_by_id(next_shape_id);
+    uint32_t num_iv = shape->capacity;
 
-    bool found = true;
     if (!rb_shape_get_iv_index(shape, id, &index)) {
         index = shape->next_iv_index;
-        found = false;
-    }
+        if (index >= MAX_IVARS) {
+            rb_raise(rb_eArgError, "too many instance variables");
+        }
 
-    // Reallocating can kick off GC.  We can't set the new shape
-    // on this object until the buffer has been allocated, otherwise
-    // GC could read off the end of the buffer.
-    if (shape->capacity <= index) {
-        shape = rb_grow_iv_list(obj);
-    }
+        if (UNLIKELY(shape->next_iv_index >= num_iv)) {
+            RUBY_ASSERT(shape->next_iv_index == num_iv);
 
-    if (!found) {
-        shape = rb_shape_get_next(shape, obj, id);
-        RUBY_ASSERT(index == (shape->next_iv_index - 1));
-        rb_shape_set_shape(obj, shape);
+            shape = rb_grow_iv_list(obj);
+            RUBY_ASSERT(shape->type == SHAPE_CAPACITY_CHANGE);
+        }
+
+        rb_shape_t *next_shape = rb_shape_get_next(shape, obj, id);
+        RUBY_ASSERT(next_shape->type == SHAPE_IVAR);
+        RUBY_ASSERT(index == (next_shape->next_iv_index - 1));
+        next_shape_id = rb_shape_id(next_shape);
+
+        rb_shape_set_shape(obj, next_shape);
     }
 
     RB_OBJ_WRITE(obj, &ROBJECT_IVPTR(obj)[index], val);
 
-    return val;
+    return index;
 }
 
 /* Set the instance variable +val+ on object +obj+ at ivar name +id+.
@@ -1455,7 +1463,7 @@ VALUE
 rb_vm_set_ivar_id(VALUE obj, ID id, VALUE val)
 {
     rb_check_frozen_internal(obj);
-    obj_ivar_set(obj, id, val);
+    rb_obj_ivar_set(obj, id, val);
     return val;
 }
 
@@ -1526,7 +1534,7 @@ ivar_set(VALUE obj, ID id, VALUE val)
     switch (BUILTIN_TYPE(obj)) {
       case T_OBJECT:
       {
-          obj_ivar_set(obj, id, val);
+          rb_obj_ivar_set(obj, id, val);
           break;
       }
       case T_CLASS:
@@ -1598,7 +1606,7 @@ iterate_over_shapes_with_callback(rb_shape_t *shape, rb_ivar_foreach_callback_fu
             break;
         }
         VALUE val = iv_list[shape->next_iv_index - 1];
-        if (val != Qundef) {
+        if (!UNDEF_P(val)) {
             callback(shape->edge_name, val, itr_data->arg);
         }
         return;
@@ -1606,6 +1614,7 @@ iterate_over_shapes_with_callback(rb_shape_t *shape, rb_ivar_foreach_callback_fu
       case SHAPE_CAPACITY_CHANGE:
       case SHAPE_FROZEN:
       case SHAPE_IVAR_UNDEF:
+      case SHAPE_T_OBJECT:
         iterate_over_shapes_with_callback(rb_shape_get_parent(shape), callback, itr_data);
         return;
     }
@@ -1756,7 +1765,7 @@ rb_ivar_count(VALUE obj)
             st_index_t i, count, num = ROBJECT_IV_COUNT(obj);
             const VALUE *const ivptr = ROBJECT_IVPTR(obj);
             for (i = count = 0; i < num; ++i) {
-                if (ivptr[i] != Qundef) {
+                if (!UNDEF_P(ivptr[i])) {
                     count++;
                 }
             }
@@ -1773,7 +1782,7 @@ rb_ivar_count(VALUE obj)
                 st_index_t i, num = rb_shape_get_shape(obj)->next_iv_index;
                 const VALUE *const ivptr = RCLASS_IVPTR(obj);
                 for (i = count = 0; i < num; ++i) {
-                    if (ivptr[i] != Qundef) {
+                    if (!UNDEF_P(ivptr[i])) {
                         count++;
                     }
                 }
@@ -2283,7 +2292,7 @@ autoload_synchronized(VALUE _arguments)
     struct autoload_arguments *arguments = (struct autoload_arguments *)_arguments;
 
     rb_const_entry_t *constant_entry = rb_const_lookup(arguments->module, arguments->name);
-    if (constant_entry && constant_entry->value != Qundef) {
+    if (constant_entry && !UNDEF_P(constant_entry->value)) {
         return Qfalse;
     }
 
@@ -2468,7 +2477,7 @@ autoloading_const_entry(VALUE mod, ID id)
 
     // Check if it's being loaded by the current thread/fiber:
     if (autoload_by_current(ele)) {
-        if (ac->value != Qundef) {
+        if (!UNDEF_P(ac->value)) {
             return ac;
         }
     }
@@ -2482,7 +2491,7 @@ autoload_defined_p(VALUE mod, ID id)
     rb_const_entry_t *ce = rb_const_lookup(mod, id);
 
     // If there is no constant or the constant is not undefined (special marker for autoloading):
-    if (!ce || ce->value != Qundef) {
+    if (!ce || !UNDEF_P(ce->value)) {
         // We are not autoloading:
         return 0;
     }
@@ -2578,7 +2587,7 @@ autoload_apply_constants(VALUE _arguments)
 
     // Iterate over all constants and assign them:
     ccan_list_for_each_safe(&arguments->autoload_data->constants, autoload_const, next, cnode) {
-        if (autoload_const->value != Qundef) {
+        if (!UNDEF_P(autoload_const->value)) {
             autoload_const_set(autoload_const);
         }
     }
@@ -2617,7 +2626,7 @@ autoload_try_load(VALUE _arguments)
     // After we loaded the feature, if the constant is not defined, we remove it completely:
     rb_const_entry_t *ce = rb_const_lookup(arguments->module, arguments->name);
 
-    if (!ce || ce->value == Qundef) {
+    if (!ce || UNDEF_P(ce->value)) {
         result = Qfalse;
 
         rb_const_remove(arguments->module, arguments->name);
@@ -2652,7 +2661,7 @@ rb_autoload_load(VALUE module, ID name)
     rb_const_entry_t *ce = rb_const_lookup(module, name);
 
     // We bail out as early as possible without any synchronisation:
-    if (!ce || ce->value != Qundef) {
+    if (!ce || !UNDEF_P(ce->value)) {
         return Qfalse;
     }
 
@@ -2725,7 +2734,7 @@ static VALUE
 rb_const_get_0(VALUE klass, ID id, int exclude, int recurse, int visibility)
 {
     VALUE c = rb_const_search(klass, id, exclude, recurse, visibility);
-    if (c != Qundef) {
+    if (!UNDEF_P(c)) {
         if (UNLIKELY(!rb_ractor_main_p())) {
             if (!rb_ractor_shareable_p(c)) {
                 rb_raise(rb_eRactorIsolationError, "can not access non-shareable objects in constant %"PRIsVALUE"::%s by non-main Ractor.", rb_class_path(klass), rb_id2name(id));
@@ -2769,7 +2778,7 @@ rb_const_search_from(VALUE klass, ID id, int exclude, int recurse, int visibilit
             }
             rb_const_warn_if_deprecated(ce, tmp, id);
             value = ce->value;
-            if (value == Qundef) {
+            if (UNDEF_P(value)) {
                 struct autoload_const *ac;
                 if (am == tmp) break;
                 am = tmp;
@@ -2798,7 +2807,7 @@ rb_const_search(VALUE klass, ID id, int exclude, int recurse, int visibility)
 
     if (klass == rb_cObject) exclude = FALSE;
     value = rb_const_search_from(klass, id, exclude, recurse, visibility);
-    if (value != Qundef) return value;
+    if (!UNDEF_P(value)) return value;
     if (exclude) return value;
     if (BUILTIN_TYPE(klass) != T_MODULE) return value;
     /* search global const too, if klass is a module */
@@ -2935,7 +2944,7 @@ rb_const_remove(VALUE mod, ID id)
 
     val = ce->value;
 
-    if (val == Qundef) {
+    if (UNDEF_P(val)) {
         autoload_delete(mod, id);
         val = Qnil;
     }
@@ -3092,7 +3101,7 @@ rb_const_defined_0(VALUE klass, ID id, int exclude, int recurse, int visibility)
             if (visibility && RB_CONST_PRIVATE_P(ce)) {
                 return (int)Qfalse;
             }
-            if (ce->value == Qundef && !check_autoload_required(tmp, id, 0) &&
+            if (UNDEF_P(ce->value) && !check_autoload_required(tmp, id, 0) &&
                 !rb_autoloading_value(tmp, id, NULL, NULL))
                 return (int)Qfalse;
 
@@ -3298,7 +3307,7 @@ const_tbl_update(struct autoload_const *ac, int autoload_force)
 
     if (rb_id_table_lookup(tbl, id, &value)) {
         ce = (rb_const_entry_t *)value;
-        if (ce->value == Qundef) {
+        if (UNDEF_P(ce->value)) {
             RUBY_ASSERT_CRITICAL_SECTION_ENTER();
             VALUE file = ac->file;
             int line = ac->line;
@@ -3398,7 +3407,7 @@ set_const_visibility(VALUE mod, int argc, const VALUE *argv,
         if ((ce = rb_const_lookup(mod, id))) {
             ce->flag &= ~mask;
             ce->flag |= flag;
-            if (ce->value == Qundef) {
+            if (UNDEF_P(ce->value)) {
                 struct autoload_data *ele;
 
                 ele = autoload_data_for_named_constant(mod, id, &ac);
@@ -3508,7 +3517,7 @@ cvar_lookup_at(VALUE klass, ID id, st_data_t *v)
     }
 
     VALUE n = rb_ivar_lookup(klass, id, Qundef);
-    if (n == Qundef) return 0;
+    if (UNDEF_P(n)) return 0;
 
     if (v) *v = n;
     return 1;
@@ -3838,7 +3847,7 @@ rb_mod_remove_cvar(VALUE mod, VALUE name)
     }
     rb_check_frozen(mod);
     val = rb_ivar_delete(mod, id, Qundef);
-    if (val != Qundef) {
+    if (!UNDEF_P(val)) {
         return (VALUE)val;
     }
     if (rb_cvar_defined(mod, id)) {

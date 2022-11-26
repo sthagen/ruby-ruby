@@ -109,8 +109,8 @@ impl Opnd
                 })
             },
 
-            Opnd::InsnOut{idx, num_bits } => {
-                assert!(num_bits == 64);
+            Opnd::InsnOut{idx, num_bits: out_num_bits } => {
+                assert!(num_bits <= out_num_bits);
                 Opnd::Mem(Mem {
                     base: MemBase::InsnOut(idx),
                     disp: disp,
@@ -143,7 +143,7 @@ impl Opnd
     }
 
     /// Get the size in bits for this operand if there is one.
-    fn num_bits(&self) -> Option<u8> {
+    pub fn num_bits(&self) -> Option<u8> {
         match *self {
             Opnd::Reg(Reg { num_bits, .. }) => Some(num_bits),
             Opnd::Mem(Mem { num_bits, .. }) => Some(num_bits),
@@ -254,20 +254,13 @@ impl From<VALUE> for Opnd {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Target
 {
-    CodePtr(CodePtr),   // Pointer to a piece of YJIT-generated code (e.g. side-exit)
-    FunPtr(*const u8),  // Pointer to a C function
-    Label(usize),       // A label within the generated code
+    CodePtr(CodePtr),     // Pointer to a piece of YJIT-generated code
+    SideExitPtr(CodePtr), // Pointer to a side exit code
+    Label(usize),         // A label within the generated code
 }
 
 impl Target
 {
-    pub fn unwrap_fun_ptr(&self) -> *const u8 {
-        match self {
-            Target::FunPtr(ptr) => *ptr,
-            _ => unreachable!("trying to unwrap {:?} into fun ptr", self)
-        }
-    }
-
     pub fn unwrap_label_idx(&self) -> usize {
         match self {
             Target::Label(idx) => *idx,
@@ -329,7 +322,7 @@ pub enum Insn {
     CPushAll,
 
     // C function call with N arguments (variadic)
-    CCall { opnds: Vec<Opnd>, target: Target, out: Opnd },
+    CCall { opnds: Vec<Opnd>, fptr: *const u8, out: Opnd },
 
     // C function return
     CRet(Opnd),
@@ -1296,7 +1289,7 @@ impl Assembler {
 
     pub fn ccall(&mut self, fptr: *const u8, opnds: Vec<Opnd>) -> Opnd {
         let out = self.next_opnd_out(Opnd::match_num_bits(&opnds));
-        self.push_insn(Insn::CCall { target: Target::FunPtr(fptr), opnds, out });
+        self.push_insn(Insn::CCall { fptr, opnds, out });
         out
     }
 

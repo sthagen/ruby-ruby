@@ -34,6 +34,7 @@
 #include "id.h"
 #include "internal.h"
 #include "internal/array.h"
+#include "internal/hash.h"
 #include "internal/compar.h"
 #include "internal/numeric.h"
 #include "internal/rational.h"
@@ -50,6 +51,10 @@ static ID id_nanosecond, id_microsecond, id_millisecond, id_nsec, id_usec;
 static ID id_local_to_utc, id_utc_to_local, id_find_timezone;
 static ID id_year, id_mon, id_mday, id_hour, id_min, id_sec, id_isdst;
 static VALUE str_utc, str_empty;
+
+// used by deconstruct_keys
+static VALUE sym_year, sym_month, sym_day, sym_yday, sym_wday;
+static VALUE sym_hour, sym_min, sym_sec, sym_subsec, sym_dst, sym_zone;
 
 #define id_quo idQuo
 #define id_div idDiv
@@ -523,7 +528,7 @@ num_exact(VALUE v)
         return rb_rational_canonicalize(v);
 
       default:
-        if ((tmp = rb_check_funcall(v, idTo_r, 0, NULL)) != Qundef) {
+        if (!UNDEF_P(tmp = rb_check_funcall(v, idTo_r, 0, NULL))) {
             /* test to_int method availability to reject non-Numeric
              * objects such as String, Time, etc which have to_r method. */
             if (!rb_respond_to(v, idTo_int)) {
@@ -2118,6 +2123,7 @@ utc_offset_arg(VALUE arg)
             if (s[0] >= 'A' && s[0] <= 'I') {
                 n = (int)s[0] - 'A' + 1;
             }
+            /* No 'J' zone */
             else if (s[0] >= 'K' && s[0] <= 'M') {
                 n = (int)s[0] - 'A';
             }
@@ -2134,30 +2140,29 @@ utc_offset_arg(VALUE arg)
                 return UTC_ZONE;
             }
             break; /* +HH */
+          case 7: /* +HHMMSS */
+            sec = s+5;
+            /* fallthrough */
           case 5: /* +HHMM */
             min = s+3;
             break;
-          case 6: /* +HH:MM */
-            min = s+4;
-            break;
-          case 7: /* +HHMMSS */
-            sec = s+5;
-            min = s+3;
-            break;
           case 9: /* +HH:MM:SS */
+            if (s[6] != ':') goto invalid_utc_offset;
             sec = s+7;
+            /* fallthrough */
+          case 6: /* +HH:MM */
+            if (s[3] != ':') goto invalid_utc_offset;
             min = s+4;
             break;
           default:
             goto invalid_utc_offset;
         }
         if (sec) {
-            if (sec == s+7 && *(sec-1) != ':') goto invalid_utc_offset;
             if (!ISDIGIT(sec[0]) || !ISDIGIT(sec[1])) goto invalid_utc_offset;
             n += (sec[0] * 10 + sec[1] - '0' * 11);
+            ASSUME(min);
         }
         if (min) {
-            if (min == s+4 && *(min-1) != ':') goto invalid_utc_offset;
             if (!ISDIGIT(min[0]) || !ISDIGIT(min[1])) goto invalid_utc_offset;
             if (min[0] > '5') goto invalid_utc_offset;
             n += (min[0] * 10 + min[1] - '0' * 11) * 60;
@@ -2277,7 +2282,7 @@ zone_set_dst(VALUE zone, struct time_object *tobj, VALUE tm)
     VALUE dst;
     CONST_ID(id_dst_p, "dst?");
     dst = rb_check_funcall(zone, id_dst_p, 1, &tm);
-    tobj->vtm.isdst = (dst != Qundef && RTEST(dst));
+    tobj->vtm.isdst = (!UNDEF_P(dst) && RTEST(dst));
 }
 
 static int
@@ -2290,7 +2295,7 @@ zone_timelocal(VALUE zone, VALUE time)
     t = rb_time_unmagnify(tobj->timew);
     tm = tm_from_time(rb_cTimeTM, time);
     utc = rb_check_funcall(zone, id_local_to_utc, 1, &tm);
-    if (utc == Qundef) return 0;
+    if (UNDEF_P(utc)) return 0;
 
     s = extract_time(utc);
     zone_set_offset(zone, tobj, t, s);
@@ -2314,7 +2319,7 @@ zone_localtime(VALUE zone, VALUE time)
     tm = tm_from_time(rb_cTimeTM, time);
 
     local = rb_check_funcall(zone, id_utc_to_local, 1, &tm);
-    if (local == Qundef) return 0;
+    if (UNDEF_P(local)) return 0;
 
     s = extract_vtm(local, &tobj->vtm, subsecx);
     tobj->tm_got = 1;
@@ -2616,7 +2621,7 @@ time_timespec(VALUE num, int interval)
     else {
         i = INT2FIX(1);
         ary = rb_check_funcall(num, id_divmod, 1, &i);
-        if (ary != Qundef && !NIL_P(ary = rb_check_array_type(ary))) {
+        if (!UNDEF_P(ary) && !NIL_P(ary = rb_check_array_type(ary))) {
             i = rb_ary_entry(ary, 0);
             f = rb_ary_entry(ary, 1);
             t.tv_sec = NUM2TIMET(i);
@@ -4834,6 +4839,96 @@ time_to_a(VALUE time)
                     time_zone(time));
 }
 
+/*
+ *  call-seq:
+ *    deconstruct_keys(array_of_names_or_nil) -> hash
+ *
+ *  Returns a hash of the name/value pairs, to use in pattern matching.
+ *  Possible keys are the same as returned by #to_h.
+ *
+ *  Possible usages:
+ *
+ *    t = Time.utc(2022, 10, 5, 21, 25, 30)
+ *
+ *    if t in wday: 3, day: ..7  # uses deconstruct_keys underneath
+ *      puts "first Wednesday of the month"
+ *    end
+ *    #=> prints "first Wednesday of the month"
+ *
+ *    case t
+ *    in year: ...2022
+ *      puts "too old"
+ *    in month: ..9
+ *      puts "quarter 1-3"
+ *    in wday: 1..5, month:
+ *      puts "working day in month #{month}"
+ *    end
+ *    #=> prints "working day in month 10"
+ *
+ *  Note that deconstruction by pattern can also be combined with class check:
+ *
+ *    if t in Time(wday: 3, day: ..7)
+ *      puts "first Wednesday of the month"
+ *    end
+ *
+ */
+static VALUE
+time_deconstruct_keys(VALUE time, VALUE keys)
+{
+    struct time_object *tobj;
+    VALUE h;
+    long i;
+
+    GetTimeval(time, tobj);
+    MAKE_TM_ENSURE(time, tobj, tobj->vtm.yday != 0);
+
+    if (NIL_P(keys)) {
+        h = rb_hash_new_with_size(11);
+
+        rb_hash_aset(h, sym_year, tobj->vtm.year);
+        rb_hash_aset(h, sym_month, INT2FIX(tobj->vtm.mon));
+        rb_hash_aset(h, sym_day, INT2FIX(tobj->vtm.mday));
+        rb_hash_aset(h, sym_yday, INT2FIX(tobj->vtm.yday));
+        rb_hash_aset(h, sym_wday, INT2FIX(tobj->vtm.wday));
+        rb_hash_aset(h, sym_hour, INT2FIX(tobj->vtm.hour));
+        rb_hash_aset(h, sym_min, INT2FIX(tobj->vtm.min));
+        rb_hash_aset(h, sym_sec, INT2FIX(tobj->vtm.sec));
+        rb_hash_aset(h, sym_subsec,
+                     quov(w2v(wmod(tobj->timew, WINT2FIXWV(TIME_SCALE))), INT2FIX(TIME_SCALE)));
+        rb_hash_aset(h, sym_dst, RBOOL(tobj->vtm.isdst));
+        rb_hash_aset(h, sym_zone, time_zone(time));
+
+        return h;
+    }
+    if (UNLIKELY(!RB_TYPE_P(keys, T_ARRAY))) {
+        rb_raise(rb_eTypeError,
+                 "wrong argument type %"PRIsVALUE" (expected Array or nil)",
+                 rb_obj_class(keys));
+
+    }
+
+    h = rb_hash_new_with_size(RARRAY_LEN(keys));
+
+    for (i=0; i<RARRAY_LEN(keys); i++) {
+        VALUE key = RARRAY_AREF(keys, i);
+
+        if (sym_year == key) rb_hash_aset(h, key, tobj->vtm.year);
+        if (sym_month == key) rb_hash_aset(h, key, INT2FIX(tobj->vtm.mon));
+        if (sym_day == key) rb_hash_aset(h, key, INT2FIX(tobj->vtm.mday));
+        if (sym_yday == key) rb_hash_aset(h, key, INT2FIX(tobj->vtm.yday));
+        if (sym_wday == key) rb_hash_aset(h, key, INT2FIX(tobj->vtm.wday));
+        if (sym_hour == key) rb_hash_aset(h, key, INT2FIX(tobj->vtm.hour));
+        if (sym_min == key) rb_hash_aset(h, key, INT2FIX(tobj->vtm.min));
+        if (sym_sec == key) rb_hash_aset(h, key, INT2FIX(tobj->vtm.sec));
+        if (sym_subsec == key) {
+            rb_hash_aset(h, key, quov(w2v(wmod(tobj->timew, WINT2FIXWV(TIME_SCALE))), INT2FIX(TIME_SCALE)));
+        }
+        if (sym_dst == key) rb_hash_aset(h, key, RBOOL(tobj->vtm.isdst));
+        if (sym_zone == key) rb_hash_aset(h, key, time_zone(time));
+    }
+    return h;
+}
+
 static VALUE
 rb_strftime_alloc(const char *format, size_t format_len, rb_encoding *enc,
                   VALUE time, struct vtm *vtm, wideval_t timew, int gmt)
@@ -5481,12 +5576,12 @@ rb_time_zone_abbreviation(VALUE zone, VALUE time)
 
     tm = tm_from_time(rb_cTimeTM, time);
     abbr = rb_check_funcall(zone, rb_intern("abbr"), 1, &tm);
-    if (abbr != Qundef) {
+    if (!UNDEF_P(abbr)) {
         goto found;
     }
 #ifdef SUPPORT_TZINFO_ZONE_ABBREVIATION
     abbr = rb_check_funcall(zone, rb_intern("period_for_utc"), 1, &tm);
-    if (abbr != Qundef) {
+    if (!UNDEF_P(abbr)) {
         abbr = rb_funcallv(abbr, rb_intern("abbreviation"), 0, 0);
         goto found;
     }
@@ -5494,7 +5589,7 @@ rb_time_zone_abbreviation(VALUE zone, VALUE time)
     strftime_args[0] = rb_fstring_lit("%Z");
     strftime_args[1] = tm;
     abbr = rb_check_funcall(zone, rb_intern("strftime"), 2, strftime_args);
-    if (abbr != Qundef) {
+    if (!UNDEF_P(abbr)) {
         goto found;
     }
     abbr = rb_check_funcall_default(zone, idName, 0, 0, Qnil);
@@ -5537,6 +5632,18 @@ Init_Time(void)
     id_isdst = rb_intern_const("isdst");
     id_find_timezone = rb_intern_const("find_timezone");
 
+    sym_year = ID2SYM(rb_intern_const("year"));
+    sym_month = ID2SYM(rb_intern_const("month"));
+    sym_yday = ID2SYM(rb_intern_const("yday"));
+    sym_wday = ID2SYM(rb_intern_const("wday"));
+    sym_day = ID2SYM(rb_intern_const("day"));
+    sym_hour = ID2SYM(rb_intern_const("hour"));
+    sym_min = ID2SYM(rb_intern_const("min"));
+    sym_sec = ID2SYM(rb_intern_const("sec"));
+    sym_subsec = ID2SYM(rb_intern_const("subsec"));
+    sym_dst = ID2SYM(rb_intern_const("dst"));
+    sym_zone = ID2SYM(rb_intern_const("zone"));
+
     str_utc = rb_fstring_lit("UTC");
     rb_gc_register_mark_object(str_utc);
     str_empty = rb_fstring_lit("");
@@ -5572,6 +5679,7 @@ Init_Time(void)
     rb_define_method(rb_cTime, "to_s", time_to_s, 0);
     rb_define_method(rb_cTime, "inspect", time_inspect, 0);
     rb_define_method(rb_cTime, "to_a", time_to_a, 0);
+    rb_define_method(rb_cTime, "deconstruct_keys", time_deconstruct_keys, 1);
 
     rb_define_method(rb_cTime, "+", time_plus, 1);
     rb_define_method(rb_cTime, "-", time_minus, 1);

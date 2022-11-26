@@ -316,6 +316,7 @@ end
   netpacket/packet.h
   net/ethernet.h
   sys/un.h
+  afunix.h
   ifaddrs.h
   sys/ioctl.h
   sys/sockio.h
@@ -551,7 +552,7 @@ EOS
   end
 
   if !have_macro("IPPROTO_IPV6", headers) && have_const("IPPROTO_IPV6", headers)
-    IO.read(File.join(File.dirname(__FILE__), "mkconstants.rb")).sub(/\A.*^__END__$/m, '').split(/\r?\n/).grep(/\AIPPROTO_\w*/){$&}.each {|name|
+    File.read(File.join(File.dirname(__FILE__), "mkconstants.rb")).sub(/\A.*^__END__$/m, '').split(/\r?\n/).grep(/\AIPPROTO_\w*/){$&}.each {|name|
       have_const(name, headers) unless $defs.include?("-DHAVE_CONST_#{name.upcase}")
     }
   end
@@ -678,7 +679,7 @@ SRC
         end
       end
       FileUtils.mkdir_p(File.dirname(hdr))
-      open(hdr, "w") {|f| f.write(in6)}
+      File.write(hdr, in6)
       $distcleanfiles << hdr
       $distcleandirs << File.dirname(hdr)
       "done"

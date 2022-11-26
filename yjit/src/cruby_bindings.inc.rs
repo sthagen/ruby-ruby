@@ -123,7 +123,6 @@ impl<T> ::std::cmp::PartialEq for __BindgenUnionField<T> {
     }
 }
 impl<T> ::std::cmp::Eq for __BindgenUnionField<T> {}
-pub const USE_RVARGC: u32 = 1;
 pub const INTEGER_REDEFINED_OP_FLAG: u32 = 1;
 pub const FLOAT_REDEFINED_OP_FLAG: u32 = 2;
 pub const STRING_REDEFINED_OP_FLAG: u32 = 4;
@@ -426,6 +425,9 @@ pub struct rb_shape {
 }
 pub type rb_shape_t = rb_shape;
 extern "C" {
+    pub fn rb_shape_id_num_bits() -> u8;
+}
+extern "C" {
     pub fn rb_shape_get_shape_by_id(shape_id: shape_id_t) -> *mut rb_shape_t;
 }
 extern "C" {
@@ -433,9 +435,6 @@ extern "C" {
 }
 extern "C" {
     pub fn rb_shape_get_iv_index(shape: *mut rb_shape_t, id: ID, value: *mut attr_index_t) -> bool;
-}
-extern "C" {
-    pub fn rb_shape_flags_mask() -> VALUE;
 }
 pub const idDot2: ruby_method_ids = 128;
 pub const idDot3: ruby_method_ids = 129;

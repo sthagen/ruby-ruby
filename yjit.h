@@ -15,7 +15,7 @@
 # define YJIT_STATS RUBY_DEBUG
 #endif
 
-#if USE_YJIT
+#if USE_YJIT && !defined(MJIT_HEADER) // MJIT and YJIT can't be enabled simultaneously
 
 // We generate x86 or arm64 assembly
 #if defined(_WIN32) ? defined(_M_AMD64) : (defined(__x86_64__) || defined(__aarch64__))
@@ -28,7 +28,6 @@
 bool rb_yjit_enabled_p(void);
 unsigned rb_yjit_call_threshold(void);
 void rb_yjit_invalidate_all_method_lookup_assumptions(void);
-void rb_yjit_method_lookup_change(VALUE klass, ID mid);
 void rb_yjit_cme_invalidate(rb_callable_method_entry_t *cme);
 void rb_yjit_collect_vm_usage_insn(int insn);
 void rb_yjit_collect_binding_alloc(void);
@@ -51,7 +50,6 @@ void rb_yjit_tracing_invalidate_all(void);
 static inline bool rb_yjit_enabled_p(void) { return false; }
 static inline unsigned rb_yjit_call_threshold(void) { return UINT_MAX; }
 static inline void rb_yjit_invalidate_all_method_lookup_assumptions(void) {}
-static inline void rb_yjit_method_lookup_change(VALUE klass, ID mid) {}
 static inline void rb_yjit_cme_invalidate(rb_callable_method_entry_t *cme) {}
 static inline void rb_yjit_collect_vm_usage_insn(int insn) {}
 static inline void rb_yjit_collect_binding_alloc(void) {}

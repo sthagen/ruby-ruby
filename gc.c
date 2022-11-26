@@ -621,17 +621,29 @@ typedef struct RVALUE {
             VALUE v3;
         } values;
     } as;
+
+    /* Start of RVALUE_OVERHEAD.
+     * Do not directly read these members from the RVALUE as they're located
+     * at the end of the slot (which may differ in size depending on the size
+     * pool). */
+#if RACTOR_CHECK_MODE
+    uint32_t _ractor_belonging_id;
+#endif
 #if GC_DEBUG
     const char *file;
     int line;
 #endif
 } RVALUE;
 
-#if GC_DEBUG
-STATIC_ASSERT(sizeof_rvalue, offsetof(RVALUE, file) == SIZEOF_VALUE * 5);
+#if RACTOR_CHECK_MODE
+# define RVALUE_OVERHEAD (sizeof(RVALUE) - offsetof(RVALUE, _ractor_belonging_id))
+#elif GC_DEBUG
+# define RVALUE_OVERHEAD (sizeof(RVALUE) - offsetof(RVALUE, file))
 #else
-STATIC_ASSERT(sizeof_rvalue, sizeof(RVALUE) == SIZEOF_VALUE * 5);
+# define RVALUE_OVERHEAD 0
 #endif
+
+STATIC_ASSERT(sizeof_rvalue, sizeof(RVALUE) == (SIZEOF_VALUE * 5) + RVALUE_OVERHEAD);
 STATIC_ASSERT(alignof_rvalue, RUBY_ALIGNOF(RVALUE) == SIZEOF_VALUE);
 
 typedef uintptr_t bits_t;
@@ -2576,7 +2588,7 @@ newobj_init(VALUE klass, VALUE flags, int wb_protected, rb_objspace_t *objspace,
 size_t
 rb_gc_obj_slot_size(VALUE obj)
 {
-    return GET_HEAP_PAGE(obj)->slot_size;
+    return GET_HEAP_PAGE(obj)->slot_size - RVALUE_OVERHEAD;
 }
 
 static inline size_t
@@ -2590,6 +2602,8 @@ size_pool_slot_size(unsigned char pool_id)
     rb_objspace_t *objspace = &rb_objspace;
     GC_ASSERT(size_pools[pool_id].slot_size == (short)slot_size);
 #endif
+
+    slot_size -= RVALUE_OVERHEAD;
 
     return slot_size;
 }
@@ -2705,6 +2719,8 @@ static inline size_t
 size_pool_idx_for_size(size_t size)
 {
 #if USE_RVARGC
+    size += RVALUE_OVERHEAD;
+
     size_t slot_count = CEILDIV(size, BASE_SLOT_SIZE);
 
     /* size_pool_idx is ceil(log2(slot_count)) */
@@ -2914,7 +2930,7 @@ rb_ec_wb_protected_newobj_of(rb_execution_context_t *ec, VALUE klass, VALUE flag
 VALUE
 rb_newobj(void)
 {
-    return newobj_of(0, T_NONE, 0, 0, 0, FALSE, sizeof(RVALUE));
+    return newobj_of(0, T_NONE, 0, 0, 0, FALSE, RVALUE_SIZE);
 }
 
 static size_t
@@ -2942,6 +2958,12 @@ rb_class_instance_allocate_internal(VALUE klass, VALUE flags, bool wb_protected)
 #endif
 
     VALUE obj = newobj_of(klass, flags, 0, 0, 0, wb_protected, size);
+    RUBY_ASSERT(rb_shape_get_shape(obj)->type == SHAPE_ROOT ||
+            rb_shape_get_shape(obj)->type == SHAPE_INITIAL_CAPACITY);
+
+    // Set the shape to the specific T_OBJECT shape which is always
+    // SIZE_POOL_COUNT away from the root shape.
+    ROBJECT_SET_SHAPE_ID(obj, ROBJECT_SHAPE_ID(obj) + SIZE_POOL_COUNT);
 
 #if RUBY_DEBUG
     VALUE *ptr = ROBJECT_IVPTR(obj);
@@ -2960,7 +2982,7 @@ rb_newobj_of(VALUE klass, VALUE flags)
         return rb_class_instance_allocate_internal(klass, (flags | ROBJECT_EMBED) & ~FL_WB_PROTECTED, flags & FL_WB_PROTECTED);
     }
     else {
-        return newobj_of(klass, flags & ~FL_WB_PROTECTED, 0, 0, 0, flags & FL_WB_PROTECTED, sizeof(RVALUE));
+        return newobj_of(klass, flags & ~FL_WB_PROTECTED, 0, 0, 0, flags & FL_WB_PROTECTED, RVALUE_SIZE);
     }
 }
 
@@ -2998,7 +3020,7 @@ rb_imemo_name(enum imemo_type type)
 VALUE
 rb_imemo_new(enum imemo_type type, VALUE v1, VALUE v2, VALUE v3, VALUE v0)
 {
-    size_t size = sizeof(RVALUE);
+    size_t size = RVALUE_SIZE;
     VALUE flags = T_IMEMO | (type << FL_USHIFT);
     return newobj_of(v0, flags, v1, v2, v3, TRUE, size);
 }
@@ -3006,7 +3028,7 @@ rb_imemo_new(enum imemo_type type, VALUE v1, VALUE v2, VALUE v3, VALUE v0)
 static VALUE
 rb_imemo_tmpbuf_new(VALUE v1, VALUE v2, VALUE v3, VALUE v0)
 {
-    size_t size = sizeof(RVALUE);
+    size_t size = sizeof(struct rb_imemo_tmpbuf_struct);
     VALUE flags = T_IMEMO | (imemo_tmpbuf << FL_USHIFT);
     return newobj_of(v0, flags, v1, v2, v3, FALSE, size);
 }
@@ -3067,7 +3089,7 @@ rb_imemo_new_debug(enum imemo_type type, VALUE v1, VALUE v2, VALUE v3, VALUE v0,
 }
 #endif
 
-VALUE
+MJIT_FUNC_EXPORTED VALUE
 rb_class_allocate_instance(VALUE klass)
 {
     return rb_class_instance_allocate_internal(klass, T_OBJECT | ROBJECT_EMBED, RGENGC_WB_PROTECTED_OBJECT);
@@ -3087,7 +3109,7 @@ rb_data_object_wrap(VALUE klass, void *datap, RUBY_DATA_FUNC dmark, RUBY_DATA_FU
 {
     RUBY_ASSERT_ALWAYS(dfree != (RUBY_DATA_FUNC)1);
     if (klass) rb_data_object_check(klass);
-    return newobj_of(klass, T_DATA, (VALUE)dmark, (VALUE)dfree, (VALUE)datap, FALSE, sizeof(RVALUE));
+    return newobj_of(klass, T_DATA, (VALUE)dmark, (VALUE)dfree, (VALUE)datap, FALSE, sizeof(struct RTypedData));
 }
 
 VALUE
@@ -3103,7 +3125,7 @@ rb_data_typed_object_wrap(VALUE klass, void *datap, const rb_data_type_t *type)
 {
     RBIMPL_NONNULL_ARG(type);
     if (klass) rb_data_object_check(klass);
-    return newobj_of(klass, T_DATA, (VALUE)type, (VALUE)1, (VALUE)datap, type->flags & RUBY_FL_WB_PROTECTED, sizeof(RVALUE));
+    return newobj_of(klass, T_DATA, (VALUE)type, (VALUE)1, (VALUE)datap, type->flags & RUBY_FL_WB_PROTECTED, sizeof(struct RTypedData));
 }
 
 VALUE
@@ -4307,7 +4329,7 @@ run_single_final(VALUE cmd, VALUE objid)
 static void
 warn_exception_in_finalizer(rb_execution_context_t *ec, VALUE final)
 {
-    if (final != Qundef && !NIL_P(ruby_verbose)) {
+    if (!UNDEF_P(final) && !NIL_P(ruby_verbose)) {
         VALUE errinfo = ec->errinfo;
         rb_warn("Exception in finalizer %+"PRIsVALUE, final);
         rb_ec_error_print(ec, errinfo);
@@ -4673,7 +4695,7 @@ id2ref(VALUE objid)
         }
     }
 
-    if ((orig = id2ref_obj_tbl(objspace, objid)) != Qundef &&
+    if (!UNDEF_P(orig = id2ref_obj_tbl(objspace, objid)) &&
         is_live_object(objspace, orig)) {
 
         if (!rb_multi_ractor_p() || rb_ractor_shareable_p(orig)) {
@@ -4968,7 +4990,7 @@ obj_memsize_of(VALUE obj, int use_all_types)
                BUILTIN_TYPE(obj), (void*)obj);
     }
 
-    return size + GET_HEAP_PAGE(obj)->slot_size;
+    return size + rb_gc_obj_slot_size(obj);
 }
 
 size_t
@@ -7379,7 +7401,7 @@ gc_mark_stacked_objects(rb_objspace_t *objspace, int incremental, size_t count)
 #endif
 
     while (pop_mark_stack(mstack, &obj)) {
-        if (obj == Qundef) continue; /* skip */
+        if (UNDEF_P(obj)) continue; /* skip */
 
         if (RGENGC_CHECK_MODE && !RVALUE_MARKED(obj)) {
             rb_bug("gc_mark_stacked_objects: %s is not marked.", obj_info(obj));
@@ -9877,6 +9899,14 @@ gc_move(rb_objspace_t *objspace, VALUE scan, VALUE free, size_t src_slot_size, s
 
     /* Move the object */
     memcpy(dest, src, MIN(src_slot_size, slot_size));
+
+    if (RVALUE_OVERHEAD > 0) {
+        void *dest_overhead = (void *)(((uintptr_t)dest) + slot_size - RVALUE_OVERHEAD);
+        void *src_overhead = (void *)(((uintptr_t)src) + src_slot_size - RVALUE_OVERHEAD);
+
+        memcpy(dest_overhead, src_overhead, RVALUE_OVERHEAD);
+    }
+
     memset(src, 0, src_slot_size);
 
     /* Set bits for object in new location */
@@ -9999,7 +10029,7 @@ gc_ref_update_array(rb_objspace_t * objspace, VALUE v)
         }
 
 #if USE_RVARGC
-        if ((size_t)GET_HEAP_PAGE(v)->slot_size >= rb_ary_size_as_embedded(v)) {
+        if (rb_gc_obj_slot_size(v) >= rb_ary_size_as_embedded(v)) {
             if (rb_ary_embeddable_p(v)) {
                 rb_ary_make_embedded(v);
             }
@@ -10030,7 +10060,7 @@ gc_ref_update_object(rb_objspace_t *objspace, VALUE v)
         }
         ptr = ROBJECT(v)->as.ary;
         size_t size_pool_shape_id = size_pool_idx_for_size(embed_size);
-        rb_shape_t * initial_shape = rb_shape_get_shape_by_id((shape_id_t)size_pool_shape_id);
+        rb_shape_t * initial_shape = rb_shape_get_shape_by_id((shape_id_t)size_pool_shape_id + SIZE_POOL_COUNT);
         rb_shape_t * new_shape = rb_shape_rebuild_shape(initial_shape, rb_shape_get_shape(v));
         rb_shape_set_shape(v, new_shape);
     }
@@ -10510,7 +10540,7 @@ gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
 
                 // if, after move the string is not embedded, and can fit in the
                 // slot it's been placed in, then re-embed it
-                if ((size_t)GET_HEAP_PAGE(obj)->slot_size >= rb_str_size_as_embedded(obj)) {
+                if (rb_gc_obj_slot_size(obj) >= rb_str_size_as_embedded(obj)) {
                     if (!STR_EMBED_P(obj) && rb_str_reembeddable_p(obj)) {
                         rb_str_make_embedded(obj);
                     }
@@ -12790,7 +12820,7 @@ wmap_finalize(RB_BLOCK_CALL_FUNC_ARGLIST(objid, self))
 
     TypedData_Get_Struct(self, struct weakmap, &weakmap_type, w);
     /* Get reference from object id. */
-    if ((obj = id2ref_obj_tbl(&rb_objspace, objid)) == Qundef) {
+    if (UNDEF_P(obj = id2ref_obj_tbl(&rb_objspace, objid))) {
         rb_bug("wmap_finalize: objid is not found.");
     }
 
@@ -13081,14 +13111,14 @@ static VALUE
 wmap_aref(VALUE self, VALUE key)
 {
     VALUE obj = wmap_lookup(self, key);
-    return obj != Qundef ? obj : Qnil;
+    return !UNDEF_P(obj) ? obj : Qnil;
 }
 
 /* Returns +true+ if +key+ is registered */
 static VALUE
 wmap_has_key(VALUE self, VALUE key)
 {
-    return RBOOL(wmap_lookup(self, key) != Qundef);
+    return RBOOL(!UNDEF_P(wmap_lookup(self, key)));
 }
 
 /* Returns the number of referenced objects */
@@ -14333,7 +14363,8 @@ Init_GC(void)
 
     gc_constants = rb_hash_new();
     rb_hash_aset(gc_constants, ID2SYM(rb_intern("DEBUG")), RBOOL(GC_DEBUG));
-    rb_hash_aset(gc_constants, ID2SYM(rb_intern("BASE_SLOT_SIZE")), SIZET2NUM(BASE_SLOT_SIZE));
+    rb_hash_aset(gc_constants, ID2SYM(rb_intern("BASE_SLOT_SIZE")), SIZET2NUM(BASE_SLOT_SIZE - RVALUE_OVERHEAD));
+    rb_hash_aset(gc_constants, ID2SYM(rb_intern("RVALUE_OVERHEAD")), SIZET2NUM(RVALUE_OVERHEAD));
     rb_hash_aset(gc_constants, ID2SYM(rb_intern("RVALUE_SIZE")), SIZET2NUM(sizeof(RVALUE)));
     rb_hash_aset(gc_constants, ID2SYM(rb_intern("HEAP_PAGE_OBJ_LIMIT")), SIZET2NUM(HEAP_PAGE_OBJ_LIMIT));
     rb_hash_aset(gc_constants, ID2SYM(rb_intern("HEAP_PAGE_BITMAP_SIZE")), SIZET2NUM(HEAP_PAGE_BITMAP_SIZE));

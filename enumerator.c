@@ -173,9 +173,11 @@ struct producer {
 
 typedef struct MEMO *lazyenum_proc_func(VALUE, struct MEMO *, VALUE, long);
 typedef VALUE lazyenum_size_func(VALUE, VALUE);
+typedef int lazyenum_precheck_func(VALUE proc_entry);
 typedef struct {
     lazyenum_proc_func *proc;
     lazyenum_size_func *size;
+    lazyenum_precheck_func *precheck;
 } lazyenum_funcs;
 
 struct proc_entry {
@@ -260,7 +262,7 @@ enumerator_ptr(VALUE obj)
     struct enumerator *ptr;
 
     TypedData_Get_Struct(obj, struct enumerator, &enumerator_data_type, ptr);
-    if (!ptr || ptr->obj == Qundef) {
+    if (!ptr || UNDEF_P(ptr->obj)) {
         rb_raise(rb_eArgError, "uninitialized enumerator");
     }
     return ptr;
@@ -519,8 +521,8 @@ rb_enumeratorize(VALUE obj, VALUE meth, int argc, const VALUE *argv)
     return rb_enumeratorize_with_size(obj, meth, argc, argv, 0);
 }
 
-static VALUE
-lazy_to_enum_i(VALUE self, VALUE meth, int argc, const VALUE *argv, rb_enumerator_size_func *size_fn, int kw_splat);
+static VALUE lazy_to_enum_i(VALUE self, VALUE meth, int argc, const VALUE *argv, rb_enumerator_size_func *size_fn, int kw_splat);
+static int lazy_precheck(VALUE procs);
 
 VALUE
 rb_enumeratorize_with_size_kw(VALUE obj, VALUE meth, int argc, const VALUE *argv, rb_enumerator_size_func *size_fn, int kw_splat)
@@ -598,9 +600,10 @@ enumerator_block_call(VALUE obj, rb_block_call_func *func, VALUE arg)
 static VALUE
 enumerator_each(int argc, VALUE *argv, VALUE obj)
 {
+    struct enumerator *e = enumerator_ptr(obj);
+
     if (argc > 0) {
-        struct enumerator *e = enumerator_ptr(obj = rb_obj_dup(obj));
-        VALUE args = e->args;
+        VALUE args = (e = enumerator_ptr(obj = rb_obj_dup(obj)))->args;
         if (args) {
 #if SIZEOF_INT < SIZEOF_LONG
             /* check int range overflow */
@@ -617,6 +620,9 @@ enumerator_each(int argc, VALUE *argv, VALUE obj)
         e->size_fn = 0;
     }
     if (!rb_block_given_p()) return obj;
+
+    if (!lazy_precheck(e->procs)) return Qnil;
+
     return enumerator_block_call(obj, 0, obj);
 }
 
@@ -735,7 +741,7 @@ next_ii(RB_BLOCK_CALL_FUNC_ARGLIST(i, obj))
     VALUE feedvalue = Qnil;
     VALUE args = rb_ary_new4(argc, argv);
     rb_fiber_yield(1, &args);
-    if (e->feedvalue != Qundef) {
+    if (!UNDEF_P(e->feedvalue)) {
         feedvalue = e->feedvalue;
         e->feedvalue = Qundef;
     }
@@ -840,7 +846,7 @@ enumerator_next_values(VALUE obj)
     struct enumerator *e = enumerator_ptr(obj);
     VALUE vs;
 
-    if (e->lookahead != Qundef) {
+    if (!UNDEF_P(e->lookahead)) {
         vs = e->lookahead;
         e->lookahead = Qundef;
         return vs;
@@ -901,7 +907,7 @@ enumerator_peek_values(VALUE obj)
 {
     struct enumerator *e = enumerator_ptr(obj);
 
-    if (e->lookahead == Qundef) {
+    if (UNDEF_P(e->lookahead)) {
         e->lookahead = get_next_values(obj, e);
     }
     return e->lookahead;
@@ -1025,7 +1031,7 @@ enumerator_feed(VALUE obj, VALUE v)
 {
     struct enumerator *e = enumerator_ptr(obj);
 
-    if (e->feedvalue != Qundef) {
+    if (!UNDEF_P(e->feedvalue)) {
         rb_raise(rb_eTypeError, "feed value already set");
     }
     e->feedvalue = v;
@@ -1070,7 +1076,7 @@ inspect_enumerator(VALUE obj, VALUE dummy, int recur)
 
     cname = rb_obj_class(obj);
 
-    if (!e || e->obj == Qundef) {
+    if (!e || UNDEF_P(e->obj)) {
         return rb_sprintf("#<%"PRIsVALUE": uninitialized>", rb_class_path(cname));
     }
 
@@ -1239,7 +1245,7 @@ enumerator_size(VALUE obj)
         argv = RARRAY_CONST_PTR(e->args);
     }
     size = rb_check_funcall_kw(e->size, id_call, argc, argv, e->kw_splat);
-    if (size != Qundef) return size;
+    if (!UNDEF_P(size)) return size;
     return e->size;
 }
 
@@ -1285,7 +1291,7 @@ yielder_ptr(VALUE obj)
     struct yielder *ptr;
 
     TypedData_Get_Struct(obj, struct yielder, &yielder_data_type, ptr);
-    if (!ptr || ptr->proc == Qundef) {
+    if (!ptr || UNDEF_P(ptr->proc)) {
         rb_raise(rb_eArgError, "uninitialized yielder");
     }
     return ptr;
@@ -1425,7 +1431,7 @@ generator_ptr(VALUE obj)
     struct generator *ptr;
 
     TypedData_Get_Struct(obj, struct generator, &generator_data_type, ptr);
-    if (!ptr || ptr->proc == Qundef) {
+    if (!ptr || UNDEF_P(ptr->proc)) {
         rb_raise(rb_eArgError, "uninitialized generator");
     }
     return ptr;
@@ -1529,7 +1535,7 @@ static VALUE
 enum_size(VALUE self)
 {
     VALUE r = rb_check_funcall(self, id_size, 0, 0);
-    return (r == Qundef) ? Qnil : r;
+    return UNDEF_P(r) ? Qnil : r;
 }
 
 static VALUE
@@ -1562,7 +1568,7 @@ lazy_init_iterator(RB_BLOCK_CALL_FUNC_ARGLIST(val, m))
         result = rb_yield_values2(len, nargv);
         ALLOCV_END(args);
     }
-    if (result == Qundef) rb_iter_break();
+    if (UNDEF_P(result)) rb_iter_break();
     return Qnil;
 }
 
@@ -1674,6 +1680,22 @@ lazy_generator_init(VALUE enumerator, VALUE procs)
     gen_ptr->obj = obj;
 
     return generator;
+}
+
+static int
+lazy_precheck(VALUE procs)
+{
+    if (RTEST(procs)) {
+        long num_procs = RARRAY_LEN(procs), i = num_procs;
+        while (i-- > 0) {
+            VALUE proc = RARRAY_AREF(procs, i);
+            struct proc_entry *entry = proc_entry_ptr(proc);
+            lazyenum_precheck_func *precheck = entry->fn->precheck;
+            if (precheck && !precheck(proc)) return FALSE;
+        }
+    }
+
+    return TRUE;
 }
 
 /*
@@ -2425,13 +2447,8 @@ lazy_take_proc(VALUE proc_entry, struct MEMO *result, VALUE memos, long memo_ind
     }
 
     remain = NUM2LONG(memo);
-    if (remain == 0) {
-        LAZY_MEMO_SET_BREAK(result);
-    }
-    else {
-        if (--remain == 0) LAZY_MEMO_SET_BREAK(result);
-        rb_ary_store(memos, memo_index, LONG2NUM(remain));
-    }
+    if (--remain == 0) LAZY_MEMO_SET_BREAK(result);
+    rb_ary_store(memos, memo_index, LONG2NUM(remain));
     return result;
 }
 
@@ -2444,8 +2461,15 @@ lazy_take_size(VALUE entry, VALUE receiver)
     return LONG2NUM(len);
 }
 
+static int
+lazy_take_precheck(VALUE proc_entry)
+{
+    struct proc_entry *entry = proc_entry_ptr(proc_entry);
+    return entry->memo != INT2FIX(0);
+}
+
 static const lazyenum_funcs lazy_take_funcs = {
-    lazy_take_proc, lazy_take_size,
+    lazy_take_proc, lazy_take_size, lazy_take_precheck,
 };
 
 /*
@@ -2459,20 +2483,14 @@ static VALUE
 lazy_take(VALUE obj, VALUE n)
 {
     long len = NUM2LONG(n);
-    int argc = 0;
-    VALUE argv[2];
 
     if (len < 0) {
         rb_raise(rb_eArgError, "attempt to take negative size");
     }
 
-    if (len == 0) {
-       argv[0] = sym_cycle;
-       argv[1] = INT2NUM(0);
-       argc = 2;
-    }
+    n = LONG2NUM(len);          /* no more conversion */
 
-    return lazy_add_method(obj, argc, argv, n, rb_ary_new3(1, n), &lazy_take_funcs);
+    return lazy_add_method(obj, 0, 0, n, rb_ary_new3(1, n), &lazy_take_funcs);
 }
 
 static struct MEMO *
@@ -2923,7 +2941,7 @@ producer_ptr(VALUE obj)
     struct producer *ptr;
 
     TypedData_Get_Struct(obj, struct producer, &producer_data_type, ptr);
-    if (!ptr || ptr->proc == Qundef) {
+    if (!ptr || UNDEF_P(ptr->proc)) {
         rb_raise(rb_eArgError, "uninitialized producer");
     }
     return ptr;
@@ -2978,7 +2996,7 @@ producer_each_i(VALUE obj)
     init = ptr->init;
     proc = ptr->proc;
 
-    if (init == Qundef) {
+    if (UNDEF_P(init)) {
         curr = Qnil;
     }
     else {
@@ -3109,7 +3127,7 @@ enum_chain_ptr(VALUE obj)
     struct enum_chain *ptr;
 
     TypedData_Get_Struct(obj, struct enum_chain, &enum_chain_data_type, ptr);
-    if (!ptr || ptr->enums == Qundef) {
+    if (!ptr || UNDEF_P(ptr->enums)) {
         rb_raise(rb_eArgError, "uninitialized chain");
     }
     return ptr;
@@ -3302,7 +3320,7 @@ inspect_enum_chain(VALUE obj, VALUE dummy, int recur)
 
     TypedData_Get_Struct(obj, struct enum_chain, &enum_chain_data_type, ptr);
 
-    if (!ptr || ptr->enums == Qundef) {
+    if (!ptr || UNDEF_P(ptr->enums)) {
         return rb_sprintf("#<%"PRIsVALUE": uninitialized>", rb_class_path(klass));
     }
 
@@ -3431,7 +3449,7 @@ enum_product_ptr(VALUE obj)
     struct enum_product *ptr;
 
     TypedData_Get_Struct(obj, struct enum_product, &enum_product_data_type, ptr);
-    if (!ptr || ptr->enums == Qundef) {
+    if (!ptr || UNDEF_P(ptr->enums)) {
         rb_raise(rb_eArgError, "uninitialized product");
     }
     return ptr;
@@ -3642,7 +3660,7 @@ inspect_enum_product(VALUE obj, VALUE dummy, int recur)
 
     TypedData_Get_Struct(obj, struct enum_product, &enum_product_data_type, ptr);
 
-    if (!ptr || ptr->enums == Qundef) {
+    if (!ptr || UNDEF_P(ptr->enums)) {
         return rb_sprintf("#<%"PRIsVALUE": uninitialized>", rb_class_path(klass));
     }
 

@@ -64,6 +64,7 @@ AC_ARG_WITH(baseruby,
 	[
 		AC_PATH_PROG([BASERUBY], [ruby], [false])
 	])
+# BASERUBY must be >= 2.2.0. Note that `"2.2.0" > "2.2"` is true.
 AS_IF([test "$HAVE_BASERUBY" != no -a "`RUBYOPT=- $BASERUBY --disable=gems -e 'print 42 if RUBY_VERSION > "2.2"' 2>/dev/null`" = 42], [
     AS_CASE(["$build_os"], [mingw*], [
         # Can MSys shell run a command with a drive letter?
@@ -1283,6 +1284,11 @@ dnl AC_HEADER_STDC has been checked in AC_USE_SYSTEM_EXTENSIONS
 AC_HEADER_STDBOOL
 AC_HEADER_SYS_WAIT
 
+AC_CHECK_HEADERS([afunix.h], [], [],
+[#ifdef _WIN32
+# include <winsock2.h>
+#endif
+])
 AC_CHECK_HEADERS(atomic.h)
 AC_CHECK_HEADERS(copyfile.h)
 AC_CHECK_HEADERS(direct.h)
@@ -3738,8 +3744,16 @@ AC_CHECK_PROG(RUSTC, [rustc], [rustc], [no]) dnl no ac_tool_prefix
 dnl check if rustc is recent enough to build YJIT (rustc >= 1.58.0)
 YJIT_RUSTC_OK=no
 AS_IF([test "$RUSTC" != "no"],
-    AC_MSG_CHECKING([whether ${RUSTC} is new enough for YJIT])
-    AS_IF([echo "fn main() { let x = 1; format!(\"{x}\"); }" | $RUSTC - --emit asm=/dev/null 2>/dev/null],
+    AC_MSG_CHECKING([whether ${RUSTC} works for YJIT])
+    YJIT_TARGET_ARCH=
+    AS_CASE(["$target_cpu"],
+        [arm64|aarch64], [YJIT_TARGET_ARCH=aarch64],
+        [x86_64], [YJIT_TARGET_ARCH=x86_64],
+    )
+    dnl Fails in case rustc target doesn't match ruby target.
+    dnl Can happen on Rosetta, for example.
+    AS_IF([echo "#[cfg(target_arch = \"$YJIT_TARGET_ARCH\")]\n fn main() { let x = 1; format!(\"{x}\"); }" |
+            $RUSTC - --emit asm=/dev/null 2>/dev/null],
         [YJIT_RUSTC_OK=yes]
     )
     AC_MSG_RESULT($YJIT_RUSTC_OK)
@@ -3821,6 +3835,9 @@ AS_CASE(["${YJIT_SUPPORT}"],
         LDFLAGS="$LDFLAGS -lpthread -lc++abi"
     ])
     YJIT_OBJ='yjit.$(OBJEXT)'
+    AS_IF([test x"$YJIT_SUPPORT" != "xyes" ], [
+        AC_DEFINE_UNQUOTED(YJIT_SUPPORT, [$YJIT_SUPPORT])
+    ])
     AC_DEFINE(USE_YJIT, 1)
 ], [AC_DEFINE(USE_YJIT, 0)])
 

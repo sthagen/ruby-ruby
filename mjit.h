@@ -52,7 +52,7 @@ struct mjit_options {
     // If true, all ISeqs are synchronously compiled. For testing.
     bool wait;
     // Number of calls to trigger JIT compilation. For testing.
-    unsigned int min_calls;
+    unsigned int call_threshold;
     // Force printing info about MJIT work of level VERBOSE or
     // less. 0=silence, 1=medium, 2=verbose.
     int verbose;
@@ -79,7 +79,7 @@ struct rb_mjit_compile_info {
     bool disable_const_cache;
 };
 
-typedef VALUE (*mjit_func_t)(rb_execution_context_t *, rb_control_frame_t *);
+typedef VALUE (*jit_func_t)(rb_execution_context_t *, rb_control_frame_t *);
 
 RUBY_SYMBOL_EXPORT_BEGIN
 RUBY_EXTERN struct mjit_options mjit_opts;

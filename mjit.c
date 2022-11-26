@@ -349,7 +349,7 @@ static void
 free_unit(struct rb_mjit_unit *unit)
 {
     if (unit->iseq) { // ISeq is not GCed
-        ISEQ_BODY(unit->iseq)->jit_func = (mjit_func_t)NOT_COMPILED_JIT_ISEQ_FUNC;
+        ISEQ_BODY(unit->iseq)->jit_func = (jit_func_t)NOT_COMPILED_JIT_ISEQ_FUNC;
         ISEQ_BODY(unit->iseq)->jit_unit = NULL;
     }
     if (unit->cc_entries) {
@@ -566,11 +566,11 @@ remove_so_file(const char *so_file, struct rb_mjit_unit *unit)
 
 // Print _mjitX, but make a human-readable funcname when --mjit-debug is used
 static void
-sprint_funcname(char *funcname, const struct rb_mjit_unit *unit)
+sprint_funcname(char *funcname, size_t funcname_size, const struct rb_mjit_unit *unit)
 {
     const rb_iseq_t *iseq = unit->iseq;
     if (iseq == NULL || (!mjit_opts.debug && !mjit_opts.debug_flags)) {
-        sprintf(funcname, "_mjit%d", unit->id);
+        snprintf(funcname, funcname_size, "_mjit%d", unit->id);
         return;
     }
 
@@ -589,7 +589,7 @@ sprint_funcname(char *funcname, const struct rb_mjit_unit *unit)
     if (!strcmp(method, "[]=")) method = "ASET";
 
     // Print and normalize
-    sprintf(funcname, "_mjit%d_%s_%s", unit->id, path, method);
+    snprintf(funcname, funcname_size, "_mjit%d_%s_%s", unit->id, path, method);
     for (size_t i = 0; i < strlen(funcname); i++) {
         char c = funcname[i];
         if (!(('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') || ('0' <= c && c <= '9') || c == '_')) {
@@ -705,7 +705,7 @@ mjit_compact(char* c_file)
         if (ISEQ_BODY(child_unit->iseq)->jit_unit == NULL) continue; // Sometimes such units are created. TODO: Investigate why
 
         char funcname[MAXPATHLEN];
-        sprint_funcname(funcname, child_unit);
+        sprint_funcname(funcname, sizeof(funcname), child_unit);
 
         int iseq_lineno = ISEQ_BODY(child_unit->iseq)->location.first_lineno;
         const char *sep = "@";
@@ -777,7 +777,7 @@ load_compact_funcs_from_so(struct rb_mjit_unit *unit, char *c_file, char *so_fil
     ccan_list_for_each(&active_units.head, cur, unode) {
         void *func;
         char funcname[MAXPATHLEN];
-        sprint_funcname(funcname, cur);
+        sprint_funcname(funcname, sizeof(funcname), cur);
 
         if ((func = dlsym(handle, funcname)) == NULL) {
             mjit_warning("skipping to reload '%s' from '%s': %s", funcname, so_file, dlerror());
@@ -786,7 +786,7 @@ load_compact_funcs_from_so(struct rb_mjit_unit *unit, char *c_file, char *so_fil
 
         if (cur->iseq) { // Check whether GCed or not
             // Usage of jit_code might be not in a critical section.
-            MJIT_ATOMIC_SET(ISEQ_BODY(cur->iseq)->jit_func, (mjit_func_t)func);
+            MJIT_ATOMIC_SET(ISEQ_BODY(cur->iseq)->jit_func, (jit_func_t)func);
         }
     }
     verbose(1, "JIT compaction (%.1fms): Compacted %d methods %s -> %s", end_time - current_cc_ms, active_units.length, c_file, so_file);
@@ -857,7 +857,7 @@ mjit_compile_unit(struct rb_mjit_unit *unit)
 
     sprint_uniq_filename(c_file, (int)sizeof(c_file), unit->id, MJIT_TMP_PREFIX, c_ext);
     sprint_uniq_filename(so_file, (int)sizeof(so_file), unit->id, MJIT_TMP_PREFIX, so_ext);
-    sprint_funcname(funcname, unit);
+    sprint_funcname(funcname, sizeof(funcname), unit);
 
     FILE *f;
     int fd = rb_cloexec_open(c_file, c_file_access_mode, 0600);
@@ -1175,7 +1175,7 @@ check_unit_queue(void)
         current_cc_pid = start_mjit_compile(unit);
         if (current_cc_pid == -1) { // JIT failure
             current_cc_pid = 0;
-            current_cc_unit->iseq->body->jit_func = (mjit_func_t)NOT_COMPILED_JIT_ISEQ_FUNC; // TODO: consider unit->compact_p
+            current_cc_unit->iseq->body->jit_func = (jit_func_t)NOT_COMPILED_JIT_ISEQ_FUNC; // TODO: consider unit->compact_p
             current_cc_unit = NULL;
             return;
         }
@@ -1250,7 +1250,7 @@ mjit_notify_waitpid(int exit_code)
     if (exit_code != 0) {
         verbose(2, "Failed to generate so");
         if (!current_cc_unit->compact_p) {
-            current_cc_unit->iseq->body->jit_func = (mjit_func_t)NOT_COMPILED_JIT_ISEQ_FUNC;
+            current_cc_unit->iseq->body->jit_func = (jit_func_t)NOT_COMPILED_JIT_ISEQ_FUNC;
         }
         free_unit(current_cc_unit);
         current_cc_unit = NULL;
@@ -1267,7 +1267,7 @@ mjit_notify_waitpid(int exit_code)
     else { // Normal unit
         // Load the function from so
         char funcname[MAXPATHLEN];
-        sprint_funcname(funcname, current_cc_unit);
+        sprint_funcname(funcname, sizeof(funcname), current_cc_unit);
         void *func = load_func_from_so(so_file, funcname, current_cc_unit);
 
         // Delete .so file
@@ -1329,7 +1329,7 @@ mjit_hook_custom_compile(const rb_iseq_t *iseq)
     VALUE iseq_class = rb_funcall(rb_mMJITC, rb_intern("rb_iseq_t"), 0);
     VALUE iseq_ptr = rb_funcall(iseq_class, rb_intern("new"), 1, ULONG2NUM((size_t)iseq));
     VALUE jit_func = rb_funcall(rb_mMJIT, rb_intern("compile"), 1, iseq_ptr);
-    ISEQ_BODY(iseq)->jit_func = (mjit_func_t)NUM2ULONG(jit_func);
+    ISEQ_BODY(iseq)->jit_func = (jit_func_t)NUM2ULONG(jit_func);
 
     mjit_call_p = original_call_p;
 }
@@ -1346,12 +1346,12 @@ mjit_add_iseq_to_process(const rb_iseq_t *iseq, const struct rb_mjit_compile_inf
         return;
     }
     if (!mjit_target_iseq_p(iseq)) {
-        ISEQ_BODY(iseq)->jit_func = (mjit_func_t)NOT_COMPILED_JIT_ISEQ_FUNC; // skip mjit_wait
+        ISEQ_BODY(iseq)->jit_func = (jit_func_t)NOT_COMPILED_JIT_ISEQ_FUNC; // skip mjit_wait
         return;
     }
 
     RB_DEBUG_COUNTER_INC(mjit_add_iseq_to_process);
-    ISEQ_BODY(iseq)->jit_func = (mjit_func_t)NOT_READY_JIT_ISEQ_FUNC;
+    ISEQ_BODY(iseq)->jit_func = (jit_func_t)NOT_READY_JIT_ISEQ_FUNC;
     create_unit(iseq);
     if (ISEQ_BODY(iseq)->jit_unit == NULL)
         // Failure in creating the unit.
@@ -1384,11 +1384,11 @@ mjit_wait(struct rb_iseq_constant_body *body)
     int tries = 0;
     tv.tv_sec = 0;
     tv.tv_usec = 1000;
-    while (body == NULL ? current_cc_pid == initial_pid : body->jit_func == (mjit_func_t)NOT_READY_JIT_ISEQ_FUNC) { // TODO: refactor this
+    while (body == NULL ? current_cc_pid == initial_pid : body->jit_func == (jit_func_t)NOT_READY_JIT_ISEQ_FUNC) { // TODO: refactor this
         tries++;
         if (tries / 1000 > MJIT_WAIT_TIMEOUT_SECONDS || pch_status == PCH_FAILED) {
             if (body != NULL) {
-                body->jit_func = (mjit_func_t) NOT_COMPILED_JIT_ISEQ_FUNC; // JIT worker seems dead. Give up.
+                body->jit_func = (jit_func_t) NOT_COMPILED_JIT_ISEQ_FUNC; // JIT worker seems dead. Give up.
             }
             mjit_warning("timed out to wait for JIT finish");
             break;
@@ -1626,9 +1626,9 @@ system_tmpdir(void)
 // Minimum value for JIT cache size.
 #define MIN_CACHE_SIZE 10
 // Default permitted number of units with a JIT code kept in memory.
-#define DEFAULT_MAX_CACHE_SIZE 10000
+#define DEFAULT_MAX_CACHE_SIZE 100
 // A default threshold used to add iseq to JIT.
-#define DEFAULT_MIN_CALLS_TO_ADD 10000
+#define DEFAULT_CALL_THRESHOLD 10000
 
 // Start MJIT worker. Return TRUE if worker is successfully started.
 static bool
@@ -1709,8 +1709,8 @@ mjit_setup_options(const char *s, struct mjit_options *mjit_opt)
     else if (opt_match_arg(s, l, "max-cache")) {
         mjit_opt->max_cache_size = atoi(s + 1);
     }
-    else if (opt_match_arg(s, l, "min-calls")) {
-        mjit_opt->min_calls = atoi(s + 1);
+    else if (opt_match_arg(s, l, "call-threshold")) {
+        mjit_opt->call_threshold = atoi(s + 1);
     }
     // --mjit=pause is an undocumented feature for experiments
     else if (opt_match_noarg(s, l, "pause")) {
@@ -1724,15 +1724,15 @@ mjit_setup_options(const char *s, struct mjit_options *mjit_opt)
 
 #define M(shortopt, longopt, desc) RUBY_OPT_MESSAGE(shortopt, longopt, desc)
 const struct ruby_opt_message mjit_option_messages[] = {
-    M("--mjit-warnings",      "", "Enable printing JIT warnings"),
-    M("--mjit-debug",         "", "Enable JIT debugging (very slow), or add cflags if specified"),
-    M("--mjit-wait",          "", "Wait until JIT compilation finishes every time (for testing)"),
-    M("--mjit-save-temps",    "", "Save JIT temporary files in $TMP or /tmp (for testing)"),
-    M("--mjit-verbose=num",   "", "Print JIT logs of level num or less to stderr (default: 0)"),
-    M("--mjit-max-cache=num", "", "Max number of methods to be JIT-ed in a cache (default: "
+    M("--mjit-warnings",           "", "Enable printing JIT warnings"),
+    M("--mjit-debug",              "", "Enable JIT debugging (very slow), or add cflags if specified"),
+    M("--mjit-wait",               "", "Wait until JIT compilation finishes every time (for testing)"),
+    M("--mjit-save-temps",         "", "Save JIT temporary files in $TMP or /tmp (for testing)"),
+    M("--mjit-verbose=num",        "", "Print JIT logs of level num or less to stderr (default: 0)"),
+    M("--mjit-max-cache=num",      "", "Max number of methods to be JIT-ed in a cache (default: "
       STRINGIZE(DEFAULT_MAX_CACHE_SIZE) ")"),
-    M("--mjit-min-calls=num", "", "Number of calls to trigger JIT (for testing, default: "
-      STRINGIZE(DEFAULT_MIN_CALLS_TO_ADD) ")"),
+    M("--mjit-call-threshold=num", "", "Number of calls to trigger JIT (for testing, default: "
+      STRINGIZE(DEFAULT_CALL_THRESHOLD) ")"),
     {0}
 };
 #undef M
@@ -1760,8 +1760,8 @@ mjit_init(const struct mjit_options *opts)
     mjit_pid = getpid();
 
     // Normalize options
-    if (mjit_opts.min_calls == 0)
-        mjit_opts.min_calls = DEFAULT_MIN_CALLS_TO_ADD;
+    if (mjit_opts.call_threshold == 0)
+        mjit_opts.call_threshold = DEFAULT_CALL_THRESHOLD;
     if (mjit_opts.max_cache_size <= 0)
         mjit_opts.max_cache_size = DEFAULT_MAX_CACHE_SIZE;
     if (mjit_opts.max_cache_size < MIN_CACHE_SIZE)

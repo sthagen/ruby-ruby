@@ -45,6 +45,29 @@ assert_normal_exit %q{
   Object.send(:remove_const, :Foo)
 }
 
+assert_normal_exit %q{
+  # Test to ensure send on overriden c functions
+  # doesn't corrupt the stack
+  class Bar
+    def bar(x)
+      x
+    end
+  end
+
+  class Foo
+    def bar
+      Bar.new
+    end
+  end
+
+  foo = Foo.new
+  # before this change, this line would error
+  # because "s" would still be on the stack
+  # String.to_s is the overridden method here
+  p foo.bar.bar("s".__send__(:to_s))
+}
+
+
 assert_equal '[nil, nil, nil, nil, nil, nil]', %q{
   [NilClass, TrueClass, FalseClass, Integer, Float, Symbol].each do |klass|
     klass.class_eval("def foo = @foo")
@@ -2245,6 +2268,26 @@ assert_equal '[[:c_return, :itself, main]]', %q{
 
   # assume first call compiles
   tp.enable { shouldnt_compile }
+
+  events
+}
+
+# test c_call invalidation
+assert_equal '[[:c_call, :itself]]', %q{
+  # enable the event once to make sure invalidation
+  # happens the second time we enable it
+  TracePoint.new(:c_call) {}.enable{}
+
+  def compiled
+    itself
+  end
+
+  # assume first call compiles
+  compiled
+
+  events = []
+  tp = TracePoint.new(:c_call) { |tp| events << [tp.event, tp.method_id] }
+  tp.enable { compiled }
 
   events
 }

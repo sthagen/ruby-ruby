@@ -210,12 +210,15 @@ impl CodeBlock {
         self.page_size
     }
 
+    pub fn mapped_region_size(&self) -> usize {
+        self.mem_block.borrow().mapped_region_size()
+    }
+
     /// Return the number of code pages that have been mapped by the VirtualMemory.
     pub fn num_mapped_pages(&self) -> usize {
-        let mapped_region_size = self.mem_block.borrow().mapped_region_size();
         // CodeBlock's page size != VirtualMem's page size on Linux,
         // so mapped_region_size % self.page_size may not be 0
-        ((mapped_region_size - 1) / self.page_size) + 1
+        ((self.mapped_region_size() - 1) / self.page_size) + 1
     }
 
     /// Return the number of code pages that have been reserved by the VirtualMemory.
@@ -633,12 +636,13 @@ impl CodeBlock {
 impl CodeBlock {
     /// Stubbed CodeBlock for testing. Can't execute generated code.
     pub fn new_dummy(mem_size: usize) -> Self {
+        use std::ptr::NonNull;
         use crate::virtualmem::*;
         use crate::virtualmem::tests::TestingAllocator;
 
         let alloc = TestingAllocator::new(mem_size);
         let mem_start: *const u8 = alloc.mem_start();
-        let virt_mem = VirtualMem::new(alloc, 1, mem_start as *mut u8, mem_size);
+        let virt_mem = VirtualMem::new(alloc, 1, NonNull::new(mem_start as *mut u8).unwrap(), mem_size);
 
         Self::new(Rc::new(RefCell::new(virt_mem)), 16 * 1024, false)
     }

@@ -201,6 +201,7 @@
 # - #getlocal: Returns a new time converted to local time.
 # - #utc (aliased as #gmtime): Converts time to UTC in place.
 # - #localtime: Converts time to local time in place.
+# - #deconstruct_keys: Returns a hash of time components used in pattern-matching.
 #
 # === Methods for Rounding
 #
@@ -330,11 +331,16 @@ class Time
   #     Time.new(2000, 1, 1, 0, 0)  # => 2000-01-01 00:00:00 -0600
   #     Time.new(2000, 1, 1, 0, 59) # => 2000-01-01 00:59:00 -0600
   #
-  # - +sec+: Second in range (0..59), or 60 if +usec+ is zero:
+  # - +sec+: Second in range (0...61):
   #
   #     Time.new(2000, 1, 1, 0, 0, 0)  # => 2000-01-01 00:00:00 -0600
   #     Time.new(2000, 1, 1, 0, 0, 59) # => 2000-01-01 00:00:59 -0600
   #     Time.new(2000, 1, 1, 0, 0, 60) # => 2000-01-01 00:01:00 -0600
+  #
+  #   +sec+ may be Float or Rational.
+  #
+  #     Time.new(2000, 1, 1, 0, 0, 59.5)  # => 2000-12-31 23:59:59.5 +0900
+  #     Time.new(2000, 1, 1, 0, 0, 59.7r) # => 2000-12-31 23:59:59.7 +0900
   #
   # These values may be:
   #
