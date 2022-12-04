@@ -7,6 +7,10 @@
 #include "internal/variable.h"
 #include <stdbool.h>
 
+#ifndef SHAPE_DEBUG
+#define SHAPE_DEBUG (VM_CHECK_MODE > 0)
+#endif
+
 static ID id_frozen;
 static ID id_t_object;
 static ID size_pool_edge_names[SIZE_POOL_COUNT];
@@ -302,6 +306,12 @@ rb_shape_id_num_bits(void)
     return SHAPE_ID_NUM_BITS;
 }
 
+int32_t
+rb_shape_id_offset(void)
+{
+    return 8 - rb_shape_id_num_bits() / 8;
+}
+
 rb_shape_t *
 rb_shape_rebuild_shape(rb_shape_t * initial_shape, rb_shape_t * dest_shape)
 {
@@ -339,7 +349,7 @@ rb_shape_rebuild_shape(rb_shape_t * initial_shape, rb_shape_t * dest_shape)
     return midway_shape;
 }
 
-#if VM_CHECK_MODE > 0
+#if SHAPE_DEBUG
 VALUE rb_cShape;
 
 /*
@@ -617,7 +627,7 @@ Init_default_shapes(void)
 void
 Init_shape(void)
 {
-#if VM_CHECK_MODE > 0
+#if SHAPE_DEBUG
     rb_cShape = rb_define_class_under(rb_cRubyVM, "Shape", rb_cObject);
     rb_undef_alloc_func(rb_cShape);
 

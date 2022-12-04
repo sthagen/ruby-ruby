@@ -827,6 +827,39 @@ class TestYJIT < Test::Unit::TestCase
     RUBY
   end
 
+  def test_int_equal
+    assert_compiles(<<~'RUBY', exits: :any, result: [true, false, true, false, true, false, true, false])
+      def eq(a, b)
+        a == b
+      end
+
+      def eqq(a, b)
+        a === b
+      end
+
+      big1 = 2 ** 65
+      big2 = big1 + 1
+      [eq(1, 1), eq(1, 2), eq(big1, big1), eq(big1, big2), eqq(1, 1), eqq(1, 2), eqq(big1, big1), eqq(big1, big2)]
+    RUBY
+  end
+
+  def test_opt_case_dispatch
+    assert_compiles(<<~'RUBY', exits: :any, result: [:"1", "2", 3])
+      def case_dispatch(val)
+        case val
+        when 1
+          :"#{val}"
+        when 2
+          "#{val}"
+        else
+          val
+        end
+      end
+
+      [case_dispatch(1), case_dispatch(2), case_dispatch(3)]
+    RUBY
+  end
+
   def test_code_gc
     assert_compiles(code_gc_helpers + <<~'RUBY', exits: :any, result: :ok)
       return :not_paged unless add_pages(100) # prepare freeable pages

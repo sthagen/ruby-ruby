@@ -483,10 +483,6 @@ struct rb_iseq_constant_body {
     unsigned int icvarc_size; // Number of ICVARC caches
     unsigned int ci_size;
     unsigned int stack_max; /* for stack overflow check */
-    union {
-        iseq_bits_t * list; /* Find references for GC */
-        iseq_bits_t single;
-    } mark_bits;
 
     bool catch_except_p; // If a frame of this ISeq may catch exception, set true.
     // If true, this ISeq is leaf *and* backtraces are not used, for example,
@@ -495,6 +491,12 @@ struct rb_iseq_constant_body {
     // ObjectSpace#trace_object_allocations.
     // For more details, see: https://bugs.ruby-lang.org/issues/16956
     bool builtin_inline_p;
+
+    union {
+        iseq_bits_t * list; /* Find references for GC */
+        iseq_bits_t single;
+    } mark_bits;
+
     struct rb_id_table *outer_variables;
 
     const rb_iseq_t *mandatory_only_iseq;
@@ -967,6 +969,9 @@ struct rb_execution_context_struct {
     struct rb_id_table *local_storage;
     VALUE local_storage_recursive_hash;
     VALUE local_storage_recursive_hash_for_trace;
+
+    /* Inheritable fiber storage. */
+    VALUE storage;
 
     /* eval env */
     const VALUE *root_lep;
@@ -2010,7 +2015,7 @@ void rb_threadptr_pending_interrupt_clear(rb_thread_t *th);
 void rb_threadptr_pending_interrupt_enque(rb_thread_t *th, VALUE v);
 VALUE rb_ec_get_errinfo(const rb_execution_context_t *ec);
 void rb_ec_error_print(rb_execution_context_t * volatile ec, volatile VALUE errinfo);
-void rb_execution_context_update(const rb_execution_context_t *ec);
+void rb_execution_context_update(rb_execution_context_t *ec);
 void rb_execution_context_mark(const rb_execution_context_t *ec);
 void rb_fiber_close(rb_fiber_t *fib);
 void Init_native_thread(rb_thread_t *th);

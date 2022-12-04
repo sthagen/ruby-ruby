@@ -102,6 +102,47 @@ Note that each entry is kept to a minimum, see links for details.
 
 Note: We're only listing outstanding class updates.
 
+* Fiber
+
+    * Introduce Fiber.[] and Fiber.[]= for inheritable fiber storage.
+      Introduce Fiber#storage and Fiber#storage= (experimental) for
+      getting and resetting the current storage.  Introduce
+      `Fiber.new(storage:)` for setting the storage when creating a
+      fiber. [[Feature #19078]]
+
+        Existing Thread and Fiber local variables can be tricky to use.
+        Thread local variables are shared between all fibers, making it
+        hard to isolate, while Fiber local variables can be hard to
+        share.  It is often desirable to define unit of execution
+        ("execution context") such that some state is shared between all
+        fibers and threads created in that context.  This is what Fiber
+        storage provides.
+
+        ```ruby
+        def log(message)
+          puts "#{Fiber[:request_id]}: #{message}"
+        end
+
+        def handle_requests
+          while request = read_request
+            Fiber.schedule do
+              Fiber[:request_id] = SecureRandom.uuid
+
+              request.messages.each do |message|
+                Fiber.schedule do
+                  log("Handling #{message}") # Log includes inherited request_id.
+                end
+              end
+            end
+          end
+        end
+        ```
+
+        You should generally consider Fiber storage for any state which
+        you want to be shared implicitly between all fibers and threads
+        created in a given context, e.g. a connection pool, a request
+        id, a logger level, environment variables, configuration, etc.
+
 * Fiber::Scheduler
 
     * Introduce `Fiber::Scheduler#io_select` for non-blocking IO.select.
@@ -158,6 +199,12 @@ Note: We're only listing outstanding class updates.
 
     * Enumerator.product has been added.  Enumerator::Product is the implementation. [[Feature #18685]]
 
+* Exception
+
+    * Exception#detailed_message has been added.
+      The default error printer calls this method on the Exception object
+      instead of #message. [[Feature #18564]]
+
 * Hash
 
     * Hash#shift now always returns nil if the hash is
@@ -200,6 +247,9 @@ Note: We're only listing outstanding class updates.
       but also as a String.  Unknown flags raise ArgumentError.
       Otherwise, anything other than `true`, `false`, `nil` or Integer will be warned.
       [[Feature #18788]]
+
+    * Regexp.timeout= has been added. Also, Regexp.new new supports timeout keyword.
+      See [[Feature #17837]]
 
 * Refinement
 
@@ -291,6 +341,9 @@ Note: We're only listing outstanding class updates.
     * Time#deconstruct_keys is added, allowing to use Time instances
       in pattern-matching expressions [[Feature #19071]]
 
+* SyntaxError
+    * SyntaxError#path has been added.  [[Feature #19138]]
+
 * TracePoint
 
     * TracePoint#binding now returns `nil` for `c_call`/`c_return` TracePoints.
@@ -320,9 +373,9 @@ Note: We're only listing outstanding class updates.
     * RubyGems 3.4.0.dev
     * bigdecimal 3.1.2
     * bundler 2.4.0.dev
-    * cgi 0.3.5
+    * cgi 0.3.6
     * date 3.2.3
-    * erb 4.0.0
+    * erb 4.0.2
     * error_highlight 0.5.1
     * etc 1.4.0
     * fiddle 1.1.1
@@ -330,7 +383,7 @@ Note: We're only listing outstanding class updates.
     * io-nonblock 0.1.1
     * io-wait 0.3.0.pre
     * ipaddr 1.2.4
-    * irb 1.5.0
+    * irb 1.5.1
     * json 2.6.2
     * logger 1.5.1
     * net-http 0.3.0
@@ -342,7 +395,7 @@ Note: We're only listing outstanding class updates.
     * securerandom 0.2.0
     * set 1.0.3
     * stringio 3.0.3
-    * syntax_suggest 0.0.1
+    * syntax_suggest 1.0.1
     * timeout 0.3.0
 
 *   The following bundled gems are updated.
@@ -354,9 +407,9 @@ Note: We're only listing outstanding class updates.
     * net-imap 0.3.1
     * net-pop 0.1.2
     * net-smtp 0.3.3
-    * rbs 2.8.0
+    * rbs 2.8.1
     * typeprof 0.21.3
-    * debug 1.6.3
+    * debug 1.7.0
 
 *   The following default gems are now bundled gems.
 
@@ -465,6 +518,8 @@ The following deprecated APIs are removed.
     * Simply run ruby with `--yjit-stats` to compute stats (incurs some run-time overhead).
 * YJIT is now optimized to take advantage of object shapes. [[Feature #18776]]
 * Take advantage of finer-grained constant invalidation to invalidate less code when defining new constants. [[Feature #18589]]
+* The default `--yjit-exec-mem-size` is changed to 128 (MiB).
+* The default `--yjit-call-threshold` is changed to 30.
 
 ### MJIT
 
@@ -509,12 +564,14 @@ The following deprecated APIs are removed.
 [Feature #17351]: https://bugs.ruby-lang.org/issues/17351
 [Feature #17391]: https://bugs.ruby-lang.org/issues/17391
 [Bug #17545]:     https://bugs.ruby-lang.org/issues/17545
+[Feature #17837]: https://bugs.ruby-lang.org/issues/17837
 [Feature #17881]: https://bugs.ruby-lang.org/issues/17881
 [Feature #18037]: https://bugs.ruby-lang.org/issues/18037
 [Feature #18159]: https://bugs.ruby-lang.org/issues/18159
 [Feature #18351]: https://bugs.ruby-lang.org/issues/18351
 [Feature #18481]: https://bugs.ruby-lang.org/issues/18481
 [Bug #18487]:     https://bugs.ruby-lang.org/issues/18487
+[Feature #18564]: https://bugs.ruby-lang.org/issues/18564
 [Feature #18571]: https://bugs.ruby-lang.org/issues/18571
 [Feature #18585]: https://bugs.ruby-lang.org/issues/18585
 [Feature #18589]: https://bugs.ruby-lang.org/issues/18589
@@ -537,6 +594,8 @@ The following deprecated APIs are removed.
 [Feature #19026]: https://bugs.ruby-lang.org/issues/19026
 [Feature #19060]: https://bugs.ruby-lang.org/issues/19060
 [Feature #19070]: https://bugs.ruby-lang.org/issues/19070
+[Feature #19071]: https://bugs.ruby-lang.org/issues/19071
+[Feature #19078]: https://bugs.ruby-lang.org/issues/19078
 [Bug #19100]:     https://bugs.ruby-lang.org/issues/19100
 [Feature #19135]: https://bugs.ruby-lang.org/issues/19135
-[Feature #19071]: https://bugs.ruby-lang.org/issues/19071
+[Feature #19138]: https://bugs.ruby-lang.org/issues/19138

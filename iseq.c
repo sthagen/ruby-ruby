@@ -103,7 +103,8 @@ compile_data_free(struct iseq_compile_data *compile_data)
 }
 
 static void
-remove_from_constant_cache(ID id, IC ic) {
+remove_from_constant_cache(ID id, IC ic)
+{
     rb_vm_t *vm = GET_VM();
     VALUE lookup_result;
     st_data_t ic_data = (st_data_t)ic;
@@ -125,6 +126,14 @@ remove_from_constant_cache(ID id, IC ic) {
 static void
 iseq_clear_ic_references(const rb_iseq_t *iseq)
 {
+    // In some cases (when there is a compilation error), we end up with
+    // ic_size greater than 0, but no allocated is_entries buffer.
+    // If there's no is_entries buffer to loop through, return early.
+    // [Bug #19173]
+    if (!ISEQ_BODY(iseq)->is_entries) {
+        return;
+    }
+
     for (unsigned int ic_idx = 0; ic_idx < ISEQ_BODY(iseq)->ic_size; ic_idx++) {
         IC ic = &ISEQ_IS_IC_ENTRY(ISEQ_BODY(iseq), ic_idx);
 

@@ -234,6 +234,22 @@ pub const RUBY_FL_SINGLETON: ruby_fl_type = 4096;
 pub type ruby_fl_type = i32;
 pub type st_data_t = ::std::os::raw::c_ulong;
 pub type st_index_t = st_data_t;
+pub const ST_CONTINUE: st_retval = 0;
+pub const ST_STOP: st_retval = 1;
+pub const ST_DELETE: st_retval = 2;
+pub const ST_CHECK: st_retval = 3;
+pub const ST_REPLACE: st_retval = 4;
+pub type st_retval = u32;
+pub type st_foreach_callback_func = ::std::option::Option<
+    unsafe extern "C" fn(
+        arg1: st_data_t,
+        arg2: st_data_t,
+        arg3: st_data_t,
+    ) -> ::std::os::raw::c_int,
+>;
+extern "C" {
+    pub fn rb_gc_writebarrier(old: VALUE, young: VALUE);
+}
 pub const RARRAY_EMBED_FLAG: ruby_rarray_flags = 8192;
 pub const RARRAY_EMBED_LEN_MASK: ruby_rarray_flags = 4161536;
 pub const RARRAY_TRANSIENT_FLAG: ruby_rarray_flags = 33554432;
@@ -345,6 +361,9 @@ extern "C" {
     pub fn rb_obj_is_kind_of(obj: VALUE, klass: VALUE) -> VALUE;
 }
 extern "C" {
+    pub fn rb_obj_frozen_p(obj: VALUE) -> VALUE;
+}
+extern "C" {
     pub fn rb_backref_get() -> VALUE;
 }
 extern "C" {
@@ -428,13 +447,28 @@ extern "C" {
     pub fn rb_shape_id_num_bits() -> u8;
 }
 extern "C" {
+    pub fn rb_shape_id_offset() -> i32;
+}
+extern "C" {
     pub fn rb_shape_get_shape_by_id(shape_id: shape_id_t) -> *mut rb_shape_t;
 }
 extern "C" {
     pub fn rb_shape_get_shape_id(obj: VALUE) -> shape_id_t;
 }
 extern "C" {
+    pub fn rb_shape_transition_shape_capa(
+        shape: *mut rb_shape_t,
+        new_capacity: u32,
+    ) -> *mut rb_shape_t;
+}
+extern "C" {
+    pub fn rb_shape_get_next(shape: *mut rb_shape_t, obj: VALUE, id: ID) -> *mut rb_shape_t;
+}
+extern "C" {
     pub fn rb_shape_get_iv_index(shape: *mut rb_shape_t, id: ID, value: *mut attr_index_t) -> bool;
+}
+extern "C" {
+    pub fn rb_shape_id(shape: *mut rb_shape_t) -> shape_id_t;
 }
 pub const idDot2: ruby_method_ids = 128;
 pub const idDot3: ruby_method_ids = 129;
@@ -1024,16 +1058,33 @@ extern "C" {
     pub fn rb_ec_str_resurrect(ec: *mut rb_execution_context_struct, str_: VALUE) -> VALUE;
 }
 extern "C" {
+    pub fn rb_hash_stlike_foreach(
+        hash: VALUE,
+        func: st_foreach_callback_func,
+        arg: st_data_t,
+    ) -> ::std::os::raw::c_int;
+}
+extern "C" {
     pub fn rb_hash_new_with_size(size: st_index_t) -> VALUE;
 }
 extern "C" {
     pub fn rb_hash_resurrect(hash: VALUE) -> VALUE;
 }
 extern "C" {
+    pub fn rb_hash_stlike_lookup(
+        hash: VALUE,
+        key: st_data_t,
+        pval: *mut st_data_t,
+    ) -> ::std::os::raw::c_int;
+}
+extern "C" {
     pub fn rb_gvar_get(arg1: ID) -> VALUE;
 }
 extern "C" {
     pub fn rb_gvar_set(arg1: ID, arg2: VALUE) -> VALUE;
+}
+extern "C" {
+    pub fn rb_ensure_iv_list_size(obj: VALUE, len: u32, newsize: u32);
 }
 extern "C" {
     pub fn rb_vm_insn_decode(encoded: VALUE) -> ::std::os::raw::c_int;
@@ -1047,7 +1098,7 @@ pub struct rb_builtin_function {
     pub name: *const ::std::os::raw::c_char,
     pub compiler: ::std::option::Option<
         unsafe extern "C" fn(
-            arg1: *mut FILE,
+            arg1: VALUE,
             arg2: ::std::os::raw::c_long,
             arg3: ::std::os::raw::c_uint,
             arg4: bool,

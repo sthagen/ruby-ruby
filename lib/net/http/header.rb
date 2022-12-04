@@ -1,12 +1,33 @@
 # frozen_string_literal: false
 #
 # The \HTTPHeader module provides access to \HTTP headers.
-# The headers are a hash-like collection of key/value pairs called _fields_.
 #
 # The module is included in:
 #
 # - Net::HTTPGenericRequest (and therefore Net::HTTPRequest).
 # - Net::HTTPResponse.
+#
+# The headers are a hash-like collection of key/value pairs called _fields_.
+#
+# == Request and Response Fields
+#
+# Headers may be included in:
+#
+# - A Net::HTTPRequest object:
+#   the object's headers will be sent with the request.
+#   Any fields may be defined in the request;
+#   see {Setters}[rdoc-ref:Net::HTTPHeader@Setters].
+# - A Net::HTTPResponse object:
+#   the objects headers are usually those returned from the host.
+#   Fields may be retrieved from the object;
+#   see {Getters}[rdoc-ref:Net::HTTPHeader@Getters]
+#   and {Iterators}[rdoc-ref:Net::HTTPHeader@Iterators].
+#
+# Exactly which fields should be sent or expected depends on the host;
+# see:
+#
+# - {Request fields}[https://en.wikipedia.org/wiki/List_of_HTTP_header_fields#Request_fields].
+# - {Response fields}[https://en.wikipedia.org/wiki/List_of_HTTP_header_fields#Response_fields].
 #
 # == About the Examples
 #
@@ -105,38 +126,49 @@
 # Various convenience methods retrieve values, set values, query values,
 # set form values, or iterate over fields.
 #
+# === Setters
+#
+# \Method #[]= can set any field, but does little to validate the new value;
+# some of the other setter methods provide some validation:
+#
+# - #[]=: Sets the string or array value for the given key.
+# - #add_field: Creates or adds to the array value for the given key.
+# - #basic_auth: Sets the string authorization header for <tt>'Authorization'</tt>.
+# - #content_length=: Sets the integer length for field <tt>'Content-Length</tt>.
+# - #content_type=: Sets the string value for field <tt>'Content-Type'</tt>.
+# - #proxy_basic_auth: Sets the string authorization header for <tt>'Proxy-Authorization'</tt>.
+# - #set_range: Sets the value for field <tt>'Range'</tt>.
+#
+# === Form Setters
+#
+# - #set_form: Sets an HTML form data set.
+# - #set_form_data: Sets header fields and a body from HTML form data.
+#
 # === Getters
 #
-# - #[]: Returns the string value for the given field.
+# \Method #[] can retrieve the value of any field that exists,
+# but always as a string;
+# some of the other getter methods return something different
+# from the simple string value:
+#
+# - #[]: Returns the string field value for the given key.
 # - #content_length: Returns the integer value of field <tt>'Content-Length'</tt>.
 # - #content_range: Returns the Range value of field <tt>'Content-Range'</tt>.
 # - #content_type: Returns the string value of field <tt>'Content-Type'</tt>.
+# - #fetch: Returns the string field value for the given key.
+# - #get_fields: Returns the array field value for the given +key+.
 # - #main_type: Returns first part of the string value of field <tt>'Content-Type'</tt>.
 # - #sub_type: Returns second part of the string value of field <tt>'Content-Type'</tt>.
 # - #range: Returns an array of Range objects of field <tt>'Range'</tt>, or +nil+.
 # - #range_length: Returns the integer length of the range given in field <tt>'Content-Range'</tt>.
 # - #type_params: Returns the string parameters for <tt>'Content-Type'</tt>.
 #
-# === Setters
-#
-# - #[]=: Sets the string or array value for the given field.
-# - #basic_auth: Sets the string authorization header for <tt>'Authorization'</tt>.
-# - #content_length=: Sets the integer length for field <tt>'Content-Length</tt>.
-# - #content_type=: Sets the string value for field <tt>'Content-Type'</tt>.
-# - #proxy_basic_auth: Sets the string authorization header for <tt>'Proxy-Authorization'</tt>.
-# - #range=: Sets the value for field +'Range'+.
-#
 # === Queries
 #
 # - #chunked?: Returns whether field <tt>'Transfer-Encoding'</tt> is set to <tt>'chunked'</tt>.
 # - #connection_close?: Returns whether field <tt>'Connection'</tt> is set to <tt>'close'</tt>.
 # - #connection_keep_alive?: Returns whether field <tt>'Connection'</tt> is set to <tt>'keep-alive'</tt>.
-# - #key?: Returns whether a given field exists.
-#
-# === Form Setters
-#
-# - #set_form: Sets an HTML form data set.
-# - #set_form_data: Sets header fields and a body from HTML form data.
+# - #key?: Returns whether a given key exists.
 #
 # === Iterators
 #
@@ -144,7 +176,7 @@
 # - #each_capitalized_name: Passes each capitalized field name to the block.
 # - #each_header: Passes each field name/value pair to the block.
 # - #each_name: Passes each field name to the block.
-# - #each_value: Passes each field value to the block.
+# - #each_value: Passes each string field value to the block.
 #
 module Net::HTTPHeader
 
@@ -175,12 +207,14 @@ module Net::HTTPHeader
   # or +nil+ if there is no such key;
   # see {Fields}[rdoc-ref:Net::HTTPHeader@Fields]:
   #
-  #   req = Net::HTTP::Get.new(uri)
-  #   req['Accept'] # => "*/*"
-  #   req['Foo'] = %w[bar baz bat]
-  #   req['Foo']    # => "bar, baz, bat"
-  #   res['Nosuch'] # => nil
+  #   res = Net::HTTP.start(hostname) do |http|
+  #     http.get('/todos/1')
+  #   end
+  #   res['Connection'] # => "keep-alive"
+  #   res['Nosuch']     # => nil
   #
+  # Note that some field values may be retrieved via convenience methods;
+  # see {Getters}[rdoc-ref:Net::HTTPHeader@Getters].
   def [](key)
     a = @header[key.downcase.to_s] or return nil
     a.join(', ')
@@ -195,6 +229,8 @@ module Net::HTTPHeader
   #   req['Accept'] = 'text/html'
   #   req['Accept'] # => "text/html"
   #
+  # Note that some field values may be set via convenience methods;
+  # see {Setters}[rdoc-ref:Net::HTTPHeader@Setters].
   def []=(key, val)
     unless val
       @header.delete key.downcase.to_s
@@ -257,12 +293,11 @@ module Net::HTTPHeader
   # or +nil+ if there is no such field;
   # see {Fields}[rdoc-ref:Net::HTTPHeader@Fields]:
   #
-  #   req = Net::HTTP::Get.new(uri)
-  #   req['Foo'] = 'bar'
-  #   req.get_fields('Foo')    # => ["bar"]
-  #   req.add_field('Foo', 'baz')
-  #   req.get_fields('Foo')    # => ["bar", "baz"]
-  #   req.get_fields('Nosuch') # => nil
+  #   res = Net::HTTP.start(hostname) do |http|
+  #     http.get('/todos/1')
+  #   end
+  #   res.get_fields('Connection') # => ["keep-alive"]
+  #   res.get_fields('Nosuch')     # => nil
   #
   def get_fields(key)
     stringified_downcased_key = key.downcase.to_s
@@ -279,18 +314,27 @@ module Net::HTTPHeader
   # ignores the +default_val+;
   # see {Fields}[rdoc-ref:Net::HTTPHeader@Fields]:
   #
-  #   req = Net::HTTP::Get.new(uri)
-  #   req['Foo'] = 'bar'
-  #   req.fetch('Foo') {|key| key.capitalize }    # => "bar"
-  #   req.fetch('Nosuch') {|key| key.capitalize } # => "Nosuch"
+  #   res = Net::HTTP.start(hostname) do |http|
+  #     http.get('/todos/1')
+  #   end
+  #
+  #   # Field exists; block not called.
+  #   res.fetch('Connection') do |value|
+  #     fail 'Cannot happen'
+  #   end # => "keep-alive"
+  #
+  #   # Field does not exist; block called.
+  #   res.fetch('Nosuch') do |value|
+  #     value.downcase
+  #   end # => "nosuch"
   #
   # With no block, returns the string value for +key+ if it exists;
   # otherwise, returns +default_val+ if it was given;
   # otherwise raises an exception:
   #
-  #   req.fetch('Foo')          # => "bar"
-  #   req.fetch('Nosuch', :baz) # => :baz
-  #   req.fetch('Nosuch')       # Raises KeyError.
+  #   res.fetch('Connection', 'Foo') # => "keep-alive"
+  #   res.fetch('Nosuch', 'Foo')     # => "Foo"
+  #   res.fetch('Nosuch')            # Raises KeyError.
   #
   def fetch(key, *args, &block)   #:yield: +key+
     a = @header.fetch(key.downcase.to_s, *args, &block)
@@ -299,15 +343,20 @@ module Net::HTTPHeader
 
   # Calls the block with each key/value pair:
   #
-  #   req = Net::HTTP::Get.new(uri)
-  #   req.each_header {|key, value| p [key, value] }
+  #   res = Net::HTTP.start(hostname) do |http|
+  #     http.get('/todos/1')
+  #   end
+  #   res.each_header do |key, value|
+  #     p [key, value] if key.start_with?('c')
+  #   end
   #
   # Output:
   #
-  #   ["accept-encoding", "gzip;q=1.0,deflate;q=0.6,identity;q=0.3"]
-  #   ["accept", "*/*"]
-  #   ["user-agent", "Ruby"]
-  #   ["host", "jsonplaceholder.typicode.com"]
+  #   ["content-type", "application/json; charset=utf-8"]
+  #   ["connection", "keep-alive"]
+  #   ["cache-control", "max-age=43200"]
+  #   ["cf-cache-status", "HIT"]
+  #   ["cf-ray", "771d17e9bc542cf5-ORD"]
   #
   # Returns an enumerator if no block is given.
   #
@@ -323,15 +372,20 @@ module Net::HTTPHeader
 
   # Calls the block with each field key:
   #
-  #   req = Net::HTTP::Get.new(uri)
-  #   req.each_key {|key| p key }
+  #   res = Net::HTTP.start(hostname) do |http|
+  #     http.get('/todos/1')
+  #   end
+  #   res.each_key do |key|
+  #     p key if key.start_with?('c')
+  #   end
   #
   # Output:
   #
-  #   "accept-encoding"
-  #   "accept"
-  #   "user-agent"
-  #   "host"
+  # "content-type"
+  # "connection"
+  # "cache-control"
+  # "cf-cache-status"
+  # "cf-ray"
   #
   # Returns an enumerator if no block is given.
   #
@@ -345,15 +399,20 @@ module Net::HTTPHeader
 
   # Calls the block with each capitalized field name:
   #
-  #   req = Net::HTTP::Get.new(uri)
-  #   req.each_capitalized_name {|key| p key }
+  #   res = Net::HTTP.start(hostname) do |http|
+  #     http.get('/todos/1')
+  #   end
+  #   res.each_capitalized_name do |key|
+  #     p key if key.start_with?('C')
+  #   end
   #
   # Output:
   #
-  #   "Accept-Encoding"
-  #   "Accept"
-  #   "User-Agent"
-  #   "Host"
+  #   "Content-Type"
+  #   "Connection"
+  #   "Cache-Control"
+  #   "Cf-Cache-Status"
+  #   "Cf-Ray"
   #
   # The capitalization is system-dependent;
   # see {Case Mapping}[rdoc-ref:case_mapping.rdoc].
@@ -366,8 +425,20 @@ module Net::HTTPHeader
     end
   end
 
-  # Iterates through header values, passing each value to the
-  # code block.
+  # Calls the block with each string field value:
+  #
+  #   res = Net::HTTP.start(hostname) do |http|
+  #     http.get('/todos/1')
+  #   end
+  #   res.each_value do |value|
+  #     p value if value.start_with?('c')
+  #   end
+  #
+  # Output:
+  #
+  #   "chunked"
+  #   "cf-q-config;dur=6.0000002122251e-06"
+  #   "cloudflare"
   #
   # Returns an enumerator if no block is given.
   def each_value   #:yield: +value+
@@ -377,32 +448,43 @@ module Net::HTTPHeader
     end
   end
 
-  # Removes a header field, specified by case-insensitive key.
+  # Removes the header for the given case-insensitive +key+
+  # (see {Fields}[rdoc-ref:Net::HTTPHeader@Fields]);
+  # returns the deleted value, or +nil+ if no such field exists:
+  #
+  #   req = Net::HTTP::Get.new(uri)
+  #   req.delete('Accept') # => ["*/*"]
+  #   req.delete('Nosuch') # => nil
+  #
   def delete(key)
     @header.delete(key.downcase.to_s)
   end
 
-  # true if +key+ header exists.
+  # Returns +true+ if the field for the case-insensitive +key+ exists, +false+ otherwise:
+  #
+  #   req = Net::HTTP::Get.new(uri)
+  #   req.key?('Accept') # => true
+  #   req.key?('Nosuch') # => false
+  #
   def key?(key)
     @header.key?(key.downcase.to_s)
   end
 
-  # Returns a Hash consisting of header names and array of values.
-  # e.g.
-  # {"cache-control" => ["private"],
-  #  "content-type" => ["text/html"],
-  #  "date" => ["Wed, 22 Jun 2005 22:11:50 GMT"]}
+  # Returns a hash of the key/value pairs:
+  #
+  #   req = Net::HTTP::Get.new(uri)
+  #   req.to_hash
+  #   # =>
+  #   {"accept-encoding"=>["gzip;q=1.0,deflate;q=0.6,identity;q=0.3"],
+  #    "accept"=>["*/*"],
+  #    "user-agent"=>["Ruby"],
+  #    "host"=>["jsonplaceholder.typicode.com"]}
+  #
   def to_hash
     @header.dup
   end
 
-  # As for #each_header, except the keys are provided in capitalized form.
-  #
-  # Note that header names are capitalized systematically;
-  # capitalization may not match that used by the remote HTTP
-  # server in its response.
-  #
-  # Returns an enumerator if no block is given.
+  # Like #each_header, but the keys are returned in capitalized form.
   #
   # Net::HTTPHeader#canonical_each is an alias for Net::HTTPHeader#each_capitalized.
   def each_capitalized
@@ -419,8 +501,17 @@ module Net::HTTPHeader
   end
   private :capitalize
 
-  # Returns an Array of Range objects which represent the Range:
-  # HTTP header field, or +nil+ if there is no such header.
+  # Returns an array of Range objects that represent
+  # the value of field <tt>'Range'</tt>,
+  # or +nil+ if there is no such field;
+  # see {Range request header}[https://en.wikipedia.org/wiki/List_of_HTTP_header_fields#range-request-header]:
+  #
+  #   req = Net::HTTP::Get.new(uri)
+  #   req['Range'] = 'bytes=0-99,200-299,400-499'
+  #   req.range # => [0..99, 200..299, 400..499]
+  #   req.delete('Range')
+  #   req.range # # => nil
+  #
   def range
     return nil unless @header['range']
 
@@ -463,14 +554,31 @@ module Net::HTTPHeader
     result
   end
 
-  # Sets the HTTP Range: header.
-  # Accepts either a Range object as a single argument,
-  # or a beginning index and a length from that index.
-  # Example:
+  # :call-seq:
+  #   set_range(length) -> length
+  #   set_range(offset, length) -> range
+  #   set_range(begin..length) -> range
   #
-  #   req.range = (0..1023)
-  #   req.set_range 0, 1023
+  # Sets the value for field <tt>'Range'</tt>;
+  # see {Range request header}[https://en.wikipedia.org/wiki/List_of_HTTP_header_fields#range-request-header]:
   #
+  # With argument +length+:
+  #
+  #   req = Net::HTTP::Get.new(uri)
+  #   req.set_range(100)      # => 100
+  #   req['Range']            # => "bytes=0-99"
+  #
+  # With arguments +offset+ and +length+:
+  #
+  #   req.set_range(100, 100) # => 100...200
+  #   req['Range']            # => "bytes=100-199"
+  #
+  # With argument +range+:
+  #
+  #   req.set_range(100..199) # => 100..199
+  #   req['Range']            # => "bytes=100-199"
+  #
+  # Net::HTTPHeader#range= is an alias for Net::HTTPHeader#set_range.
   def set_range(r, e = nil)
     unless r
       @header.delete 'range'
