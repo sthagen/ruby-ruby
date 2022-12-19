@@ -1474,7 +1474,7 @@ assert_equal "#{N}#{N}", %Q{
 }
 
 # enc_table
-assert_equal "#{N/10}", %Q{
+assert_equal "100", %Q{
   Ractor.new do
     loop do
       Encoding.find("test-enc-#{rand(5_000)}").inspect
@@ -1483,7 +1483,7 @@ assert_equal "#{N/10}", %Q{
   end
 
   src = Encoding.find("UTF-8")
-  #{N/10}.times{|i|
+  100.times{|i|
     src.replicate("test-enc-\#{i}")
   }
 }
@@ -1502,7 +1502,7 @@ assert_equal "#{n}#{n}", %Q{
       end
     end
   }.map{|r| r.take}.join
-}
+} unless yjit_enabled # flaky with YJIT https://github.com/ruby/ruby/actions/runs/3692339025/jobs/6251137785
 
 # NameError
 assert_equal "ok", %q{
