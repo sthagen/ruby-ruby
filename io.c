@@ -3679,13 +3679,11 @@ io_write_nonblock(rb_execution_context_t *ec, VALUE io, VALUE str, VALUE ex)
  *  call-seq:
  *    read(maxlen = nil, out_string = nil) -> new_string, out_string, or nil
  *
- *  Reads bytes from the stream, (in binary mode);
- *  the stream must be opened for reading
+ *  Reads bytes from the stream; the stream must be opened for reading
  *  (see {Access Modes}[rdoc-ref:File@Access+Modes]):
  *
- *  - If +maxlen+ is +nil+, reads all bytes.
- *  - Otherwise reads +maxlen+ bytes, if available.
- *  - Otherwise reads all bytes.
+ *  - If +maxlen+ is +nil+, reads all bytes using the stream's data mode.
+ *  - Otherwise reads up to +maxlen+ bytes in binary mode.
  *
  *  Returns a string (either a new string or the given +out_string+)
  *  containing the bytes read.
@@ -14779,6 +14777,8 @@ set_LAST_READ_LINE(VALUE val, ID _x, VALUE *_y)
  *  - +:binmode+: If a truthy value, specifies the mode as binary, text-only otherwise.
  *  - +:autoclose+: If a truthy value, specifies that the +fd+ will close
  *    when the stream closes; otherwise it remains open.
+ *  - +:path:+ If a string value is provided, it is used in #inspect and is available as
+ *    #path method.
  *
  *  Also available are the options offered in String#encode,
  *  which may control conversion between external internal encoding.

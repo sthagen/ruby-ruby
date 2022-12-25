@@ -425,7 +425,7 @@
 # If you have any questions, file a ticket at http://bugs.ruby-lang.org.
 #
 class OptionParser
-  OptionParser::Version = "0.3.0"
+  OptionParser::Version = "0.3.1"
 
   # :stopdoc:
   NoArgument = [NO_ARGUMENT = :NONE, nil].freeze
@@ -2084,10 +2084,23 @@ XXX
       f |= Regexp::IGNORECASE if /i/ =~ o
       f |= Regexp::MULTILINE if /m/ =~ o
       f |= Regexp::EXTENDED if /x/ =~ o
-      k = o.delete("imx")
-      k = nil if k.empty?
+      case o = o.delete("imx")
+      when ""
+      when "u"
+        s = s.encode(Encoding::UTF_8)
+      when "e"
+        s = s.encode(Encoding::EUC_JP)
+      when "s"
+        s = s.encode(Encoding::SJIS)
+      when "n"
+        f |= Regexp::NOENCODING
+      else
+        raise OptionParser::InvalidArgument, "unknown regexp option - #{o}"
+      end
+    else
+      s ||= all
     end
-    Regexp.new(s || all, f, k)
+    Regexp.new(s, f)
   end
 
   #

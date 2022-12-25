@@ -5844,23 +5844,29 @@ gc_sweep_finish_size_pool(rb_objspace_t *objspace, rb_size_pool_t *size_pool)
     size_t swept_slots = size_pool->freed_slots + size_pool->empty_slots;
 
     size_t min_free_slots = (size_t)(total_slots * gc_params.heap_free_slots_min_ratio);
-    /* Some size pools may have very few pages (or even no pages). These size pools
-     * should still have allocatable pages. */
-    if (min_free_slots < gc_params.heap_init_slots) {
-        min_free_slots = gc_params.heap_init_slots;
-    }
 
     /* If we don't have enough slots and we have pages on the tomb heap, move
      * pages from the tomb heap to the eden heap. This may prevent page
      * creation thrashing (frequently allocating and deallocting pages) and
      * GC thrashing (running GC more frequently than required). */
     struct heap_page *resurrected_page;
-    while (swept_slots < min_free_slots &&
+    while ((swept_slots < min_free_slots || swept_slots < gc_params.heap_init_slots) &&
             (resurrected_page = heap_page_resurrect(objspace, size_pool))) {
         swept_slots += resurrected_page->free_slots;
 
         heap_add_page(objspace, size_pool, heap, resurrected_page);
         heap_add_freepage(heap, resurrected_page);
+    }
+
+    /* Some size pools may have very few pages (or even no pages). These size pools
+     * should still have allocatable pages. */
+    if (min_free_slots < gc_params.heap_init_slots && swept_slots < gc_params.heap_init_slots) {
+        int multiple = size_pool->slot_size / BASE_SLOT_SIZE;
+        size_t extra_slots = gc_params.heap_init_slots - swept_slots;
+        size_t extend_page_count = CEILDIV(extra_slots * multiple, HEAP_PAGE_OBJ_LIMIT);
+        if (extend_page_count > size_pool->allocatable_pages) {
+            size_pool_allocatable_pages_set(objspace, size_pool, extend_page_count);
+        }
     }
 
     if (swept_slots < min_free_slots) {
@@ -8519,7 +8525,7 @@ gc_compact_move(rb_objspace_t *objspace, rb_heap_t *heap, rb_size_pool_t *size_p
 
         dheap->sweeping_page = ccan_list_next(&dheap->pages, dheap->sweeping_page, page_node);
         if (gc_compact_heap_cursors_met_p(dheap)) {
-            return false;
+            return dheap != heap;
         }
     }
 
@@ -10118,13 +10124,11 @@ gc_ref_update_object(rb_objspace_t *objspace, VALUE v)
     }
 
 #if USE_RVARGC
-    uint32_t numiv = ROBJECT_IV_CAPACITY(v);
-
     size_t slot_size = rb_gc_obj_slot_size(v);
-    size_t embed_size = rb_obj_embedded_size(numiv);
+    size_t embed_size = rb_obj_embedded_size(ROBJECT_IV_CAPACITY(v));
     if (slot_size >= embed_size && !RB_FL_TEST_RAW(v, ROBJECT_EMBED)) {
         // Object can be re-embedded
-        memcpy(ROBJECT(v)->as.ary, ptr, sizeof(VALUE) * numiv);
+        memcpy(ROBJECT(v)->as.ary, ptr, sizeof(VALUE) * ROBJECT_IV_COUNT(v));
         RB_FL_SET_RAW(v, ROBJECT_EMBED);
         if (ROBJ_TRANSIENT_P(v)) {
             ROBJ_TRANSIENT_UNSET(v);
@@ -10792,9 +10796,9 @@ gc_update_references(rb_objspace_t *objspace)
 #if GC_CAN_COMPILE_COMPACTION
 /*
  *  call-seq:
- *     GC.latest_compact_info -> {:considered=>{:T_CLASS=>11}, :moved=>{:T_CLASS=>11}}
+ *     GC.latest_compact_info -> hash
  *
- *  Returns information about object moved in the most recent GC compaction.
+ * Returns information about object moved in the most recent \GC compaction.
  *
  * The returned hash has two keys :considered and :moved.  The hash for
  * :considered lists the number of objects that were considered for movement
@@ -10898,13 +10902,13 @@ heap_check_moved_i(void *vstart, void *vend, size_t stride, void *data)
  * This function compacts objects together in Ruby's heap.  It eliminates
  * unused space (or fragmentation) in the heap by moving objects in to that
  * unused space.  This function returns a hash which contains statistics about
- * which objects were moved.  See `GC.latest_gc_info` for details about
+ * which objects were moved.  See <tt>GC.latest_gc_info</tt> for details about
  * compaction statistics.
  *
  * This method is implementation specific and not expected to be implemented
  * in any implementation besides MRI.
  *
- * To test whether GC compaction is supported, use the idiom:
+ * To test whether \GC compaction is supported, use the idiom:
  *
  *   GC.respond_to?(:compact)
  */
@@ -13501,7 +13505,7 @@ gc_prof_set_heap_info(rb_objspace_t *objspace)
  *  call-seq:
  *    GC::Profiler.clear          -> nil
  *
- *  Clears the GC profiler data.
+ *  Clears the \GC profiler data.
  *
  */
 
@@ -13815,7 +13819,7 @@ gc_profile_total_time(VALUE self)
  *  call-seq:
  *    GC::Profiler.enabled?	-> true or false
  *
- *  The current status of GC profile mode.
+ *  The current status of \GC profile mode.
  */
 
 static VALUE
@@ -13829,7 +13833,7 @@ gc_profile_enable_get(VALUE self)
  *  call-seq:
  *    GC::Profiler.enable	-> nil
  *
- *  Starts the GC profiler.
+ *  Starts the \GC profiler.
  *
  */
 
@@ -13846,7 +13850,7 @@ gc_profile_enable(VALUE _)
  *  call-seq:
  *    GC::Profiler.disable	-> nil
  *
- *  Stops the GC profiler.
+ *  Stops the \GC profiler.
  *
  */
 
@@ -14569,7 +14573,7 @@ Init_GC(void)
 
     {
         VALUE opts;
-        /* GC build options */
+        /* \GC build options */
         rb_define_const(rb_mGC, "OPTS", opts = rb_ary_new());
 #define OPT(o) if (o) rb_ary_push(opts, rb_fstring_lit(#o))
         OPT(GC_DEBUG);
