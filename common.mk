@@ -1375,7 +1375,6 @@ update-config_files: PHONY
 
 refresh-gems: update-bundled_gems prepare-gems
 prepare-gems: $(HAVE_BASERUBY:yes=update-gems) $(HAVE_BASERUBY:yes=extract-gems)
-prepare-gems: $(DOT_WAIT) $(HAVE_BASERUBY:yes=outdate-bundled-gems)
 extract-gems: $(HAVE_BASERUBY:yes=update-gems)
 
 update-gems$(gnumake:yes=-sequential): PHONY
@@ -1492,8 +1491,9 @@ yes-test-bundler-prepare: yes-test-bundler-precheck
 
 RSPECOPTS =
 BUNDLER_SPECS =
+PREPARE_BUNDLER = yes-test-bundler-prepare
 test-bundler: $(TEST_RUNNABLE)-test-bundler
-yes-test-bundler: yes-test-bundler-prepare
+yes-test-bundler: $(PREPARE_BUNDLER)
 	$(gnumake_recursive)$(XRUBY) \
 		-r./$(arch)-fake \
 		-e "exec(*ARGV)" -- \
@@ -1503,7 +1503,7 @@ no-test-bundler:
 
 PARALLELRSPECOPTS = --runtime-log $(srcdir)/tmp/parallel_runtime_rspec.log
 test-bundler-parallel: $(TEST_RUNNABLE)-test-bundler-parallel
-yes-test-bundler-parallel: yes-test-bundler-prepare
+yes-test-bundler-parallel: $(PREPARE_BUNDLER)
 	$(gnumake_recursive)$(XRUBY) \
 		-r./$(arch)-fake \
 		-e "ARGV[-1] = File.expand_path(ARGV[-1])" \
@@ -1705,6 +1705,8 @@ info-arch: PHONY
 	@echo arch=$(arch)
 
 exam: check
+exam: $(DOT_WAIT) test-bundler-parallel
+exam: $(DOT_WAIT) test-bundled-gems
 
 love: sudo-precheck up all test exam install
 	@echo love is all you need

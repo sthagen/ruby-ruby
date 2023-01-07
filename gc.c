@@ -8521,7 +8521,7 @@ gc_compact_move(rb_objspace_t *objspace, rb_heap_t *heap, rb_size_pool_t *size_p
 
         if (dheap->sweeping_page->free_slots > 0) {
             heap_add_freepage(dheap, dheap->sweeping_page);
-        };
+        }
 
         dheap->sweeping_page = ccan_list_next(&dheap->pages, dheap->sweeping_page, page_node);
         if (gc_compact_heap_cursors_met_p(dheap)) {
@@ -9913,10 +9913,8 @@ gc_is_moveable_obj(rb_objspace_t *objspace, VALUE obj)
 #define COULD_MALLOC_REGION_START() \
     GC_ASSERT(during_gc); \
     VALUE _already_disabled = rb_gc_disable_no_rest(); \
-    during_gc = false;
 
 #define COULD_MALLOC_REGION_END() \
-    during_gc = true; \
     if (_already_disabled == Qfalse) rb_objspace_gc_enable(objspace);
 
 static VALUE
@@ -11719,24 +11717,25 @@ get_envparam_double(const char *name, double *default_value, double lower_bound,
 }
 
 static void
-gc_set_initial_pages(void)
+gc_set_initial_pages(rb_objspace_t *objspace)
 {
-    size_t min_pages;
-    rb_objspace_t *objspace = &rb_objspace;
-
     gc_rest(objspace);
-
-    min_pages = gc_params.heap_init_slots / HEAP_PAGE_OBJ_LIMIT;
-
-    size_t pages_per_class = (min_pages - heap_eden_total_pages(objspace)) / SIZE_POOL_COUNT;
 
     for (int i = 0; i < SIZE_POOL_COUNT; i++) {
         rb_size_pool_t *size_pool = &size_pools[i];
 
-        heap_add_pages(objspace, size_pool, SIZE_POOL_EDEN_HEAP(size_pool), pages_per_class);
+        if (gc_params.heap_init_slots > size_pool->eden_heap.total_slots) {
+            size_t slots = gc_params.heap_init_slots - size_pool->eden_heap.total_slots;
+            int multiple = size_pool->slot_size / BASE_SLOT_SIZE;
+            size_pool->allocatable_pages = slots * multiple / HEAP_PAGE_OBJ_LIMIT;
+        }
+        else {
+            /* We already have more slots than heap_init_slots allows, so
+             * prevent creating more pages. */
+            size_pool->allocatable_pages = 0;
+        }
     }
-
-    heap_add_pages(objspace, &size_pools[0], SIZE_POOL_EDEN_HEAP(&size_pools[0]), min_pages - heap_eden_total_pages(objspace));
+    heap_pages_expand_sorted(objspace);
 }
 
 /*
@@ -11792,7 +11791,7 @@ ruby_gc_set_params(void)
 
     /* RUBY_GC_HEAP_INIT_SLOTS */
     if (get_envparam_size("RUBY_GC_HEAP_INIT_SLOTS", &gc_params.heap_init_slots, 0)) {
-        gc_set_initial_pages();
+        gc_set_initial_pages(objspace);
     }
 
     get_envparam_double("RUBY_GC_HEAP_GROWTH_FACTOR", &gc_params.growth_factor, 1.0, 0.0, FALSE);
@@ -12215,7 +12214,7 @@ malloc_during_gc_p(rb_objspace_t *objspace)
      * (since ractors can run while another thread is sweeping) and when we
      * have the GVL (since if we don't have the GVL, we'll try to acquire the
      * GVL which will block and ensure the other thread finishes GC). */
-    return during_gc && !rb_multi_ractor_p() && ruby_thread_has_gvl_p();
+    return during_gc && !dont_gc_val() && !rb_multi_ractor_p() && ruby_thread_has_gvl_p();
 }
 
 static inline void *
@@ -14491,6 +14490,9 @@ Init_GC(void)
     rb_hash_aset(gc_constants, ID2SYM(rb_intern("HEAP_PAGE_SIZE")), SIZET2NUM(HEAP_PAGE_SIZE));
     rb_hash_aset(gc_constants, ID2SYM(rb_intern("SIZE_POOL_COUNT")), LONG2FIX(SIZE_POOL_COUNT));
     rb_hash_aset(gc_constants, ID2SYM(rb_intern("RVARGC_MAX_ALLOCATE_SIZE")), LONG2FIX(size_pool_slot_size(SIZE_POOL_COUNT - 1)));
+    if (RB_BUG_INSTEAD_OF_RB_MEMERROR+0) {
+        rb_hash_aset(gc_constants, ID2SYM(rb_intern("RB_BUG_INSTEAD_OF_RB_MEMERROR")), Qtrue);
+    }
     OBJ_FREEZE(gc_constants);
     /* internal constants */
     rb_define_const(rb_mGC, "INTERNAL_CONSTANTS", gc_constants);

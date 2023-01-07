@@ -518,6 +518,16 @@ class TestMJIT < Test::Unit::TestCase
     end;
   end
 
+  def test_compile_multiple_values_case
+    assert_compile_twice("#{<<~"begin;"}\n#{<<~"end;"}", result_inspect: '"world"', insns: %i[opt_case_dispatch])
+    begin;
+      case 'hello'
+      when 'hello', 'world'
+        'world'
+      end
+    end;
+  end
+
   def test_compile_insn_opt_calc
     assert_compile_twice('4 + 2 - ((2 * 3 / 2) % 2)', result_inspect: '5', insns: %i[opt_plus opt_minus opt_mult opt_div opt_mod])
     assert_compile_twice('4.0 + 2.0 - ((2.0 * 3.0 / 2.0) % 2.0)', result_inspect: '5.0', insns: %i[opt_plus opt_minus opt_mult opt_div opt_mod])
@@ -1181,6 +1191,7 @@ class TestMJIT < Test::Unit::TestCase
     assert_eval_with_jit("#{<<~"begin;"}\n#{<<~"end;"}", success_count: 0, call_threshold: 2)
     begin;
       class Integer
+        alias < <
         def <(x)
           true
         end
