@@ -8,7 +8,7 @@
 require "rbconfig"
 
 module Gem
-  VERSION = "3.5.0.dev".freeze
+  VERSION = "3.5.0.dev"
 end
 
 # Must be first since it unloads the prelude from 1.9.2
@@ -118,10 +118,6 @@ module Gem
   # This allows switching ".untaint" to ".tap(&Gem::UNTAINT)",
   # to avoid deprecation warnings in Ruby 2.7.
   UNTAINT = RUBY_VERSION < "2.7" ? :untaint.to_sym : proc {}
-
-  # When https://bugs.ruby-lang.org/issues/17259 is available, there is no need to override Kernel#warn
-  KERNEL_WARN_IGNORES_INTERNAL_ENTRIES = RUBY_ENGINE == "truffleruby" ||
-                                         (RUBY_ENGINE == "ruby" && RUBY_VERSION >= "3.0")
 
   ##
   # An Array of Regexps that match windows Ruby platforms.
@@ -826,7 +822,7 @@ An Array (#{env.inspect}) was passed in from #{caller[3]}
   def self.env_requirement(gem_name)
     @env_requirements_by_name ||= {}
     @env_requirements_by_name[gem_name] ||= begin
-      req = ENV["GEM_REQUIREMENT_#{gem_name.upcase}"] || ">= 0".freeze
+      req = ENV["GEM_REQUIREMENT_#{gem_name.upcase}"] || ">= 0"
       Gem::Requirement.create(req)
     end
   end
@@ -1294,7 +1290,7 @@ An Array (#{env.inspect}) was passed in from #{caller[3]}
   ##
   # Location of Marshal quick gemspecs on remote repositories
 
-  MARSHAL_SPEC_DIR = "quick/Marshal.#{Gem.marshal_version}/".freeze
+  MARSHAL_SPEC_DIR = "quick/Marshal.#{Gem.marshal_version}/"
 
   autoload :ConfigFile,         File.expand_path("rubygems/config_file", __dir__)
   autoload :Dependency,         File.expand_path("rubygems/dependency", __dir__)
@@ -1348,7 +1344,16 @@ end
 Gem::Specification.load_defaults
 
 require_relative "rubygems/core_ext/kernel_gem"
-require_relative "rubygems/core_ext/kernel_require"
-require_relative "rubygems/core_ext/kernel_warn"
+
+path = File.join(__dir__, "rubygems/core_ext/kernel_require.rb")
+# When https://bugs.ruby-lang.org/issues/17259 is available, there is no need to override Kernel#warn
+if RUBY_ENGINE == "truffleruby" ||
+   (RUBY_ENGINE == "ruby" && RUBY_VERSION >= "3.0")
+  file = "<internal:#{path}>"
+else
+  require_relative "rubygems/core_ext/kernel_warn"
+  file = path
+end
+eval File.read(path), nil, file
 
 require ENV["BUNDLER_SETUP"] if ENV["BUNDLER_SETUP"] && !defined?(Bundler)
