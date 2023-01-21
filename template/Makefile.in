@@ -384,7 +384,7 @@ install-cross: $(arch)-fake.rb $(RBCONFIG) rbconfig.rb $(arch_hdrdir)/ruby/confi
 
 Makefile:	$(srcdir)/template/Makefile.in $(srcdir)/enc/Makefile.in
 
-$(MKFILES): config.status $(srcdir)/version.h $(REVISION_H) $(ABI_VERSION_HDR)
+$(MKFILES): config.status $(srcdir)/version.h $(ABI_VERSION_HDR)
 		@[ -f $@ ] && mv $@ $@.old
 		MAKE=$(MAKE) $(SHELL) ./config.status $@
 		@cmp $@ $@.old > /dev/null 2>&1 && echo $@ unchanged && exit 0; \
@@ -602,23 +602,6 @@ update-benchmark-driver:
 		--branch $(BENCHMARK_DRIVER_GIT_REF) \
 		$(BENCHMARK_DRIVER_GIT_URL) benchmark-driver $(GIT_OPTS)
 
-update-doclie:
-	$(Q) $(tooldir)/git-refresh -C $(srcdir)/coverage $(Q1:0=-q) \
-		--branch $(DOCLIE_GIT_REF) \
-		$(DOCLIE_GIT_URL) doclie $(GIT_OPTS)
-
-update-simplecov-html:
-	$(Q) $(tooldir)/git-refresh -C $(srcdir)/coverage $(Q1:0=-q) \
-		--branch $(SIMPLECOV_HTML_GIT_REF) \
-		$(SIMPLECOV_HTML_GIT_URL) simplecov-html $(GIT_OPTS)
-
-update-simplecov:
-	$(Q) $(tooldir)/git-refresh -C $(srcdir)/coverage $(Q1:0=-q) \
-		--branch $(SIMPLECOV_GIT_REF)  \
-		$(SIMPLECOV_GIT_URL) simplecov $(GIT_OPTS)
-
-update-coverage: update-simplecov update-simplecov-html update-doclie
-
 update-known-errors:
 	errno --list | cut -d' ' -f1 | sort -u - $(srcdir)/defs/known_errors.def | \
 	$(IFCHANGE) $(srcdir)/defs/known_errors.def -
@@ -721,4 +704,4 @@ mjit_build_dir.$(SOEXT): $(MJIT_MIN_HEADER) $(srcdir)/ruby-runner.c ruby-runner.
 
 # yes-test-basic: leaked-globals
 leaked-globals: $(COMMONOBJS) prog $(tooldir)/leaked-globals PHONY
-	$(Q) $(XRUBY) $(tooldir)/leaked-globals NM=$(NM) SYMBOL_PREFIX=$(SYMBOL_PREFIX) PLATFORM=$(hdrdir)/ruby/$(PLATFORM_DIR).h $(srcdir)/configure.ac $(COMMONOBJS)
+	$(Q) $(XRUBY) $(tooldir)/leaked-globals NM="$(NM) -Pgp" SYMBOL_PREFIX=$(SYMBOL_PREFIX) PLATFORM=$(hdrdir)/ruby/$(PLATFORM_DIR).h $(srcdir)/configure.ac $(COMMONOBJS)
