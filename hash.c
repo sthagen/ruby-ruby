@@ -567,32 +567,6 @@ RHASH_TABLE_EMPTY_P(VALUE hash)
     return RHASH_SIZE(hash) == 0;
 }
 
-int
-rb_hash_ar_table_p(VALUE hash)
-{
-    if (FL_TEST_RAW((hash), RHASH_ST_TABLE_FLAG)) {
-        HASH_ASSERT(RHASH(hash)->as.st != NULL);
-        return FALSE;
-    }
-    else {
-        return TRUE;
-    }
-}
-
-ar_table *
-rb_hash_ar_table(VALUE hash)
-{
-    HASH_ASSERT(RHASH_AR_TABLE_P(hash));
-    return RHASH(hash)->as.ar;
-}
-
-st_table *
-rb_hash_st_table(VALUE hash)
-{
-    HASH_ASSERT(!RHASH_AR_TABLE_P(hash));
-    return RHASH(hash)->as.st;
-}
-
 void
 rb_hash_st_table_set(VALUE hash, st_table *st)
 {
@@ -1225,44 +1199,28 @@ static ar_table*
 ar_copy(VALUE hash1, VALUE hash2)
 {
     ar_table *old_tab = RHASH_AR_TABLE(hash2);
+    ar_table *new_tab = RHASH_AR_TABLE(hash1);
 
-    if (old_tab != NULL) {
-        ar_table *new_tab = RHASH_AR_TABLE(hash1);
-        if (new_tab == NULL) {
-            new_tab = (ar_table*) rb_transient_heap_alloc(hash1, sizeof(ar_table));
-            if (new_tab != NULL) {
-                RHASH_SET_TRANSIENT_FLAG(hash1);
-            }
-            else {
-                RHASH_UNSET_TRANSIENT_FLAG(hash1);
-                new_tab = (ar_table*)ruby_xmalloc(sizeof(ar_table));
-            }
+    if (new_tab == NULL) {
+        new_tab = (ar_table*) rb_transient_heap_alloc(hash1, sizeof(ar_table));
+        if (new_tab != NULL) {
+            RHASH_SET_TRANSIENT_FLAG(hash1);
         }
-        *new_tab = *old_tab;
-        RHASH(hash1)->ar_hint.word = RHASH(hash2)->ar_hint.word;
-        RHASH_AR_TABLE_BOUND_SET(hash1, RHASH_AR_TABLE_BOUND(hash2));
-        RHASH_AR_TABLE_SIZE_SET(hash1, RHASH_AR_TABLE_SIZE(hash2));
-        hash_ar_table_set(hash1, new_tab);
-
-        rb_gc_writebarrier_remember(hash1);
-        return new_tab;
-    }
-    else {
-        RHASH_AR_TABLE_BOUND_SET(hash1, RHASH_AR_TABLE_BOUND(hash2));
-        RHASH_AR_TABLE_SIZE_SET(hash1, RHASH_AR_TABLE_SIZE(hash2));
-
-        if (RHASH_TRANSIENT_P(hash1)) {
+        else {
             RHASH_UNSET_TRANSIENT_FLAG(hash1);
+            new_tab = (ar_table*)ruby_xmalloc(sizeof(ar_table));
         }
-        else if (RHASH_AR_TABLE(hash1)) {
-            ruby_xfree(RHASH_AR_TABLE(hash1));
-        }
-
-        hash_ar_table_set(hash1, NULL);
-
-        rb_gc_writebarrier_remember(hash1);
-        return old_tab;
     }
+
+    *new_tab = *old_tab;
+    RHASH(hash1)->ar_hint.word = RHASH(hash2)->ar_hint.word;
+    RHASH_AR_TABLE_BOUND_SET(hash1, RHASH_AR_TABLE_BOUND(hash2));
+    RHASH_AR_TABLE_SIZE_SET(hash1, RHASH_AR_TABLE_SIZE(hash2));
+    hash_ar_table_set(hash1, new_tab);
+
+    rb_gc_writebarrier_remember(hash1);
+
+    return new_tab;
 }
 
 static void
@@ -1602,10 +1560,12 @@ static VALUE
 hash_copy(VALUE ret, VALUE hash)
 {
     if (!RHASH_EMPTY_P(hash)) {
-        if (RHASH_AR_TABLE_P(hash))
+        if (RHASH_AR_TABLE_P(hash)) {
             ar_copy(ret, hash);
-        else if (RHASH_ST_TABLE_P(hash))
+        }
+        else {
             RHASH_ST_TABLE_SET(ret, st_copy(RHASH_ST_TABLE(hash)));
+        }
     }
     return ret;
 }

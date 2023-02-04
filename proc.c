@@ -752,7 +752,7 @@ rb_vm_ifunc_new(rb_block_call_func_t func, const void *data, int min_argc, int m
     }
     arity.argc.min = min_argc;
     arity.argc.max = max_argc;
-    VALUE ret = rb_imemo_new(imemo_ifunc, (VALUE)func, (VALUE)data, arity.packed, 0);
+    VALUE ret = rb_imemo_new(imemo_ifunc, (VALUE)func, (VALUE)data, arity.packed, (VALUE)GET_EC()->cfp);
     return (struct vm_ifunc *)ret;
 }
 
@@ -1630,7 +1630,7 @@ static const rb_data_type_t method_data_type = {
         bm_memsize,
         bm_compact,
     },
-    0, 0, RUBY_TYPED_FREE_IMMEDIATELY
+    0, 0, RUBY_TYPED_FREE_IMMEDIATELY | RUBY_TYPED_WB_PROTECTED
 };
 
 VALUE
