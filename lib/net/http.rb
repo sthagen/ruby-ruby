@@ -332,20 +332,101 @@ module Net   #:nodoc:
   #   uri # => #<URI::HTTPS https://jsonplaceholder.typicode.com/>
   #   Net::HTTP.get(uri)
   #
-  # == Proxies
+  # == Proxy Server
   #
-  # \Net::HTTP will automatically create a proxy from the +http_proxy+
-  # environment variable if it is present.  To disable use of +http_proxy+,
-  # pass +nil+ for the proxy address.
+  # An \HTTP object can have
+  # a {proxy server}[https://en.wikipedia.org/wiki/Proxy_server].
   #
-  # You may also create a custom proxy:
+  # You can create an \HTTP object with a proxy server
+  # using method Net::HTTP.new or method Net::HTTP.start.
   #
-  #   proxy_addr = 'your.proxy.host'
-  #   proxy_port = 8080
+  # The proxy may be defined either by argument +p_addr+
+  # or by environment variable <tt>'http_proxy'</tt>.
   #
-  #   Net::HTTP.new('example.com', nil, proxy_addr, proxy_port).start { |http|
-  #     # always proxy via your.proxy.addr:8080
-  #   }
+  # === Proxy Using Argument +p_addr+ as a \String
+  #
+  # When argument +p_addr+ is a string hostname,
+  # the returned +http+ has the given host as its proxy:
+  #
+  #   http = Net::HTTP.new(hostname, nil, 'proxy.example')
+  #   http.proxy?          # => true
+  #   http.proxy_from_env? # => false
+  #   http.proxy_address   # => "proxy.example"
+  #   # These use default values.
+  #   http.proxy_port      # => 80
+  #   http.proxy_user      # => nil
+  #   http.proxy_pass      # => nil
+  #
+  # The port, username, and password for the proxy may also be given:
+  #
+  #   http = Net::HTTP.new(hostname, nil, 'proxy.example', 8000, 'pname', 'ppass')
+  #   # => #<Net::HTTP jsonplaceholder.typicode.com:80 open=false>
+  #   http.proxy?          # => true
+  #   http.proxy_from_env? # => false
+  #   http.proxy_address   # => "proxy.example"
+  #   http.proxy_port      # => 8000
+  #   http.proxy_user      # => "pname"
+  #   http.proxy_pass      # => "ppass"
+  #
+  # === Proxy Using <tt>ENV['http_proxy']</tt>
+  #
+  # When environment variable <tt>'http_proxy'</tt>
+  # is set to a \URI string,
+  # the returned +http+ will have the server at that URI as its proxy;
+  # note that the \URI string must have a protocol
+  # such as <tt>'http'</tt> or <tt>'https'</tt>:
+  #
+  #   ENV['http_proxy'] = 'http://example.com'
+  #   http = Net::HTTP.new(hostname)
+  #   http.proxy?          # => true
+  #   http.proxy_from_env? # => true
+  #   http.proxy_address   # => "example.com"
+  #   # These use default values.
+  #   http.proxy_port      # => 80
+  #   http.proxy_user      # => nil
+  #   http.proxy_pass      # => nil
+  #
+  # The \URI string may include proxy username, password, and port number:
+  #
+  #   ENV['http_proxy'] = 'http://pname:ppass@example.com:8000'
+  #   http = Net::HTTP.new(hostname)
+  #   http.proxy?          # => true
+  #   http.proxy_from_env? # => true
+  #   http.proxy_address   # => "example.com"
+  #   http.proxy_port      # => 8000
+  #   http.proxy_user      # => "pname"
+  #   http.proxy_pass      # => "ppass"
+  #
+  # === Filtering Proxies
+  #
+  # With method Net::HTTP.new (but not Net::HTTP.start),
+  # you can use argument +p_no_proxy+ to filter proxies:
+  #
+  # - Reject a certain address:
+  #
+  #     http = Net::HTTP.new('example.com', nil, 'proxy.example', 8000, 'pname', 'ppass', 'proxy.example')
+  #     http.proxy_address # => nil
+  #
+  # - Reject certain domains or subdomains:
+  #
+  #     http = Net::HTTP.new('example.com', nil, 'my.proxy.example', 8000, 'pname', 'ppass', 'proxy.example')
+  #     http.proxy_address # => nil
+  #
+  # - Reject certain addresses and port combinations:
+  #
+  #     http = Net::HTTP.new('example.com', nil, 'proxy.example', 8000, 'pname', 'ppass', 'proxy.example:1234')
+  #     http.proxy_address # => "proxy.example"
+  #
+  #     http = Net::HTTP.new('example.com', nil, 'proxy.example', 8000, 'pname', 'ppass', 'proxy.example:8000')
+  #     http.proxy_address # => nil
+  #
+  # - Reject a list of the types above delimited using a comma:
+  #
+  #     http = Net::HTTP.new('example.com', nil, 'proxy.example', 8000, 'pname', 'ppass', 'my.proxy,proxy.example:8000')
+  #     http.proxy_address # => nil
+  #
+  #     http = Net::HTTP.new('example.com', nil, 'my.proxy', 8000, 'pname', 'ppass', 'my.proxy,proxy.example:8000')
+  #     http.proxy_address # => nil
   #
   # == Compression
   #
@@ -564,13 +645,10 @@ module Net   #:nodoc:
     #
     # Creates a new \Net::HTTP object, +http+, via \Net::HTTP.new:
     #
-    #   Net::HTTP.new(address, port, p_addr, p_port, p_user, p_pass)
-    #
-    # - For arguments +hostname+ through +p_pass+, see Net::HTTP.new.
+    # - For arguments +address+ and +port+, see Net::HTTP.new.
+    # - For proxy-defining arguments +p_addr+ through +p_pass+,
+    #   see {Proxy Server}[rdoc-ref:Net::HTTP@Proxy+Server].
     # - For argument +opts+, see below.
-    #
-    # Note: If +port+ is +nil+ and <tt>opts[:use_ssl]</tt> is a truthy value,
-    # the value passed to +new+ is Net::HTTP.https_default_port, not +port+.
     #
     # With no block given:
     #
@@ -644,6 +722,9 @@ module Net   #:nodoc:
     # - #verify_mode
     # - #write_timeout
     #
+    # Note: If +port+ is +nil+ and <tt>opts[:use_ssl]</tt> is a truthy value,
+    # the value passed to +new+ is Net::HTTP.https_default_port, not +port+.
+    #
     def HTTP.start(address, *arg, &block) # :yield: +http+
       arg.pop if opt = Hash.try_convert(arg[-1])
       port, p_addr, p_port, p_user, p_pass = *arg
@@ -673,9 +754,7 @@ module Net   #:nodoc:
     # Returns a new \Net::HTTP object +http+
     # (but does not open a TCP connection or \HTTP session).
     #
-    # <b>No Proxy</b>
-    #
-    # With only string argument +hostname+ given
+    # With only string argument +address+ given
     # (and <tt>ENV['http_proxy']</tt> undefined or +nil+),
     # the returned +http+:
     #
@@ -698,85 +777,8 @@ module Net   #:nodoc:
     #   # => #<Net::HTTP jsonplaceholder.typicode.com:8000 open=false>
     #   http.port # => 8000
     #
-    # <b>Proxy Using Argument +p_addr+ as a \String</b>
-    #
-    # When argument +p_addr+ is a string hostname,
-    # the returned +http+ has a proxy:
-    #
-    #   http = Net::HTTP.new(hostname, nil, 'proxy.example')
-    #   # => #<Net::HTTP jsonplaceholder.typicode.com:80 open=false>
-    #   http.proxy?        # => true
-    #   http.proxy_address # => "proxy.example"
-    #   # These use default values.
-    #   http.proxy_port    # => 80
-    #   http.proxy_user    # => nil
-    #   http.proxy_pass    # => nil
-    #
-    # The port, username, and password for the proxy may also be given:
-    #
-    #   http = Net::HTTP.new(hostname, nil, 'proxy.example', 8000, 'pname', 'ppass')
-    #   # => #<Net::HTTP jsonplaceholder.typicode.com:80 open=false>
-    #   http.proxy?        # => true
-    #   http.proxy_address # => "proxy.example"
-    #   http.proxy_port    # => 8000
-    #   http.proxy_user    # => "pname"
-    #   http.proxy_pass    # => "ppass"
-    #
-    # <b>Proxy Using <tt>ENV['http_proxy']</tt></b>
-    #
-    # When environment variable <tt>'http_proxy'</tt>
-    # is set to a \URI string,
-    # the returned +http+ will have that URI as its proxy;
-    # note that the \URI string must have a protocol
-    # such as <tt>'http'</tt> or <tt>'https'</tt>:
-    #
-    #   ENV['http_proxy'] = 'http://example.com'
-    #   # => "http://example.com"
-    #   http = Net::HTTP.new(hostname)
-    #   # => #<Net::HTTP jsonplaceholder.typicode.com:80 open=false>
-    #   http.proxy?        # => true
-    #   http.address       # => "jsonplaceholder.typicode.com"
-    #   http.proxy_address # => "example.com"
-    #
-    # The \URI string may include proxy username, password, and port number:
-    #
-    #   ENV['http_proxy'] = 'http://pname:ppass@example.com:8000'
-    #   # => "http://pname:ppass@example.com:8000"
-    #   http = Net::HTTP.new(hostname)
-    #   # => #<Net::HTTP jsonplaceholder.typicode.com:80 open=false>
-    #   http.proxy_port # => 8000
-    #   http.proxy_user # => "pname"
-    #   http.proxy_pass # => "ppass"
-    #
-    # <b>Argument +p_no_proxy+</b>
-    #
-    # You can use argument +p_no_proxy+ to reject certain proxies:
-    #
-    # - Reject a certain address:
-    #
-    #     http = Net::HTTP.new('example.com', nil, 'proxy.example', 8000, 'pname', 'ppass', 'proxy.example')
-    #     http.proxy_address # => nil
-    #
-    # - Reject certain domains or subdomains:
-    #
-    #     http = Net::HTTP.new('example.com', nil, 'my.proxy.example', 8000, 'pname', 'ppass', 'proxy.example')
-    #     http.proxy_address # => nil
-    #
-    # - Reject certain addresses and port combinations:
-    #
-    #     http = Net::HTTP.new('example.com', nil, 'proxy.example', 8000, 'pname', 'ppass', 'proxy.example:1234')
-    #     http.proxy_address # => "proxy.example"
-    #
-    #     http = Net::HTTP.new('example.com', nil, 'proxy.example', 8000, 'pname', 'ppass', 'proxy.example:8000')
-    #     http.proxy_address # => nil
-    #
-    # - Reject a list of the types above delimited using a comma:
-    #
-    #     http = Net::HTTP.new('example.com', nil, 'proxy.example', 8000, 'pname', 'ppass', 'my.proxy,proxy.example:8000')
-    #     http.proxy_address # => nil
-    #
-    #     http = Net::HTTP.new('example.com', nil, 'my.proxy', 8000, 'pname', 'ppass', 'my.proxy,proxy.example:8000')
-    #     http.proxy_address # => nil
+    # For proxy-defining arguments +p_addr+ through +p_no_proxy+,
+    # see {Proxy Server}[rdoc-ref:Net::HTTP@Proxy+Server].
     #
     def HTTP.new(address, port = nil, p_addr = :ENV, p_port = nil, p_user = nil, p_pass = nil, p_no_proxy = nil)
       http = super address, port
@@ -1470,12 +1472,15 @@ module Net   #:nodoc:
       attr_reader :proxy_pass
     end
 
-    # True if requests for this connection will be proxied
+    # Returns +true+ if a proxy server is defined, +false+ otherwise;
+    # see {Proxy Server}[rdoc-ref:Net::HTTP@Proxy+Server].
     def proxy?
       !!(@proxy_from_env ? proxy_uri : @proxy_address)
     end
 
-    # True if the proxy for this connection is determined from the environment
+    # Returns +true+ if the proxy server is defined in the environment,
+    # +false+ otherwise;
+    # see {Proxy Server}[rdoc-ref:Net::HTTP@Proxy+Server].
     def proxy_from_env?
       @proxy_from_env
     end
@@ -1489,7 +1494,8 @@ module Net   #:nodoc:
       @proxy_uri || nil
     end
 
-    # The address of the proxy server, if one is configured.
+    # Returns the address of the proxy server, if defined, +nil+ otherwise;
+    # see {Proxy Server}[rdoc-ref:Net::HTTP@Proxy+Server].
     def proxy_address
       if @proxy_from_env then
         proxy_uri&.hostname
@@ -1498,7 +1504,8 @@ module Net   #:nodoc:
       end
     end
 
-    # The port of the proxy server, if one is configured.
+    # Returns the port number of the proxy server, if defined, +nil+ otherwise;
+    # see {Proxy Server}[rdoc-ref:Net::HTTP@Proxy+Server].
     def proxy_port
       if @proxy_from_env then
         proxy_uri&.port
@@ -1507,7 +1514,8 @@ module Net   #:nodoc:
       end
     end
 
-    # The username of the proxy server, if one is configured.
+    # Returns the user name of the proxy server, if defined, +nil+ otherwise;
+    # see {Proxy Server}[rdoc-ref:Net::HTTP@Proxy+Server].
     def proxy_user
       if @proxy_from_env
         user = proxy_uri&.user
@@ -1517,7 +1525,8 @@ module Net   #:nodoc:
       end
     end
 
-    # The password of the proxy server, if one is configured.
+    # Returns the password of the proxy server, if defined, +nil+ otherwise;
+    # see {Proxy Server}[rdoc-ref:Net::HTTP@Proxy+Server].
     def proxy_pass
       if @proxy_from_env
         pass = proxy_uri&.password
