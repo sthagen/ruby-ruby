@@ -1468,32 +1468,8 @@ fn gen_expandarray(
     KeepCompiling
 }
 
-fn gen_getlocal_wc0(
-    jit: &mut JITState,
-    ctx: &mut Context,
-    asm: &mut Assembler,
-    _ocb: &mut OutlinedCb,
-) -> CodegenStatus {
-    // Compute the offset from BP to the local
-    let slot_idx = jit_get_arg(jit, 0).as_i32();
-    let offs: i32 = -SIZEOF_VALUE_I32 * slot_idx;
-    let local_idx = slot_to_local_idx(jit.get_iseq(), slot_idx);
-
-    // Load environment pointer EP (level 0) from CFP
-    let ep_opnd = gen_get_ep(asm, 0);
-
-    // Load the local from the EP
-    let local_opnd = Opnd::mem(64, ep_opnd, offs);
-
-    // Write the local at SP
-    let stack_top = ctx.stack_push_local(local_idx.as_usize());
-    asm.mov(stack_top, local_opnd);
-
-    KeepCompiling
-}
-
 // Compute the index of a local variable from its slot index
-fn slot_to_local_idx(iseq: IseqPtr, slot_idx: i32) -> u32 {
+fn ep_offset_to_local_idx(iseq: IseqPtr, ep_offset: u32) -> u32 {
     // Layout illustration
     // This is an array of VALUE
     //                                           | VM_ENV_DATA_SIZE |
@@ -1504,7 +1480,7 @@ fn slot_to_local_idx(iseq: IseqPtr, slot_idx: i32) -> u32 {
     //           ^       ^                       ^                  ^
     //           +-------+---local_table_size----+         cfp->ep--+
     //                   |                                          |
-    //                   +------------------slot_idx----------------+
+    //                   +------------------ep_offset---------------+
     //
     // See usages of local_var_name() from iseq.c for similar calculation.
 
@@ -1512,7 +1488,7 @@ fn slot_to_local_idx(iseq: IseqPtr, slot_idx: i32) -> u32 {
     let local_table_size: i32 = unsafe { get_iseq_body_local_table_size(iseq) }
         .try_into()
         .unwrap();
-    let op = slot_idx - (VM_ENV_DATA_SIZE as i32);
+    let op = (ep_offset - VM_ENV_DATA_SIZE) as i32;
     let local_idx = local_table_size - op - 1;
     assert!(local_idx >= 0 && local_idx < local_table_size);
     local_idx.try_into().unwrap()
@@ -1553,9 +1529,10 @@ fn gen_get_lep(jit: &mut JITState, asm: &mut Assembler) -> Opnd {
 }
 
 fn gen_getlocal_generic(
+    jit: &mut JITState,
     ctx: &mut Context,
     asm: &mut Assembler,
-    local_idx: u32,
+    ep_offset: u32,
     level: u32,
 ) -> CodegenStatus {
     // Load environment pointer EP (level 0) from CFP
@@ -1563,11 +1540,16 @@ fn gen_getlocal_generic(
 
     // Load the local from the block
     // val = *(vm_get_ep(GET_EP(), level) - idx);
-    let offs = -(SIZEOF_VALUE_I32 * local_idx as i32);
+    let offs = -(SIZEOF_VALUE_I32 * ep_offset as i32);
     let local_opnd = Opnd::mem(64, ep_opnd, offs);
 
     // Write the local at SP
-    let stack_top = ctx.stack_push(Type::Unknown);
+    let stack_top = if level == 0 {
+        let local_idx = ep_offset_to_local_idx(jit.get_iseq(), ep_offset);
+        ctx.stack_push_local(local_idx.as_usize())
+    } else {
+        ctx.stack_push(Type::Unknown)
+    };
 
     asm.mov(stack_top, local_opnd);
 
@@ -1580,9 +1562,19 @@ fn gen_getlocal(
     asm: &mut Assembler,
     _ocb: &mut OutlinedCb,
 ) -> CodegenStatus {
-    let idx = jit_get_arg(jit, 0);
-    let level = jit_get_arg(jit, 1);
-    gen_getlocal_generic(ctx, asm, idx.as_u32(), level.as_u32())
+    let idx = jit_get_arg(jit, 0).as_u32();
+    let level = jit_get_arg(jit, 1).as_u32();
+    gen_getlocal_generic(jit, ctx, asm, idx, level)
+}
+
+fn gen_getlocal_wc0(
+    jit: &mut JITState,
+    ctx: &mut Context,
+    asm: &mut Assembler,
+    _ocb: &mut OutlinedCb,
+) -> CodegenStatus {
+    let idx = jit_get_arg(jit, 0).as_u32();
+    gen_getlocal_generic(jit, ctx, asm, idx, 0)
 }
 
 fn gen_getlocal_wc1(
@@ -1591,66 +1583,8 @@ fn gen_getlocal_wc1(
     asm: &mut Assembler,
     _ocb: &mut OutlinedCb,
 ) -> CodegenStatus {
-    let idx = jit_get_arg(jit, 0);
-    gen_getlocal_generic(ctx, asm, idx.as_u32(), 1)
-}
-
-fn gen_setlocal_wc0(
-    jit: &mut JITState,
-    ctx: &mut Context,
-    asm: &mut Assembler,
-    ocb: &mut OutlinedCb,
-) -> CodegenStatus {
-    /*
-    vm_env_write(const VALUE *ep, int index, VALUE v)
-    {
-        VALUE flags = ep[VM_ENV_DATA_INDEX_FLAGS];
-        if (LIKELY((flags & VM_ENV_FLAG_WB_REQUIRED) == 0)) {
-            VM_STACK_ENV_WRITE(ep, index, v);
-        }
-        else {
-            vm_env_write_slowpath(ep, index, v);
-        }
-    }
-    */
-
-    let slot_idx = jit_get_arg(jit, 0).as_i32();
-    let local_idx = slot_to_local_idx(jit.get_iseq(), slot_idx).as_usize();
-    let value_type = ctx.get_opnd_type(StackOpnd(0));
-
-    // Load environment pointer EP (level 0) from CFP
-    let ep_opnd = gen_get_ep(asm, 0);
-
-    // Write barriers may be required when VM_ENV_FLAG_WB_REQUIRED is set, however write barriers
-    // only affect heap objects being written. If we know an immediate value is being written we
-    // can skip this check.
-    if !value_type.is_imm() {
-        // flags & VM_ENV_FLAG_WB_REQUIRED
-        let flags_opnd = Opnd::mem(
-            64,
-            ep_opnd,
-            SIZEOF_VALUE_I32 * VM_ENV_DATA_INDEX_FLAGS as i32,
-        );
-        asm.test(flags_opnd, VM_ENV_FLAG_WB_REQUIRED.into());
-
-        // Create a side-exit to fall back to the interpreter
-        let side_exit = get_side_exit(jit, ocb, ctx);
-
-        // if (flags & VM_ENV_FLAG_WB_REQUIRED) != 0
-        asm.jnz(side_exit);
-    }
-
-    // Set the type of the local variable in the context
-    ctx.set_local_type(local_idx, value_type);
-
-    // Pop the value to write from the stack
-    let stack_top = ctx.stack_pop(1);
-
-    // Write the value at the environment pointer
-    let offs: i32 = -8 * slot_idx;
-    asm.mov(Opnd::mem(64, ep_opnd, offs), stack_top);
-
-    KeepCompiling
+    let idx = jit_get_arg(jit, 0).as_u32();
+    gen_getlocal_generic(jit, ctx, asm, idx, 1)
 }
 
 fn gen_setlocal_generic(
@@ -1658,7 +1592,7 @@ fn gen_setlocal_generic(
     ctx: &mut Context,
     asm: &mut Assembler,
     ocb: &mut OutlinedCb,
-    local_idx: i32,
+    ep_offset: u32,
     level: u32,
 ) -> CodegenStatus {
     let value_type = ctx.get_opnd_type(StackOpnd(0));
@@ -1685,11 +1619,16 @@ fn gen_setlocal_generic(
         asm.jnz(side_exit);
     }
 
+    if level == 0 {
+        let local_idx = ep_offset_to_local_idx(jit.get_iseq(), ep_offset).as_usize();
+        ctx.set_local_type(local_idx, value_type);
+    }
+
     // Pop the value to write from the stack
     let stack_top = ctx.stack_pop(1);
 
     // Write the value at the environment pointer
-    let offs = -(SIZEOF_VALUE_I32 * local_idx);
+    let offs = -(SIZEOF_VALUE_I32 * ep_offset as i32);
     asm.mov(Opnd::mem(64, ep_opnd, offs), stack_top);
 
     KeepCompiling
@@ -1701,9 +1640,19 @@ fn gen_setlocal(
     asm: &mut Assembler,
     ocb: &mut OutlinedCb,
 ) -> CodegenStatus {
-    let idx = jit_get_arg(jit, 0).as_i32();
+    let idx = jit_get_arg(jit, 0).as_u32();
     let level = jit_get_arg(jit, 1).as_u32();
     gen_setlocal_generic(jit, ctx, asm, ocb, idx, level)
+}
+
+fn gen_setlocal_wc0(
+    jit: &mut JITState,
+    ctx: &mut Context,
+    asm: &mut Assembler,
+    ocb: &mut OutlinedCb,
+) -> CodegenStatus {
+    let idx = jit_get_arg(jit, 0).as_u32();
+    gen_setlocal_generic(jit, ctx, asm, ocb, idx, 0)
 }
 
 fn gen_setlocal_wc1(
@@ -1712,7 +1661,7 @@ fn gen_setlocal_wc1(
     asm: &mut Assembler,
     ocb: &mut OutlinedCb,
 ) -> CodegenStatus {
-    let idx = jit_get_arg(jit, 0).as_i32();
+    let idx = jit_get_arg(jit, 0).as_u32();
     gen_setlocal_generic(jit, ctx, asm, ocb, idx, 1)
 }
 
@@ -1975,12 +1924,6 @@ fn gen_get_ivar(
     recv_opnd: YARVOpnd,
     side_exit: Target,
 ) -> CodegenStatus {
-    // If the object has a too complex shape, we exit
-    if comptime_receiver.shape_too_complex() {
-        gen_counter_incr!(asm, getivar_too_complex);
-        return CantCompile;
-    }
-
     let comptime_val_klass = comptime_receiver.class_of();
     let starting_context = ctx.clone(); // make a copy for use with jit_chain_guard
 
@@ -2007,7 +1950,8 @@ fn gen_get_ivar(
     // NOTE: This assumes nobody changes the allocator of the class after allocation.
     //       Eventually, we can encode whether an object is T_OBJECT or not
     //       inside object shapes.
-    if !receiver_t_object || uses_custom_allocator {
+    // too-complex shapes can't use index access, so we use rb_ivar_get for them too.
+    if !receiver_t_object || uses_custom_allocator || comptime_receiver.shape_too_complex() {
         // General case. Call rb_ivar_get().
         // VALUE rb_ivar_get(VALUE obj, ID id)
         asm.comment("call rb_ivar_get()");
@@ -2214,11 +2158,6 @@ fn gen_setinstancevariable(
         gen_counter_incr!(asm, setivar_frozen);
         return CantCompile;
     }
-    // If the object has a too complex shape, we will also exit
-    if comptime_receiver.shape_too_complex() {
-        gen_counter_incr!(asm, setivar_too_complex);
-        return CantCompile;
-    }
 
     let (_, stack_type) = ctx.get_opnd_mapping(StackOpnd(0));
 
@@ -2236,8 +2175,9 @@ fn gen_setinstancevariable(
     let receiver_t_object = unsafe { RB_TYPE_P(comptime_receiver, RUBY_T_OBJECT) };
 
     // If the receiver isn't a T_OBJECT, or uses a custom allocator,
-    // then just write out the IV write as a function call
-    if !receiver_t_object || uses_custom_allocator {
+    // then just write out the IV write as a function call.
+    // too-complex shapes can't use index access, so we use rb_ivar_get for them too.
+    if !receiver_t_object || uses_custom_allocator || comptime_receiver.shape_too_complex() {
         asm.comment("call rb_vm_setinstancevariable()");
 
         let ic = jit_get_arg(jit, 1).as_u64(); // type IVC
@@ -2611,6 +2551,7 @@ fn gen_fixnum_cmp(
     asm: &mut Assembler,
     ocb: &mut OutlinedCb,
     cmov_op: CmovFn,
+    bop: ruby_basic_operators,
 ) -> CodegenStatus {
     let two_fixnums = match ctx.two_fixnums_on_stack(jit) {
         Some(two_fixnums) => two_fixnums,
@@ -2626,7 +2567,7 @@ fn gen_fixnum_cmp(
         // Note: we generate the side-exit before popping operands from the stack
         let side_exit = get_side_exit(jit, ocb, ctx);
 
-        if !assume_bop_not_redefined(jit, ocb, INTEGER_REDEFINED_OP_FLAG, BOP_LT) {
+        if !assume_bop_not_redefined(jit, ocb, INTEGER_REDEFINED_OP_FLAG, bop) {
             return CantCompile;
         }
 
@@ -2657,7 +2598,7 @@ fn gen_opt_lt(
     asm: &mut Assembler,
     ocb: &mut OutlinedCb,
 ) -> CodegenStatus {
-    gen_fixnum_cmp(jit, ctx, asm, ocb, Assembler::csel_l)
+    gen_fixnum_cmp(jit, ctx, asm, ocb, Assembler::csel_l, BOP_LT)
 }
 
 fn gen_opt_le(
@@ -2666,7 +2607,7 @@ fn gen_opt_le(
     asm: &mut Assembler,
     ocb: &mut OutlinedCb,
 ) -> CodegenStatus {
-    gen_fixnum_cmp(jit, ctx, asm, ocb, Assembler::csel_le)
+    gen_fixnum_cmp(jit, ctx, asm, ocb, Assembler::csel_le, BOP_LE)
 }
 
 fn gen_opt_ge(
@@ -2675,7 +2616,7 @@ fn gen_opt_ge(
     asm: &mut Assembler,
     ocb: &mut OutlinedCb,
 ) -> CodegenStatus {
-    gen_fixnum_cmp(jit, ctx, asm, ocb, Assembler::csel_ge)
+    gen_fixnum_cmp(jit, ctx, asm, ocb, Assembler::csel_ge, BOP_GE)
 }
 
 fn gen_opt_gt(
@@ -2684,7 +2625,7 @@ fn gen_opt_gt(
     asm: &mut Assembler,
     ocb: &mut OutlinedCb,
 ) -> CodegenStatus {
-    gen_fixnum_cmp(jit, ctx, asm, ocb, Assembler::csel_g)
+    gen_fixnum_cmp(jit, ctx, asm, ocb, Assembler::csel_g, BOP_GT)
 }
 
 // Implements specialized equality for either two fixnum or two strings
@@ -2695,6 +2636,7 @@ fn gen_equality_specialized(
     ctx: &mut Context,
     asm: &mut Assembler,
     ocb: &mut OutlinedCb,
+    gen_eq: bool,
 ) -> Option<bool> {
     // Create a side-exit to fall back to the interpreter
     let side_exit = get_side_exit(jit, ocb, ctx);
@@ -2716,8 +2658,11 @@ fn gen_equality_specialized(
         guard_two_fixnums(jit, ctx, asm, ocb, side_exit);
 
         asm.cmp(a_opnd, b_opnd);
-
-        let val = asm.csel_ne(Qfalse.into(), Qtrue.into());
+        let val = if gen_eq {
+            asm.csel_e(Qtrue.into(), Qfalse.into())
+        } else {
+            asm.csel_ne(Qtrue.into(), Qfalse.into())
+        };
 
         // Push the output on the stack
         ctx.stack_pop(2);
@@ -2780,7 +2725,10 @@ fn gen_equality_specialized(
         }
 
         // Call rb_str_eql_internal(a, b)
-        let val = asm.ccall(rb_str_eql_internal as *const u8, vec![a_opnd, b_opnd]);
+        let val = asm.ccall(
+            if gen_eq { rb_str_eql_internal } else { rb_str_neq_internal } as *const u8,
+            vec![a_opnd, b_opnd],
+        );
 
         // Push the output on the stack
         ctx.stack_pop(2);
@@ -2789,7 +2737,7 @@ fn gen_equality_specialized(
         asm.jmp(ret);
 
         asm.write_label(equal);
-        asm.mov(dst, Qtrue.into());
+        asm.mov(dst, if gen_eq { Qtrue } else { Qfalse }.into());
 
         asm.write_label(ret);
 
@@ -2805,7 +2753,7 @@ fn gen_opt_eq(
     asm: &mut Assembler,
     ocb: &mut OutlinedCb,
 ) -> CodegenStatus {
-    let specialized = match gen_equality_specialized(jit, ctx, asm, ocb) {
+    let specialized = match gen_equality_specialized(jit, ctx, asm, ocb, true) {
         Some(specialized) => specialized,
         None => {
             // Defer compilation so we can specialize base on a runtime receiver
@@ -3864,7 +3812,7 @@ fn jit_guard_known_klass(
         }
     } else if unsafe {
         FL_TEST(known_klass, VALUE(RUBY_FL_SINGLETON as usize)) != VALUE(0)
-            && sample_instance == rb_attr_get(known_klass, id__attached__ as ID)
+            && sample_instance == rb_class_attached_object(known_klass)
     } {
         // Singleton classes are attached to one specific object, so we can
         // avoid one memory access (and potentially the is_heap check) by
@@ -4021,6 +3969,122 @@ fn jit_rb_false(
     true
 }
 
+/// Codegen for Kernel#is_a?
+fn jit_rb_kernel_is_a(
+    jit: &mut JITState,
+    ctx: &mut Context,
+    asm: &mut Assembler,
+    ocb: &mut OutlinedCb,
+    _ci: *const rb_callinfo,
+    _cme: *const rb_callable_method_entry_t,
+    _block: Option<IseqPtr>,
+    argc: i32,
+    known_recv_class: *const VALUE,
+) -> bool {
+    if argc != 1 {
+        return false;
+    }
+
+    // If this is a super call we might not know the class
+    if known_recv_class.is_null() {
+        return false;
+    }
+
+    // Important note: The output code will simply `return true/false`.
+    // Correctness follows from:
+    //  - `known_recv_class` implies there is a guard scheduled before here
+    //    for a particular `CLASS_OF(lhs)`.
+    //  - We guard that rhs is identical to the compile-time sample
+    //  - In general, for any two Class instances A, B, `A < B` does not change at runtime.
+    //    Class#superclass is stable.
+
+    let sample_rhs = jit_peek_at_stack(jit, ctx, 0);
+    let sample_lhs = jit_peek_at_stack(jit, ctx, 1);
+
+    // We are not allowing module here because the module hierachy can change at runtime.
+    if !unsafe { RB_TYPE_P(sample_rhs, RUBY_T_CLASS) } {
+        return false;
+    }
+    let sample_is_a = unsafe { rb_obj_is_kind_of(sample_lhs, sample_rhs) == Qtrue };
+
+    let side_exit = get_side_exit(jit, ocb, ctx);
+    asm.comment("Kernel#is_a?");
+    asm.cmp(ctx.stack_opnd(0), sample_rhs.into());
+    asm.jne(counted_exit!(ocb, side_exit, send_is_a_class_mismatch));
+
+    ctx.stack_pop(2);
+
+    if sample_is_a {
+        let stack_ret = ctx.stack_push(Type::True);
+        asm.mov(stack_ret, Qtrue.into());
+    } else {
+        let stack_ret = ctx.stack_push(Type::False);
+        asm.mov(stack_ret, Qfalse.into());
+    }
+    return true;
+}
+
+/// Codegen for Kernel#instance_of?
+fn jit_rb_kernel_instance_of(
+    jit: &mut JITState,
+    ctx: &mut Context,
+    asm: &mut Assembler,
+    ocb: &mut OutlinedCb,
+    _ci: *const rb_callinfo,
+    _cme: *const rb_callable_method_entry_t,
+    _block: Option<IseqPtr>,
+    argc: i32,
+    known_recv_class: *const VALUE,
+) -> bool {
+    if argc != 1 {
+        return false;
+    }
+
+    // If this is a super call we might not know the class
+    if known_recv_class.is_null() {
+        return false;
+    }
+
+    // Important note: The output code will simply `return true/false`.
+    // Correctness follows from:
+    //  - `known_recv_class` implies there is a guard scheduled before here
+    //    for a particular `CLASS_OF(lhs)`.
+    //  - We guard that rhs is identical to the compile-time sample
+    //  - For a particular `CLASS_OF(lhs)`, `rb_obj_class(lhs)` does not change.
+    //    (because for any singleton class `s`, `s.superclass.equal?(s.attached_object.class)`)
+
+    let sample_rhs = jit_peek_at_stack(jit, ctx, 0);
+    let sample_lhs = jit_peek_at_stack(jit, ctx, 1);
+
+    // Filters out cases where the C implementation raises
+    if unsafe { !(RB_TYPE_P(sample_rhs, RUBY_T_CLASS) || RB_TYPE_P(sample_rhs, RUBY_T_MODULE)) } {
+        return false;
+    }
+
+    // We need to grab the class here to deal with singleton classes.
+    // Instance of grabs the "real class" of the object rather than the
+    // singleton class.
+    let sample_lhs_real_class = unsafe { rb_obj_class(sample_lhs) };
+
+    let sample_instance_of = sample_lhs_real_class == sample_rhs;
+
+    let side_exit = get_side_exit(jit, ocb, ctx);
+    asm.comment("Kernel#instance_of?");
+    asm.cmp(ctx.stack_opnd(0), sample_rhs.into());
+    asm.jne(counted_exit!(ocb, side_exit, send_instance_of_class_mismatch));
+
+    ctx.stack_pop(2);
+
+    if sample_instance_of {
+        let stack_ret = ctx.stack_push(Type::True);
+        asm.mov(stack_ret, Qtrue.into());
+    } else {
+        let stack_ret = ctx.stack_push(Type::False);
+        asm.mov(stack_ret, Qfalse.into());
+    }
+    return true;
+}
+
 // Codegen for rb_obj_equal()
 // object identity comparison
 fn jit_rb_obj_equal(
@@ -4044,6 +4108,22 @@ fn jit_rb_obj_equal(
     let stack_ret = ctx.stack_push(Type::UnknownImm);
     asm.mov(stack_ret, ret_opnd);
     true
+}
+
+// Codegen for rb_obj_not_equal()
+// object identity comparison
+fn jit_rb_obj_not_equal(
+    jit: &mut JITState,
+    ctx: &mut Context,
+    asm: &mut Assembler,
+    ocb: &mut OutlinedCb,
+    _ci: *const rb_callinfo,
+    _cme: *const rb_callable_method_entry_t,
+    _block: Option<IseqPtr>,
+    _argc: i32,
+    _known_recv_class: *const VALUE,
+) -> bool {
+    gen_equality_specialized(jit, ctx, asm, ocb, false) == Some(true)
 }
 
 // Codegen for rb_int_equal()
@@ -4077,17 +4157,24 @@ fn jit_rb_int_equal(
 
 /// If string is frozen, duplicate it to get a non-frozen string. Otherwise, return it.
 fn jit_rb_str_uplus(
-    _jit: &mut JITState,
+    jit: &mut JITState,
     ctx: &mut Context,
     asm: &mut Assembler,
     _ocb: &mut OutlinedCb,
     _ci: *const rb_callinfo,
     _cme: *const rb_callable_method_entry_t,
     _block: Option<IseqPtr>,
-    _argc: i32,
+    argc: i32,
     _known_recv_class: *const VALUE,
 ) -> bool
 {
+    if argc != 0 {
+        return false;
+    }
+
+    // We allocate when we dup the string
+    jit_prepare_routine_call(jit, ctx, asm);
+
     asm.comment("Unary plus on string");
     let recv_opnd = asm.load(ctx.stack_pop(1));
     let flags_opnd = asm.load(Opnd::mem(64, recv_opnd, RUBY_OFFSET_RBASIC_FLAGS));
@@ -4095,8 +4182,8 @@ fn jit_rb_str_uplus(
 
     let ret_label = asm.new_label("stack_ret");
 
-    // We guard for the receiver being a ::String, so the return value is too
-    let stack_ret = ctx.stack_push(Type::CString);
+    // String#+@ can only exist on T_STRING
+    let stack_ret = ctx.stack_push(Type::TString);
 
     // If the string isn't frozen, we just return it.
     asm.mov(stack_ret, recv_opnd);
@@ -5149,10 +5236,6 @@ fn gen_send_iseq(
 
     // No support for callees with these parameters yet as they require allocation
     // or complex handling.
-    if unsafe { get_iseq_flags_has_rest(iseq) } {
-        gen_counter_incr!(asm, send_iseq_has_rest);
-        return CantCompile;
-    }
     if unsafe { get_iseq_flags_has_post(iseq) } {
         gen_counter_incr!(asm, send_iseq_has_post);
         return CantCompile;
@@ -5171,6 +5254,32 @@ fn gen_send_iseq(
         get_iseq_flags_ruby2_keywords(jit.iseq) && flags & VM_CALL_ARGS_SPLAT != 0
     } {
         gen_counter_incr!(asm, send_iseq_ruby2_keywords);
+        return CantCompile;
+    }
+
+    let iseq_has_rest = unsafe { get_iseq_flags_has_rest(iseq) };
+    if iseq_has_rest && captured_opnd.is_some() {
+        gen_counter_incr!(asm, send_iseq_has_rest_and_captured);
+        return CantCompile;
+    }
+
+    if iseq_has_rest && flags & VM_CALL_ARGS_SPLAT != 0 {
+        gen_counter_incr!(asm, send_iseq_has_rest_and_splat);
+        return CantCompile;
+    }
+
+    if iseq_has_rest && flags & VM_CALL_OPT_SEND != 0 {
+        gen_counter_incr!(asm, send_iseq_has_rest_and_send);
+        return CantCompile;
+    }
+
+    if iseq_has_rest && unsafe { get_iseq_flags_has_block(iseq) } {
+        gen_counter_incr!(asm, send_iseq_has_rest_and_block);
+        return CantCompile;
+    }
+
+    if iseq_has_rest && unsafe { get_iseq_flags_has_kw(iseq) } {
+        gen_counter_incr!(asm, send_iseq_has_rest_and_kw);
         return CantCompile;
     }
 
@@ -5236,14 +5345,19 @@ fn gen_send_iseq(
         return CantCompile;
     }
 
-    if opts_filled < 0 && flags & VM_CALL_ARGS_SPLAT == 0  {
+    if iseq_has_rest && opt_num != 0 {
+        gen_counter_incr!(asm, send_iseq_has_rest_and_optional);
+        return CantCompile;
+    }
+
+    if opts_filled < 0 && flags & VM_CALL_ARGS_SPLAT == 0 {
         // Too few arguments and no splat to make up for it
         gen_counter_incr!(asm, send_iseq_arity_error);
         return CantCompile;
     }
 
-    if opts_filled > opt_num {
-        // Too many arguments
+    if opts_filled > opt_num && !iseq_has_rest {
+        // Too many arguments and no place to put them (i.e. rest arg)
         gen_counter_incr!(asm, send_iseq_arity_error);
         return CantCompile;
     }
@@ -5443,7 +5557,7 @@ fn gen_send_iseq(
         // If block_arg0_splat, we still need side exits after this, but
         // doing push_splat_args here disallows it. So bail out.
         if block_arg0_splat {
-            gen_counter_incr!(asm, invokeblock_iseq_arg0_has_kw);
+            gen_counter_incr!(asm, invokeblock_iseq_arg0_args_splat);
             return CantCompile;
         }
 
@@ -5666,6 +5780,39 @@ fn gen_send_iseq(
             asm.mov(stack_opnd, Opnd::mem(64, array_opnd, SIZEOF_VALUE_I32 * i));
         }
         argc = lead_num;
+    }
+
+    if iseq_has_rest {
+        assert!(argc >= required_num);
+
+        // We are going to allocate so setting pc and sp.
+        jit_save_pc(jit, asm);
+        gen_save_sp(jit, asm, ctx);
+
+        let n = (argc - required_num) as u32;
+        argc = required_num + 1;
+        // If n is 0, then elts is never going to be read, so we can just pass null
+        let values_ptr = if n == 0 {
+            Opnd::UImm(0)
+        } else {
+            asm.comment("load pointer to array elts");
+            let offset_magnitude = SIZEOF_VALUE as u32 * n;
+            let values_opnd = ctx.sp_opnd(-(offset_magnitude as isize));
+            asm.lea(values_opnd)
+        };
+
+        let new_ary = asm.ccall(
+            rb_ec_ary_new_from_values as *const u8,
+            vec![
+                EC,
+                Opnd::UImm(n.into()),
+                values_ptr
+            ]
+        );
+
+        ctx.stack_pop(n.as_usize());
+        let stack_ret = ctx.stack_push(Type::CArray);
+        asm.mov(stack_ret, new_ary);
     }
 
     // Points to the receiver operand on the stack unless a captured environment is used
@@ -7712,9 +7859,13 @@ impl CodegenGlobals {
 
             self.yjit_reg_method(rb_cNilClass, "nil?", jit_rb_true);
             self.yjit_reg_method(rb_mKernel, "nil?", jit_rb_false);
+            self.yjit_reg_method(rb_mKernel, "is_a?", jit_rb_kernel_is_a);
+            self.yjit_reg_method(rb_mKernel, "kind_of?", jit_rb_kernel_is_a);
+            self.yjit_reg_method(rb_mKernel, "instance_of?", jit_rb_kernel_instance_of);
 
             self.yjit_reg_method(rb_cBasicObject, "==", jit_rb_obj_equal);
             self.yjit_reg_method(rb_cBasicObject, "equal?", jit_rb_obj_equal);
+            self.yjit_reg_method(rb_cBasicObject, "!=", jit_rb_obj_not_equal);
             self.yjit_reg_method(rb_mKernel, "eql?", jit_rb_obj_equal);
             self.yjit_reg_method(rb_cModule, "==", jit_rb_obj_equal);
             self.yjit_reg_method(rb_cSymbol, "==", jit_rb_obj_equal);

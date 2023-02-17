@@ -3489,7 +3489,7 @@ obj_free(rb_objspace_t *objspace, VALUE obj)
             xfree(RCLASS_SUPERCLASSES(obj));
         }
 
-#if SIZE_POOL_COUNT == 1
+#if !RCLASS_EXT_EMBEDDED
         if (RCLASS_EXT(obj))
             xfree(RCLASS_EXT(obj));
 #endif
@@ -4908,7 +4908,7 @@ obj_memsize_of(VALUE obj, int use_all_types)
             if (FL_TEST_RAW(obj, RCLASS_SUPERCLASSES_INCLUDE_SELF)) {
                 size += (RCLASS_SUPERCLASS_DEPTH(obj) + 1) * sizeof(VALUE);
             }
-#if SIZE_POOL_COUNT == 1
+#if !RCLASS_EXT_EMBEDDED
             size += sizeof(rb_classext_t);
 #endif
         }
@@ -7264,6 +7264,10 @@ gc_mark_children(rb_objspace_t *objspace, VALUE obj)
 
     switch (BUILTIN_TYPE(obj)) {
       case T_CLASS:
+        if (FL_TEST(obj, FL_SINGLETON)) {
+            gc_mark(objspace, RCLASS_ATTACHED_OBJECT(obj));
+        }
+        // Continue to the shared T_CLASS/T_MODULE
       case T_MODULE:
         if (RCLASS_SUPER(obj)) {
             gc_mark(objspace, RCLASS_SUPER(obj));
@@ -8192,10 +8196,10 @@ gc_verify_transient_heap_internal_consistency(VALUE dmy)
     return Qnil;
 }
 
-#if GC_ENABLE_INCREMENTAL_MARK
 static void
 heap_move_pooled_pages_to_free_pages(rb_heap_t *heap)
 {
+#if GC_ENABLE_INCREMENTAL_MARK
     if (heap->pooled_pages) {
         if (heap->free_pages) {
             struct heap_page *free_pages_tail = heap->free_pages;
@@ -8210,8 +8214,8 @@ heap_move_pooled_pages_to_free_pages(rb_heap_t *heap)
 
         heap->pooled_pages = NULL;
     }
-}
 #endif
+}
 
 /* marks */
 
@@ -10566,6 +10570,10 @@ gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
 
     switch (BUILTIN_TYPE(obj)) {
       case T_CLASS:
+        if (FL_TEST(obj, FL_SINGLETON)) {
+            UPDATE_IF_MOVED(objspace, RCLASS_ATTACHED_OBJECT(obj));
+        }
+        // Continue to the shared T_CLASS/T_MODULE
       case T_MODULE:
         if (RCLASS_SUPER((VALUE)obj)) {
             UPDATE_IF_MOVED(objspace, RCLASS(obj)->super);
