@@ -3319,7 +3319,7 @@ iseq_peephole_optimize(rb_iseq_t *iseq, LINK_ELEMENT *list, const int do_tailcal
                 previ == BIN(getlocal) ||
                 previ == BIN(getblockparam) ||
                 previ == BIN(getblockparamproxy) ||
-                /* getinstancevariable may issue a warning */
+                previ == BIN(getinstancevariable) ||
                 previ == BIN(duparray)) {
                 /* just push operand or static value and pop soon, no
                  * side effects */
@@ -8270,7 +8270,7 @@ compile_builtin_function_call(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NOD
     NODE *args_node = node->nd_args;
 
     if (parent_block != NULL) {
-        COMPILE_ERROR(iseq, nd_line(line_node), "should not call builtins here.");
+        COMPILE_ERROR(ERROR_ARGS_AT(line_node) "should not call builtins here.");
         return COMPILE_NG;
     }
     else {
@@ -10262,6 +10262,18 @@ dump_disasm_list_with_cursor(const LINK_ELEMENT *link, const LINK_ELEMENT *curr,
     }
     printf("---------------------\n");
     fflush(stdout);
+}
+
+bool
+rb_insns_leaf_p(int i)
+{
+    return insn_leaf_p(i);
+}
+
+int
+rb_insn_len(VALUE insn)
+{
+    return insn_len(insn);
 }
 
 const char *

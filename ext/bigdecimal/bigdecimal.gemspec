@@ -1,15 +1,25 @@
 # coding: utf-8
 
+name = File.basename(__FILE__, '.*')
+source_version = ["", "ext/#{name}/"].find do |dir|
+  begin
+    break File.foreach(File.join(__dir__, "#{dir}#{name}.c")) {|line|
+      break $1.sub("-", ".") if /^#define\s+#{name.upcase}_VERSION\s+"(.+)"/o =~ line
+    }
+  rescue Errno::ENOENT
+  end
+end or raise "can't find #{name.upcase}_VERSION"
+
 Gem::Specification.new do |s|
-  s.name          = "bigdecimal"
-  s.version       = "3.1.3"
+  s.name          = name
+  s.version       = source_version
   s.authors       = ["Kenta Murata", "Zachary Scott", "Shigeo Kobayashi"]
   s.email         = ["mrkn@mrkn.jp"]
 
   s.summary       = "Arbitrary-precision decimal floating-point number library."
   s.description   = "This library provides arbitrary-precision decimal floating-point number class."
   s.homepage      = "https://github.com/ruby/bigdecimal"
-  s.licenses       = ["Ruby", "bsd-2-clause"]
+  s.licenses       = ["Ruby", "BSD-2-Clause"]
 
   s.require_paths = %w[lib]
   s.files         = %w[

@@ -1411,6 +1411,20 @@ extract-gems$(gnumake:yes=-sequential): PHONY
 	    -e 'end' \
 	    gems/bundled_gems
 
+extract-gems$(gnumake:yes=-sequential): $(HAVE_GIT:yes=clone-bundled-gems-src)
+
+clone-bundled-gems-src: PHONY
+	$(Q) $(BASERUBY) -C "$(srcdir)" \
+	    -Itool/lib -rbundled_gem -answ \
+	    -e 'BEGIN {git = $$git}' \
+	    -e 'gem, _, repo, rev = *$$F' \
+	    -e 'next if !rev or /^#/=~gem' \
+	    -e 'gemdir = "gems/src/#{gem}"' \
+	    -e 'BundledGem.checkout(gemdir, repo, rev, git: git)' \
+	    -e 'BundledGem.dummy_gemspec("#{gemdir}/#{gem}.gemspec")' \
+	    -- -git="$(GIT)" \
+	    gems/bundled_gems
+
 outdate-bundled-gems: PHONY
 	$(Q) $(BASERUBY) $(tooldir)/$@.rb --make="$(MAKE)" --mflags="$(MFLAGS)" "$(srcdir)"
 
@@ -1754,6 +1768,7 @@ help: PHONY
 	"  runruby:               runs test.rb by ruby you just built" \
 	"  gdb:                   runs test.rb by miniruby under gdb" \
 	"  gdb-ruby:              runs test.rb by ruby under gdb" \
+	"  runirb:                starts irb on built ruby (not installed ruby)" \
 	"  exam:                  equals make check test-bundler-parallel test-bundled-gems" \
 	"  check:                 equals make test test-tool test-all test-spec test-syntax-suggest" \
 	"  test:                  ruby core tests [BTESTS=<bootstraptest files>]" \
@@ -6776,6 +6791,7 @@ gc.$(OBJEXT): $(top_srcdir)/internal/basic_operators.h
 gc.$(OBJEXT): $(top_srcdir)/internal/bignum.h
 gc.$(OBJEXT): $(top_srcdir)/internal/bits.h
 gc.$(OBJEXT): $(top_srcdir)/internal/class.h
+gc.$(OBJEXT): $(top_srcdir)/internal/compile.h
 gc.$(OBJEXT): $(top_srcdir)/internal/compilers.h
 gc.$(OBJEXT): $(top_srcdir)/internal/complex.h
 gc.$(OBJEXT): $(top_srcdir)/internal/cont.h

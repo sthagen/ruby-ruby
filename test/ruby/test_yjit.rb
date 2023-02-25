@@ -974,6 +974,25 @@ class TestYJIT < Test::Unit::TestCase
     RUBY
   end
 
+  def test_code_gc_partial_last_page
+    # call_threshold: 2 to avoid JIT-ing code_gc itself. If code_gc were JITed right before
+    # code_gc is called, the last page would be on stack.
+    assert_compiles(<<~'RUBY', exits: :any, result: :ok, call_threshold: 2)
+      # Leave a bunch of off-stack pages
+      i = 0
+      while i < 1000
+        eval("x = proc { 1.to_s }; x.call; x.call")
+        i += 1
+      end
+
+      # On Linux, memory page size != code page size. So the last code page could be partially
+      # mapped. This call tests that assertions and other things work fine under the situation.
+      RubyVM::YJIT.code_gc
+
+      :ok
+    RUBY
+  end
+
   def test_trace_script_compiled # not ISEQ_TRACE_EVENTS
     assert_compiles(<<~'RUBY', exits: :any, result: :ok)
       @eval_counter = 0
@@ -1133,6 +1152,47 @@ class TestYJIT < Test::Unit::TestCase
 
       test ""
       test S.new
+    RUBY
+  end
+
+  def test_return_to_invalidated_block
+    # [Bug #19463]
+    assert_compiles(<<~RUBY, result: [1, 1, :ugokanai])
+      klass = Class.new do
+        def self.lookup(hash, key) = hash[key]
+
+        def self.foo(a, b) = []
+
+        def self.test(hash, key)
+          [lookup(hash, key), key, "".freeze]
+          # 05 opt_send_without_block :lookup
+          # 07 getlocal_WC_0          :hash
+          # 09 opt_str_freeze         ""
+          # 12 newarray               3
+          # 14 leave
+          #
+          # YJIT will put instructions (07..14) into a block.
+          # When String#freeze is redefined from within lookup(),
+          # the return address to the block is still on-stack. We rely
+          # on invalidation patching the code at the return address
+          # to service this situation correctly.
+        end
+      end
+
+      # get YJIT to compile test()
+      hash = { 1 => [] }
+      31.times { klass.test(hash, 1) }
+
+      # inject invalidation into lookup()
+      evil_hash = Hash.new do |_, key|
+        class String
+          undef :freeze
+          def freeze = :ugokanai
+        end
+
+        key
+      end
+      klass.test(evil_hash, 1)
     RUBY
   end
 

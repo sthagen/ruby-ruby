@@ -338,13 +338,13 @@ $(srcdir)/.bundle/.timestamp:
 	$(MAKEDIRS) $@
 
 define build-gem
-$(srcdir)/gems/src/$(1)/$(1).gemspec: | $(srcdir)/gems/src
+$(srcdir)/gems/src/$(1)/.git: | $(srcdir)/gems/src
 	$(ECHO) Cloning $(4)
 	$(Q) $(GIT) clone $(4) $$(@D)
 
-$(srcdir)/.bundle/.timestamp/$(1).revision: $(srcdir)/gems/src/$(1)/$(1).gemspec \
+$(srcdir)/.bundle/.timestamp/$(1).revision: \
 	$(if $(if $(wildcard $$(@)),$(filter $(3),$(shell cat $$(@)))),,PHONY) \
-	| $$(@D)
+	| $(srcdir)/.bundle/.timestamp $(srcdir)/gems/src/$(1)/.git
 	$(ECHO) Update $(1) to $(3)
 	$(Q) $(CHDIR) "$(srcdir)/gems/src/$(1)" && \
 	    $(GIT) fetch origin $(3) && \
@@ -352,12 +352,18 @@ $(srcdir)/.bundle/.timestamp/$(1).revision: $(srcdir)/gems/src/$(1)/$(1).gemspec
 	:
 	echo $(3) | $(IFCHANGE) $$(@) -
 
+# The repository of minitest does not include minitest.gemspec because it uses hoe.
+# This creates a dummy gemspec.
+$(srcdir)/gems/src/$(1)/$(1).gemspec: \
+	| $(srcdir)/gems/src/$(1)/.git
+	$(Q) $(BASERUBY) -I$(tooldir)/lib -rbundled_gem -e 'BundledGem.dummy_gemspec(*ARGV)' $$(@)
+
 $(srcdir)/gems/$(1)-$(2).gem: $(srcdir)/gems/src/$(1)/$(1).gemspec \
 		$(srcdir)/.bundle/.timestamp/$(1).revision
 	$(ECHO) Building $(1)@$(3) to $$(@)
 	$(Q) $(BASERUBY) -C "$(srcdir)" \
 	    -Itool/lib -rbundled_gem \
-	    -e 'BundledGem.build("gems/src/$(1)/$(1).gemspec", "$(2)", "gems")'
+	    -e 'BundledGem.build("gems/src/$(1)/$(1).gemspec", "$(2)", "gems", validation: false)'
 
 endef
 define build-gem-0

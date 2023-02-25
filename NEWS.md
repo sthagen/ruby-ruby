@@ -20,18 +20,25 @@ Note: We're only listing outstanding class updates.
     * `String#unpack` now raises ArgumentError for unknown directives. [[Bug #19150]]
     * `String#bytesplice` now accepts new arguments index/length or range of the source string to be copied.  [[Feature #19314]]
 
+* ObjectSpace::WeakKeyMap
+
+    * New core class to build collections with weak references.
+      The class use equality semantic to lookup keys like a regular hash,
+      but it doesn't hold strong references on the keys. [[Feature #18498]]
+
 ## Stdlib updates
 
 The following default gems are updated.
 
 * RubyGems 3.5.0.dev
+* bigdecimal 3.1.4
 * bundler 2.5.0.dev
 * csv 3.2.7
 * fiddle 1.1.2
 * optparse 0.4.0.pre.1
 * psych 5.1.0
 * stringio 3.0.6
-* strscan 3.0.6
+* strscan 3.0.7
 * timeout 0.3.2
 
 The following bundled gems are updated.

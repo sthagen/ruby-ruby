@@ -407,6 +407,35 @@ rb_io_buffer_type_for(VALUE klass, VALUE string)
     }
 }
 
+/*
+ * call-seq:
+ *   IO::Buffer.string(length) {|io_buffer| ... read/write io_buffer ...} -> string
+ *
+ * Creates a new string of the given length and yields a IO::Buffer instance
+ * to the block which uses the string as a source. The block is expected to
+ * write to the buffer and the string will be returned.
+ *
+ *    IO::Buffer.string(4) do |buffer|
+ *      buffer.set_string("Ruby")
+ *    end
+ *    # => "Ruby"
+ */
+VALUE
+rb_io_buffer_type_string(VALUE klass, VALUE length)
+{
+    VALUE string = rb_str_new(NULL, RB_NUM2LONG(length));
+
+    struct io_buffer_for_yield_instance_arguments arguments = {
+        .klass = klass,
+        .string = string,
+        .instance = Qnil,
+    };
+
+    rb_ensure(io_buffer_for_yield_instance, (VALUE)&arguments, io_buffer_for_yield_instance_ensure, (VALUE)&arguments);
+
+    return string;
+}
+
 VALUE
 rb_io_buffer_new(void *base, size_t size, enum rb_io_buffer_flags flags)
 {
@@ -2415,12 +2444,10 @@ rb_io_buffer_read(VALUE self, VALUE io, size_t length, size_t offset)
 }
 
 /*
- *  call-seq: read(io, [length, [offset]]) -> read length or -errno
+ *  call-seq: read(io, length, [offset]) -> read length or -errno
  *
  *  Read at most +length+ bytes from +io+ into the buffer, starting at
  *  +offset+. If an error occurs, return <tt>-errno</tt>.
- *
- *  If +length+ is not given, read until the end of the buffer.
  *
  *  If +offset+ is not given, read from the beginning of the buffer.
  *
@@ -2447,14 +2474,10 @@ io_buffer_read(int argc, VALUE *argv, VALUE self)
 
     VALUE io = argv[0];
 
-    size_t length;
-    if (argc >= 2) {
-        if (rb_int_negative_p(argv[1])) {
-            rb_raise(rb_eArgError, "Length can't be negative!");
-        }
-
-        length = NUM2SIZET(argv[1]);
+    if (rb_int_negative_p(argv[1])) {
+        rb_raise(rb_eArgError, "Length can't be negative!");
     }
+    size_t length = NUM2SIZET(argv[1]);
 
     size_t offset = 0;
     if (argc >= 3) {
@@ -2660,14 +2683,10 @@ io_buffer_write(int argc, VALUE *argv, VALUE self)
 
     VALUE io = argv[0];
 
-    size_t length;
-    if (argc >= 2) {
-        if (rb_int_negative_p(argv[1])) {
-            rb_raise(rb_eArgError, "Length can't be negative!");
-        }
-
-        length = NUM2SIZET(argv[1]);
+    if (rb_int_negative_p(argv[1])) {
+        rb_raise(rb_eArgError, "Length can't be negative!");
     }
+    size_t length = NUM2SIZET(argv[1]);
 
     size_t offset = 0;
     if (argc >= 3) {
@@ -3246,6 +3265,7 @@ Init_IO_Buffer(void)
 
     rb_define_alloc_func(rb_cIOBuffer, rb_io_buffer_type_allocate);
     rb_define_singleton_method(rb_cIOBuffer, "for", rb_io_buffer_type_for, 1);
+    rb_define_singleton_method(rb_cIOBuffer, "string", rb_io_buffer_type_string, 1);
 
 #ifdef _WIN32
     SYSTEM_INFO info;
