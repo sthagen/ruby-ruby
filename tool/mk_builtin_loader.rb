@@ -6,6 +6,7 @@ require_relative 'ruby_vm/helpers/c_escape'
 
 SUBLIBS = {}
 REQUIRED = {}
+BUILTIN_ATTRS = %w[inline]
 
 def string_literal(lit, str = [])
   while lit
@@ -25,11 +26,31 @@ def string_literal(lit, str = [])
   end
 end
 
+# e.g. [:symbol_literal, [:symbol, [:@ident, "inline", [19, 21]]]]
+def symbol_literal(lit)
+  symbol_literal, symbol_lit = lit
+  raise "#{lit.inspect} was not :symbol_literal" if symbol_literal != :symbol_literal
+  symbol, ident_lit = symbol_lit
+  raise "#{symbol_lit.inspect} was not :symbol" if symbol != :symbol
+  ident, symbol_name, = ident_lit
+  raise "#{ident.inspect} was not :@ident" if ident != :@ident
+  symbol_name
+end
+
 def inline_text argc, arg1
   raise "argc (#{argc}) of inline! should be 1" unless argc == 1
   arg1 = string_literal(arg1)
   raise "1st argument should be string literal" unless arg1
   arg1.join("").rstrip
+end
+
+def inline_attr(argc, arg1)
+  raise "argc (#{argc}) of attr! should be 1" unless argc == 1
+  attr = symbol_literal(arg1)
+  unless BUILTIN_ATTRS.include?(attr)
+    raise "attr (#{attr}) was not in: #{BUILTIN_ATTRS.join(', ')}"
+  end
+  attr
 end
 
 def make_cfunc_name inlines, name, lineno
@@ -138,10 +159,7 @@ def collect_builtin base, tree, name, bs, inlines, locals = nil
         if /(.+)[\!\?]\z/ =~ func_name
           case $1
           when 'attr'
-            text = inline_text(argc, args.first)
-            if text != 'inline'
-              raise "Only 'inline' is allowed to be annotated (but got: '#{text}')"
-            end
+            text = inline_attr(argc, args.first)
             break
           when 'cstmt'
             text = inline_text argc, args.first
@@ -318,44 +336,6 @@ def mk_builtin_header file
       end
     }
 
-    bs.each_pair{|func, (argc, cfunc_name)|
-      decl = ', VALUE' * argc
-      argv = argc                    \
-           . times                   \
-           . map {|i|", argv[#{i}]"} \
-           . join('')
-      f.puts %'static void'
-      f.puts %'mjit_compile_invokebuiltin_for_#{func}(VALUE buf, long index, unsigned stack_size, bool inlinable_p)'
-      f.puts %'{'
-      f.puts %'    rb_str_catf(buf, "    VALUE self = GET_SELF();\\n");'
-      f.puts %'    rb_str_catf(buf, "    typedef VALUE (*func)(rb_execution_context_t *, VALUE#{decl});\\n");'
-      if inlines.has_key? cfunc_name
-        body_lineno, text, locals, func_name = inlines[cfunc_name]
-        lineno, str = generate_cexpr(ofile, lineno, line_file, body_lineno, text, locals, func_name)
-        f.puts %'    if (inlinable_p) {'
-        str.gsub(/^(?!#)/, '    ').each_line {|i|
-          j = RubyVM::CEscape.rstring2cstr(i).dup
-          j.sub!(/^    return\b/ , '    val =')
-          f.printf(%'        rb_str_catf(buf, "%%s", %s);\n', j)
-        }
-        f.puts(%'        return;')
-        f.puts(%'    }')
-      end
-      if argc > 0
-        f.puts %'    if (index == -1) {'
-        f.puts %'        rb_str_catf(buf, "    const VALUE *argv = &stack[%d];\\n", stack_size - #{argc});'
-        f.puts %'    }'
-        f.puts %'    else {'
-        f.puts %'        rb_str_catf(buf, "    const unsigned int lnum = ISEQ_BODY(GET_ISEQ())->local_table_size;\\n");'
-        f.puts %'        rb_str_catf(buf, "    const VALUE *argv = GET_EP() - lnum - VM_ENV_DATA_SIZE + 1 + %ld;\\n", index);'
-        f.puts %'    }'
-      end
-      f.puts %'    rb_str_catf(buf, "    func f = (func)%"PRIuVALUE"; /* == #{cfunc_name} */\\n", (VALUE)#{cfunc_name});'
-      f.puts %'    rb_str_catf(buf, "    val = f(ec, self#{argv});\\n");'
-      f.puts %'}'
-      f.puts
-    }
-
     if SUBLIBS[base]
       f.puts "// sub libraries"
       SUBLIBS[base].each do |sub|
@@ -371,9 +351,9 @@ def mk_builtin_header file
     f.puts "  // table definition"
     f.puts "  static const struct rb_builtin_function #{table}[] = {"
     bs.each.with_index{|(func, (argc, cfunc_name)), i|
-      f.puts "    RB_BUILTIN_FUNCTION(#{i}, #{func}, #{cfunc_name}, #{argc}, mjit_compile_invokebuiltin_for_#{func}),"
+      f.puts "    RB_BUILTIN_FUNCTION(#{i}, #{func}, #{cfunc_name}, #{argc}),"
     }
-    f.puts "    RB_BUILTIN_FUNCTION(-1, NULL, NULL, 0, 0),"
+    f.puts "    RB_BUILTIN_FUNCTION(-1, NULL, NULL, 0),"
     f.puts "  };"
 
     f.puts

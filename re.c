@@ -3317,7 +3317,7 @@ rb_reg_init_str_enc(VALUE re, VALUE s, rb_encoding *enc, int options)
     return re;
 }
 
-MJIT_FUNC_EXPORTED VALUE
+VALUE
 rb_reg_new_ary(VALUE ary, int opt)
 {
     VALUE re = rb_reg_new_str(rb_reg_preprocess_dregexp(ary, opt), opt);
@@ -3859,7 +3859,7 @@ void rb_warn_deprecated_to_remove(const char *removal, const char *fmt, const ch
  *      Regexp.new('foo', 'i')  # => /foo/i
  *      Regexp.new('foo', 'im') # => /foo/im
  *
- *  - The logical OR of one or more of the constants
+ *  - The bit-wise OR of one or more of the constants
  *    Regexp::EXTENDED, Regexp::IGNORECASE, Regexp::MULTILINE, and
  *    Regexp::NOENCODING:
  *
@@ -3937,11 +3937,11 @@ reg_extract_args(int argc, VALUE *argv, struct reg_init_args *args)
         str = RREGEXP_SRC(re);
     }
     else {
-        if (!UNDEF_P(opts)) {
+        if (!NIL_P(opts)) {
             int f;
             if (FIXNUM_P(opts)) flags = FIX2INT(opts);
             else if ((f = str_to_option(opts)) >= 0) flags = f;
-            else if (!NIL_P(opts) && rb_bool_expected(opts, "ignorecase", FALSE))
+            else if (rb_bool_expected(opts, "ignorecase", FALSE))
                 flags = ONIG_OPTION_IGNORECASE;
         }
         str = StringValue(src);
