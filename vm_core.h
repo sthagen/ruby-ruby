@@ -365,6 +365,16 @@ enum rb_iseq_type {
     ISEQ_TYPE_PLAIN
 };
 
+// Attributes specified by Primitive.attr!
+enum rb_builtin_attr {
+    // The iseq does not call methods.
+    BUILTIN_ATTR_LEAF = 0x01,
+    // The iseq does not allocate objects.
+    BUILTIN_ATTR_NO_GC = 0x02,
+};
+
+typedef VALUE (*rb_jit_func_t)(struct rb_execution_context_struct *, struct rb_control_frame_struct *);
+
 struct rb_iseq_constant_body {
     enum rb_iseq_type type;
 
@@ -484,12 +494,7 @@ struct rb_iseq_constant_body {
     unsigned int stack_max; /* for stack overflow check */
 
     bool catch_except_p; // If a frame of this ISeq may catch exception, set true.
-    // If true, this ISeq is leaf *and* backtraces are not used, for example,
-    // by rb_profile_frames. We verify only leafness on VM_CHECK_MODE though.
-    // Note that GC allocations might use backtraces due to
-    // ObjectSpace#trace_object_allocations.
-    // For more details, see: https://bugs.ruby-lang.org/issues/16956
-    bool builtin_inline_p;
+    unsigned int builtin_attrs; // Union of rb_builtin_attr
 
     union {
         iseq_bits_t * list; /* Find references for GC */
@@ -502,7 +507,7 @@ struct rb_iseq_constant_body {
 
 #if USE_RJIT || USE_YJIT
     // Function pointer for JIT code
-    VALUE (*jit_func)(struct rb_execution_context_struct *, struct rb_control_frame_struct *);
+    rb_jit_func_t jit_func;
     // Number of total calls with jit_exec()
     long unsigned total_calls;
 #endif
@@ -517,8 +522,6 @@ struct rb_iseq_constant_body {
     void *yjit_payload;
 #endif
 };
-
-typedef VALUE (*jit_func_t)(struct rb_execution_context_struct *, struct rb_control_frame_struct *);
 
 /* T_IMEMO/iseq */
 /* typedef rb_iseq_t is in method.h */

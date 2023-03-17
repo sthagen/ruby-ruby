@@ -32,8 +32,8 @@ jobs:
           - ruby-3.2
 
     steps:
-      - uses: actions/checkout@ac593985615ec2ede58e132d2e21d2b1cbd6127c # v3.3.0
-      - uses: ruby/setup-ruby@9669f3ee51dc3f4eda8447ab696b3ab19a90d14b # v1.144.0
+      - uses: actions/checkout@24cb9080177205b6e8c946b17badbe402adc938f # v3.4.0
+      - uses: ruby/setup-ruby@e6689b4deb1cb2062ea45315001f687c0b52111b # v1.144.1
         with:
           ruby-version: ${{ matrix.ruby }}
           bundler: none
@@ -42,7 +42,7 @@ jobs:
         working-directory: spec/ruby
         env:
           CHECK_LEAKS: true
-      - uses: ruby/action-slack@36bda26f63ca8a3787504418657edbbc1a3f5361 # v3.1.0
+      - uses: ruby/action-slack@0bd85c72233cdbb6a0fe01d37aaeff1d21b5fce1 # v3.2.1
         with:
           payload: |
             {

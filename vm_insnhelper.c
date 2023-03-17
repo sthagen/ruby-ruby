@@ -1823,6 +1823,12 @@ vm_throw(const rb_execution_context_t *ec, rb_control_frame_t *reg_cfp,
     }
 }
 
+VALUE
+rb_vm_throw(const rb_execution_context_t *ec, rb_control_frame_t *reg_cfp, rb_num_t throw_state, VALUE throwobj)
+{
+    return vm_throw(ec, reg_cfp, throw_state, throwobj);
+}
+
 static inline void
 vm_expandarray(VALUE *sp, VALUE ary, rb_num_t num, int flag)
 {
@@ -5211,15 +5217,7 @@ vm_sendish(
         val = vm_invokeblock_i(ec, GET_CFP(), &calling);
         break;
     }
-
-    if (!UNDEF_P(val)) {
-        return val;             /* CFUNC normal return */
-    }
-    else {
-        RESTORE_REGS();         /* CFP pushed in cc->call() */
-    }
-
-    return jit_exec(ec);
+    return val;
 }
 
 /* object.c */
@@ -6395,7 +6393,7 @@ lookup_builtin_invoker(int argc)
 static inline VALUE
 invoke_bf(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp, const struct rb_builtin_function* bf, const VALUE *argv)
 {
-    const bool canary_p = ISEQ_BODY(reg_cfp->iseq)->builtin_inline_p; // Verify an assumption of `Primitive.attr! 'inline'`
+    const bool canary_p = ISEQ_BODY(reg_cfp->iseq)->builtin_attrs & BUILTIN_ATTR_LEAF; // Verify an assumption of `Primitive.attr! :leaf`
     SETUP_CANARY(canary_p);
     VALUE ret = (*lookup_builtin_invoker(bf->argc))(ec, reg_cfp->self, argv, (rb_insn_func_t)bf->func_ptr);
     CHECK_CANARY(canary_p, BIN(invokebuiltin));

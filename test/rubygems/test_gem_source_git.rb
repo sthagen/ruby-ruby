@@ -8,7 +8,7 @@ class TestGemSourceGit < Gem::TestCase
 
     @name, @version, @repository, @head = git_gem
 
-    @hash = Digest::SHA1.hexdigest @repository
+    @hash = OpenSSL::Digest::SHA1.hexdigest @repository
 
     @source = Gem::Source::Git.new @name, @repository, nil, false
   end
@@ -251,7 +251,7 @@ class TestGemSourceGit < Gem::TestCase
       specs = source.specs
     end
 
-    assert_equal %w[a-1 b-1], specs.map {|spec| spec.full_name }
+    assert_equal %w[a-1 b-1], specs.map(&:full_name)
 
     a_spec = specs.shift
 

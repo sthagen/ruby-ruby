@@ -111,9 +111,25 @@ module RubyVM::RJIT
 
     def test_cmp
       asm = Assembler.new
-      asm.cmp(:rax, 0)          # CMP r/m64, imm8 (Mod 11: reg)
+      asm.cmp(BytePtr[:rax, 8], 8)      # CMP r/m8, imm8 (Mod 01: [reg]+disp8)
+      asm.cmp(DwordPtr[:rax, 8], 0x100) # CMP r/m32, imm32 (Mod 01: [reg]+disp8)
+      asm.cmp([:rax, 8], 8)             # CMP r/m64, imm8 (Mod 01: [reg]+disp8)
+      asm.cmp([:rax, 0x100], 8)         # CMP r/m64, imm8 (Mod 10: [reg]+disp32)
+      asm.cmp(:rax, 8)                  # CMP r/m64, imm8 (Mod 11: reg)
+      asm.cmp(:rax, 0x100)              # CMP r/m64, imm32 (Mod 11: reg)
+      asm.cmp([:rax, 8], :rbx)          # CMP r/m64, r64 (Mod 01: [reg]+disp8)
+      asm.cmp([:rax, -0x100], :rbx)     # CMP r/m64, r64 (Mod 10: [reg]+disp32)
+      asm.cmp(:rax, :rbx)               # CMP r/m64, r64 (Mod 11: reg)
       assert_compile(asm, <<~EOS)
-        0x0: cmp rax, 0
+        0x0: cmp byte ptr [rax + 8], 8
+        0x4: cmp dword ptr [rax + 8], 0x100
+        0xb: cmp qword ptr [rax + 8], 8
+        0x10: cmp qword ptr [rax + 0x100], 8
+        0x18: cmp rax, 8
+        0x1c: cmp rax, 0x100
+        0x23: cmp qword ptr [rax + 8], rbx
+        0x27: cmp qword ptr [rax - 0x100], rbx
+        0x2e: cmp rax, rbx
       EOS
     end
 
@@ -150,7 +166,7 @@ module RubyVM::RJIT
       asm.jmp([:rax, 8])   # JMP r/m64 (Mod 01: [reg]+disp8)
       asm.jmp(:rax)        # JMP r/m64 (Mod 11: reg)
       assert_compile(asm, <<~EOS)
-        0x0: jmp 0x2
+        0x0: jmp 2
         0x2: jmp 0xff
         0x7: jmp qword ptr [rax + 8]
         0xa: jmp rax
@@ -201,19 +217,45 @@ module RubyVM::RJIT
 
     def test_mov
       asm = Assembler.new
-      asm.mov(:rax, :rbx)      # MOV r64, r/m64 (Mod 00: [reg])
-      asm.mov(:rax, [:rbx, 8]) # MOV r64, r/m64 (Mod 01: [reg]+disp8)
+      asm.mov(:eax, DwordPtr[:rbx, 8])  # MOV r32 r/m32 (Mod 01: [reg]+disp8)
+      asm.mov(:eax, 0x100)              # MOV r32, imm32 (Mod 11: reg)
+      asm.mov(:rax, [:rbx])             # MOV r64, r/m64 (Mod 00: [reg])
+      asm.mov(:rax, [:rbx, 8])          # MOV r64, r/m64 (Mod 01: [reg]+disp8)
+      asm.mov(:rax, [:rbx, 0x100])      # MOV r64, r/m64 (Mod 10: [reg]+disp32)
+      asm.mov(:rax, :rbx)               # MOV r64, r/m64 (Mod 11: reg)
+      asm.mov(:rax, 0x100)              # MOV r/m64, imm32 (Mod 11: reg)
+      asm.mov(:rax, 0x100000000)        # MOV r64, imm64
+      asm.mov(DwordPtr[:rax, 8], 0x100) # MOV r/m32, imm32 (Mod 01: [reg]+disp8)
+      asm.mov([:rax], 0x100)            # MOV r/m64, imm32 (Mod 00: [reg])
+      asm.mov([:rax], :rbx)             # MOV r/m64, r64 (Mod 00: [reg])
+      asm.mov([:rax, 8], 0x100)         # MOV r/m64, imm32 (Mod 01: [reg]+disp8)
+      asm.mov([:rax, 8], :rbx)          # MOV r/m64, r64 (Mod 01: [reg]+disp8)
+      asm.mov([:rax, 0x100], 0x100)     # MOV r/m64, imm32 (Mod 10: [reg]+disp32)
+      asm.mov([:rax, 0x100], :rbx)      # MOV r/m64, r64 (Mod 10: [reg]+disp32)
       assert_compile(asm, <<~EOS)
-        0x0: mov rax, rbx
-        0x3: mov rax, qword ptr [rbx + 8]
+        0x0: mov eax, dword ptr [rbx + 8]
+        0x3: mov eax, 0x100
+        0x8: mov rax, qword ptr [rbx]
+        0xb: mov rax, qword ptr [rbx + 8]
+        0xf: mov rax, qword ptr [rbx + 0x100]
+        0x16: mov rax, rbx
+        0x19: mov rax, 0x100
+        0x20: movabs rax, 0x100000000
+        0x2a: mov dword ptr [rax + 8], 0x100
+        0x31: mov qword ptr [rax], 0x100
+        0x38: mov qword ptr [rax], rbx
+        0x3b: mov qword ptr [rax + 8], 0x100
+        0x43: mov qword ptr [rax + 8], rbx
+        0x47: mov qword ptr [rax + 0x100], 0x100
+        0x52: mov qword ptr [rax + 0x100], rbx
       EOS
     end
 
     def test_or
       asm = Assembler.new
-      asm.or(:rax, 0)          # OR r/m64, imm8 (Mod 11: reg)
-      asm.or(:rax, 0xffff)     # OR r/m64, imm32 (Mod 11: reg)
-      asm.or(:rax, [:rbx, 8])  # OR r64, r/m64 (Mod 01: [reg]+disp8)
+      asm.or(:rax, 0)         # OR r/m64, imm8 (Mod 11: reg)
+      asm.or(:rax, 0xffff)    # OR r/m64, imm32 (Mod 11: reg)
+      asm.or(:rax, [:rbx, 8]) # OR r64, r/m64 (Mod 01: [reg]+disp8)
       assert_compile(asm, <<~EOS)
         0x0: or rax, 0
         0x4: or rax, 0xffff
@@ -245,7 +287,7 @@ module RubyVM::RJIT
 
     def test_sar
       asm = Assembler.new
-      asm.sar(:rax, 0)          # SAR r/m64, imm8 (Mod 11: reg)
+      asm.sar(:rax, 0) # SAR r/m64, imm8 (Mod 11: reg)
       assert_compile(asm, <<~EOS)
         0x0: sar rax, 0
       EOS
@@ -253,9 +295,11 @@ module RubyVM::RJIT
 
     def test_sub
       asm = Assembler.new
-      asm.sub(:rax, 0)          # SUB r/m64, imm8 (Mod 11: reg)
+      asm.sub(:rax, 8)    # SUB r/m64, imm8 (Mod 11: reg)
+      asm.sub(:rax, :rbx) # SUB r/m64, r64 (Mod 11: reg)
       assert_compile(asm, <<~EOS)
-        0x0: sub rax, 0
+        0x0: sub rax, 8
+        0x4: sub rax, rbx
       EOS
     end
 
@@ -294,23 +338,12 @@ module RubyVM::RJIT
       end_addr = @cb.write_addr
 
       io = StringIO.new
-      @cb.dump_disasm(start_addr, end_addr, io:, color: false)
+      @cb.dump_disasm(start_addr, end_addr, io:, color: false, test: true)
       io.seek(0)
       disasm = io.read
 
       disasm.gsub!(/^  /, '')
       disasm.sub!(/\n\z/, '')
-      disasm.gsub!(/0x(\h{12})/) do
-        offset = $1.to_i(16) - start_addr
-        if offset.negative?
-          "-0x#{offset.to_s(16)}"
-        else
-          "0x#{offset.to_s(16)}"
-        end
-      end
-      (start_addr...end_addr).each do |addr|
-        disasm.gsub!("0x#{addr.to_s(16)}", "0x#{(addr - start_addr).to_s(16)}")
-      end
       disasm
     end
   end

@@ -37,7 +37,6 @@ RJIT_RUNTIME_COUNTERS(
     send_undef,
     send_zsuper,
     send_refined,
-    send_unknown_type,
     send_stackoverflow,
     send_arity,
     send_c_tracing,
@@ -50,7 +49,7 @@ RJIT_RUNTIME_COUNTERS(
     send_block_not_proxy,
 
     send_iseq_kwparam,
-    send_iseq_kw_splat,
+    send_iseq_complex,
 
     send_cfunc_variadic,
     send_cfunc_too_many_args,
@@ -75,13 +74,18 @@ RJIT_RUNTIME_COUNTERS(
     send_optimized_blockarg,
     send_optimized_block_call,
     send_optimized_struct_aset,
-    send_optimized_unknown_type,
 
     send_bmethod_not_iseq,
     send_bmethod_blockarg,
 
     invokesuper_me_changed,
     invokesuper_same_me,
+
+    invokeblock_none,
+    invokeblock_iseq,
+    invokeblock_ifunc,
+    invokeblock_symbol,
+    invokeblock_proc,
 
     getivar_megamorphic,
     getivar_not_heap,

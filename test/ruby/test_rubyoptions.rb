@@ -151,7 +151,7 @@ class TestRubyOptions < Test::Unit::TestCase
       assert_match(VERSION_PATTERN, r[0])
       if self.class.rjit_enabled? && !JITSupport.rjit_force_enabled?
         assert_equal(NO_JIT_DESCRIPTION, r[0])
-      elsif self.class.yjit_enabled? && !yjit_force_enabled? # checking -DYJIT_FORCE_ENABLE
+      elsif self.class.yjit_enabled? && !JITSupport.yjit_force_enabled?
         assert_equal(NO_JIT_DESCRIPTION, r[0])
       else
         assert_equal(RUBY_DESCRIPTION, r[0])
@@ -172,7 +172,7 @@ class TestRubyOptions < Test::Unit::TestCase
   end
 
   def test_enable
-    if JITSupport.supported?
+    if JITSupport.yjit_supported? || JITSupport.rjit_supported?
       assert_in_out_err(%w(--enable all -e) + [""], "", [], [])
       assert_in_out_err(%w(--enable-all -e) + [""], "", [], [])
       assert_in_out_err(%w(--enable=all -e) + [""], "", [], [])
@@ -228,7 +228,7 @@ class TestRubyOptions < Test::Unit::TestCase
 
   def test_rjit_disabled_version
     return unless JITSupport.rjit_supported?
-    return if yjit_force_enabled?
+    return if JITSupport.yjit_force_enabled?
 
     env = { 'RUBY_YJIT_ENABLE' => nil } # unset in children
     [
@@ -246,7 +246,7 @@ class TestRubyOptions < Test::Unit::TestCase
 
   def test_rjit_version
     return unless JITSupport.rjit_supported?
-    return if yjit_force_enabled?
+    return if JITSupport.yjit_force_enabled?
 
     env = { 'RUBY_YJIT_ENABLE' => nil } # unset in children
     [
@@ -755,6 +755,9 @@ class TestRubyOptions < Test::Unit::TestCase
         )?
       )x,
       %r(
+        (?:--\sThreading(?:.+\n)*\n)?
+      )x,
+      %r(
         (?:--\sMachine(?:.+\n)*\n)?
       )x,
       %r(
@@ -1123,11 +1126,5 @@ class TestRubyOptions < Test::Unit::TestCase
   def test_null_script
     omit "#{IO::NULL} is not a character device" unless File.chardev?(IO::NULL)
     assert_in_out_err([IO::NULL], success: true)
-  end
-
-  private
-
-  def yjit_force_enabled?
-    "#{RbConfig::CONFIG['CFLAGS']} #{RbConfig::CONFIG['CPPFLAGS']}".match?(/(\A|\s)-D ?YJIT_FORCE_ENABLE\b/)
   end
 end

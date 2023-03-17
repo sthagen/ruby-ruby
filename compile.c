@@ -4299,7 +4299,28 @@ compile_branch_condition(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *co
         CHECK(compile_defined_expr(iseq, ret, cond, Qfalse));
         break;
       default:
-        CHECK(COMPILE(ret, "branch condition", cond));
+        {
+            DECL_ANCHOR(cond_seq);
+            INIT_ANCHOR(cond_seq);
+
+            CHECK(COMPILE(cond_seq, "branch condition", cond));
+
+            if (LIST_INSN_SIZE_ONE(cond_seq)) {
+                INSN *insn = (INSN *)ELEM_FIRST_INSN(FIRST_ELEMENT(cond_seq));
+                if (insn->insn_id == BIN(putobject)) {
+                    if (RTEST(insn->operands[0])) {
+                        ADD_INSNL(ret, cond, jump, then_label);
+                        // maybe unreachable
+                        return COMPILE_OK;
+                    }
+                    else {
+                        ADD_INSNL(ret, cond, jump, else_label);
+                        return COMPILE_OK;
+                    }
+                }
+            }
+            ADD_SEQ(ret, cond_seq);
+        }
         break;
     }
 
@@ -5789,6 +5810,16 @@ check_keyword(const NODE *node)
 }
 #endif
 
+static bool
+keyword_node_single_splat_p(NODE *kwnode)
+{
+    RUBY_ASSERT(keyword_node_p(kwnode));
+
+    NODE *node = kwnode->nd_head;
+    return node->nd_head == NULL &&
+           node->nd_next->nd_next == NULL;
+}
+
 static int
 setup_args_core(rb_iseq_t *iseq, LINK_ANCHOR *const args, const NODE *argn,
                 int dup_rest, unsigned int *flag_ptr, struct rb_callinfo_kwarg **kwarg_ptr)
@@ -5881,7 +5912,9 @@ setup_args_core(rb_iseq_t *iseq, LINK_ANCHOR *const args, const NODE *argn,
           if (kwnode) {
               // f(*a, k:1)
               *flag_ptr |= VM_CALL_KW_SPLAT;
-              *flag_ptr |= VM_CALL_KW_SPLAT_MUT;
+              if (!keyword_node_single_splat_p(kwnode)) {
+                  *flag_ptr |= VM_CALL_KW_SPLAT_MUT;
+              }
               compile_hash(iseq, args, kwnode, TRUE, FALSE);
               argc += 1;
           }
@@ -6017,53 +6050,21 @@ optimizable_range_item_p(const NODE *n)
 static int
 compile_if(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *const node, int popped, const enum node_type type)
 {
-    struct rb_iseq_constant_body *const body = ISEQ_BODY(iseq);
     const NODE *const node_body = type == NODE_IF ? node->nd_body : node->nd_else;
     const NODE *const node_else = type == NODE_IF ? node->nd_else : node->nd_body;
 
     const int line = nd_line(node);
     const NODE *line_node = node;
     DECL_ANCHOR(cond_seq);
-    DECL_ANCHOR(then_seq);
-    DECL_ANCHOR(else_seq);
     LABEL *then_label, *else_label, *end_label;
     VALUE branches = Qfalse;
-    int ci_size;
-    VALUE catch_table = ISEQ_COMPILE_DATA(iseq)->catch_table_ary;
-    long catch_table_size = NIL_P(catch_table) ? 0 : RARRAY_LEN(catch_table);
 
     INIT_ANCHOR(cond_seq);
-    INIT_ANCHOR(then_seq);
-    INIT_ANCHOR(else_seq);
     then_label = NEW_LABEL(line);
     else_label = NEW_LABEL(line);
     end_label = 0;
 
-    compile_branch_condition(iseq, cond_seq, node->nd_cond,
-                             then_label, else_label);
-
-    ci_size = body->ci_size;
-    CHECK(COMPILE_(then_seq, "then", node_body, popped));
-    catch_table = ISEQ_COMPILE_DATA(iseq)->catch_table_ary;
-    if (!then_label->refcnt) {
-        body->ci_size = ci_size;
-        if (!NIL_P(catch_table)) rb_ary_set_len(catch_table, catch_table_size);
-    }
-    else {
-        if (!NIL_P(catch_table)) catch_table_size = RARRAY_LEN(catch_table);
-    }
-
-    ci_size = body->ci_size;
-    CHECK(COMPILE_(else_seq, "else", node_else, popped));
-    catch_table = ISEQ_COMPILE_DATA(iseq)->catch_table_ary;
-    if (!else_label->refcnt) {
-        body->ci_size = ci_size;
-        if (!NIL_P(catch_table)) rb_ary_set_len(catch_table, catch_table_size);
-    }
-    else {
-        if (!NIL_P(catch_table)) catch_table_size = RARRAY_LEN(catch_table);
-    }
-
+    compile_branch_condition(iseq, cond_seq, node->nd_cond, then_label, else_label);
     ADD_SEQ(ret, cond_seq);
 
     if (then_label->refcnt && else_label->refcnt) {
@@ -6072,6 +6073,11 @@ compile_if(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *const node, int 
 
     if (then_label->refcnt) {
         ADD_LABEL(ret, then_label);
+
+        DECL_ANCHOR(then_seq);
+        INIT_ANCHOR(then_seq);
+        CHECK(COMPILE_(then_seq, "then", node_body, popped));
+
         if (else_label->refcnt) {
             add_trace_branch_coverage(
                 iseq,
@@ -6091,6 +6097,11 @@ compile_if(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *const node, int 
 
     if (else_label->refcnt) {
         ADD_LABEL(ret, else_label);
+
+        DECL_ANCHOR(else_seq);
+        INIT_ANCHOR(else_seq);
+        CHECK(COMPILE_(else_seq, "else", node_else, popped));
+
         if (then_label->refcnt) {
             add_trace_branch_coverage(
                 iseq,
@@ -8214,6 +8225,50 @@ delegate_call_p(const rb_iseq_t *iseq, unsigned int argc, const LINK_ANCHOR *arg
     }
 }
 
+// Compile Primitive.attr! :leaf, ...
+static int
+compile_builtin_attr(rb_iseq_t *iseq, const NODE *node)
+{
+    VALUE symbol;
+    VALUE string;
+    if (!node) goto no_arg;
+    while (node) {
+        if (!nd_type_p(node, NODE_LIST)) goto bad_arg;
+        const NODE *next = node->nd_next;
+
+        node = node->nd_head;
+        if (!node) goto no_arg;
+        if (!nd_type_p(node, NODE_LIT)) goto bad_arg;
+
+        symbol = node->nd_lit;
+        if (!SYMBOL_P(symbol)) goto non_symbol_arg;
+
+        string = rb_sym_to_s(symbol);
+        if (strcmp(RSTRING_PTR(string), "leaf") == 0) {
+            ISEQ_BODY(iseq)->builtin_attrs |= BUILTIN_ATTR_LEAF;
+        }
+        else if (strcmp(RSTRING_PTR(string), "no_gc") == 0) {
+            ISEQ_BODY(iseq)->builtin_attrs |= BUILTIN_ATTR_NO_GC;
+        }
+        else {
+            goto unknown_arg;
+        }
+        node = next;
+    }
+    return COMPILE_OK;
+  no_arg:
+    COMPILE_ERROR(ERROR_ARGS "attr!: no argument");
+    return COMPILE_NG;
+  non_symbol_arg:
+    COMPILE_ERROR(ERROR_ARGS "non symbol argument to attr!: %s", rb_builtin_class_name(symbol));
+    return COMPILE_NG;
+  unknown_arg:
+    COMPILE_ERROR(ERROR_ARGS "unknown argument to attr!: %s", RSTRING_PTR(string));
+    return COMPILE_NG;
+  bad_arg:
+    UNKNOWN_NODE("attr!", node, COMPILE_NG);
+}
+
 static int
 compile_builtin_arg(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *node, const NODE *line_node, int popped)
 {
@@ -8337,9 +8392,7 @@ compile_builtin_function_call(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NOD
                 return COMPILE_OK;
             }
             else if (strcmp("attr!", builtin_func) == 0) {
-                // There's only "inline" attribute for now
-                ISEQ_BODY(iseq)->builtin_inline_p = true;
-                return COMPILE_OK;
+                return compile_builtin_attr(iseq, args_node);
             }
             else if (strcmp("arg!", builtin_func) == 0) {
                 return compile_builtin_arg(iseq, ret, args_node, line_node, popped);
@@ -12122,7 +12175,7 @@ ibf_dump_iseq_each(struct ibf_dump *dump, const rb_iseq_t *iseq)
     ibf_dump_write_small_value(dump, body->ci_size);
     ibf_dump_write_small_value(dump, body->stack_max);
     ibf_dump_write_small_value(dump, body->catch_except_p);
-    ibf_dump_write_small_value(dump, body->builtin_inline_p);
+    ibf_dump_write_small_value(dump, body->builtin_attrs);
 
 #undef IBF_BODY_OFFSET
 
@@ -12235,7 +12288,7 @@ ibf_load_iseq_each(struct ibf_load *load, rb_iseq_t *iseq, ibf_offset_t offset)
     const unsigned int ci_size = (unsigned int)ibf_load_small_value(load, &reading_pos);
     const unsigned int stack_max = (unsigned int)ibf_load_small_value(load, &reading_pos);
     const char catch_except_p = (char)ibf_load_small_value(load, &reading_pos);
-    const bool builtin_inline_p = (bool)ibf_load_small_value(load, &reading_pos);
+    const unsigned int builtin_attrs = (unsigned int)ibf_load_small_value(load, &reading_pos);
 
     // setup fname and dummy frame
     VALUE path = ibf_load_object(load, location_pathobj_index);
@@ -12308,7 +12361,7 @@ ibf_load_iseq_each(struct ibf_load *load, rb_iseq_t *iseq, ibf_offset_t offset)
     load_body->location.code_location.end_pos.lineno = location_code_location_end_pos_lineno;
     load_body->location.code_location.end_pos.column = location_code_location_end_pos_column;
     load_body->catch_except_p = catch_except_p;
-    load_body->builtin_inline_p = builtin_inline_p;
+    load_body->builtin_attrs = builtin_attrs;
 
     load_body->ivc_size             = ivc_size;
     load_body->icvarc_size          = icvarc_size;

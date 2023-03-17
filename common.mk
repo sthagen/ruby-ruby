@@ -760,6 +760,7 @@ $(arch:noarch=ignore)-fake.rb: $(srcdir)/template/fake.rb.in $(tooldir)/generic_
 noarch-fake.rb: # prerequisite of yes-fake
 	$(Q) exit > $@
 
+# runner: BASERUBY, target: miniruby
 btest: $(TEST_RUNNABLE)-btest
 no-btest: PHONY
 yes-btest: yes-fake miniruby$(EXEEXT) PHONY
@@ -767,11 +768,18 @@ yes-btest: yes-fake miniruby$(EXEEXT) PHONY
 	$(Q)$(gnumake_recursive)$(exec) $(BOOTSTRAPRUBY) "$(srcdir)/bootstraptest/runner.rb" --ruby="$(BTESTRUBY) $(RUN_OPTS)" $(OPTS) $(TESTOPTS) $(BTESTS)
 	$(ACTIONS_ENDGROUP)
 
+# runner: ruby, target: ruby
 btest-ruby: $(TEST_RUNNABLE)-btest-ruby
 no-btest-ruby: PHONY
 yes-btest-ruby: prog PHONY
 	$(ACTIONS_GROUP)
 	$(Q)$(gnumake_recursive)$(exec) $(RUNRUBY) "$(srcdir)/bootstraptest/runner.rb" --ruby="$(PROGRAM) -I$(srcdir)/lib $(RUN_OPTS)" $(OPTS) $(TESTOPTS) $(BTESTS)
+	$(ACTIONS_ENDGROUP)
+
+# runner: BASERUBY, target: ruby
+btest-bruby: prog PHONY
+	$(ACTIONS_GROUP)
+	$(Q)$(gnumake_recursive)$(exec) $(BOOTSTRAPRUBY) "$(srcdir)/bootstraptest/runner.rb" --ruby="$(PROGRAM) -I$(srcdir)/lib $(RUN_OPTS)" $(OPTS) $(TESTOPTS) $(BTESTS)
 	$(ACTIONS_ENDGROUP)
 
 rtest: yes-fake miniruby$(EXEEXT) PHONY
@@ -13222,6 +13230,7 @@ rjit_c.$(OBJEXT): {$(VPATH)}backward/2/stdarg.h
 rjit_c.$(OBJEXT): {$(VPATH)}builtin.h
 rjit_c.$(OBJEXT): {$(VPATH)}config.h
 rjit_c.$(OBJEXT): {$(VPATH)}constant.h
+rjit_c.$(OBJEXT): {$(VPATH)}debug.h
 rjit_c.$(OBJEXT): {$(VPATH)}debug_counter.h
 rjit_c.$(OBJEXT): {$(VPATH)}defines.h
 rjit_c.$(OBJEXT): {$(VPATH)}encoding.h
@@ -17612,6 +17621,7 @@ vm_sync.$(OBJEXT): $(top_srcdir)/internal/gc.h
 vm_sync.$(OBJEXT): $(top_srcdir)/internal/imemo.h
 vm_sync.$(OBJEXT): $(top_srcdir)/internal/serial.h
 vm_sync.$(OBJEXT): $(top_srcdir)/internal/static_assert.h
+vm_sync.$(OBJEXT): $(top_srcdir)/internal/thread.h
 vm_sync.$(OBJEXT): $(top_srcdir)/internal/variable.h
 vm_sync.$(OBJEXT): $(top_srcdir)/internal/vm.h
 vm_sync.$(OBJEXT): $(top_srcdir)/internal/warnings.h
