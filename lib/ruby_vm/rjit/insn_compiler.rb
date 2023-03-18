@@ -18,7 +18,7 @@ module RubyVM::RJIT
       asm.incr_counter(:rjit_insns_count)
       asm.comment("Insn: #{insn.name}")
 
-      # 74/102
+      # 77/102
       case insn.name
       when :nop then nop(jit, ctx, asm)
       when :getlocal then getlocal(jit, ctx, asm)
@@ -26,7 +26,7 @@ module RubyVM::RJIT
       when :getblockparam then getblockparam(jit, ctx, asm)
       # setblockparam
       when :getblockparamproxy then getblockparamproxy(jit, ctx, asm)
-      # getspecial
+      when :getspecial then getspecial(jit, ctx, asm)
       # setspecial
       when :getinstancevariable then getinstancevariable(jit, ctx, asm)
       when :setinstancevariable then setinstancevariable(jit, ctx, asm)
@@ -40,7 +40,7 @@ module RubyVM::RJIT
       when :putnil then putnil(jit, ctx, asm)
       when :putself then putself(jit, ctx, asm)
       when :putobject then putobject(jit, ctx, asm)
-      # putspecialobject
+      when :putspecialobject then putspecialobject(jit, ctx, asm)
       when :putstring then putstring(jit, ctx, asm)
       when :concatstrings then concatstrings(jit, ctx, asm)
       when :anytostring then anytostring(jit, ctx, asm)
@@ -82,7 +82,7 @@ module RubyVM::RJIT
       when :invokesuper then invokesuper(jit, ctx, asm)
       when :invokeblock then invokeblock(jit, ctx, asm)
       when :leave then leave(jit, ctx, asm)
-      # throw
+      when :throw then throw(jit, ctx, asm)
       when :jump then jump(jit, ctx, asm)
       when :branchif then branchif(jit, ctx, asm)
       when :branchunless then branchunless(jit, ctx, asm)
@@ -301,7 +301,72 @@ module RubyVM::RJIT
       EndBlock
     end
 
-    # getspecial
+    # @param jit [RubyVM::RJIT::JITState]
+    # @param ctx [RubyVM::RJIT::Context]
+    # @param asm [RubyVM::RJIT::Assembler]
+    def getspecial(jit, ctx, asm)
+      # This takes two arguments, key and type
+      # key is only used when type == 0
+      # A non-zero type determines which type of backref to fetch
+      #rb_num_t key = jit.jit_get_arg(0);
+      rtype = jit.operand(1)
+
+      if rtype == 0
+        # not yet implemented
+        return CantCompile;
+      elsif rtype & 0x01 != 0
+        # Fetch a "special" backref based on a char encoded by shifting by 1
+
+        # Can raise if matchdata uninitialized
+        jit_prepare_routine_call(jit, ctx, asm)
+
+        # call rb_backref_get()
+        asm.comment('rb_backref_get')
+        asm.call(C.rb_backref_get)
+
+        asm.mov(C_ARGS[0], C_RET) # backref
+        case [rtype >> 1].pack('c')
+        in ?&
+          asm.comment("rb_reg_last_match")
+          asm.call(C.rb_reg_last_match)
+        in ?`
+          asm.comment("rb_reg_match_pre")
+          asm.call(C.rb_reg_match_pre)
+        in ?'
+          asm.comment("rb_reg_match_post")
+          asm.call(C.rb_reg_match_post)
+        in ?+
+          asm.comment("rb_reg_match_last")
+          asm.call(C.rb_reg_match_last)
+        end
+
+        stack_ret = ctx.stack_push
+        asm.mov(stack_ret, C_RET)
+
+        KeepCompiling
+      else
+        # Fetch the N-th match from the last backref based on type shifted by 1
+
+        # Can raise if matchdata uninitialized
+        jit_prepare_routine_call(jit, ctx, asm)
+
+        # call rb_backref_get()
+        asm.comment('rb_backref_get')
+        asm.call(C.rb_backref_get)
+
+        # rb_reg_nth_match((int)(type >> 1), backref);
+        asm.comment('rb_reg_nth_match')
+        asm.mov(C_ARGS[0], rtype >> 1)
+        asm.mov(C_ARGS[1], C_RET) # backref
+        asm.call(C.rb_reg_nth_match)
+
+        stack_ret = ctx.stack_push
+        asm.mov(stack_ret, C_RET)
+
+        KeepCompiling
+      end
+    end
+
     # setspecial
 
     # @param jit [RubyVM::RJIT::JITState]
@@ -621,7 +686,22 @@ module RubyVM::RJIT
       KeepCompiling
     end
 
-    # putspecialobject
+    # @param jit [RubyVM::RJIT::JITState]
+    # @param ctx [RubyVM::RJIT::Context]
+    # @param asm [RubyVM::RJIT::Assembler]
+    def putspecialobject(jit, ctx, asm)
+      object_type = jit.operand(0)
+      if object_type == C::VM_SPECIAL_OBJECT_VMCORE
+        stack_top = ctx.stack_push
+        asm.mov(:rax, C.rb_mRubyVMFrozenCore)
+        asm.mov(stack_top, :rax)
+        KeepCompiling
+      else
+        # TODO: implement for VM_SPECIAL_OBJECT_CBASE and
+        # VM_SPECIAL_OBJECT_CONST_BASE
+        CantCompile
+      end
+    end
 
     # @param jit [RubyVM::RJIT::JITState]
     # @param ctx [RubyVM::RJIT::Context]
@@ -1308,7 +1388,37 @@ module RubyVM::RJIT
       EndBlock
     end
 
-    # throw
+    # @param jit [RubyVM::RJIT::JITState]
+    # @param ctx [RubyVM::RJIT::Context]
+    # @param asm [RubyVM::RJIT::Assembler]
+    def throw(jit, ctx, asm)
+      throw_state = jit.operand(0)
+      asm.mov(:rcx, ctx.stack_pop(1)) # throwobj
+
+      # THROW_DATA_NEW allocates. Save SP for GC and PC for allocation tracing as
+      # well as handling the catch table. However, not using jit_prepare_routine_call
+      # since we don't need a patch point for this implementation.
+      jit_save_pc(jit, asm) # clobbers rax
+      jit_save_sp(ctx, asm)
+
+      # rb_vm_throw verifies it's a valid throw, sets ec->tag->state, and returns throw
+      # data, which is throwobj or a vm_throw_data wrapping it. When ec->tag->state is
+      # set, JIT code callers will handle the throw with vm_exec_handle_exception.
+      asm.mov(C_ARGS[0], EC)
+      asm.mov(C_ARGS[1], CFP)
+      asm.mov(C_ARGS[2], throw_state)
+      # asm.mov(C_ARGS[3], :rcx) # same reg
+      asm.call(C.rb_vm_throw)
+
+      asm.comment('exit from throw')
+      asm.pop(SP)
+      asm.pop(EC)
+      asm.pop(CFP)
+
+      # return C_RET as C_RET
+      asm.ret
+      EndBlock
+    end
 
     # @param jit [RubyVM::RJIT::JITState]
     # @param ctx [RubyVM::RJIT::Context]
@@ -2593,39 +2703,41 @@ module RubyVM::RJIT
       # Only memory operand is supported for now
       assert_equal(true, obj_opnd.is_a?(Array))
 
-      if known_klass == NilClass
+      # Touching this as Ruby could crash for FrozenCore
+      known_klass = C.to_value(known_klass)
+      if known_klass == C.rb_cNilClass
         asm.comment('guard object is nil')
         asm.cmp(obj_opnd, Qnil)
         jit_chain_guard(:jne, jit, ctx, asm, side_exit, limit:)
-      elsif known_klass == TrueClass
+      elsif known_klass == C.rb_cTrueClass
         asm.comment('guard object is true')
         asm.cmp(obj_opnd, Qtrue)
         jit_chain_guard(:jne, jit, ctx, asm, side_exit, limit:)
-      elsif known_klass == FalseClass
+      elsif known_klass == C.rb_cFalseClass
         asm.comment('guard object is false')
         asm.cmp(obj_opnd, Qfalse)
         jit_chain_guard(:jne, jit, ctx, asm, side_exit, limit:)
-      elsif known_klass == Integer && fixnum?(comptime_obj)
+      elsif known_klass == C.rb_cInteger && fixnum?(comptime_obj)
         asm.comment('guard object is fixnum')
         asm.test(obj_opnd, C::RUBY_FIXNUM_FLAG)
         jit_chain_guard(:jz, jit, ctx, asm, side_exit, limit:)
-      elsif known_klass == Symbol && static_symbol?(comptime_obj)
+      elsif known_klass == C.rb_cSymbol && static_symbol?(comptime_obj)
         # We will guard STATIC vs DYNAMIC as though they were separate classes
         # DYNAMIC symbols can be handled by the general else case below
         asm.comment('guard object is static symbol')
         assert_equal(8, C::RUBY_SPECIAL_SHIFT)
         asm.cmp(BytePtr[*obj_opnd], C::RUBY_SYMBOL_FLAG)
         jit_chain_guard(:jne, jit, ctx, asm, side_exit, limit:)
-      elsif known_klass == Float && flonum?(comptime_obj)
+      elsif known_klass == C.rb_cFloat && flonum?(comptime_obj)
         # We will guard flonum vs heap float as though they were separate classes
         asm.comment('guard object is flonum')
         asm.mov(:rax, obj_opnd)
         asm.and(:rax, C::RUBY_FLONUM_MASK)
         asm.cmp(:rax, C::RUBY_FLONUM_FLAG)
         jit_chain_guard(:jne, jit, ctx, asm, side_exit, limit:)
-      elsif C::FL_TEST(known_klass, C::RUBY_FL_SINGLETON) && comptime_obj == C.rb_class_attached_object(known_klass)
+      elsif C.FL_TEST(known_klass, C::RUBY_FL_SINGLETON) && comptime_obj == C.rb_class_attached_object(known_klass)
         asm.comment('guard known object with singleton class')
-        asm.mov(:rax, C.to_value(comptime_obj))
+        asm.mov(:rax, to_value(comptime_obj))
         asm.cmp(obj_opnd, :rax)
         jit_chain_guard(:jne, jit, ctx, asm, side_exit, limit:)
       else
@@ -2644,7 +2756,7 @@ module RubyVM::RJIT
         # Bail if receiver class is different from known_klass
         klass_opnd = [obj_opnd, C.RBasic.offsetof(:klass)]
         asm.comment("guard known class #{known_klass}")
-        asm.mov(:rcx, to_value(known_klass))
+        asm.mov(:rcx, known_klass)
         asm.cmp(klass_opnd, :rcx)
         jit_chain_guard(:jne, jit, ctx, asm, side_exit, limit:)
       end
@@ -2810,10 +2922,10 @@ module RubyVM::RJIT
     def jit_prepare_routine_call(jit, ctx, asm)
       jit.record_boundary_patch_point = true
       jit_save_pc(jit, asm)
-      jit_save_sp(jit, ctx, asm)
+      jit_save_sp(ctx, asm)
     end
 
-    # Note: This clobbers :rax
+    # NOTE: This clobbers :rax
     # @param jit [RubyVM::RJIT::JITState]
     # @param asm [RubyVM::RJIT::Assembler]
     def jit_save_pc(jit, asm, comment: 'save PC to CFP')
@@ -2823,10 +2935,9 @@ module RubyVM::RJIT
       asm.mov([CFP, C.rb_control_frame_t.offsetof(:pc)], :rax)
     end
 
-    # @param jit [RubyVM::RJIT::JITState]
     # @param ctx [RubyVM::RJIT::Context]
     # @param asm [RubyVM::RJIT::Assembler]
-    def jit_save_sp(jit, ctx, asm)
+    def jit_save_sp(ctx, asm)
       if ctx.sp_offset != 0
         asm.comment('save SP to CFP')
         asm.lea(SP, ctx.sp_opnd)

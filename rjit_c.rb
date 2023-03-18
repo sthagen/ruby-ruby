@@ -18,13 +18,7 @@ module RubyVM::RJIT # :nodoc: all
     end
 
     def rjit_insn_exits
-      addr = Primitive.cstmt! %{
-        #if RJIT_STATS
-          return SIZET2NUM((size_t)rjit_insn_exits);
-        #else
-          return SIZET2NUM(0);
-        #endif
-      }
+      addr = Primitive.cexpr! 'SIZET2NUM((size_t)rjit_insn_exits)'
       CType::Immediate.parse("size_t").new(addr)
     end
 
@@ -36,13 +30,7 @@ module RubyVM::RJIT # :nodoc: all
     end
 
     def rb_rjit_counters
-      addr = Primitive.cstmt! %{
-        #if RJIT_STATS
-          return SIZET2NUM((size_t)&rb_rjit_counters);
-        #else
-          return SIZET2NUM(0);
-        #endif
-      }
+      addr = Primitive.cexpr! 'SIZET2NUM((size_t)&rb_rjit_counters)'
       rb_rjit_runtime_counters.new(addr)
     end
 
@@ -415,6 +403,7 @@ module RubyVM::RJIT # :nodoc: all
   C::VM_METHOD_TYPE_REFINED = Primitive.cexpr! %q{ SIZET2NUM(VM_METHOD_TYPE_REFINED) }
   C::VM_METHOD_TYPE_UNDEF = Primitive.cexpr! %q{ SIZET2NUM(VM_METHOD_TYPE_UNDEF) }
   C::VM_METHOD_TYPE_ZSUPER = Primitive.cexpr! %q{ SIZET2NUM(VM_METHOD_TYPE_ZSUPER) }
+  C::VM_SPECIAL_OBJECT_VMCORE = Primitive.cexpr! %q{ SIZET2NUM(VM_SPECIAL_OBJECT_VMCORE) }
 
   def C.block_type_iseq
     Primitive.cexpr! %q{ SIZET2NUM(block_type_iseq) }
@@ -452,6 +441,10 @@ module RubyVM::RJIT # :nodoc: all
     Primitive.cexpr! %q{ SIZET2NUM(rb_cTrueClass) }
   end
 
+  def C.rb_mRubyVMFrozenCore
+    Primitive.cexpr! %q{ SIZET2NUM(rb_mRubyVMFrozenCore) }
+  end
+
   def C.rb_rjit_global_events
     Primitive.cexpr! %q{ SIZET2NUM(rb_rjit_global_events) }
   end
@@ -470,6 +463,10 @@ module RubyVM::RJIT # :nodoc: all
 
   def C.rb_ary_store
     Primitive.cexpr! %q{ SIZET2NUM((size_t)rb_ary_store) }
+  end
+
+  def C.rb_backref_get
+    Primitive.cexpr! %q{ SIZET2NUM((size_t)rb_backref_get) }
   end
 
   def C.rb_ec_ary_new_from_values
@@ -544,6 +541,26 @@ module RubyVM::RJIT # :nodoc: all
     Primitive.cexpr! %q{ SIZET2NUM((size_t)rb_obj_is_kind_of) }
   end
 
+  def C.rb_reg_last_match
+    Primitive.cexpr! %q{ SIZET2NUM((size_t)rb_reg_last_match) }
+  end
+
+  def C.rb_reg_match_last
+    Primitive.cexpr! %q{ SIZET2NUM((size_t)rb_reg_match_last) }
+  end
+
+  def C.rb_reg_match_post
+    Primitive.cexpr! %q{ SIZET2NUM((size_t)rb_reg_match_post) }
+  end
+
+  def C.rb_reg_match_pre
+    Primitive.cexpr! %q{ SIZET2NUM((size_t)rb_reg_match_pre) }
+  end
+
+  def C.rb_reg_nth_match
+    Primitive.cexpr! %q{ SIZET2NUM((size_t)rb_reg_nth_match) }
+  end
+
   def C.rb_str_concat_literals
     Primitive.cexpr! %q{ SIZET2NUM((size_t)rb_str_concat_literals) }
   end
@@ -590,6 +607,10 @@ module RubyVM::RJIT # :nodoc: all
 
   def C.rb_vm_splat_array
     Primitive.cexpr! %q{ SIZET2NUM((size_t)rb_vm_splat_array) }
+  end
+
+  def C.rb_vm_throw
+    Primitive.cexpr! %q{ SIZET2NUM((size_t)rb_vm_throw) }
   end
 
   def C.rjit_full_cfunc_return

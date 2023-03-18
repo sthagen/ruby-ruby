@@ -460,6 +460,7 @@ generator = BindingGenerator.new(
       VM_METHOD_TYPE_REFINED
       VM_METHOD_TYPE_UNDEF
       VM_METHOD_TYPE_ZSUPER
+      VM_SPECIAL_OBJECT_VMCORE
     ],
   },
   values: {
@@ -474,6 +475,7 @@ generator = BindingGenerator.new(
       rb_cSymbol
       rb_cTrueClass
       rb_rjit_global_events
+      rb_mRubyVMFrozenCore
     ],
   },
   funcs: %w[
@@ -515,6 +517,13 @@ generator = BindingGenerator.new(
     rjit_str_neq_internal
     rjit_record_exit_stack
     rb_ivar_defined
+    rb_vm_throw
+    rb_backref_get
+    rb_reg_last_match
+    rb_reg_match_pre
+    rb_reg_match_post
+    rb_reg_match_last
+    rb_reg_nth_match
   ],
   types: %w[
     CALL_DATA
