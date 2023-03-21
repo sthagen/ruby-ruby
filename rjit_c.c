@@ -170,6 +170,12 @@ rjit_str_neq_internal(VALUE str1, VALUE str2)
     return rb_str_eql_internal(str1, str2) == Qtrue ? Qfalse : Qtrue;
 }
 
+static VALUE
+rjit_str_simple_append(VALUE str1, VALUE str2)
+{
+    return rb_str_cat(str1, RSTRING_PTR(str2), RSTRING_LEN(str2));
+}
+
 // The code we generate in gen_send_cfunc() doesn't fire the c_return TracePoint event
 // like the interpreter. When tracing for c_return is enabled, we patch the code after
 // the C method return to call into this to fire the event.
@@ -495,6 +501,11 @@ extern bool rb_vm_ic_hit_p(IC ic, const VALUE *reg_ep);
 extern rb_event_flag_t rb_rjit_global_events;
 extern void rb_vm_setinstancevariable(const rb_iseq_t *iseq, VALUE obj, ID id, VALUE val, IVC ic);
 extern VALUE rb_vm_throw(const rb_execution_context_t *ec, rb_control_frame_t *reg_cfp, rb_num_t throw_state, VALUE throwobj);
+extern VALUE rb_reg_new_ary(VALUE ary, int opt);
+extern void rb_vm_setclassvariable(const rb_iseq_t *iseq, const rb_control_frame_t *cfp, ID id, VALUE val, ICVARC ic);
+extern VALUE rb_str_bytesize(VALUE str);
+extern const rb_callable_method_entry_t *rb_callable_method_entry_or_negative(VALUE klass, ID mid);
+extern VALUE rb_vm_yield_with_cfunc(rb_execution_context_t *ec, const struct rb_captured_block *captured, int argc, const VALUE *argv);
 
 #include "rjit_c.rbinc"
 

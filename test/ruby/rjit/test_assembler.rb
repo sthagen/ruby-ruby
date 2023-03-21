@@ -93,6 +93,14 @@ module RubyVM::RJIT
       EOS
     end
 
+    def test_cmovne
+      asm = Assembler.new
+      asm.cmovne(:rax, :rbx) # CMOVNE r64, r/m64 (Mod 11: reg)
+      assert_compile(asm, <<~EOS) # cmovne == cmovnz
+        0x0: cmovne rax, rbx
+      EOS
+    end
+
     def test_cmovnz
       asm = Assembler.new
       asm.cmovnz(:rax, :rbx) # CMOVNZ r64, r/m64 (Mod 11: reg)
@@ -318,6 +326,14 @@ module RubyVM::RJIT
         0x17: test rax, 0xffff
         0x1e: test eax, ebx
         0x20: test rax, rbx
+      EOS
+    end
+
+    def test_xor
+      asm = Assembler.new
+      asm.xor(:rax, :rbx)
+      assert_compile(asm, <<~EOS)
+        0x0: xor rax, rbx
       EOS
     end
 
