@@ -1,4 +1,5 @@
 # frozen_string_literal: true
+
 ##
 # A semi-compatible DSL for the Bundler Gemfile and Isolate gem dependencies
 # files.
@@ -813,7 +814,7 @@ Gem dependencies file #{@path} includes git reference for both ref/branch and ta
       end
     end
 
-    return true
+    true
   end
 
   ##

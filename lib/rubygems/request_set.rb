@@ -1,4 +1,5 @@
 # frozen_string_literal: true
+
 require_relative "tsort"
 
 ##
@@ -447,7 +448,7 @@ class Gem::RequestSet
       next if dep.type == :development && !@development
 
       match = @requests.find do |r|
-        dep.match? r.spec.name, r.spec.version, r.spec.is_a?(Gem::Resolver::InstalledSpecification) || @prerelease
+        dep.match?(r.spec.name, r.spec.version, r.spec.is_a?(Gem::Resolver::InstalledSpecification) || @prerelease)
       end
 
       unless match

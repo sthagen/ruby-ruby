@@ -28,12 +28,12 @@ typedef uint16_t shape_id_t;
 
 # define SHAPE_FLAG_SHIFT ((SIZEOF_VALUE * 8) - SHAPE_ID_NUM_BITS)
 
-# define SHAPE_BITMAP_SIZE 16384
+# define SHAPE_BUFFER_SIZE 0x80000
 
 # define SHAPE_MAX_VARIATIONS 8
 # define SHAPE_MAX_NUM_IVS 80
 
-# define MAX_SHAPE_ID (SHAPE_MASK - 1)
+# define MAX_SHAPE_ID SHAPE_BUFFER_SIZE
 # define INVALID_SHAPE_ID SHAPE_MASK
 # define ROOT_SHAPE_ID 0x0
 
@@ -200,10 +200,6 @@ RCLASS_IV_COUNT(VALUE obj)
     uint32_t ivc = rb_shape_get_shape_by_id(RCLASS_SHAPE_ID(obj))->next_iv_index;
     return ivc;
 }
-
-rb_shape_t * rb_shape_alloc(ID edge_name, rb_shape_t * parent);
-rb_shape_t * rb_shape_alloc_with_size_pool_index(ID edge_name, rb_shape_t * parent, uint8_t size_pool_index);
-rb_shape_t * rb_shape_alloc_with_parent_id(ID edge_name, shape_id_t parent_id);
 
 rb_shape_t *rb_shape_traverse_from_new_root(rb_shape_t *initial_shape, rb_shape_t *orig_shape);
 

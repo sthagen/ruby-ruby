@@ -1,4 +1,5 @@
 # frozen_string_literal: true
+
 #--
 # Copyright 2006 by Chad Fowler, Rich Kilmer, Jim Weirich and others.
 # All rights reserved.
@@ -347,7 +348,7 @@ class Gem::Uninstaller
 
     msg << "If you remove this gem, these dependencies will not be met."
     msg << "Continue with Uninstall?"
-    return ask_yes_no(msg.join("\n"), false)
+    ask_yes_no(msg.join("\n"), false)
   end
 
   ##

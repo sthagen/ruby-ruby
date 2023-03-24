@@ -3646,6 +3646,10 @@ iseq_peephole_optimize(rb_iseq_t *iseq, LINK_ELEMENT *list, const int do_tailcal
         if (IS_TRACE(iobj->link.next)) {
             if (IS_NEXT_INSN_ID(iobj->link.next, leave)) {
                 iobj->insn_id = BIN(opt_invokebuiltin_delegate_leave);
+                const struct rb_builtin_function *bf = (const struct rb_builtin_function *)iobj->operands[0];
+                if (iobj == (INSN *)list && bf->argc == 0 && (iseq->body->builtin_attrs & BUILTIN_ATTR_LEAF)) {
+                    iseq->body->builtin_attrs |= BUILTIN_ATTR_SINGLE_NOARG_INLINE;
+                }
             }
         }
     }
@@ -8348,15 +8352,12 @@ compile_builtin_mandatory_only_method(rb_iseq_t *iseq, const NODE *node, const N
         .script_lines = ISEQ_BODY(iseq)->variable.script_lines,
     };
 
-    int prev_inline_index = GET_VM()->builtin_inline_index;
-
     ISEQ_BODY(iseq)->mandatory_only_iseq =
       rb_iseq_new_with_opt(&ast, rb_iseq_base_label(iseq),
                            rb_iseq_path(iseq), rb_iseq_realpath(iseq),
                            nd_line(line_node), NULL, 0,
                            ISEQ_TYPE_METHOD, ISEQ_COMPILE_DATA(iseq)->option);
 
-    GET_VM()->builtin_inline_index = prev_inline_index;
     ALLOCV_END(idtmp);
     return COMPILE_OK;
 }

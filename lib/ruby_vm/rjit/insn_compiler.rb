@@ -3876,7 +3876,7 @@ module RubyVM::RJIT
           C::FL_TEST_RAW(rbasic_klass, C::RMODULE_IS_REFINEMENT) != 0
         return CantCompile
       end
-      comptime_superclass = C.rb_class_get_superclass(current_defined_class)
+      comptime_superclass = C.rb_class_get_superclass(C.RCLASS_ORIGIN(current_defined_class))
 
       # Don't JIT calls that aren't simple
       # Note, not using VM_CALL_ARGS_SIMPLE because sometimes we pass a block.
@@ -3904,12 +3904,6 @@ module RubyVM::RJIT
       cme = C.rb_callable_method_entry(comptime_superclass, mid)
 
       if cme.nil?
-        return CantCompile
-      end
-
-      # workaround -- TODO: Why does this happen?
-      if me.to_i == cme.to_i
-        asm.incr_counter(:invokesuper_same_me)
         return CantCompile
       end
 
@@ -4771,12 +4765,12 @@ module RubyVM::RJIT
       end
 
       if iseq.body.param.flags.has_rest || iseq.body.param.flags.has_post
-        asm.incr_counter(:send_iseq_complex_has_rest_or_post)
+        asm.incr_counter(iseq.body.param.flags.has_rest ? :send_iseq_complex_has_rest : :send_iseq_complex_has_pos)
         return CantCompile
       end
 
       if iseq.body.param.flags.has_post
-        asm.incr_counter(:send_iseq_complex_has_rest_or_post)
+        asm.incr_counter(:send_iseq_complex_has_post)
         return CantCompile
       end
 
@@ -4786,7 +4780,7 @@ module RubyVM::RJIT
       end
 
       if iseq.body.param.flags.has_rest
-        asm.incr_counter(:send_iseq_complex_has_rest_or_post)
+        asm.incr_counter(:send_iseq_complex_has_rest)
         return CantCompile
       end
 
@@ -4813,13 +4807,16 @@ module RubyVM::RJIT
     # @param ctx [RubyVM::RJIT::Context]
     # @param asm [RubyVM::RJIT::Assembler]
     def jit_caller_setup_arg(jit, ctx, asm, flags)
-      if flags & C::VM_CALL_ARGS_SPLAT != 0
-        # We don't support vm_caller_setup_arg_splat
+      if flags & C::VM_CALL_ARGS_SPLAT != 0 && flags & C::VM_CALL_KW_SPLAT != 0
+        asm.incr_counter(:send_args_splat_kw_splat)
+        return CantCompile
+      elsif flags & C::VM_CALL_ARGS_SPLAT != 0
         asm.incr_counter(:send_args_splat)
         return CantCompile
-      end
-      if flags & (C::VM_CALL_KWARG | C::VM_CALL_KW_SPLAT) != 0
-        # We don't support keyword args either
+      elsif flags & C::VM_CALL_KW_SPLAT != 0
+        asm.incr_counter(:send_args_kw_splat)
+        return CantCompile
+      elsif flags & C::VM_CALL_KWARG != 0
         asm.incr_counter(:send_kwarg)
         return CantCompile
       end

@@ -329,6 +329,10 @@ module RubyVM::RJIT # :nodoc: all
       _cme_addr = cme.to_i
       Primitive.cexpr! 'RBOOL(UNDEFINED_METHOD_ENTRY_P((const rb_callable_method_entry_t *)NUM2SIZET(_cme_addr)))'
     end
+
+    def RCLASS_ORIGIN(klass)
+      Primitive.cexpr! 'RCLASS_ORIGIN(klass)'
+    end
   end
 
   #
@@ -948,6 +952,7 @@ module RubyVM::RJIT # :nodoc: all
         ),
         method_missing_reason: self.method_missing_reason,
         v: self.VALUE,
+        bf: CType::Pointer.new { self.rb_builtin_function },
       ), Primitive.cexpr!("OFFSETOF((*((struct rb_callcache *)NULL)), aux_)")],
     )
   end
@@ -1267,10 +1272,11 @@ module RubyVM::RJIT # :nodoc: all
       "rb_rjit_runtime_counters", Primitive.cexpr!("SIZEOF(struct rb_rjit_runtime_counters)"),
       vm_insns_count: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), vm_insns_count)")],
       rjit_insns_count: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), rjit_insns_count)")],
+      send_args_splat_kw_splat: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), send_args_splat_kw_splat)")],
       send_args_splat: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), send_args_splat)")],
-      send_klass_megamorphic: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), send_klass_megamorphic)")],
       send_kw_splat: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), send_kw_splat)")],
       send_kwarg: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), send_kwarg)")],
+      send_klass_megamorphic: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), send_klass_megamorphic)")],
       send_missing_cme: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), send_missing_cme)")],
       send_private: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), send_private)")],
       send_protected_check_failed: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), send_protected_check_failed)")],
@@ -1303,7 +1309,8 @@ module RubyVM::RJIT # :nodoc: all
       send_iseq_complex_arg_setup_block: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), send_iseq_complex_arg_setup_block)")],
       send_iseq_complex_arity: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), send_iseq_complex_arity)")],
       send_iseq_complex_has_lead: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), send_iseq_complex_has_lead)")],
-      send_iseq_complex_has_rest_or_post: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), send_iseq_complex_has_rest_or_post)")],
+      send_iseq_complex_has_rest: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), send_iseq_complex_has_rest)")],
+      send_iseq_complex_has_post: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), send_iseq_complex_has_post)")],
       send_iseq_complex_has_opt: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), send_iseq_complex_has_opt)")],
       send_iseq_complex_has_kw: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), send_iseq_complex_has_kw)")],
       send_iseq_complex_has_kwrest: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), send_iseq_complex_has_kwrest)")],
@@ -1331,7 +1338,6 @@ module RubyVM::RJIT # :nodoc: all
       send_bmethod_not_iseq: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), send_bmethod_not_iseq)")],
       send_bmethod_blockarg: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), send_bmethod_blockarg)")],
       invokesuper_me_changed: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), invokesuper_me_changed)")],
-      invokesuper_same_me: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), invokesuper_same_me)")],
       invokeblock_none: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), invokeblock_none)")],
       invokeblock_symbol: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), invokeblock_symbol)")],
       invokeblock_proc: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), invokeblock_proc)")],

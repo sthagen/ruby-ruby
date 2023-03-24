@@ -573,7 +573,7 @@ class Gem::TestCase < Test::Unit::TestCase
       head = Gem::Util.popen(@git, "rev-parse", "HEAD").strip
     end
 
-    return name, git_spec.version, directory, head
+    [name, git_spec.version, directory, head]
   end
 
   ##
@@ -734,7 +734,7 @@ class Gem::TestCase < Test::Unit::TestCase
 
     Gem::Specification.reset
 
-    return spec
+    spec
   end
 
   ##
@@ -869,7 +869,7 @@ class Gem::TestCase < Test::Unit::TestCase
       FileUtils.rm spec.spec_file
     end
 
-    return spec
+    spec
   end
 
   ##
@@ -1096,10 +1096,10 @@ Also, a list:
 
     @RUBY_VERSION        = RUBY_VERSION
     @RUBY_PATCHLEVEL     = RUBY_PATCHLEVEL
-    @RUBY_REVISION       = RUBY_REVISION if defined?(RUBY_REVISION)
+    @RUBY_REVISION       = RUBY_REVISION
     @RUBY_DESCRIPTION    = RUBY_DESCRIPTION
     @RUBY_ENGINE         = RUBY_ENGINE
-    @RUBY_ENGINE_VERSION = RUBY_ENGINE_VERSION if defined?(RUBY_ENGINE_VERSION)
+    @RUBY_ENGINE_VERSION = RUBY_ENGINE_VERSION
 
     util_clear_RUBY_VERSION
 
@@ -1108,7 +1108,7 @@ Also, a list:
     Object.const_set :RUBY_REVISION,       revision
     Object.const_set :RUBY_DESCRIPTION,    description
     Object.const_set :RUBY_ENGINE,         engine
-    Object.const_set :RUBY_ENGINE_VERSION, engine_version if engine_version
+    Object.const_set :RUBY_ENGINE_VERSION, engine_version
   end
 
   def util_restore_RUBY_VERSION
@@ -1116,19 +1116,19 @@ Also, a list:
 
     Object.const_set :RUBY_VERSION,        @RUBY_VERSION
     Object.const_set :RUBY_PATCHLEVEL,     @RUBY_PATCHLEVEL
-    Object.const_set :RUBY_REVISION,       @RUBY_REVISION if defined?(@RUBY_REVISION)
+    Object.const_set :RUBY_REVISION,       @RUBY_REVISION
     Object.const_set :RUBY_DESCRIPTION,    @RUBY_DESCRIPTION
     Object.const_set :RUBY_ENGINE,         @RUBY_ENGINE
-    Object.const_set :RUBY_ENGINE_VERSION, @RUBY_ENGINE_VERSION if defined?(@RUBY_ENGINE_VERSION)
+    Object.const_set :RUBY_ENGINE_VERSION, @RUBY_ENGINE_VERSION
   end
 
   def util_clear_RUBY_VERSION
     Object.send :remove_const, :RUBY_VERSION
-    Object.send :remove_const, :RUBY_PATCHLEVEL     if defined?(RUBY_PATCHLEVEL)
-    Object.send :remove_const, :RUBY_REVISION       if defined?(RUBY_REVISION)
-    Object.send :remove_const, :RUBY_DESCRIPTION    if defined?(RUBY_DESCRIPTION)
+    Object.send :remove_const, :RUBY_PATCHLEVEL
+    Object.send :remove_const, :RUBY_REVISION
+    Object.send :remove_const, :RUBY_DESCRIPTION
     Object.send :remove_const, :RUBY_ENGINE
-    Object.send :remove_const, :RUBY_ENGINE_VERSION if defined?(RUBY_ENGINE_VERSION)
+    Object.send :remove_const, :RUBY_ENGINE_VERSION
   end
 
   ##
@@ -1441,7 +1441,7 @@ Also, a list:
       io.write vendor_spec.to_ruby
     end
 
-    return name, vendor_spec.version, directory
+    [name, vendor_spec.version, directory]
   end
 
   ##

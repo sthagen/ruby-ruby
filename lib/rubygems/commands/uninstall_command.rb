@@ -1,4 +1,5 @@
 # frozen_string_literal: true
+
 require_relative "../command"
 require_relative "../version_option"
 require_relative "../uninstaller"
@@ -167,15 +168,14 @@ that is a dependency of an existing gem.  You can use the
     gems_to_uninstall = {}
 
     deps.each do |dep|
-      unless gems_to_uninstall[dep.name]
-        gems_to_uninstall[dep.name] = true
+      next if gems_to_uninstall[dep.name]
+      gems_to_uninstall[dep.name] = true
 
-        unless original_gem_version[dep.name] == Gem::Requirement.default
-          options[:version] = dep.version
-        end
-
-        uninstall_gem(dep.name)
+      unless original_gem_version[dep.name] == Gem::Requirement.default
+        options[:version] = dep.version
       end
+
+      uninstall_gem(dep.name)
     end
   end
 

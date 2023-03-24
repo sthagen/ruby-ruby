@@ -781,8 +781,13 @@ pub fn gen_single_block(
     // Instruction sequence to compile
     let iseq = blockid.iseq;
     let iseq_size = unsafe { get_iseq_encoded_size(iseq) };
-    let iseq_size: u16 = iseq_size.try_into().unwrap();
-    let mut insn_idx: u16 = blockid.idx;
+    let iseq_size: IseqIdx = if let Ok(size) = iseq_size.try_into() {
+        size
+    } else {
+        // ISeq too large to compile
+        return Err(());
+    };
+    let mut insn_idx: IseqIdx = blockid.idx;
 
     // Initialize a JIT state object
     let mut jit = JITState::new(blockid, ctx.clone(), cb.get_write_ptr(), ec);
@@ -801,6 +806,10 @@ pub fn gen_single_block(
     // For each instruction to compile
     // NOTE: could rewrite this loop with a std::iter::Iterator
     while insn_idx < iseq_size {
+        // Set the starting_ctx so we can use it for side_exiting
+        // if status == CantCompile
+        let starting_ctx = ctx.clone();
+
         // Get the current pc and opcode
         let pc = unsafe { rb_iseq_pc_at_idx(iseq, insn_idx.into()) };
         // try_into() call below is unfortunate. Maybe pick i32 instead of usize for opcodes.
@@ -864,9 +873,10 @@ pub fn gen_single_block(
             }
 
             // TODO: if the codegen function makes changes to ctx and then return YJIT_CANT_COMPILE,
-            // the exit this generates would be wrong. We could save a copy of the entry context
-            // and assert that ctx is the same here.
-            gen_exit(jit.pc, &ctx, &mut asm);
+            // the exit this generates would be wrong. There are some changes that are safe to make
+            // like popping from the stack (but not writing). We are assuming here that only safe
+            // changes were made and using the starting_ctx.
+            gen_exit(jit.pc, &starting_ctx, &mut asm);
 
             // If this is the first instruction in the block, then
             // the entry address is the address for block_entry_exit
@@ -2445,37 +2455,84 @@ fn gen_definedivar(
     jit: &mut JITState,
     ctx: &mut Context,
     asm: &mut Assembler,
-    _ocb: &mut OutlinedCb,
+    ocb: &mut OutlinedCb,
 ) -> CodegenStatus {
+    // Defer compilation so we can specialize base on a runtime receiver
+    if !jit.at_current_insn() {
+        defer_compilation(jit, ctx, asm, ocb);
+        return EndBlock;
+    }
+
     let ivar_name = jit.get_arg(0).as_u64();
+    // Value that will be pushed on the stack if the ivar is defined. In practice this is always the
+    // string "instance-variable". If the ivar is not defined, nil will be pushed instead.
     let pushval = jit.get_arg(2);
 
     // Get the receiver
     let recv = asm.load(Opnd::mem(64, CFP, RUBY_OFFSET_CFP_SELF));
 
-    // Save the PC and SP because the callee may allocate
-    // Note that this modifies REG_SP, which is why we do it first
-    jit_prepare_routine_call(jit, ctx, asm);
+    // Specialize base on compile time values
+    let comptime_receiver = jit.peek_at_self();
 
-    // Call rb_ivar_defined(recv, ivar_name)
-    let def_result = asm.ccall(rb_ivar_defined as *const u8, vec![recv.into(), ivar_name.into()]);
+    if comptime_receiver.shape_too_complex() {
+        // Fall back to calling rb_ivar_defined
 
-    // if (rb_ivar_defined(recv, ivar_name)) {
-    //  val = pushval;
-    // }
-    asm.test(def_result, Opnd::UImm(255));
-    let out_value = asm.csel_nz(pushval.into(), Qnil.into());
+        // Save the PC and SP because the callee may allocate
+        // Note that this modifies REG_SP, which is why we do it first
+        jit_prepare_routine_call(jit, ctx, asm);
 
-    // Push the return value onto the stack
-    let out_type = if pushval.special_const_p() {
-        Type::UnknownImm
-    } else {
-        Type::Unknown
+        // Call rb_ivar_defined(recv, ivar_name)
+        let def_result = asm.ccall(rb_ivar_defined as *const u8, vec![recv.into(), ivar_name.into()]);
+
+        // if (rb_ivar_defined(recv, ivar_name)) {
+        //  val = pushval;
+        // }
+        asm.test(def_result, Opnd::UImm(255));
+        let out_value = asm.csel_nz(pushval.into(), Qnil.into());
+
+        // Push the return value onto the stack
+        let out_type = if pushval.special_const_p() { Type::UnknownImm } else { Type::Unknown };
+        let stack_ret = ctx.stack_push(out_type);
+        asm.mov(stack_ret, out_value);
+
+        return KeepCompiling
+    }
+
+    let shape_id = comptime_receiver.shape_id_of();
+    let ivar_exists = unsafe {
+        let shape = rb_shape_get_shape_by_id(shape_id);
+        let mut ivar_index: u32 = 0;
+        rb_shape_get_iv_index(shape, ivar_name, &mut ivar_index)
     };
-    let stack_ret = ctx.stack_push(out_type);
-    asm.mov(stack_ret, out_value);
 
-    KeepCompiling
+    let side_exit = get_side_exit(jit, ocb, ctx);
+
+    // Guard heap object (recv_opnd must be used before stack_pop)
+    guard_object_is_heap(ctx, asm, recv, SelfOpnd, side_exit);
+
+    let shape_id_offset = unsafe { rb_shape_id_offset() };
+    let shape_opnd = Opnd::mem(SHAPE_ID_NUM_BITS as u8, recv, shape_id_offset);
+
+    asm.comment("guard shape");
+    asm.cmp(shape_opnd, Opnd::UImm(shape_id as u64));
+    let megamorphic_side_exit = counted_exit!(ocb, side_exit, getivar_megamorphic);
+    jit_chain_guard(
+        JCC_JNE,
+        jit,
+        ctx,
+        asm,
+        ocb,
+        GET_IVAR_MAX_DEPTH,
+        megamorphic_side_exit,
+    );
+
+    let result = if ivar_exists { pushval } else { Qnil };
+    jit_putobject(jit, ctx, asm, result);
+
+    // Jump to next instruction. This allows guard chains to share the same successor.
+    jump_to_next_insn(jit, ctx, asm, ocb);
+
+    return EndBlock;
 }
 
 fn gen_checktype(
@@ -4422,8 +4479,10 @@ fn jit_rb_str_concat(
     // Guard that the concat argument is a string
     guard_object_is_string(ctx, asm, ctx.stack_opnd(0), StackOpnd(0), side_exit);
 
-    // Guard buffers from GC since rb_str_buf_append may allocate.
-    gen_save_sp(asm, ctx);
+    // Guard buffers from GC since rb_str_buf_append may allocate. During the VM lock on GC,
+    // other Ractors may trigger global invalidation, so we need ctx.clear_local_types().
+    // PC is used on errors like Encoding::CompatibilityError raised by rb_str_buf_append.
+    jit_prepare_routine_call(jit, ctx, asm);
 
     let concat_arg = ctx.stack_pop(1);
     let recv = ctx.stack_pop(1);
@@ -5181,9 +5240,9 @@ fn move_rest_args_to_stack(array: Opnd, num_args: u32, ctx: &mut Context, asm: &
 
     let array_len_opnd = get_array_len(asm, array);
 
-    asm.comment("Side exit if length is less than required");
+    asm.comment("Side exit if length doesn't not equal remaining args");
     asm.cmp(array_len_opnd, num_args.into());
-    asm.jl(counted_exit!(ocb, side_exit, send_iseq_has_rest_and_splat_not_equal));
+    asm.jbe(counted_exit!(ocb, side_exit, send_splatarray_length_not_equal));
 
     asm.comment("Push arguments from array");
 
@@ -5410,6 +5469,11 @@ fn gen_send_iseq(
     let iseq_has_rest = unsafe { get_iseq_flags_has_rest(iseq) };
     if iseq_has_rest && captured_opnd.is_some() {
         gen_counter_incr!(asm, send_iseq_has_rest_and_captured);
+        return CantCompile;
+    }
+
+    if iseq_has_rest && unsafe { get_iseq_flags_has_block(iseq) } {
+        gen_counter_incr!(asm, send_iseq_has_rest_and_block);
         return CantCompile;
     }
 
@@ -5703,7 +5767,7 @@ fn gen_send_iseq(
             unsafe { rb_yjit_array_len(array) as u32}
         };
 
-        if opt_num == 0 && required_num != array_length as i32 {
+        if opt_num == 0 && required_num != array_length as i32 + argc - 1 {
             gen_counter_incr!(asm, send_iseq_splat_arity_error);
             return CantCompile;
         }

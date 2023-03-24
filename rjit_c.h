@@ -20,10 +20,11 @@ RJIT_RUNTIME_COUNTERS(
     vm_insns_count,
     rjit_insns_count,
 
+    send_args_splat_kw_splat,
     send_args_splat,
-    send_klass_megamorphic,
     send_kw_splat,
     send_kwarg,
+    send_klass_megamorphic,
     send_missing_cme,
     send_private,
     send_protected_check_failed,
@@ -58,7 +59,8 @@ RJIT_RUNTIME_COUNTERS(
     send_iseq_complex_arg_setup_block,
     send_iseq_complex_arity,
     send_iseq_complex_has_lead,
-    send_iseq_complex_has_rest_or_post,
+    send_iseq_complex_has_rest,
+    send_iseq_complex_has_post,
     send_iseq_complex_has_opt,
     send_iseq_complex_has_kw,
     send_iseq_complex_has_kwrest,
@@ -92,7 +94,6 @@ RJIT_RUNTIME_COUNTERS(
     send_bmethod_blockarg,
 
     invokesuper_me_changed,
-    invokesuper_same_me,
 
     invokeblock_none,
     invokeblock_symbol,

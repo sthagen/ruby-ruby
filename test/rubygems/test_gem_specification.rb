@@ -1,4 +1,5 @@
 # frozen_string_literal: true
+
 require "benchmark"
 require_relative "helper"
 require "date"
@@ -2194,7 +2195,7 @@ dependencies: []
     s2 = util_spec "b", "1"
 
     assert_equal(-1, (s1 <=> s2))
-    assert_equal(0, (s1 <=> s1))
+    assert_equal(0, (s1 <=> s1)) # rubocop:disable Lint/BinaryOperatorWithIdenticalOperands
     assert_equal(1, (s2 <=> s1))
   end
 
@@ -2205,7 +2206,7 @@ dependencies: []
     end
 
     assert_equal(-1, (s1 <=> s2))
-    assert_equal(0, (s1 <=> s1))
+    assert_equal(0, (s1 <=> s1)) # rubocop:disable Lint/BinaryOperatorWithIdenticalOperands
     assert_equal(1, (s2 <=> s1))
   end
 
@@ -2214,7 +2215,7 @@ dependencies: []
     s2 = util_spec "a", "2"
 
     assert_equal(-1, (s1 <=> s2))
-    assert_equal(0, (s1 <=> s1))
+    assert_equal(0, (s1 <=> s1)) # rubocop:disable Lint/BinaryOperatorWithIdenticalOperands
     assert_equal(1, (s2 <=> s1))
   end
 
@@ -2438,7 +2439,7 @@ end
 
   def test_to_ruby_nested_hash
     metadata = {}
-    metadata[metadata] = metadata
+    metadata[:metadata] = {}
 
     @a2.metadata = metadata
 

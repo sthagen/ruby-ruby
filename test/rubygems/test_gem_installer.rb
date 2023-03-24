@@ -1,4 +1,5 @@
 # frozen_string_literal: true
+
 require_relative "installer_test_case"
 
 class TestGemInstaller < Gem::InstallerTestCase
@@ -341,8 +342,11 @@ gem 'other', version
   end
 
   def test_generate_bin_bindir_with_user_install_warning
-    bin_dir = Gem.win_platform? ? File.expand_path(ENV["WINDIR"]).upcase :
-                                  "/usr/bin"
+    bin_dir = if Gem.win_platform?
+      File.expand_path(ENV["WINDIR"]).upcase
+    else
+      "/usr/bin"
+    end
 
     old_path = ENV["PATH"]
     ENV["PATH"] = [ENV["PATH"], bin_dir].compact.join(File::PATH_SEPARATOR)

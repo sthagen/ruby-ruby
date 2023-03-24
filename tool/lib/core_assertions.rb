@@ -541,11 +541,11 @@ eom
         refute_respond_to(obj, meth, msg)
       end
 
-      # pattern_list is an array which contains regexp and :*.
+      # pattern_list is an array which contains regexp, string and :*.
       # :* means any sequence.
       #
       # pattern_list is anchored.
-      # Use [:*, regexp, :*] for non-anchored match.
+      # Use [:*, regexp/string, :*] for non-anchored match.
       def assert_pattern_list(pattern_list, actual, message=nil)
         rest = actual
         anchored = true
@@ -746,7 +746,7 @@ eom
       def assert_linear_performance(seq, rehearsal: nil, pre: ->(n) {n})
         first = seq.first
         *arg = pre.call(first)
-        times = (0..(rehearsal || (2 * first))).filter_map do
+        times = (0..(rehearsal || (2 * first))).map do
           st = Process.clock_gettime(Process::CLOCK_MONOTONIC)
           yield(*arg)
           t = (Process.clock_gettime(Process::CLOCK_MONOTONIC) - st)
@@ -760,10 +760,10 @@ eom
 
         seq.each do |i|
           next if i == first
-          t = (tmax * i).to_f
+          t = tmax * i.fdiv(first)
           *arg = pre.call(i)
           message = "[#{i}]: in #{t}s"
-          Timeout.timeout(t, nil, message) do
+          Timeout.timeout(t, Timeout::Error, message) do
             st = Process.clock_gettime(Process::CLOCK_MONOTONIC)
             yield(*arg)
             assert_operator (Process.clock_gettime(Process::CLOCK_MONOTONIC) - st), :<=, t, message
