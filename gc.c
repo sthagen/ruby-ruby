@@ -3677,7 +3677,7 @@ obj_free(rb_objspace_t *objspace, VALUE obj)
         cc_table_free(objspace, obj, FALSE);
         rb_class_remove_from_module_subclasses(obj);
         rb_class_remove_from_super_subclasses(obj);
-#if !USE_RVARGC
+#if !RCLASS_EXT_EMBEDDED
         xfree(RCLASS_EXT(obj));
 #endif
 
@@ -6875,6 +6875,7 @@ each_machine_stack_value(const rb_execution_context_t *ec, void (*cb)(rb_objspac
     VALUE *stack_start, *stack_end;
 
     GET_STACK_BOUNDS(stack_start, stack_end, 0);
+    RUBY_DEBUG_LOG("ec->th:%u stack_start:%p stack_end:%p", rb_ec_thread_ptr(ec)->serial, stack_start, stack_end);
     each_stack_location(objspace, ec, stack_start, stack_end, cb);
 }
 

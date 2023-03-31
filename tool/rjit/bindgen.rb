@@ -396,6 +396,8 @@ generator = BindingGenerator.new(
       BOP_MOD
       BOP_OR
       BOP_PLUS
+      BUILTIN_ATTR_LEAF
+      BUILTIN_ATTR_NO_GC
       HASH_REDEFINED_OP_FLAG
       INTEGER_REDEFINED_OP_FLAG
       INVALID_SHAPE_ID
@@ -433,6 +435,7 @@ generator = BindingGenerator.new(
       RUBY_T_MODULE
       RUBY_T_STRING
       RUBY_T_SYMBOL
+      RUBY_T_OBJECT
       SHAPE_CAPACITY_CHANGE
       SHAPE_FLAG_SHIFT
       SHAPE_FROZEN
@@ -558,6 +561,7 @@ generator = BindingGenerator.new(
     rb_str_buf_append
     rb_str_dup
     rb_vm_yield_with_cfunc
+    rb_vm_set_ivar_id
   ],
   types: %w[
     CALL_DATA
@@ -621,7 +625,7 @@ generator = BindingGenerator.new(
     'RString.as': %w[embed], # doesn't compile on USE_RVARGC=0 CI
     rb_execution_context_struct: %w[method_missing_reason], # non-leading bit fields not supported
     rb_iseq_constant_body: %w[yjit_payload], # conditionally defined
-    rb_thread_struct: %w[status locking_native_thread to_kill abort_on_exception report_on_exception pending_interrupt_queue_checked],
+    rb_thread_struct: %w[status has_dedicated_nt to_kill abort_on_exception report_on_exception pending_interrupt_queue_checked],
     :'' => %w[is_from_method is_lambda is_isolated], # rb_proc_t
   },
   ruby_fields: {

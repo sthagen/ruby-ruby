@@ -370,6 +370,8 @@ module RubyVM::RJIT # :nodoc: all
   C::BOP_MOD = Primitive.cexpr! %q{ SIZET2NUM(BOP_MOD) }
   C::BOP_OR = Primitive.cexpr! %q{ SIZET2NUM(BOP_OR) }
   C::BOP_PLUS = Primitive.cexpr! %q{ SIZET2NUM(BOP_PLUS) }
+  C::BUILTIN_ATTR_LEAF = Primitive.cexpr! %q{ SIZET2NUM(BUILTIN_ATTR_LEAF) }
+  C::BUILTIN_ATTR_NO_GC = Primitive.cexpr! %q{ SIZET2NUM(BUILTIN_ATTR_NO_GC) }
   C::HASH_REDEFINED_OP_FLAG = Primitive.cexpr! %q{ SIZET2NUM(HASH_REDEFINED_OP_FLAG) }
   C::INTEGER_REDEFINED_OP_FLAG = Primitive.cexpr! %q{ SIZET2NUM(INTEGER_REDEFINED_OP_FLAG) }
   C::INVALID_SHAPE_ID = Primitive.cexpr! %q{ SIZET2NUM(INVALID_SHAPE_ID) }
@@ -408,6 +410,7 @@ module RubyVM::RJIT # :nodoc: all
   C::RUBY_T_ICLASS = Primitive.cexpr! %q{ SIZET2NUM(RUBY_T_ICLASS) }
   C::RUBY_T_MASK = Primitive.cexpr! %q{ SIZET2NUM(RUBY_T_MASK) }
   C::RUBY_T_MODULE = Primitive.cexpr! %q{ SIZET2NUM(RUBY_T_MODULE) }
+  C::RUBY_T_OBJECT = Primitive.cexpr! %q{ SIZET2NUM(RUBY_T_OBJECT) }
   C::RUBY_T_STRING = Primitive.cexpr! %q{ SIZET2NUM(RUBY_T_STRING) }
   C::RUBY_T_SYMBOL = Primitive.cexpr! %q{ SIZET2NUM(RUBY_T_SYMBOL) }
   C::SHAPE_CAPACITY_CHANGE = Primitive.cexpr! %q{ SIZET2NUM(SHAPE_CAPACITY_CHANGE) }
@@ -691,6 +694,10 @@ module RubyVM::RJIT # :nodoc: all
 
   def C.rb_vm_opt_newarray_min
     Primitive.cexpr! %q{ SIZET2NUM((size_t)rb_vm_opt_newarray_min) }
+  end
+
+  def C.rb_vm_set_ivar_id
+    Primitive.cexpr! %q{ SIZET2NUM((size_t)rb_vm_set_ivar_id) }
   end
 
   def C.rb_vm_setclassvariable
@@ -1278,6 +1285,7 @@ module RubyVM::RJIT # :nodoc: all
       send_args_splat: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), send_args_splat)")],
       send_args_splat_not_array: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), send_args_splat_not_array)")],
       send_args_splat_length_not_equal: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), send_args_splat_length_not_equal)")],
+      send_args_splat_cfunc_var_args: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), send_args_splat_cfunc_var_args)")],
       send_args_splat_arity_error: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), send_args_splat_arity_error)")],
       send_args_splat_ruby2_hash: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), send_args_splat_ruby2_hash)")],
       send_kw_splat: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), send_kw_splat)")],
@@ -1288,8 +1296,6 @@ module RubyVM::RJIT # :nodoc: all
       send_protected_check_failed: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), send_protected_check_failed)")],
       send_tailcall: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), send_tailcall)")],
       send_notimplemented: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), send_notimplemented)")],
-      send_cfunc: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), send_cfunc)")],
-      send_attrset: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), send_attrset)")],
       send_missing: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), send_missing)")],
       send_bmethod: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), send_bmethod)")],
       send_alias: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), send_alias)")],
@@ -1323,7 +1329,10 @@ module RubyVM::RJIT # :nodoc: all
       send_cfunc_variadic: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), send_cfunc_variadic)")],
       send_cfunc_too_many_args: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), send_cfunc_too_many_args)")],
       send_cfunc_ruby_array_varg: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), send_cfunc_ruby_array_varg)")],
-      send_ivar: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), send_ivar)")],
+      send_attrset_splat: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), send_attrset_splat)")],
+      send_attrset_kwarg: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), send_attrset_kwarg)")],
+      send_attrset_method: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), send_attrset_method)")],
+      send_attrset_blockarg: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), send_attrset_blockarg)")],
       send_ivar_splat: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), send_ivar_splat)")],
       send_ivar_opt_send: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), send_ivar_opt_send)")],
       send_ivar_blockarg: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), send_ivar_blockarg)")],

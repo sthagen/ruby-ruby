@@ -1516,6 +1516,16 @@ impl Context {
         self.stack_size
     }
 
+    /// Create a new Context instance with a given stack_size and sp_offset adjusted
+    /// accordingly. This is useful when you want to virtually rewind a stack_size for
+    /// generating a side exit while considering past sp_offset changes on gen_save_sp.
+    pub fn with_stack_size(&self, stack_size: u8) -> Context {
+        let mut ctx = self.clone();
+        ctx.sp_offset -= (ctx.get_stack_size() as isize - stack_size as isize) as i8;
+        ctx.stack_size = stack_size;
+        ctx
+    }
+
     pub fn get_sp_offset(&self) -> i8 {
         self.sp_offset
     }
@@ -2049,7 +2059,7 @@ pub fn gen_entry_point(iseq: IseqPtr, ec: EcPtr) -> Option<CodePtr> {
         // Compilation failed
         None => {
             // Trigger code GC. This entry point will be recompiled later.
-            cb.code_gc();
+            cb.code_gc(ocb);
             return None;
         }
 
@@ -2146,7 +2156,7 @@ fn entry_stub_hit_body(entry_ptr: *const c_void, ec: EcPtr) -> Option<*const u8>
             Some(blockref) => blockref,
             None => { // No space
                 // Trigger code GC. This entry point will be recompiled later.
-                cb.code_gc();
+                cb.code_gc(ocb);
                 return None;
             }
         }
@@ -2426,7 +2436,7 @@ fn branch_stub_hit_body(branch_ptr: *const c_void, target_idx: u32, ec: EcPtr) -
             // because incomplete code could be used when cb.dropped_bytes is flipped
             // by code GC. So this place, after all compilation, is the safest place
             // to hook code GC on branch_stub_hit.
-            cb.code_gc();
+            cb.code_gc(ocb);
 
             // Failed to service the stub by generating a new block so now we
             // need to exit to the interpreter at the stubbed location. We are

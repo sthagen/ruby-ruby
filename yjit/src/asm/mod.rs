@@ -154,8 +154,9 @@ impl CodeBlock {
         }
 
         // Move the other CodeBlock to the same page if it's on the furthest page
-        #[cfg(not(test))]
-        self.other_cb().unwrap().set_page(next_page_idx.unwrap(), &jmp_ptr);
+        if cfg!(not(test)) {
+            self.other_cb().unwrap().set_page(next_page_idx.unwrap(), &jmp_ptr);
+        }
 
         return !self.dropped_bytes;
     }
@@ -583,7 +584,9 @@ impl CodeBlock {
     }
 
     /// Code GC. Free code pages that are not on stack and reuse them.
-    pub fn code_gc(&mut self) {
+    pub fn code_gc(&mut self, ocb: &mut OutlinedCb) {
+        assert!(self.inline(), "must use on inline code block");
+
         // The previous code GC failed to free any pages. Give up.
         if self.freed_pages.as_ref() == &Some(vec![]) {
             return;
@@ -631,21 +634,17 @@ impl CodeBlock {
         freed_pages.append(&mut virtual_pages);
 
         if let Some(&first_page) = freed_pages.first() {
-            let mut cb = CodegenGlobals::get_inline_cb();
-            cb.write_pos = cb.get_page_pos(first_page);
-            cb.dropped_bytes = false;
-            cb.clear_comments();
-
-            let mut ocb = CodegenGlobals::get_outlined_cb().unwrap();
-            ocb.write_pos = ocb.get_page_pos(first_page);
-            ocb.dropped_bytes = false;
-            ocb.clear_comments();
+            for cb in [&mut *self, ocb.unwrap()] {
+                cb.write_pos = cb.get_page_pos(first_page);
+                cb.dropped_bytes = false;
+                cb.clear_comments();
+            }
         }
 
         // Track which pages are free.
         let new_freed_pages = Rc::new(Some(freed_pages));
         let old_freed_pages = mem::replace(&mut self.freed_pages, Rc::clone(&new_freed_pages));
-        self.other_cb().unwrap().freed_pages = new_freed_pages;
+        ocb.unwrap().freed_pages = new_freed_pages;
         assert_eq!(1, Rc::strong_count(&old_freed_pages)); // will deallocate
 
         CodegenGlobals::incr_code_gc_count();

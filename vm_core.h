@@ -1011,7 +1011,7 @@ typedef struct rb_thread_struct {
 
     BITFIELD(enum rb_thread_status, status, 2);
     /* bit flags */
-    unsigned int locking_native_thread : 1;
+    unsigned int has_dedicated_nt : 1;
     unsigned int to_kill : 1;
     unsigned int abort_on_exception: 1;
     unsigned int report_on_exception: 1;
@@ -1876,15 +1876,21 @@ rb_current_thread(void)
 }
 
 static inline rb_ractor_t *
-rb_current_ractor(void)
+rb_current_ractor_raw(bool expect)
 {
     if (ruby_single_main_ractor) {
         return ruby_single_main_ractor;
     }
     else {
-        const rb_execution_context_t *ec = GET_EC();
-        return rb_ec_ractor_ptr(ec);
+        const rb_execution_context_t *ec = rb_current_execution_context(expect);
+        return (expect || ec) ? rb_ec_ractor_ptr(ec) : NULL;
     }
+}
+
+static inline rb_ractor_t *
+rb_current_ractor(void)
+{
+    return rb_current_ractor_raw(true);
 }
 
 static inline rb_vm_t *

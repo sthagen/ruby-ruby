@@ -47,15 +47,18 @@ The following default gems are updated.
 * irb 1.6.3
 * optparse 0.4.0.pre.1
 * psych 5.1.0
+* reline 0.3.3
 * stringio 3.0.6
 * strscan 3.0.7
 * timeout 0.3.2
+* uri 0.12.1
 
 The following bundled gems are updated.
 
 * minitest 5.18.0
 * rbs 3.0.4
 * typeprof 0.21.7
+* debug 1.7.2
 
 See GitHub releases like [Logger](https://github.com/ruby/logger/releases) or
 changelog for details of the default gems or bundled gems.
