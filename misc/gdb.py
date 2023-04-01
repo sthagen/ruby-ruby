@@ -1,6 +1,8 @@
+import textwrap
+
 # Usage:
 #   cfp: Dump the current cfp
-#   cfp + 1: Dump the caller cfp
+#   cfp 1: Dump the caller cfp
 class CFP(gdb.Command):
     FRAME_MAGICS = [
         # frame types
@@ -44,17 +46,18 @@ class CFP(gdb.Command):
         gdb.execute(f'p *({cfp})')
         print()
 
-        local_size = self.get_int(f'{cfp}->iseq->body->local_table_size - {cfp}->iseq->body->param.size')
-        param_size = self.get_int(f'{cfp}->iseq->body->param.size')
-        print(f'Params (size={param_size}):')
-        for i in range(-3 - local_size - param_size, -3 - local_size):
-            self.print_stack(cfp, i, self.rp(cfp, i))
-        print()
+        if self.get_int(f'{cfp}->iseq'):
+            local_size = self.get_int(f'{cfp}->iseq->body->local_table_size - {cfp}->iseq->body->param.size')
+            param_size = self.get_int(f'{cfp}->iseq->body->param.size')
+            print(f'Params (size={param_size}):')
+            for i in range(-3 - local_size - param_size, -3 - local_size):
+                self.print_stack(cfp, i, self.rp(cfp, i))
+            print()
 
-        print(f'Locals (size={local_size}):')
-        for i in range(-3 - local_size, -3):
-            self.print_stack(cfp, i, self.rp(cfp, i))
-        print()
+            print(f'Locals (size={local_size}):')
+            for i in range(-3 - local_size, -3):
+                self.print_stack(cfp, i, self.rp(cfp, i))
+            print()
 
         print('Env:')
         self.print_stack(cfp, -3, self.rp(cfp, -3))
@@ -66,13 +69,24 @@ class CFP(gdb.Command):
         print(f'Stack (size={stack_size}):')
         for i in range(0, stack_size):
             self.print_stack(cfp, i, self.rp(cfp, i))
+        print(self.regs(cfp, stack_size))
 
     def print_stack(self, cfp, bp_index, content):
         address = self.get_int(f'{cfp}->__bp__ + {bp_index}')
         value = self.get_value(cfp, bp_index)
+        regs = self.regs(cfp, bp_index)
         if content:
+            content = textwrap.indent(content, ' ' * 3).lstrip() # Leave the regs column empty
             content = f'{content} '
-        print('0x{:x} [{}] {}(0x{:x})'.format(address, bp_index, content, value))
+        print('{:2} 0x{:x} [{}] {}(0x{:x})'.format(regs, address, bp_index, content, value))
+
+    def regs(self, cfp, bp_index):
+        address = self.get_int(f'{cfp}->__bp__ + {bp_index}')
+        regs = []
+        for reg, field in { 'EP': 'ep', 'BP': '__bp__', 'SP': 'sp' }.items():
+            if address == self.get_int(f'{cfp}->{field}'):
+                regs.append(reg)
+        return ' '.join(regs)
 
     def rp(self, cfp, bp_index):
         value = self.get_value(cfp, bp_index)
@@ -81,9 +95,10 @@ class CFP(gdb.Command):
     # specval: block_handler or previous EP
     def specval(self, cfp, bp_index):
         value = self.get_value(cfp, bp_index)
-        for block_handler in ['VM_BLOCK_HANDLER_NONE', 'rb_block_param_proxy']:
-            if value == self.get_int(block_handler):
-                return block_handler
+        if value == 0:
+            return 'VM_BLOCK_HANDLER_NONE'
+        if value == self.get_int('rb_block_param_proxy'):
+            return 'rb_block_param_proxy'
         return ''
 
     def frame_types(self, cfp, bp_index):
