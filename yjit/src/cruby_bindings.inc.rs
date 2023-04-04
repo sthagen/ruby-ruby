@@ -810,15 +810,14 @@ pub const VM_CALL_ARGS_BLOCKARG_bit: vm_call_flag_bits = 1;
 pub const VM_CALL_FCALL_bit: vm_call_flag_bits = 2;
 pub const VM_CALL_VCALL_bit: vm_call_flag_bits = 3;
 pub const VM_CALL_ARGS_SIMPLE_bit: vm_call_flag_bits = 4;
-pub const VM_CALL_BLOCKISEQ_bit: vm_call_flag_bits = 5;
-pub const VM_CALL_KWARG_bit: vm_call_flag_bits = 6;
-pub const VM_CALL_KW_SPLAT_bit: vm_call_flag_bits = 7;
-pub const VM_CALL_TAILCALL_bit: vm_call_flag_bits = 8;
-pub const VM_CALL_SUPER_bit: vm_call_flag_bits = 9;
-pub const VM_CALL_ZSUPER_bit: vm_call_flag_bits = 10;
-pub const VM_CALL_OPT_SEND_bit: vm_call_flag_bits = 11;
-pub const VM_CALL_KW_SPLAT_MUT_bit: vm_call_flag_bits = 12;
-pub const VM_CALL__END: vm_call_flag_bits = 13;
+pub const VM_CALL_KWARG_bit: vm_call_flag_bits = 5;
+pub const VM_CALL_KW_SPLAT_bit: vm_call_flag_bits = 6;
+pub const VM_CALL_TAILCALL_bit: vm_call_flag_bits = 7;
+pub const VM_CALL_SUPER_bit: vm_call_flag_bits = 8;
+pub const VM_CALL_ZSUPER_bit: vm_call_flag_bits = 9;
+pub const VM_CALL_OPT_SEND_bit: vm_call_flag_bits = 10;
+pub const VM_CALL_KW_SPLAT_MUT_bit: vm_call_flag_bits = 11;
+pub const VM_CALL__END: vm_call_flag_bits = 12;
 pub type vm_call_flag_bits = u32;
 #[repr(C)]
 pub struct rb_callinfo {
@@ -1095,6 +1094,7 @@ extern "C" {
     pub fn rb_ary_store(ary: VALUE, key: ::std::os::raw::c_long, val: VALUE);
     pub fn rb_ary_dup(ary: VALUE) -> VALUE;
     pub fn rb_ary_resurrect(ary: VALUE) -> VALUE;
+    pub fn rb_ary_push(ary: VALUE, elem: VALUE) -> VALUE;
     pub fn rb_ary_clear(ary: VALUE) -> VALUE;
     pub fn rb_hash_new() -> VALUE;
     pub fn rb_hash_aref(hash: VALUE, key: VALUE) -> VALUE;
@@ -1297,11 +1297,7 @@ extern "C" {
     pub fn rb_yarv_str_eql_internal(str1: VALUE, str2: VALUE) -> VALUE;
     pub fn rb_str_neq_internal(str1: VALUE, str2: VALUE) -> VALUE;
     pub fn rb_yarv_ary_entry_internal(ary: VALUE, offset: ::std::os::raw::c_long) -> VALUE;
-    pub fn rb_yjit_rb_ary_unshift_m(
-        argc: ::std::os::raw::c_int,
-        argv: *mut VALUE,
-        ary: VALUE,
-    ) -> VALUE;
+    pub fn rb_ary_unshift_m(argc: ::std::os::raw::c_int, argv: *mut VALUE, ary: VALUE) -> VALUE;
     pub fn rb_yjit_rb_ary_subseq_length(ary: VALUE, beg: ::std::os::raw::c_long) -> VALUE;
     pub fn rb_yarv_fix_mod_fix(recv: VALUE, obj: VALUE) -> VALUE;
     pub fn rb_yjit_dump_iseq_loc(iseq: *const rb_iseq_t, insn_idx: u32);

@@ -457,6 +457,7 @@ generator = BindingGenerator.new(
       VM_CALL_OPT_SEND
       VM_CALL_TAILCALL
       VM_CALL_TAILCALL_bit
+      VM_CALL_ZSUPER
       VM_ENV_DATA_INDEX_FLAGS
       VM_ENV_DATA_SIZE
       VM_ENV_FLAG_LOCAL
@@ -491,11 +492,14 @@ generator = BindingGenerator.new(
     SIZET: %w[
       block_type_iseq
       imemo_iseq
+      imemo_callinfo
       rb_block_param_proxy
+      rb_cArray
       rb_cFalseClass
       rb_cFloat
       rb_cInteger
       rb_cNilClass
+      rb_cString
       rb_cSymbol
       rb_cTrueClass
       rb_rjit_global_events
@@ -562,6 +566,12 @@ generator = BindingGenerator.new(
     rb_str_dup
     rb_vm_yield_with_cfunc
     rb_vm_set_ivar_id
+    rb_ary_dup
+    rjit_rb_ary_subseq_length
+    rb_ary_unshift_m
+    rjit_build_kwhash
+    rb_rjit_entry_stub_hit
+    rb_rjit_branch_stub_hit
   ],
   types: %w[
     CALL_DATA
@@ -614,6 +624,7 @@ generator = BindingGenerator.new(
     rb_jit_func_t
     rb_iseq_param_keyword
     rb_rjit_options
+    rb_callinfo_kwarg
   ],
   # #ifdef-dependent immediate types, which need Primitive.cexpr! for type detection
   dynamic_types: %w[

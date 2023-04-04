@@ -176,6 +176,28 @@ rjit_str_simple_append(VALUE str1, VALUE str2)
     return rb_str_cat(str1, RSTRING_PTR(str2), RSTRING_LEN(str2));
 }
 
+static VALUE
+rjit_rb_ary_subseq_length(VALUE ary, long beg)
+{
+    long len = RARRAY_LEN(ary);
+    return rb_ary_subseq(ary, beg, len);
+}
+
+static VALUE
+rjit_build_kwhash(const struct rb_callinfo *ci, VALUE *sp)
+{
+    const struct rb_callinfo_kwarg *kw_arg = vm_ci_kwarg(ci);
+    int kw_len = kw_arg->keyword_len;
+    VALUE hash = rb_hash_new_with_size(kw_len);
+
+    for (int i = 0; i < kw_len; i++) {
+        VALUE key = kw_arg->keywords[i];
+        VALUE val = *(sp - kw_len + i);
+        rb_hash_aset(hash, key, val);
+    }
+    return hash;
+}
+
 // The code we generate in gen_send_cfunc() doesn't fire the c_return TracePoint event
 // like the interpreter. When tracing for c_return is enabled, we patch the code after
 // the C method return to call into this to fire the event.
@@ -507,6 +529,9 @@ extern VALUE rb_str_bytesize(VALUE str);
 extern const rb_callable_method_entry_t *rb_callable_method_entry_or_negative(VALUE klass, ID mid);
 extern VALUE rb_vm_yield_with_cfunc(rb_execution_context_t *ec, const struct rb_captured_block *captured, int argc, const VALUE *argv);
 extern VALUE rb_vm_set_ivar_id(VALUE obj, ID id, VALUE val);
+extern VALUE rb_ary_unshift_m(int argc, VALUE *argv, VALUE ary);
+extern void* rb_rjit_entry_stub_hit(VALUE branch_stub, int sp_offset, int target0_p);
+extern void* rb_rjit_branch_stub_hit(VALUE branch_stub, int sp_offset, int target0_p);
 
 #include "rjit_c.rbinc"
 
