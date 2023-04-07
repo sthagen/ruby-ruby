@@ -500,7 +500,7 @@ Removed '/CN=alternate/DC=example'
 
     mask = 0100600 & (~File.umask)
 
-    assert_equal mask, File.stat(path).mode unless win_platform?
+    assert_equal mask, File.stat(path).mode unless Gem.win_platform?
   end
 
   def test_execute_sign_encrypted_key
@@ -529,7 +529,7 @@ Removed '/CN=alternate/DC=example'
 
     mask = 0100600 & (~File.umask)
 
-    assert_equal mask, File.stat(path).mode unless win_platform?
+    assert_equal mask, File.stat(path).mode unless Gem.win_platform?
   end
 
   def test_execute_sign_default
@@ -561,7 +561,7 @@ Removed '/CN=alternate/DC=example'
 
     mask = 0100600 & (~File.umask)
 
-    assert_equal mask, File.stat(path).mode unless win_platform?
+    assert_equal mask, File.stat(path).mode unless Gem.win_platform?
   end
 
   def test_execute_sign_default_encrypted_key
@@ -593,7 +593,7 @@ Removed '/CN=alternate/DC=example'
 
     mask = 0100600 & (~File.umask)
 
-    assert_equal mask, File.stat(path).mode unless win_platform?
+    assert_equal mask, File.stat(path).mode unless Gem.win_platform?
   end
 
   def test_execute_sign_no_cert
@@ -778,7 +778,7 @@ ERROR:  --private-key not specified and ~/.gem/gem-private_key.pem does not exis
       @cmd.handle_options %W[--certificate #{bad}]
     end
 
-    assert_equal "invalid argument: " +
+    assert_equal "invalid argument: " \
                  "--certificate #{bad}: invalid X509 certificate",
                  e.message
   end
@@ -789,7 +789,7 @@ ERROR:  --private-key not specified and ~/.gem/gem-private_key.pem does not exis
       @cmd.handle_options %W[--private-key #{nonexistent}]
     end
 
-    assert_equal "invalid argument: " +
+    assert_equal "invalid argument: " \
                  "--private-key #{nonexistent}: does not exist",
                  e.message
 
@@ -807,7 +807,7 @@ ERROR:  --private-key not specified and ~/.gem/gem-private_key.pem does not exis
       @cmd.handle_options %W[--private-key #{PUBLIC_KEY_FILE}]
     end
 
-    assert_equal "invalid argument: " +
+    assert_equal "invalid argument: " \
                  "--private-key #{PUBLIC_KEY_FILE}: private key not found",
                  e.message
   end

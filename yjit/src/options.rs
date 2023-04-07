@@ -1,4 +1,5 @@
 use std::ffi::CStr;
+use crate::backend::ir::Assembler;
 
 // Command-line options
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -21,6 +22,9 @@ pub struct Options {
     // Maximum number of versions per block
     // 1 means always create generic versions
     pub max_versions: usize,
+
+    // The number of registers allocated for stack temps
+    pub num_temp_regs: usize,
 
     // Capture and print out stats
     pub gen_stats: bool,
@@ -52,6 +56,7 @@ pub static mut OPTIONS: Options = Options {
     greedy_versioning: false,
     no_type_prop: false,
     max_versions: 4,
+    num_temp_regs: 5,
     gen_stats: false,
     gen_trace_exits: false,
     pause: false,
@@ -139,6 +144,16 @@ pub fn parse_option(str_ptr: *const std::os::raw::c_char) -> Option<()> {
 
         ("pause", "") => unsafe {
             OPTIONS.pause = true;
+        },
+
+        ("temp-regs", _) => match opt_val.parse() {
+            Ok(n) => {
+                assert!(n <= Assembler::TEMP_REGS.len(), "--yjit-temp-regs must be <= {}", Assembler::TEMP_REGS.len());
+                unsafe { OPTIONS.num_temp_regs = n }
+            }
+            Err(_) => {
+                return None;
+            }
         },
 
         ("dump-disasm", _) => match opt_val.to_string().as_str() {

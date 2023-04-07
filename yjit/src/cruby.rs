@@ -184,7 +184,9 @@ pub use rb_get_cikw_keywords_idx as get_cikw_keywords_idx;
 pub use rb_get_call_data_ci as get_call_data_ci;
 pub use rb_yarv_str_eql_internal as rb_str_eql_internal;
 pub use rb_yarv_ary_entry_internal as rb_ary_entry_internal;
-pub use rb_yarv_fix_mod_fix as rb_fix_mod_fix;
+pub use rb_yjit_fix_div_fix as rb_fix_div_fix;
+pub use rb_yjit_fix_mod_fix as rb_fix_mod_fix;
+pub use rb_yjit_fix_mul_fix as rb_fix_mul_fix;
 pub use rb_FL_TEST as FL_TEST;
 pub use rb_FL_TEST_RAW as FL_TEST_RAW;
 pub use rb_RB_TYPE_P as RB_TYPE_P;
@@ -614,7 +616,7 @@ macro_rules! obj_written {
     ($old: expr, $young: expr) => {
         let (old, young): (VALUE, VALUE) = ($old, $young);
         let src_loc = $crate::cruby::src_loc!();
-        rb_yjit_obj_written(old, young, src_loc.file.as_ptr(), src_loc.line);
+        unsafe { rb_yjit_obj_written(old, young, src_loc.file.as_ptr(), src_loc.line) };
     };
 }
 pub(crate) use obj_written;

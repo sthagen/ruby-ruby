@@ -1451,7 +1451,7 @@ dependencies: []
     @ext.build_extensions
     assert_path_not_exist @ext.extension_dir
   ensure
-    unless $DEBUG || win_platform? || Process.uid.zero? || Gem.java_platform?
+    unless $DEBUG || Gem.win_platform? || Process.uid.zero? || Gem.java_platform?
       FileUtils.chmod 0755, File.join(@ext.base_dir, "extensions")
       FileUtils.chmod 0755, @ext.base_dir
     end
@@ -1540,7 +1540,7 @@ dependencies: []
       refute @ext.contains_requirable_file? "nonexistent"
     end
 
-    expected = "Ignoring ext-1 because its extensions are not built. " +
+    expected = "Ignoring ext-1 because its extensions are not built. " \
                "Try: gem pristine ext --version 1\n"
 
     assert_equal expected, err
@@ -1840,7 +1840,7 @@ dependencies: []
   end
 
   def test_full_gem_path_double_slash
-    gemhome = @gemhome.to_s.sub(/\w\//, '\&/')
+    gemhome = @gemhome.to_s.sub(%r{\w/}, '\&/')
     @a1.loaded_from = File.join gemhome, "specifications", @a1.spec_name
 
     expected = File.join @gemhome, "gems", @a1.full_name
@@ -1858,7 +1858,7 @@ dependencies: []
     @a1.instance_variable_set :@new_platform, "mswin32"
     assert_equal "a-1-mswin32", @a1.full_name, "legacy"
 
-    return if win_platform?
+    return if Gem.win_platform?
 
     @a1 = Gem::Specification.new "a", 1
     @a1.platform = "current"
@@ -2380,7 +2380,7 @@ end
 
     expected = <<-SPEC
 # -*- encoding: utf-8 -*-
-# stub: a 1 #{win_platform? ? "x86-mswin32-60" : "x86-darwin-8"} #{stub_require_paths}
+# stub: a 1 #{Gem.win_platform? ? "x86-mswin32-60" : "x86-darwin-8"} #{stub_require_paths}
 # stub: #{extensions}
 
 Gem::Specification.new do |s|
@@ -2445,7 +2445,7 @@ end
 
     ruby = @a2.to_ruby
 
-    assert_match %r%^  s\.metadata = \{ "%, ruby
+    assert_match(/^  s\.metadata = \{ "/, ruby)
   end
 
   def test_to_ruby_platform
@@ -2462,7 +2462,7 @@ end
   def test_to_yaml
     yaml_str = @a1.to_yaml
 
-    refute_match %r{!!null}, yaml_str
+    refute_match(/!!null/, yaml_str)
 
     same_spec = Gem::Specification.from_yaml(yaml_str)
 
@@ -2483,7 +2483,7 @@ end
   def test_to_yaml_platform_empty_string
     @a1.instance_variable_set :@original_platform, ""
 
-    assert_match %r{^platform: ruby$}, @a1.to_yaml
+    assert_match(/^platform: ruby$/, @a1.to_yaml)
   end
 
   def test_to_yaml_platform_legacy
@@ -2501,7 +2501,7 @@ end
   def test_to_yaml_platform_nil
     @a1.instance_variable_set :@original_platform, nil
 
-    assert_match %r{^platform: ruby$}, @a1.to_yaml
+    assert_match(/^platform: ruby$/, @a1.to_yaml)
   end
 
   def test_validate
@@ -2897,7 +2897,7 @@ duplicate dependency on c (>= 1.2.3, development), (~> 1.2) use:
   end
 
   def test_validate_empty_require_paths
-    if win_platform?
+    if Gem.win_platform?
       pend "test_validate_empty_require_paths skipped on MS Windows (symlink)"
     else
       util_setup_validate
@@ -2913,7 +2913,7 @@ duplicate dependency on c (>= 1.2.3, development), (~> 1.2) use:
   end
 
   def test_validate_files
-    pend "test_validate_files skipped on MS Windows (symlink)" if win_platform?
+    pend "test_validate_files skipped on MS Windows (symlink)" if Gem.win_platform?
     util_setup_validate
 
     @a1.files += ["lib", "lib2"]
@@ -3306,7 +3306,7 @@ Did you mean 'Ruby'?
           spec.validate
         end
 
-        assert_match %r{^#{name}}, e.message
+        assert_match(/^#{name}/, e.message)
       end
     end
   end

@@ -120,7 +120,7 @@ class Gem::FakeFetcher
     path = path.to_s
     @paths << path
 
-    raise ArgumentError, "need full URI" unless path =~ %r{^http://}
+    raise ArgumentError, "need full URI" unless %r{^http://}.match?(path)
 
     unless @data.key? path
       raise Gem::RemoteFetcher::FetchError.new("no data for #{path}", path)
@@ -141,7 +141,7 @@ class Gem::FakeFetcher
 
     path = File.join path, name
 
-    if source_uri =~ /^http/
+    if /^http/.match?(source_uri)
       File.open(path, "wb") do |f|
         f.write fetch_path(File.join(source_uri, "gems", name))
       end
@@ -168,7 +168,7 @@ end
 #
 # Example:
 #
-#   HTTPResponseFactory.create(
+#   Gem::HTTPResponseFactory.create(
 #     body: "",
 #     code: 301,
 #     msg: "Moved Permanently",
@@ -176,7 +176,7 @@ end
 #   )
 #
 
-class HTTPResponseFactory
+class Gem::HTTPResponseFactory
   def self.create(body:, code:, msg:, headers: {})
     response = Net::HTTPResponse.send(:response_class, code.to_s).new("1.0", code.to_s, msg)
     response.instance_variable_set(:@body, body)
@@ -374,7 +374,7 @@ end
 #
 # This class was added to flush out problems in Rubinius' IO implementation.
 
-class TempIO < Tempfile
+class Gem::TempIO < Tempfile
   ##
   # Creates a new TempIO that will be initialized to contain +string+.
 
@@ -392,4 +392,9 @@ class TempIO < Tempfile
     flush
     Gem.read_binary path
   end
+end
+
+class Gem::TestCase
+  TempIO = Gem::TempIO
+  HTTPResponseFactory = Gem::HTTPResponseFactory
 end

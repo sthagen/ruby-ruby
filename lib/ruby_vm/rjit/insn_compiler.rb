@@ -1846,44 +1846,53 @@ module RubyVM::RJIT
         jit_check_ints(jit, ctx, asm)
       end
 
-      # TODO: skip check for known truthy
+      # Get the branch target instruction offsets
+      next_pc = jit.pc + C.VALUE.size * jit.insn.len
+      jump_pc = jit.pc + C.VALUE.size * (jit.insn.len + jump_offset)
 
-      # This `test` sets ZF only for Qnil and Qfalse, which let jz jump.
-      val = ctx.stack_pop
-      asm.test(val, ~Qnil)
+      val_type = ctx.get_opnd_type(StackOpnd[0])
+      val_opnd = ctx.stack_pop(1)
 
-      # Set stubs
-      branch_stub = BranchStub.new(
-        iseq: jit.iseq,
-        shape: Default,
-        target0: BranchTarget.new(ctx:, pc: jit.pc + C.VALUE.size * (jit.insn.len + jump_offset)), # branch target
-        target1: BranchTarget.new(ctx:, pc: jit.pc + C.VALUE.size * jit.insn.len),                 # fallthrough
-      )
-      branch_stub.target0.address = Assembler.new.then do |ocb_asm|
-        @exit_compiler.compile_branch_stub(ctx, ocb_asm, branch_stub, true)
-        @ocb.write(ocb_asm)
-      end
-      branch_stub.target1.address = Assembler.new.then do |ocb_asm|
-        @exit_compiler.compile_branch_stub(ctx, ocb_asm, branch_stub, false)
-        @ocb.write(ocb_asm)
-      end
+      if (result = val_type.known_truthy) != nil
+        target_pc = result ? jump_pc : next_pc
+        jit_direct_jump(jit.iseq, target_pc, ctx, asm)
+      else
+        # This `test` sets ZF only for Qnil and Qfalse, which let jz jump.
+        asm.test(val_opnd, ~Qnil)
 
-      # Jump to target0 on jnz
-      branch_stub.compile = proc do |branch_asm|
-        branch_asm.comment("branchif #{branch_stub.shape}")
-        branch_asm.stub(branch_stub) do
-          case branch_stub.shape
-          in Default
-            branch_asm.jnz(branch_stub.target0.address)
-            branch_asm.jmp(branch_stub.target1.address)
-          in Next0
-            branch_asm.jz(branch_stub.target1.address)
-          in Next1
-            branch_asm.jnz(branch_stub.target0.address)
+        # Set stubs
+        branch_stub = BranchStub.new(
+          iseq: jit.iseq,
+          shape: Default,
+          target0: BranchTarget.new(ctx:, pc: jump_pc), # branch target
+          target1: BranchTarget.new(ctx:, pc: next_pc), # fallthrough
+        )
+        branch_stub.target0.address = Assembler.new.then do |ocb_asm|
+          @exit_compiler.compile_branch_stub(ctx, ocb_asm, branch_stub, true)
+          @ocb.write(ocb_asm)
+        end
+        branch_stub.target1.address = Assembler.new.then do |ocb_asm|
+          @exit_compiler.compile_branch_stub(ctx, ocb_asm, branch_stub, false)
+          @ocb.write(ocb_asm)
+        end
+
+        # Jump to target0 on jnz
+        branch_stub.compile = proc do |branch_asm|
+          branch_asm.comment("branchif #{branch_stub.shape}")
+          branch_asm.stub(branch_stub) do
+            case branch_stub.shape
+            in Default
+              branch_asm.jnz(branch_stub.target0.address)
+              branch_asm.jmp(branch_stub.target1.address)
+            in Next0
+              branch_asm.jz(branch_stub.target1.address)
+            in Next1
+              branch_asm.jnz(branch_stub.target0.address)
+            end
           end
         end
+        branch_stub.compile.call(asm)
       end
-      branch_stub.compile.call(asm)
 
       EndBlock
     end
@@ -1898,44 +1907,53 @@ module RubyVM::RJIT
         jit_check_ints(jit, ctx, asm)
       end
 
-      # TODO: skip check for known truthy
+      # Get the branch target instruction offsets
+      next_pc = jit.pc + C.VALUE.size * jit.insn.len
+      jump_pc = jit.pc + C.VALUE.size * (jit.insn.len + jump_offset)
 
-      # This `test` sets ZF only for Qnil and Qfalse, which let jz jump.
-      val = ctx.stack_pop
-      asm.test(val, ~Qnil)
+      val_type = ctx.get_opnd_type(StackOpnd[0])
+      val_opnd = ctx.stack_pop(1)
 
-      # Set stubs
-      branch_stub = BranchStub.new(
-        iseq: jit.iseq,
-        shape: Default,
-        target0: BranchTarget.new(ctx:, pc: jit.pc + C.VALUE.size * (jit.insn.len + jump_offset)), # branch target
-        target1: BranchTarget.new(ctx:, pc: jit.pc + C.VALUE.size * jit.insn.len),                 # fallthrough
-      )
-      branch_stub.target0.address = Assembler.new.then do |ocb_asm|
-        @exit_compiler.compile_branch_stub(ctx, ocb_asm, branch_stub, true)
-        @ocb.write(ocb_asm)
-      end
-      branch_stub.target1.address = Assembler.new.then do |ocb_asm|
-        @exit_compiler.compile_branch_stub(ctx, ocb_asm, branch_stub, false)
-        @ocb.write(ocb_asm)
-      end
+      if (result = val_type.known_truthy) != nil
+        target_pc = result ? next_pc : jump_pc
+        jit_direct_jump(jit.iseq, target_pc, ctx, asm)
+      else
+        # This `test` sets ZF only for Qnil and Qfalse, which let jz jump.
+        asm.test(val_opnd, ~Qnil)
 
-      # Jump to target0 on jz
-      branch_stub.compile = proc do |branch_asm|
-        branch_asm.comment("branchunless #{branch_stub.shape}")
-        branch_asm.stub(branch_stub) do
-          case branch_stub.shape
-          in Default
-            branch_asm.jz(branch_stub.target0.address)
-            branch_asm.jmp(branch_stub.target1.address)
-          in Next0
-            branch_asm.jnz(branch_stub.target1.address)
-          in Next1
-            branch_asm.jz(branch_stub.target0.address)
+        # Set stubs
+        branch_stub = BranchStub.new(
+          iseq: jit.iseq,
+          shape: Default,
+          target0: BranchTarget.new(ctx:, pc: jump_pc), # branch target
+          target1: BranchTarget.new(ctx:, pc: next_pc), # fallthrough
+        )
+        branch_stub.target0.address = Assembler.new.then do |ocb_asm|
+          @exit_compiler.compile_branch_stub(ctx, ocb_asm, branch_stub, true)
+          @ocb.write(ocb_asm)
+        end
+        branch_stub.target1.address = Assembler.new.then do |ocb_asm|
+          @exit_compiler.compile_branch_stub(ctx, ocb_asm, branch_stub, false)
+          @ocb.write(ocb_asm)
+        end
+
+        # Jump to target0 on jz
+        branch_stub.compile = proc do |branch_asm|
+          branch_asm.comment("branchunless #{branch_stub.shape}")
+          branch_asm.stub(branch_stub) do
+            case branch_stub.shape
+            in Default
+              branch_asm.jz(branch_stub.target0.address)
+              branch_asm.jmp(branch_stub.target1.address)
+            in Next0
+              branch_asm.jnz(branch_stub.target1.address)
+            in Next1
+              branch_asm.jz(branch_stub.target0.address)
+            end
           end
         end
+        branch_stub.compile.call(asm)
       end
-      branch_stub.compile.call(asm)
 
       EndBlock
     end
@@ -1950,43 +1968,52 @@ module RubyVM::RJIT
         jit_check_ints(jit, ctx, asm)
       end
 
-      # TODO: skip check for known truthy
+      # Get the branch target instruction offsets
+      next_pc = jit.pc + C.VALUE.size * jit.insn.len
+      jump_pc = jit.pc + C.VALUE.size * (jit.insn.len + jump_offset)
 
-      val = ctx.stack_pop
-      asm.cmp(val, Qnil)
+      val_type = ctx.get_opnd_type(StackOpnd[0])
+      val_opnd = ctx.stack_pop(1)
 
-      # Set stubs
-      branch_stub = BranchStub.new(
-        iseq: jit.iseq,
-        shape: Default,
-        target0: BranchTarget.new(ctx:, pc: jit.pc + C.VALUE.size * (jit.insn.len + jump_offset)), # branch target
-        target1: BranchTarget.new(ctx:, pc: jit.pc + C.VALUE.size * jit.insn.len),                 # fallthrough
-      )
-      branch_stub.target0.address = Assembler.new.then do |ocb_asm|
-        @exit_compiler.compile_branch_stub(ctx, ocb_asm, branch_stub, true)
-        @ocb.write(ocb_asm)
-      end
-      branch_stub.target1.address = Assembler.new.then do |ocb_asm|
-        @exit_compiler.compile_branch_stub(ctx, ocb_asm, branch_stub, false)
-        @ocb.write(ocb_asm)
-      end
+      if (result = val_type.known_nil) != nil
+        target_pc = result ? jump_pc : next_pc
+        jit_direct_jump(jit.iseq, target_pc, ctx, asm)
+      else
+        asm.cmp(val_opnd, Qnil)
 
-      # Jump to target0 on je
-      branch_stub.compile = proc do |branch_asm|
-        branch_asm.comment("branchnil #{branch_stub.shape}")
-        branch_asm.stub(branch_stub) do
-          case branch_stub.shape
-          in Default
-            branch_asm.je(branch_stub.target0.address)
-            branch_asm.jmp(branch_stub.target1.address)
-          in Next0
-            branch_asm.jne(branch_stub.target1.address)
-          in Next1
-            branch_asm.je(branch_stub.target0.address)
+        # Set stubs
+        branch_stub = BranchStub.new(
+          iseq: jit.iseq,
+          shape: Default,
+          target0: BranchTarget.new(ctx:, pc: jump_pc), # branch target
+          target1: BranchTarget.new(ctx:, pc: next_pc), # fallthrough
+        )
+        branch_stub.target0.address = Assembler.new.then do |ocb_asm|
+          @exit_compiler.compile_branch_stub(ctx, ocb_asm, branch_stub, true)
+          @ocb.write(ocb_asm)
+        end
+        branch_stub.target1.address = Assembler.new.then do |ocb_asm|
+          @exit_compiler.compile_branch_stub(ctx, ocb_asm, branch_stub, false)
+          @ocb.write(ocb_asm)
+        end
+
+        # Jump to target0 on je
+        branch_stub.compile = proc do |branch_asm|
+          branch_asm.comment("branchnil #{branch_stub.shape}")
+          branch_asm.stub(branch_stub) do
+            case branch_stub.shape
+            in Default
+              branch_asm.je(branch_stub.target0.address)
+              branch_asm.jmp(branch_stub.target1.address)
+            in Next0
+              branch_asm.jne(branch_stub.target1.address)
+            in Next1
+              branch_asm.je(branch_stub.target0.address)
+            end
           end
         end
+        branch_stub.compile.call(asm)
       end
-      branch_stub.compile.call(asm)
 
       EndBlock
     end
@@ -2057,29 +2084,21 @@ module RubyVM::RJIT
       comptime_obj  = jit.peek_at_stack(0)
 
       if fixnum?(comptime_recv) && fixnum?(comptime_obj)
-        # Generate a side exit before popping operands
-        side_exit = side_exit(jit, ctx)
-
         unless Invariants.assume_bop_not_redefined(jit, C::INTEGER_REDEFINED_OP_FLAG, C::BOP_PLUS)
           return CantCompile
         end
 
+        # Check that both operands are fixnums
+        guard_two_fixnums(jit, ctx, asm)
+
         obj_opnd  = ctx.stack_pop
         recv_opnd = ctx.stack_pop
-
-        asm.comment('guard recv is fixnum') # TODO: skip this with type information
-        asm.test(recv_opnd, C::RUBY_FIXNUM_FLAG)
-        asm.jz(side_exit)
-
-        asm.comment('guard obj is fixnum') # TODO: skip this with type information
-        asm.test(obj_opnd, C::RUBY_FIXNUM_FLAG)
-        asm.jz(side_exit)
 
         asm.mov(:rax, recv_opnd)
         asm.sub(:rax, 1) # untag
         asm.mov(:rcx, obj_opnd)
         asm.add(:rax, :rcx)
-        asm.jo(side_exit)
+        asm.jo(side_exit(jit, ctx))
 
         dst_opnd = ctx.stack_push(Type::Fixnum)
         asm.mov(dst_opnd, :rax)
@@ -2103,28 +2122,20 @@ module RubyVM::RJIT
       comptime_obj  = jit.peek_at_stack(0)
 
       if fixnum?(comptime_recv) && fixnum?(comptime_obj)
-        # Generate a side exit before popping operands
-        side_exit = side_exit(jit, ctx)
-
         unless Invariants.assume_bop_not_redefined(jit, C::INTEGER_REDEFINED_OP_FLAG, C::BOP_MINUS)
           return CantCompile
         end
 
+        # Check that both operands are fixnums
+        guard_two_fixnums(jit, ctx, asm)
+
         obj_opnd  = ctx.stack_pop
         recv_opnd = ctx.stack_pop
-
-        asm.comment('guard recv is fixnum') # TODO: skip this with type information
-        asm.test(recv_opnd, C::RUBY_FIXNUM_FLAG)
-        asm.jz(side_exit)
-
-        asm.comment('guard obj is fixnum') # TODO: skip this with type information
-        asm.test(obj_opnd, C::RUBY_FIXNUM_FLAG)
-        asm.jz(side_exit)
 
         asm.mov(:rax, recv_opnd)
         asm.mov(:rcx, obj_opnd)
         asm.sub(:rax, :rcx)
-        asm.jo(side_exit)
+        asm.jo(side_exit(jit, ctx))
         asm.add(:rax, 1) # re-tag
 
         dst_opnd = ctx.stack_push(Type::Fixnum)
@@ -2160,16 +2171,12 @@ module RubyVM::RJIT
       end
 
       if two_fixnums_on_stack?(jit)
-        # Create a side-exit to fall back to the interpreter
-        # Note: we generate the side-exit before popping operands from the stack
-        side_exit = side_exit(jit, ctx)
-
         unless Invariants.assume_bop_not_redefined(jit, C::INTEGER_REDEFINED_OP_FLAG, C::BOP_MOD)
           return CantCompile
         end
 
         # Check that both operands are fixnums
-        guard_two_fixnums(jit, ctx, asm, side_exit)
+        guard_two_fixnums(jit, ctx, asm)
 
         # Get the operands and destination from the stack
         arg1 = ctx.stack_pop(1)
@@ -2177,7 +2184,7 @@ module RubyVM::RJIT
 
         # Check for arg0 % 0
         asm.cmp(arg1, 0)
-        asm.je(side_exit)
+        asm.je(side_exit(jit, ctx))
 
         # Call rb_fix_mod_fix(VALUE recv, VALUE obj)
         asm.mov(C_ARGS[0], arg0)
@@ -2266,16 +2273,12 @@ module RubyVM::RJIT
       end
 
       if two_fixnums_on_stack?(jit)
-        # Create a side-exit to fall back to the interpreter
-        # Note: we generate the side-exit before popping operands from the stack
-        side_exit = side_exit(jit, ctx)
-
         unless Invariants.assume_bop_not_redefined(jit, C::INTEGER_REDEFINED_OP_FLAG, C::BOP_AND)
           return CantCompile
         end
 
         # Check that both operands are fixnums
-        guard_two_fixnums(jit, ctx, asm, side_exit)
+        guard_two_fixnums(jit, ctx, asm)
 
         # Get the operands and destination from the stack
         arg1 = ctx.stack_pop(1)
@@ -2305,16 +2308,12 @@ module RubyVM::RJIT
       end
 
       if two_fixnums_on_stack?(jit)
-        # Create a side-exit to fall back to the interpreter
-        # Note: we generate the side-exit before popping operands from the stack
-        side_exit = side_exit(jit, ctx)
-
         unless Invariants.assume_bop_not_redefined(jit, C::INTEGER_REDEFINED_OP_FLAG, C::BOP_OR)
           return CantCompile
         end
 
         # Check that both operands are fixnums
-        guard_two_fixnums(jit, ctx, asm, side_exit)
+        guard_two_fixnums(jit, ctx, asm)
 
         # Get the operands and destination from the stack
         asm.comment('bitwise or')
@@ -2846,8 +2845,7 @@ module RubyVM::RJIT
       return false if argc != 1
       return false unless two_fixnums_on_stack?(jit)
 
-      side_exit = side_exit(jit, ctx)
-      guard_two_fixnums(jit, ctx, asm, side_exit)
+      guard_two_fixnums(jit, ctx, asm)
 
       # Compare the arguments
       asm.comment('rb_int_equal')
@@ -2871,8 +2869,7 @@ module RubyVM::RJIT
       return false if argc != 1
       return false unless two_fixnums_on_stack?(jit)
 
-      side_exit = side_exit(jit, ctx)
-      guard_two_fixnums(jit, ctx, asm, side_exit)
+      guard_two_fixnums(jit, ctx, asm)
 
       asm.comment('rb_int_mul')
       y_opnd = ctx.stack_pop
@@ -2890,15 +2887,14 @@ module RubyVM::RJIT
       return false if argc != 1
       return false unless two_fixnums_on_stack?(jit)
 
-      side_exit = side_exit(jit, ctx)
-      guard_two_fixnums(jit, ctx, asm, side_exit)
+      guard_two_fixnums(jit, ctx, asm)
 
       asm.comment('rb_int_div')
       y_opnd = ctx.stack_pop
       x_opnd = ctx.stack_pop
       asm.mov(:rax, y_opnd)
       asm.cmp(:rax, C.to_value(0))
-      asm.je(side_exit)
+      asm.je(side_exit(jit, ctx))
 
       asm.mov(C_ARGS[0], x_opnd)
       asm.mov(C_ARGS[1], :rax)
@@ -2916,8 +2912,7 @@ module RubyVM::RJIT
       return false if argc != 1
       return false unless two_fixnums_on_stack?(jit)
 
-      side_exit = side_exit(jit, ctx)
-      guard_two_fixnums(jit, ctx, asm, side_exit)
+      guard_two_fixnums(jit, ctx, asm)
 
       asm.comment('rb_int_aref')
       y_opnd = ctx.stack_pop
@@ -2938,7 +2933,6 @@ module RubyVM::RJIT
     def jit_rb_str_empty_p(jit, ctx, asm, argc, known_recv_class)
       # Assume same offset to len embedded or not so we can use one code path to read the length
       #assert_equal(C.RString.offsetof(:as, :heap, :len), C.RString.offsetof(:as, :embed, :len))
-      # `C.RString.offsetof(:as, :embed, :len)` doesn't work because of USE_RVARGC=0 CI
 
       recv_opnd = ctx.stack_pop(1)
       out_opnd = ctx.stack_push(Type::UnknownImm)
@@ -3168,17 +3162,21 @@ module RubyVM::RJIT
       end
       mid = C.rb_sym2id(mid_sym)
 
+      # This represents the value of the "include_all" argument and whether it's known
+      allow_priv = if argc == 1
+        # Default is false
+        false
+      else
+        # Get value from type information (may or may not be known)
+        ctx.get_opnd_type(StackOpnd[0]).known_truthy
+      end
+
       target_cme = C.rb_callable_method_entry_or_negative(recv_class, mid)
 
       # Should never be null, as in that case we will be returned a "negative CME"
       assert_equal(false, target_cme.nil?)
 
-      cme_def_type =
-        if C.UNDEFINED_METHOD_ENTRY_P(target_cme)
-          C::VM_METHOD_TYPE_UNDEF
-        else
-          target_cme.def.type
-        end
+      cme_def_type = C.UNDEFINED_METHOD_ENTRY_P(target_cme) ? C::VM_METHOD_TYPE_UNDEF : target_cme.def.type
 
       if cme_def_type == C::VM_METHOD_TYPE_REFINED
         return false
@@ -3191,13 +3189,11 @@ module RubyVM::RJIT
       end
 
       result =
-        case visibility
-        in C::METHOD_VISI_UNDEF
-          Qfalse # No method => false
-        in C::METHOD_VISI_PUBLIC
-          Qtrue # Public method => true regardless of include_all
-        else
-          return false # not public and include_all not known, can't compile
+        case [visibility, allow_priv]
+        in C::METHOD_VISI_UNDEF, _ then Qfalse # No method => false
+        in C::METHOD_VISI_PUBLIC, _ then Qtrue # Public method => true regardless of include_all
+        in _, true then Qtrue # include_all => always true
+        else return false # not public and include_all not known, can't compile
         end
 
       if result != Qtrue
@@ -3347,16 +3343,16 @@ module RubyVM::RJIT
       stack0_mem = ctx.stack_opnd(offset0)
       stack1_mem = ctx.stack_opnd(offset1)
 
-      mapping0 = ctx.get_opnd_mapping(StackOpnd[0])
-      mapping1 = ctx.get_opnd_mapping(StackOpnd[1])
+      mapping0 = ctx.get_opnd_mapping(StackOpnd[offset0])
+      mapping1 = ctx.get_opnd_mapping(StackOpnd[offset1])
 
       asm.mov(:rax, stack0_mem)
       asm.mov(:rcx, stack1_mem)
       asm.mov(stack0_mem, :rcx)
       asm.mov(stack1_mem, :rax)
 
-      ctx.set_opnd_mapping(StackOpnd[0], mapping1);
-      ctx.set_opnd_mapping(StackOpnd[1], mapping0);
+      ctx.set_opnd_mapping(StackOpnd[offset0], mapping1)
+      ctx.set_opnd_mapping(StackOpnd[offset1], mapping0)
     end
 
     def jit_getlocal_generic(jit, ctx, asm, idx:, level:)
@@ -3740,7 +3736,7 @@ module RubyVM::RJIT
     # @param jit [RubyVM::RJIT::JITState]
     # @param ctx [RubyVM::RJIT::Context]
     # @param asm [RubyVM::RJIT::Assembler]
-    def guard_two_fixnums(jit, ctx, asm, side_exit)
+    def guard_two_fixnums(jit, ctx, asm)
       # Get stack operands without popping them
       arg1 = ctx.stack_opnd(0)
       arg0 = ctx.stack_opnd(1)
@@ -3751,19 +3747,19 @@ module RubyVM::RJIT
 
       if arg0_type.heap? || arg1_type.heap?
         asm.comment('arg is heap object')
-        asm.jmp(side_exit)
+        asm.jmp(side_exit(jit, ctx))
         return
       end
 
       if arg0_type != Type::Fixnum && arg0_type.specific?
         asm.comment('arg0 not fixnum')
-        asm.jmp(side_exit)
+        asm.jmp(side_exit(jit, ctx))
         return
       end
 
       if arg1_type != Type::Fixnum && arg1_type.specific?
         asm.comment('arg1 not fixnum')
-        asm.jmp(side_exit)
+        asm.jmp(side_exit(jit, ctx))
         return
       end
 
@@ -3776,12 +3772,12 @@ module RubyVM::RJIT
       if arg0_type != Type::Fixnum
         asm.comment('guard arg0 fixnum')
         asm.test(arg0, C::RUBY_FIXNUM_FLAG)
-        jit_chain_guard(:jz, jit, ctx, asm, side_exit)
+        jit_chain_guard(:jz, jit, ctx, asm, side_exit(jit, ctx))
       end
       if arg1_type != Type::Fixnum
         asm.comment('guard arg1 fixnum')
         asm.test(arg1, C::RUBY_FIXNUM_FLAG)
-        jit_chain_guard(:jz, jit, ctx, asm, side_exit)
+        jit_chain_guard(:jz, jit, ctx, asm, side_exit(jit, ctx))
       end
 
       # Set stack types in context
@@ -3804,23 +3800,15 @@ module RubyVM::RJIT
       comptime_obj  = jit.peek_at_stack(0)
 
       if fixnum?(comptime_recv) && fixnum?(comptime_obj)
-        # Generate a side exit before popping operands
-        side_exit = side_exit(jit, ctx)
-
         unless Invariants.assume_bop_not_redefined(jit, C::INTEGER_REDEFINED_OP_FLAG, bop)
           return CantCompile
         end
 
+        # Check that both operands are fixnums
+        guard_two_fixnums(jit, ctx, asm)
+
         obj_opnd  = ctx.stack_pop
         recv_opnd = ctx.stack_pop
-
-        asm.comment('guard recv is fixnum') # TODO: skip this with type information
-        asm.test(recv_opnd, C::RUBY_FIXNUM_FLAG)
-        asm.jz(side_exit)
-
-        asm.comment('guard obj is fixnum') # TODO: skip this with type information
-        asm.test(obj_opnd, C::RUBY_FIXNUM_FLAG)
-        asm.jz(side_exit)
 
         asm.mov(:rax, obj_opnd)
         asm.cmp(recv_opnd, :rax)
@@ -3855,7 +3843,7 @@ module RubyVM::RJIT
           return false
         end
 
-        guard_two_fixnums(jit, ctx, asm, side_exit)
+        guard_two_fixnums(jit, ctx, asm)
 
         asm.comment('check fixnum equality')
         asm.mov(:rax, a_opnd)
@@ -3890,9 +3878,12 @@ module RubyVM::RJIT
         asm.je(equal_label)
 
         # Otherwise guard that b is a T_STRING (from type info) or String (from runtime guard)
-        # Note: any T_STRING is valid here, but we check for a ::String for simplicity
-        # To pass a mutable static variable (rb_cString) requires an unsafe block
-        jit_guard_known_klass(jit, ctx, asm, C.rb_class_of(comptime_b), b_opnd, StackOpnd[0], comptime_b, side_exit)
+        btype = ctx.get_opnd_type(StackOpnd[0])
+        unless btype.string?
+          # Note: any T_STRING is valid here, but we check for a ::String for simplicity
+          # To pass a mutable static variable (rb_cString) requires an unsafe block
+          jit_guard_known_klass(jit, ctx, asm, C.rb_class_of(comptime_b), b_opnd, StackOpnd[0], comptime_b, side_exit)
+        end
 
         asm.comment('call rb_str_eql_internal')
         asm.mov(C_ARGS[0], a_opnd)
@@ -4131,17 +4122,11 @@ module RubyVM::RJIT
     # @param asm [RubyVM::RJIT::Assembler]
     def guard_block_arg(jit, ctx, asm, calling)
       if calling.flags & C::VM_CALL_ARGS_BLOCKARG != 0
-        # TODO: Skip cmp + jne using Context
-        block_code = jit.peek_at_stack(0)
-        block_opnd = ctx.stack_opnd(0) # to be popped after eliminating side exit possibility
-        if block_code.nil?
-          asm.cmp(block_opnd, Qnil)
-          jit_chain_guard(:jne, jit, ctx, asm, counted_exit(side_exit(jit, ctx), :send_block_not_nil))
+        block_arg_type = ctx.get_opnd_type(StackOpnd[0])
+        case block_arg_type
+        in Type::Nil
           calling.block_handler = C::VM_BLOCK_HANDLER_NONE
-        elsif C.to_value(block_code) == C.rb_block_param_proxy
-          asm.mov(:rax, C.rb_block_param_proxy)
-          asm.cmp(block_opnd, :rax)
-          jit_chain_guard(:jne, jit, ctx, asm, counted_exit(side_exit(jit, ctx), :send_block_not_proxy))
+        in Type::BlockParamProxy
           calling.block_handler = C.rb_block_param_proxy
         else
           asm.incr_counter(:send_block_arg)
@@ -4815,6 +4800,13 @@ module RubyVM::RJIT
 
       # Create a context for the callee
       callee_ctx = Context.new
+
+      # Set the argument types in the callee's context
+      argc.times do |arg_idx|
+        stack_offs = argc - arg_idx - 1
+        arg_type = ctx.get_opnd_type(StackOpnd[stack_offs])
+        callee_ctx.set_local_type(arg_idx, arg_type)
+      end
 
       recv_type = if calling.block_handler == :captured
         Type::Unknown # we don't track the type information of captured->self for now

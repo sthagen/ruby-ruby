@@ -10,6 +10,7 @@ use crate::codegen::{JITState};
 use crate::cruby::*;
 use crate::backend::ir::*;
 use crate::codegen::CodegenGlobals;
+use crate::options::*;
 
 // Use the x86 register type for this platform
 pub type Reg = X86Reg;
@@ -86,6 +87,9 @@ impl Assembler
     // Note: right now this is only used by LeaLabel because label_ref accepts
     // a closure and we don't want it to have to capture anything.
     const SCRATCH0: X86Opnd = X86Opnd::Reg(R11_REG);
+
+    /// List of registers that can be used for stack temps.
+    pub const TEMP_REGS: [Reg; 5] = [RSI_REG, RDI_REG, R8_REG, R9_REG, R10_REG];
 
     /// Get the list of registers from which we can allocate on this platform
     pub fn get_alloc_regs() -> Vec<Reg>
@@ -709,7 +713,9 @@ impl Assembler
                 Insn::CSelGE { truthy, falsy, out } => {
                     emit_csel(cb, *truthy, *falsy, *out, cmovl);
                 }
-                Insn::LiveReg { .. } => (), // just a reg alloc signal, no code
+                Insn::LiveReg { .. } |
+                Insn::RegTemps(_) |
+                Insn::SpillTemp(_) => (), // just a reg alloc signal, no code
                 Insn::PadInvalPatch => {
                     let code_size = cb.get_write_pos().saturating_sub(std::cmp::max(start_write_pos, cb.page_start_pos()));
                     if code_size < JMP_PTR_BYTES {

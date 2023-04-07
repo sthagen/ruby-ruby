@@ -189,7 +189,7 @@ class TestGemPackage < Gem::Package::TarTestCase
       File.symlink("code.rb", "lib/code_sym.rb")
       File.symlink("../lib/code.rb", "lib/code_sym2.rb")
     rescue Errno::EACCES => e
-      if win_platform?
+      if Gem.win_platform?
         pend "symlink - must be admin with no UAC on Windows"
       else
         raise e
@@ -482,7 +482,7 @@ class TestGemPackage < Gem::Package::TarTestCase
     mask = 0100666 & (~File.umask)
 
     assert_equal mask.to_s(8), File.stat(extracted).mode.to_s(8) unless
-      win_platform?
+      Gem.win_platform?
   end
 
   def test_extract_files_empty
@@ -512,7 +512,7 @@ class TestGemPackage < Gem::Package::TarTestCase
   end
 
   def test_extract_file_permissions
-    pend "chmod not supported" if win_platform?
+    pend "chmod not supported" if Gem.win_platform?
 
     gem_with_long_permissions = File.expand_path("packages/Bluebie-legs-0.6.2.gem", __dir__)
 
@@ -539,7 +539,7 @@ class TestGemPackage < Gem::Package::TarTestCase
       package.extract_tar_gz tgz_io, @destination
     end
 
-    assert_equal("installing into parent path /absolute.rb of " +
+    assert_equal("installing into parent path /absolute.rb of " \
                  "#{@destination} is not allowed", e.message)
   end
 
@@ -559,7 +559,7 @@ class TestGemPackage < Gem::Package::TarTestCase
     begin
       package.extract_tar_gz tgz_io, @destination
     rescue Errno::EACCES => e
-      if win_platform?
+      if Gem.win_platform?
         pend "symlink - must be admin with no UAC on Windows"
       else
         raise e
@@ -612,7 +612,7 @@ class TestGemPackage < Gem::Package::TarTestCase
     destination_subdir = File.join @destination, "subdir"
     FileUtils.mkdir_p destination_subdir
 
-    expected_exceptions = win_platform? ? [Gem::Package::SymlinkError, Errno::EACCES] : [Gem::Package::SymlinkError]
+    expected_exceptions = Gem.win_platform? ? [Gem::Package::SymlinkError, Errno::EACCES] : [Gem::Package::SymlinkError]
 
     e = assert_raise(*expected_exceptions) do
       package.extract_tar_gz tgz_io, destination_subdir
@@ -620,7 +620,7 @@ class TestGemPackage < Gem::Package::TarTestCase
 
     pend "symlink - must be admin with no UAC on Windows" if Errno::EACCES === e
 
-    assert_equal("installing symlink 'lib/link' pointing to parent path #{@destination} of " +
+    assert_equal("installing symlink 'lib/link' pointing to parent path #{@destination} of " \
                 "#{destination_subdir} is not allowed", e.message)
 
     assert_path_not_exist File.join(@destination, "outside.txt")
@@ -647,7 +647,7 @@ class TestGemPackage < Gem::Package::TarTestCase
       tar.add_symlink "link/dir", ".", 16_877
     end
 
-    expected_exceptions = win_platform? ? [Gem::Package::SymlinkError, Errno::EACCES] : [Gem::Package::SymlinkError]
+    expected_exceptions = Gem.win_platform? ? [Gem::Package::SymlinkError, Errno::EACCES] : [Gem::Package::SymlinkError]
 
     e = assert_raise(*expected_exceptions) do
       package.extract_tar_gz tgz_io, destination_subdir
@@ -655,7 +655,7 @@ class TestGemPackage < Gem::Package::TarTestCase
 
     pend "symlink - must be admin with no UAC on Windows" if Errno::EACCES === e
 
-    assert_equal("installing symlink 'link' pointing to parent path #{destination_user_dir} of " +
+    assert_equal("installing symlink 'link' pointing to parent path #{destination_user_dir} of " \
                 "#{destination_subdir} is not allowed", e.message)
 
     assert_path_exist destination_user_subdir
@@ -749,7 +749,7 @@ class TestGemPackage < Gem::Package::TarTestCase
       package.install_location "/absolute.rb", @destination
     end
 
-    assert_equal("installing into parent path /absolute.rb of " +
+    assert_equal("installing into parent path /absolute.rb of " \
                  "#{@destination} is not allowed", e.message)
   end
 
@@ -790,7 +790,7 @@ class TestGemPackage < Gem::Package::TarTestCase
 
     parent = File.expand_path File.join @destination, "../relative.rb"
 
-    assert_equal("installing into parent path #{parent} of " +
+    assert_equal("installing into parent path #{parent} of " \
                  "#{@destination} is not allowed", e.message)
   end
 
@@ -805,7 +805,7 @@ class TestGemPackage < Gem::Package::TarTestCase
 
     parent = File.expand_path File.join @destination, filename
 
-    assert_equal("installing into parent path #{parent} of " +
+    assert_equal("installing into parent path #{parent} of " \
                  "#{@destination} is not allowed", e.message)
   end
 
@@ -965,8 +965,8 @@ class TestGemPackage < Gem::Package::TarTestCase
       package.verify
     end
 
-    assert_match %r{^No such file or directory}, e.message
-    assert_match %r{nonexistent.gem$},           e.message
+    assert_match(/^No such file or directory/, e.message)
+    assert_match(/nonexistent.gem$/,           e.message)
   end
 
   def test_verify_duplicate_file

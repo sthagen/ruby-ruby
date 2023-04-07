@@ -11,8 +11,6 @@ require "test/unit"
 
 ENV["JARS_SKIP"] = "true" if Gem.java_platform? # avoid unnecessary and noisy `jar-dependencies` post install hook
 
-require "rubygems/deprecate"
-
 require "fileutils"
 require "pathname"
 require "pp"
@@ -72,8 +70,6 @@ end
 # your normal set of gems is not affected.
 
 class Gem::TestCase < Test::Unit::TestCase
-  extend Gem::Deprecate
-
   attr_accessor :fetcher # :nodoc:
 
   attr_accessor :gem_repo # :nodoc:
@@ -256,16 +252,10 @@ class Gem::TestCase < Test::Unit::TestCase
   def assert_contains_make_command(target, output, msg = nil)
     if output.include?("\n")
       msg = build_message(msg,
-        "Expected output containing make command \"%s\", but was \n\nBEGIN_OF_OUTPUT\n%sEND_OF_OUTPUT" % [
-          ("%s %s" % [make_command, target]).rstrip,
-          output,
-        ])
+        format("Expected output containing make command \"%s\", but was \n\nBEGIN_OF_OUTPUT\n%sEND_OF_OUTPUT", format("%s %s", make_command, target).rstrip, output))
     else
       msg = build_message(msg,
-        'Expected make command "%s", but was "%s"' % [
-          ("%s %s" % [make_command, target]).rstrip,
-          output,
-        ])
+        format('Expected make command "%s", but was "%s"', format("%s %s", make_command, target).rstrip, output))
     end
 
     assert scan_make_command_lines(output).any? {|line|
@@ -414,7 +404,7 @@ class Gem::TestCase < Test::Unit::TestCase
 
     @orig_arch = RbConfig::CONFIG["arch"]
 
-    if win_platform?
+    if Gem.win_platform?
       util_set_arch "i386-mswin32"
     else
       util_set_arch "i686-darwin8.10.1"
@@ -1132,34 +1122,6 @@ Also, a list:
   end
 
   ##
-  # Is this test being run on a Windows platform?
-
-  def self.win_platform?
-    Gem.win_platform?
-  end
-
-  ##
-  # Is this test being run on a Windows platform?
-
-  def win_platform?
-    Gem.win_platform?
-  end
-
-  ##
-  # Is this test being run on a Java platform?
-
-  def self.java_platform?
-    Gem.java_platform?
-  end
-
-  ##
-  # Is this test being run on a Java platform?
-
-  def java_platform?
-    Gem.java_platform?
-  end
-
-  ##
   # Returns whether or not we're on a version of Ruby built with VC++ (or
   # Borland) versus Cygwin, Mingw, etc.
 
@@ -1168,18 +1130,10 @@ Also, a list:
   end
 
   ##
-  # Returns whether or not we're on a version of Ruby built with VC++ (or
-  # Borland) versus Cygwin, Mingw, etc.
+  # see ::vc_windows?
 
   def vc_windows?
-    RUBY_PLATFORM.match("mswin")
-  end
-
-  ##
-  # Is this test being run on a version of Ruby built with mingw?
-
-  def self.mingw_windows?
-    RUBY_PLATFORM.match("mingw")
+    self.class.vc_windows?
   end
 
   ##
@@ -1195,15 +1149,6 @@ Also, a list:
 
   def ruby_repo?
     !ENV["GEM_COMMAND"].nil?
-  end
-
-  ##
-  # Returns the make command for the current platform. For versions of Ruby
-  # built on MS Windows with VC++ or Borland it will return 'nmake'. On all
-  # other platforms, including Cygwin, it will return 'make'.
-
-  def self.make_command
-    ENV["make"] || ENV["MAKE"] || (vc_windows? ? "nmake" : "make")
   end
 
   ##
@@ -1228,22 +1173,6 @@ Also, a list:
   def wait_for_child_process_to_exit
     Process.wait if Process.respond_to?(:fork)
   rescue Errno::ECHILD
-  end
-
-  ##
-  # Allows tests to use a random (but controlled) port number instead of
-  # a hardcoded one. This helps CI tools when running parallels builds on
-  # the same builder slave.
-
-  def self.process_based_port
-    @@process_based_port ||= 8000 + $$ % 1000
-  end
-
-  ##
-  # See ::process_based_port
-
-  def process_based_port
-    self.class.process_based_port
   end
 
   ##
@@ -1330,21 +1259,17 @@ Also, a list:
     $VERBOSE = old_verbose
   end
 
-  class << self
-    # :nodoc:
-    ##
-    # Return the join path, with escaping backticks, dollars, and
-    # double-quotes.  Unlike `shellescape`, equal-sign is not escaped.
+  # :nodoc:
+  ##
+  # Return the join path, with escaping backticks, dollars, and
+  # double-quotes.  Unlike `shellescape`, equal-sign is not escaped.
 
-    private
-
-    def escape_path(*path)
-      path = File.join(*path)
-      if %r{\A[-+:/=@,.\w]+\z} =~ path
-        path
-      else
-        "\"#{path.gsub(/[`$"]/, '\\&')}\""
-      end
+  def self.escape_path(*path)
+    path = File.join(*path)
+    if %r{\A[-+:/=@,.\w]+\z}.match?(path)
+      path
+    else
+      "\"#{path.gsub(/[`$"]/, '\\&')}\""
     end
   end
 

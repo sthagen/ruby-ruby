@@ -189,7 +189,7 @@ ERROR:  Could not find a valid gem 'bar' (= 0.5) (required by 'foo' (>= 0)) in a
   end
 
   def test_execute_no_user_install
-    pend "skipped on MS Windows (chmod has no effect)" if win_platform?
+    pend "skipped on MS Windows (chmod has no effect)" if Gem.win_platform?
     pend "skipped in root privilege" if Process.uid.zero?
 
     specs = spec_fetcher do |fetcher|
@@ -1067,7 +1067,7 @@ ERROR:  Possible alternatives: non_existent_with_hint
     end
 
     assert_equal 2, e.exit_code
-    assert_match %r{Could not find a valid gem 'a' \(= 10.0\)}, @ui.error
+    assert_match(/Could not find a valid gem 'a' \(= 10.0\)/, @ui.error)
   end
 
   def test_show_errors_on_failure
