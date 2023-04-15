@@ -1,4 +1,6 @@
 # -*- mode: makefile-gmake; indent-tabs-mode: t -*-
+# This fragment can be used with nmake.exe and with bsdmake.
+# Avoid features specific to GNU Make.
 
 bin: $(PROGRAM) $(WPROGRAM)
 lib: $(LIBRUBY)
@@ -749,7 +751,7 @@ $(HAVE_BASERUBY:no=)$(arch)-fake.rb: miniruby$(EXEEXT)
 
 # actually depending on other headers more.
 $(arch:noarch=ignore)-fake.rb: $(top_srcdir)/revision.h $(top_srcdir)/version.h $(srcdir)/version.c
-$(arch:noarch=ignore)-fake.rb: {$(VPATH)}id.h {$(VPATH)}vm_opts.h
+$(arch:noarch=ignore)-fake.rb: {$(VPATH)}id.h {$(VPATH)}vm_opts.h $(REVISION_H)
 
 $(arch:noarch=ignore)-fake.rb: $(srcdir)/template/fake.rb.in $(tooldir)/generic_erb.rb
 	$(ECHO) generating $@
@@ -13416,6 +13418,7 @@ rjit_c.$(OBJEXT): $(top_srcdir)/internal/gc.h
 rjit_c.$(OBJEXT): $(top_srcdir)/internal/hash.h
 rjit_c.$(OBJEXT): $(top_srcdir)/internal/imemo.h
 rjit_c.$(OBJEXT): $(top_srcdir)/internal/object.h
+rjit_c.$(OBJEXT): $(top_srcdir)/internal/proc.h
 rjit_c.$(OBJEXT): $(top_srcdir)/internal/sanitizers.h
 rjit_c.$(OBJEXT): $(top_srcdir)/internal/serial.h
 rjit_c.$(OBJEXT): $(top_srcdir)/internal/static_assert.h
@@ -14226,10 +14229,12 @@ shape.$(OBJEXT): $(top_srcdir)/internal/array.h
 shape.$(OBJEXT): $(top_srcdir)/internal/basic_operators.h
 shape.$(OBJEXT): $(top_srcdir)/internal/class.h
 shape.$(OBJEXT): $(top_srcdir)/internal/compilers.h
+shape.$(OBJEXT): $(top_srcdir)/internal/error.h
 shape.$(OBJEXT): $(top_srcdir)/internal/gc.h
 shape.$(OBJEXT): $(top_srcdir)/internal/imemo.h
 shape.$(OBJEXT): $(top_srcdir)/internal/serial.h
 shape.$(OBJEXT): $(top_srcdir)/internal/static_assert.h
+shape.$(OBJEXT): $(top_srcdir)/internal/string.h
 shape.$(OBJEXT): $(top_srcdir)/internal/symbol.h
 shape.$(OBJEXT): $(top_srcdir)/internal/variable.h
 shape.$(OBJEXT): $(top_srcdir)/internal/vm.h

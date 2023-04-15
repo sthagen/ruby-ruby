@@ -2824,9 +2824,6 @@ newobj_slowpath(VALUE klass, VALUE flags, rb_objspace_t *objspace, rb_ractor_t *
         }
 
         obj = newobj_alloc(objspace, cr, size_pool_idx, true);
-#if SHAPE_IN_BASIC_FLAGS
-        flags |= (VALUE)(size_pool_idx) << SHAPE_FLAG_SHIFT;
-#endif
         newobj_init(klass, flags, wb_protected, objspace, obj);
 
         gc_event_hook_prep(objspace, RUBY_INTERNAL_EVENT_NEWOBJ, obj, newobj_zero_slot(obj));
@@ -2873,14 +2870,15 @@ newobj_of0(VALUE klass, VALUE flags, int wb_protected, rb_ractor_t *cr, size_t a
 
     size_t size_pool_idx = size_pool_idx_for_size(alloc_size);
 
+    if (SHAPE_IN_BASIC_FLAGS || (flags & RUBY_T_MASK) == T_OBJECT) {
+        flags |= (VALUE)size_pool_idx << SHAPE_FLAG_SHIFT;
+    }
+
     if (!UNLIKELY(during_gc ||
                   ruby_gc_stressful ||
                   gc_event_hook_available_p(objspace)) &&
             wb_protected) {
         obj = newobj_alloc(objspace, cr, size_pool_idx, false);
-#if SHAPE_IN_BASIC_FLAGS
-        flags |= (VALUE)size_pool_idx << SHAPE_FLAG_SHIFT;
-#endif
         newobj_init(klass, flags, wb_protected, objspace, obj);
     }
     else {
@@ -3946,14 +3944,16 @@ objspace_each_objects_try(VALUE arg)
  *
  * This is a sample callback code to iterate liveness objects:
  *
- *   int
- *   sample_callback(void *vstart, void *vend, int stride, void *data) {
- *     VALUE v = (VALUE)vstart;
- *     for (; v != (VALUE)vend; v += stride) {
- *       if (RBASIC(v)->flags) { // liveness check
- *       // do something with live object 'v'
- *     }
- *     return 0; // continue to iteration
+ *   static int
+ *   sample_callback(void *vstart, void *vend, int stride, void *data)
+ *   {
+ *       VALUE v = (VALUE)vstart;
+ *       for (; v != (VALUE)vend; v += stride) {
+ *           if (!rb_objspace_internal_object_p(v)) { // liveness check
+ *               // do something with live object 'v'
+ *           }
+ *       }
+ *       return 0; // continue to iteration
  *   }
  *
  * Note: 'vstart' is not a top of heap_page.  This point the first
@@ -7351,7 +7351,7 @@ gc_mark_children(rb_objspace_t *objspace, VALUE obj)
                 VALUE klass = RBASIC_CLASS(obj);
 
                 // Increment max_iv_count if applicable, used to determine size pool allocation
-                uint32_t num_of_ivs = shape->next_iv_index;
+                attr_index_t num_of_ivs = shape->next_iv_index;
                 if (RCLASS_EXT(klass)->max_iv_count < num_of_ivs) {
                     RCLASS_EXT(klass)->max_iv_count = num_of_ivs;
                 }

@@ -37,6 +37,8 @@ end
 
 class Resolv
 
+  VERSION = "0.2.2"
+
   ##
   # Looks up the first IP address for +name+.
 
@@ -1487,14 +1489,14 @@ class Resolv
           }
         end
 
-        def put_name(d)
-          put_labels(d.to_a)
+        def put_name(d, compress: true)
+          put_labels(d.to_a, compress: compress)
         end
 
-        def put_labels(d)
+        def put_labels(d, compress: true)
           d.each_index {|i|
             domain = d[i..-1]
-            if idx = @names[domain]
+            if compress && idx = @names[domain]
               self.put_pack("n", 0xc000 | idx)
               return
             else
@@ -2328,7 +2330,7 @@ class Resolv
             msg.put_pack("n", @priority)
             msg.put_pack("n", @weight)
             msg.put_pack("n", @port)
-            msg.put_name(@target)
+            msg.put_name(@target, compress: false)
           end
 
           def self.decode_rdata(msg) # :nodoc:

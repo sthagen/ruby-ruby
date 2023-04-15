@@ -496,7 +496,6 @@ struct rb_iseq_constant_body {
     unsigned int ci_size;
     unsigned int stack_max; /* for stack overflow check */
 
-    bool catch_except_p; // If a frame of this ISeq may catch exception, set true.
     unsigned int builtin_attrs; // Union of rb_builtin_attr
 
     union {
@@ -677,6 +676,7 @@ typedef struct rb_vm_struct {
     VALUE loaded_features;
     VALUE loaded_features_snapshot;
     VALUE loaded_features_realpaths;
+    VALUE loaded_features_realpath_map;
     struct st_table *loaded_features_index;
     struct st_table *loading_table;
 #if EXTSTATIC

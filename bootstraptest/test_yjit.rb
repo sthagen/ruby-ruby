@@ -1,3 +1,23 @@
+# Regression test for GC mishap while doing shape transition
+assert_equal '[:ok]', %q{
+  # [Bug #19601]
+  class RegressionTest
+    def initialize
+      @a = @b = @fourth_ivar_does_shape_transition = nil
+    end
+
+    def extender
+      @first_extended_ivar = [:ok]
+    end
+  end
+
+  GC.stress = true
+
+  # Used to crash due to GC run in rb_ensure_iv_list_size()
+  # not marking the newly allocated [:ok].
+  RegressionTest.new.extender.itself
+} unless RUBY_DESCRIPTION.include?('+RJIT') # Skip on RJIT since this uncovers a crash
+
 assert_equal 'true', %q{
   # regression test for tracking type of locals for too long
   def local_setting_cmp(five)
@@ -1225,6 +1245,38 @@ assert_equal '42', %q{
 
   run
   run
+}
+
+# splatting an empty array on a specialized method
+assert_equal 'ok', %q{
+  def run
+    "ok".to_s(*[])
+  end
+
+  run
+  run
+}
+
+# splatting an single element array on a specialized method
+assert_equal '[1]', %q{
+  def run
+    [].<<(*[1])
+  end
+
+  run
+  run
+}
+
+# specialized method with wrong args
+assert_equal 'ok', %q{
+  def run(x)
+    "bad".to_s(123) if x
+  rescue
+    :ok
+  end
+
+  run(false)
+  run(true)
 }
 
 # getinstancevariable on Symbol
@@ -3821,4 +3873,63 @@ assert_equal '[true, true, true, true]', %q{
 # Test Integer#[] with 2 args
 assert_equal '0', %q{
   3[0, 0]
+}
+
+# unspecified_bits + checkkeyword
+assert_equal '2', %q{
+  def callee = 1
+
+  # checkkeyword should see unspecified_bits=0 (use bar), not Integer 1 (set bar = foo).
+  def foo(foo, bar: foo) = bar
+
+  def entry(&block)
+    # write 1 at stack[3]. Calling #callee spills stack[3].
+    1 + (1 + (1 + (1 + callee)))
+    # &block is written to a register instead of stack[3]. When &block is popped and
+    # unspecified_bits is pushed, it must be written to stack[3], not to a register.
+    foo(1, bar: 2, &block)
+  end
+
+  entry # call branch_stub_hit (spill temps)
+  entry # doesn't call branch_stub_hit (not spill temps)
+}
+
+# Test rest and optional_params
+assert_equal '[true, true, true, true]', %q{
+  def my_func(stuff, base=nil, sort=true, *args)
+    [stuff, base, sort, args]
+  end
+
+  def calling_my_func
+    results = []
+    results << (my_func("test") == ["test", nil, true, []])
+    results << (my_func("test", :base) == ["test", :base, true, []])
+    results << (my_func("test", :base, false) == ["test", :base, false, []])
+    results << (my_func("test", :base, false, "other", "other") == ["test", :base, false, ["other", "other"]])
+    results
+  end
+  calling_my_func
+}
+
+# Test rest and optional_params and splat
+assert_equal '[true, true, true, true, true]', %q{
+  def my_func(stuff, base=nil, sort=true, *args)
+    [stuff, base, sort, args]
+  end
+
+  def calling_my_func
+    results = []
+    splat = ["test"]
+    results << (my_func(*splat) == ["test", nil, true, []])
+    splat = [:base]
+    results << (my_func("test", *splat) == ["test", :base, true, []])
+    splat = [:base, false]
+    results << (my_func("test", *splat) == ["test", :base, false, []])
+    splat = [:base, false, "other", "other"]
+    results << (my_func("test", *splat) == ["test", :base, false, ["other", "other"]])
+    splat = ["test", :base, false, "other", "other"]
+    results << (my_func(*splat) == ["test", :base, false, ["other", "other"]])
+    results
+  end
+  calling_my_func
 }

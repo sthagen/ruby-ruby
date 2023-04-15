@@ -233,6 +233,12 @@ AS_CASE(["${build_os}"],
 ],
 [aix*], [
     AC_PATH_TOOL([NM], [nm], [/usr/ccs/bin/nm], [/usr/ccs/bin:$PATH])
+],
+[darwin*], [
+    # For Apple clang version 14.0.3 (clang-1403.0.22.14.1)
+    ac_cv_prog_ac_ct_AR=`$CC -print-prog-name=ar`
+    ac_cv_prog_ac_ct_LD=`$CC -print-prog-name=ld`
+    ac_cv_prog_ac_ct_NM=`$CC -print-prog-name=nm`
 ])
 AS_CASE(["${target_os}"],
 [cygwin*|msys*|mingw*|darwin*], [
@@ -257,6 +263,10 @@ AC_CHECK_TOOLS([NM],      [gnm nm])
 AC_CHECK_TOOLS([OBJCOPY], [gobjcopy objcopy], [:])
 AC_CHECK_TOOLS([OBJDUMP], [gobjdump objdump])
 AC_CHECK_TOOLS([STRIP],   [gstrip strip], [:])
+
+# nm errors with Rust's LLVM bitcode when Rust uses a newer LLVM version than nm.
+# In case we're working with llvm-nm, tell it to not worry about the bitcode.
+AS_IF([${NM} --help | grep -q 'llvm-bc'], [NM="$NM --no-llvm-bc"])
 
 AS_IF([test ! $rb_test_CFLAGS], [AS_UNSET(CFLAGS)]); AS_UNSET(rb_test_CFLAGS)
 AS_IF([test ! $rb_test_CXXFLAGS], [AS_UNSET(CXXFLAGS)]); AS_UNSET(rb_save_CXXFLAGS)

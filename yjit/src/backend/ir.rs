@@ -3,13 +3,15 @@
 #![allow(unused_imports)]
 
 use std::cell::Cell;
+use std::collections::HashMap;
 use std::fmt;
 use std::convert::From;
 use std::io::Write;
 use std::mem::take;
+use crate::codegen::{gen_outlined_exit, gen_counted_exit};
 use crate::cruby::{VALUE, SIZEOF_VALUE_I32};
 use crate::virtualmem::{CodePtr};
-use crate::asm::{CodeBlock, uimm_num_bits, imm_num_bits};
+use crate::asm::{CodeBlock, uimm_num_bits, imm_num_bits, OutlinedCb};
 use crate::core::{Context, Type, TempMapping, RegTemps, MAX_REG_TEMPS, MAX_TEMP_TYPES};
 use crate::options::*;
 use crate::stats::*;
@@ -280,13 +282,22 @@ impl From<VALUE> for Opnd {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Target
 {
-    CodePtr(CodePtr),     // Pointer to a piece of YJIT-generated code
-    SideExitPtr(CodePtr), // Pointer to a side exit code
-    Label(usize),         // A label within the generated code
+    /// Pointer to a piece of YJIT-generated code
+    CodePtr(CodePtr),
+    /// Side exit with a counter
+    SideExit { counter: Counter, context: Option<SideExitContext> },
+    /// Pointer to a side exit code
+    SideExitPtr(CodePtr),
+    /// A label within the generated code
+    Label(usize),
 }
 
 impl Target
 {
+    pub fn side_exit(counter: Counter) -> Target {
+        Target::SideExit { counter, context: None }
+    }
+
     pub fn unwrap_label_idx(&self) -> usize {
         match self {
             Target::Label(idx) => *idx,
@@ -498,6 +509,25 @@ impl Insn {
     /// in turn for this instruction.
     pub(super) fn opnd_iter_mut(&mut self) -> InsnOpndMutIterator {
         InsnOpndMutIterator::new(self)
+    }
+
+    /// Get a mutable reference to a Target if it exists.
+    pub(super) fn target_mut(&mut self) -> Option<&mut Target> {
+        match self {
+            Insn::Jbe(target) |
+            Insn::Je(target) |
+            Insn::Jl(target) |
+            Insn::Jmp(target) |
+            Insn::Jne(target) |
+            Insn::Jnz(target) |
+            Insn::Jo(target) |
+            Insn::Jz(target) |
+            Insn::Label(target) |
+            Insn::LeaLabel { target, .. } => {
+                Some(target)
+            }
+            _ => None,
+        }
     }
 
     /// Returns a string that describes which operation this instruction is
@@ -880,10 +910,19 @@ impl fmt::Debug for Insn {
     }
 }
 
+/// Set of variables used for generating side exits
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct SideExitContext {
+    /// PC of the instruction being compiled
+    pub pc: *mut VALUE,
+
+    /// Context when it started to compile the instruction
+    pub ctx: Context,
+}
+
 /// Object into which we assemble instructions to be
 /// optimized and lowered
-pub struct Assembler
-{
+pub struct Assembler {
     pub(super) insns: Vec<Insn>,
 
     /// Parallel vec with insns
@@ -896,20 +935,36 @@ pub struct Assembler
 
     /// Names of labels
     pub(super) label_names: Vec<String>,
+
+    /// Context for generating the current insn
+    pub ctx: Context,
+
+    /// Side exit caches for each SideExitContext
+    pub(super) side_exits: HashMap<SideExitContext, CodePtr>,
+
+    /// PC for Target::SideExit
+    side_exit_pc: Option<*mut VALUE>,
+
+    /// Stack size for Target::SideExit
+    side_exit_stack_size: Option<u8>,
 }
 
 impl Assembler
 {
     pub fn new() -> Self {
-        Self::new_with_label_names(Vec::default())
+        Self::new_with_label_names(Vec::default(), HashMap::default())
     }
 
-    pub fn new_with_label_names(label_names: Vec<String>) -> Self {
+    pub fn new_with_label_names(label_names: Vec<String>, side_exits: HashMap<SideExitContext, CodePtr>) -> Self {
         Self {
             insns: Vec::default(),
             live_ranges: Vec::default(),
             reg_temps: Vec::default(),
-            label_names
+            label_names,
+            ctx: Context::default(),
+            side_exits,
+            side_exit_pc: None,
+            side_exit_stack_size: None,
         }
     }
 
@@ -918,6 +973,12 @@ impl Assembler
         let num_regs = get_option!(num_temp_regs);
         let mut regs = Self::TEMP_REGS.to_vec();
         regs.drain(0..num_regs).collect()
+    }
+
+    /// Set a context for generating side exits
+    pub fn set_side_exit_context(&mut self, pc: *mut VALUE, stack_size: u8) {
+        self.side_exit_pc = Some(pc);
+        self.side_exit_stack_size = Some(stack_size);
     }
 
     /// Build an Opnd::InsnOut from the current index of the assembler and the
@@ -969,6 +1030,18 @@ impl Assembler
             }
         }
 
+        // Set a side exit context to Target::SideExit
+        let mut insn = insn;
+        if let Some(Target::SideExit { context, .. }) = insn.target_mut() {
+            // We should skip this when this instruction is being copied from another Assembler.
+            if context.is_none() {
+                *context = Some(SideExitContext {
+                    pc: self.side_exit_pc.unwrap(),
+                    ctx: self.ctx.with_stack_size(self.side_exit_stack_size.unwrap()),
+                });
+            }
+        }
+
         self.insns.push(insn);
         self.live_ranges.push(insn_idx);
         self.reg_temps.push(reg_temps);
@@ -977,6 +1050,26 @@ impl Assembler
     /// Get stack temps that are currently in a register
     pub fn get_reg_temps(&self) -> RegTemps {
         *self.reg_temps.last().unwrap_or(&RegTemps::default())
+    }
+
+    /// Get a cached side exit, wrapping a counter if specified
+    pub fn get_side_exit(&mut self, side_exit_context: &SideExitContext, counter: Option<Counter>, ocb: &mut OutlinedCb) -> CodePtr {
+        // Drop type information from a cache key
+        let mut side_exit_context = side_exit_context.clone();
+        side_exit_context.ctx = side_exit_context.ctx.get_generic_ctx();
+
+        // Get a cached side exit
+        let side_exit = match self.side_exits.get(&side_exit_context) {
+            None => {
+                let exit_code = gen_outlined_exit(side_exit_context.pc, &side_exit_context.ctx, ocb);
+                self.side_exits.insert(side_exit_context.clone(), exit_code);
+                exit_code
+            }
+            Some(code_ptr) => *code_ptr,
+        };
+
+        // Wrap a counter if needed
+        gen_counted_exit(side_exit, ocb, counter)
     }
 
     /// Create a new label instance that we can jump to
@@ -1012,7 +1105,7 @@ impl Assembler
             }
         }
 
-        let mut asm = Assembler::new_with_label_names(take(&mut self.label_names));
+        let mut asm = Assembler::new_with_label_names(take(&mut self.label_names), take(&mut self.side_exits));
         let regs = Assembler::get_temp_regs();
         let reg_temps = take(&mut self.reg_temps);
         let mut iterator = self.into_draining_iter();
@@ -1054,12 +1147,12 @@ impl Assembler
     }
 
     /// Allocate a register to a stack temp if available.
-    pub fn alloc_temp_reg(&mut self, ctx: &mut Context, stack_idx: u8) {
+    pub fn alloc_temp_reg(&mut self, stack_idx: u8) {
         if get_option!(num_temp_regs) == 0 {
             return;
         }
 
-        assert_eq!(self.get_reg_temps(), ctx.get_reg_temps());
+        assert_eq!(self.get_reg_temps(), self.ctx.get_reg_temps());
         let mut reg_temps = self.get_reg_temps();
 
         // Allocate a register if there's no conflict.
@@ -1068,17 +1161,17 @@ impl Assembler
         } else {
             reg_temps.set(stack_idx, true);
             self.set_reg_temps(reg_temps);
-            ctx.set_reg_temps(reg_temps);
+            self.ctx.set_reg_temps(reg_temps);
         }
     }
 
     /// Spill all live stack temps from registers to the stack
-    pub fn spill_temps(&mut self, ctx: &mut Context) {
-        assert_eq!(self.get_reg_temps(), ctx.get_reg_temps());
+    pub fn spill_temps(&mut self) {
+        assert_eq!(self.get_reg_temps(), self.ctx.get_reg_temps());
 
         // Forget registers above the stack top
         let mut reg_temps = self.get_reg_temps();
-        for stack_idx in ctx.get_stack_size()..MAX_REG_TEMPS {
+        for stack_idx in self.ctx.get_stack_size()..MAX_REG_TEMPS {
             reg_temps.set(stack_idx, false);
         }
         self.set_reg_temps(reg_temps);
@@ -1086,17 +1179,17 @@ impl Assembler
         // Spill live stack temps
         if self.get_reg_temps() != RegTemps::default() {
             self.comment(&format!("spill_temps: {:08b} -> {:08b}", self.get_reg_temps().as_u8(), RegTemps::default().as_u8()));
-            for stack_idx in 0..u8::min(MAX_REG_TEMPS, ctx.get_stack_size()) {
+            for stack_idx in 0..u8::min(MAX_REG_TEMPS, self.ctx.get_stack_size()) {
                 if self.get_reg_temps().get(stack_idx) {
-                    let idx = ctx.get_stack_size() - 1 - stack_idx;
-                    self.spill_temp(ctx.stack_opnd(idx.into()));
+                    let idx = self.ctx.get_stack_size() - 1 - stack_idx;
+                    self.spill_temp(self.stack_opnd(idx.into()));
                 }
             }
         }
 
         // Every stack temp should have been spilled
         assert_eq!(self.get_reg_temps(), RegTemps::default());
-        ctx.set_reg_temps(self.get_reg_temps());
+        self.ctx.set_reg_temps(self.get_reg_temps());
     }
 
     /// Sets the out field on the various instructions that require allocated
@@ -1168,7 +1261,7 @@ impl Assembler
         }
 
         let live_ranges: Vec<usize> = take(&mut self.live_ranges);
-        let mut asm = Assembler::new_with_label_names(take(&mut self.label_names));
+        let mut asm = Assembler::new_with_label_names(take(&mut self.label_names), take(&mut self.side_exits));
         let mut iterator = self.into_draining_iter();
 
         while let Some((index, mut insn)) = iterator.next_unmapped() {
@@ -1301,13 +1394,13 @@ impl Assembler
     /// Compile the instructions down to machine code
     /// NOTE: should compile return a list of block labels to enable
     ///       compiling multiple blocks at a time?
-    pub fn compile(self, cb: &mut CodeBlock) -> Vec<u32>
+    pub fn compile(self, cb: &mut CodeBlock, ocb: Option<&mut OutlinedCb>) -> Vec<u32>
     {
         #[cfg(feature = "disasm")]
         let start_addr = cb.get_write_ptr();
 
         let alloc_regs = Self::get_alloc_regs();
-        let gc_offsets = self.compile_with_regs(cb, alloc_regs);
+        let gc_offsets = self.compile_with_regs(cb, ocb, alloc_regs);
 
         #[cfg(feature = "disasm")]
         if let Some(dump_disasm) = get_option_ref!(dump_disasm) {
@@ -1323,7 +1416,7 @@ impl Assembler
     {
         let mut alloc_regs = Self::get_alloc_regs();
         let alloc_regs = alloc_regs.drain(0..num_regs).collect();
-        self.compile_with_regs(cb, alloc_regs)
+        self.compile_with_regs(cb, None, alloc_regs)
     }
 
     /// Consume the assembler by creating a new draining iterator.
@@ -1500,12 +1593,12 @@ impl Assembler {
         out
     }
 
-    pub fn cpop_all(&mut self, ctx: &Context) {
+    pub fn cpop_all(&mut self) {
         self.push_insn(Insn::CPopAll);
 
         // Re-enable ccall's RegTemps assertion disabled by cpush_all.
         // cpush_all + cpop_all preserve all stack temp registers, so it's safe.
-        self.set_reg_temps(ctx.get_reg_temps());
+        self.set_reg_temps(self.ctx.get_reg_temps());
     }
 
     pub fn cpop_into(&mut self, opnd: Opnd) {
