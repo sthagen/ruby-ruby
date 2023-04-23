@@ -147,21 +147,23 @@ impl Assembler
             let mut opnd_iter = insn.opnd_iter_mut();
 
             while let Some(opnd) = opnd_iter.next() {
+                if let Opnd::Stack { .. } = opnd {
+                    *opnd = asm.lower_stack_opnd(opnd);
+                }
                 unmapped_opnds.push(*opnd);
 
-                *opnd = if is_load {
-                    iterator.map_opnd(*opnd)
-                } else if let Opnd::Value(value) = opnd {
-                    // Since mov(mem64, imm32) sign extends, as_i64() makes sure
-                    // we split when the extended value is different.
-                    if !value.special_const_p() || imm_num_bits(value.as_i64()) > 32 {
-                        asm.load(iterator.map_opnd(*opnd))
-                    } else {
-                        Opnd::UImm(value.as_u64())
+                *opnd = match opnd {
+                    Opnd::Value(value) if !is_load => {
+                        // Since mov(mem64, imm32) sign extends, as_i64() makes sure
+                        // we split when the extended value is different.
+                        if !value.special_const_p() || imm_num_bits(value.as_i64()) > 32 {
+                            asm.load(iterator.map_opnd(*opnd))
+                        } else {
+                            Opnd::UImm(value.as_u64())
+                        }
                     }
-                } else {
-                    iterator.map_opnd(*opnd)
-                }
+                    _ => iterator.map_opnd(*opnd),
+                };
             }
 
             // We are replacing instructions here so we know they are already
@@ -737,9 +739,7 @@ impl Assembler
                 Insn::CSelGE { truthy, falsy, out } => {
                     emit_csel(cb, *truthy, *falsy, *out, cmovl);
                 }
-                Insn::LiveReg { .. } |
-                Insn::RegTemps(_) |
-                Insn::SpillTemp(_) => (), // just a reg alloc signal, no code
+                Insn::LiveReg { .. } => (), // just a reg alloc signal, no code
                 Insn::PadInvalPatch => {
                     let code_size = cb.get_write_pos().saturating_sub(std::cmp::max(start_write_pos, cb.page_start_pos()));
                     if code_size < cb.jmp_ptr_bytes() {
@@ -763,8 +763,7 @@ impl Assembler
 
     /// Optimize and compile the stored instructions
     pub fn compile_with_regs(self, cb: &mut CodeBlock, ocb: Option<&mut OutlinedCb>, regs: Vec<Reg>) -> Vec<u32> {
-        let asm = self.lower_stack();
-        let asm = asm.x86_split();
+        let asm = self.x86_split();
         let mut asm = asm.alloc_regs(regs);
 
         // Create label instances in the code block
