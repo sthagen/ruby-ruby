@@ -1424,6 +1424,11 @@ class TestProcess < Test::Unit::TestCase
     REPRO
   end
 
+  def test_argv0_frozen
+    assert_predicate Process.argv0, :frozen?
+    assert_predicate $0, :frozen?
+  end
+
   def test_status
     with_tmpchdir do
       s = run_in_child("exit 1")
@@ -2594,7 +2599,7 @@ EOS
   end if Process.respond_to?(:_fork)
 
   def test__fork_pid_cache
-    parent_pid = Process.pid
+    _parent_pid = Process.pid
     r, w = IO.pipe
     pid = Process._fork
     if pid == 0

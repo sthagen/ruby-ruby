@@ -69,9 +69,10 @@ The following default gems are updated.
 The following bundled gems are updated.
 
 * minitest 5.18.0
+* test-unit 3.5.8
 * rbs 3.1.0
 * typeprof 0.21.7
-* debug 1.7.2
+* debug 1.8.0
 
 See GitHub releases like [Logger](https://github.com/ruby/logger/releases) or
 changelog for details of the default gems or bundled gems.
@@ -81,6 +82,11 @@ changelog for details of the default gems or bundled gems.
 ## Compatibility issues
 
 ## Stdlib compatibility issues
+
+### `ext/readline` is retired
+
+* We have `reline` that is pure Ruby implementation compatible with `ext/readline` API. We rely on `reline` in the future. If you need to use `ext/readline`, you can install `ext/readline` via rubygems.org with `gem install readline-ext`.
+* We no longer need to install libraries like `libreadline` or `libedit`.
 
 ## C API updates
 
