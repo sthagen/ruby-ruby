@@ -58,7 +58,7 @@ The following default gems are updated.
 * irb 1.6.4
 * optparse 0.4.0.pre.1
 * psych 5.1.0
-* reline 0.3.3
+* reline 0.3.4
 * stringio 3.0.7
 * strscan 3.0.7
 * syntax_suggest 1.0.4
@@ -126,3 +126,4 @@ changelog for details of the default gems or bundled gems.
 [Feature #19314]: https://bugs.ruby-lang.org/issues/19314
 [Feature #19347]: https://bugs.ruby-lang.org/issues/19347
 [Feature #19538]: https://bugs.ruby-lang.org/issues/19538
+[Feature #19591]: https://bugs.ruby-lang.org/issues/19591

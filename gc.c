@@ -3398,7 +3398,7 @@ obj_free_object_id(rb_objspace_t *objspace, VALUE obj)
         st_delete(objspace->id_to_obj_tbl, &id, NULL);
     }
     else {
-        rb_bug("Object ID seen, but not in mapping table: %s\n", obj_info(obj));
+        rb_bug("Object ID seen, but not in mapping table: %s", obj_info(obj));
     }
 }
 
@@ -3568,21 +3568,12 @@ obj_free(rb_objspace_t *objspace, VALUE obj)
             RB_DEBUG_COUNTER_INC(obj_hash_st);
         }
 #endif
-        if (/* RHASH_AR_TABLE_P(obj) */ !FL_TEST_RAW(obj, RHASH_ST_TABLE_FLAG)) {
-            struct ar_table_struct *tab = RHASH(obj)->as.ar;
 
-            if (tab) {
-                if (RHASH_TRANSIENT_P(obj)) {
-                    RB_DEBUG_COUNTER_INC(obj_hash_transient);
-                }
-                else {
-                    ruby_xfree(tab);
-                }
-            }
-        }
-        else {
-            GC_ASSERT(RHASH_ST_TABLE_P(obj));
-            st_free_table(RHASH(obj)->as.st);
+        if (RHASH_ST_TABLE_P(obj)) {
+            st_table *tab = RHASH_ST_TABLE(obj);
+
+            if (tab->bins != NULL) free(tab->bins);
+            free(tab->entries);
         }
         break;
       case T_REGEXP:
@@ -4921,15 +4912,10 @@ obj_memsize_of(VALUE obj, int use_all_types)
         size += rb_ary_memsize(obj);
         break;
       case T_HASH:
-        if (RHASH_AR_TABLE_P(obj)) {
-            if (RHASH_AR_TABLE(obj) != NULL) {
-                size_t rb_hash_ar_table_size(void);
-                size += rb_hash_ar_table_size();
-            }
-        }
-        else {
+        if (RHASH_ST_TABLE_P(obj)) {
             VM_ASSERT(RHASH_ST_TABLE(obj) != NULL);
-            size += st_memsize(RHASH_ST_TABLE(obj));
+            /* st_table is in the slot */
+            size += st_memsize(RHASH_ST_TABLE(obj)) - sizeof(st_table);
         }
         break;
       case T_REGEXP:
@@ -5592,7 +5578,7 @@ gc_sweep_plane(rb_objspace_t *objspace, rb_heap_t *heap, uintptr_t p, bits_t bit
                          * The sweep cursor and compact cursor move in
                          * opposite directions, and when they meet references will
                          * get updated and "during_compacting" should get disabled */
-                        rb_bug("T_MOVED shouldn't be seen until compaction is finished\n");
+                        rb_bug("T_MOVED shouldn't be seen until compaction is finished");
                     }
                     gc_report(3, objspace, "page_sweep: %s is added to freelist\n", obj_info(vp));
                     ctx->empty_slots++;
@@ -6608,14 +6594,6 @@ mark_hash(rb_objspace_t *objspace, VALUE hash)
         rb_hash_stlike_foreach(hash, mark_keyvalue, (st_data_t)objspace);
     }
 
-    if (RHASH_AR_TABLE_P(hash)) {
-        if (LIKELY(during_gc) && RHASH_TRANSIENT_P(hash)) {
-            rb_transient_heap_mark(hash, RHASH_AR_TABLE(hash));
-        }
-    }
-    else {
-        VM_ASSERT(!RHASH_TRANSIENT_P(hash));
-    }
     gc_mark(objspace, RHASH(hash)->ifnone);
 }
 
@@ -7992,11 +7970,11 @@ gc_verify_heap_page(rb_objspace_t *objspace, struct heap_page *page, VALUE obj)
     if (0) {
         /* free_slots may not equal to free_objects */
         if (page->free_slots != free_objects) {
-            rb_bug("page %p's free_slots should be %d, but %d\n", (void *)page, page->free_slots, free_objects);
+            rb_bug("page %p's free_slots should be %d, but %d", (void *)page, page->free_slots, free_objects);
         }
     }
     if (page->final_slots != zombie_objects) {
-        rb_bug("page %p's final_slots should be %d, but %d\n", (void *)page, page->final_slots, zombie_objects);
+        rb_bug("page %p's final_slots should be %d, but %d", (void *)page, page->final_slots, zombie_objects);
     }
 
     return remembered_old_objects;
@@ -8423,6 +8401,10 @@ gc_compact_destination_pool(rb_objspace_t *objspace, rb_size_pool_t *src_pool, V
 
       case T_STRING:
         obj_size = rb_str_size_as_embedded(src);
+        break;
+
+      case T_HASH:
+        obj_size = sizeof(struct RHash) + (RHASH_ST_TABLE_P(src) ? sizeof(st_table) : sizeof(ar_table));
         break;
 
       default:
@@ -10785,7 +10767,7 @@ static void
 root_obj_check_moved_i(const char *category, VALUE obj, void *data)
 {
     if (gc_object_moved_p(&rb_objspace, obj)) {
-        rb_bug("ROOT %s points to MOVED: %p -> %s\n", category, (void *)obj, obj_info(rb_gc_location(obj)));
+        rb_bug("ROOT %s points to MOVED: %p -> %s", category, (void *)obj, obj_info(rb_gc_location(obj)));
     }
 }
 
@@ -10794,7 +10776,7 @@ reachable_object_check_moved_i(VALUE ref, void *data)
 {
     VALUE parent = (VALUE)data;
     if (gc_object_moved_p(&rb_objspace, ref)) {
-        rb_bug("Object %s points to MOVED: %p -> %s\n", obj_info(parent), (void *)ref, obj_info(rb_gc_location(ref)));
+        rb_bug("Object %s points to MOVED: %p -> %s", obj_info(parent), (void *)ref, obj_info(rb_gc_location(ref)));
     }
 }
 
@@ -13583,9 +13565,8 @@ rb_raw_obj_info_buitin_type(char *const buff, const size_t buff_size, const VALU
             break;
           }
           case T_HASH: {
-            APPEND_F("[%c%c] %"PRIdSIZE,
+            APPEND_F("[%c] %"PRIdSIZE,
                      RHASH_AR_TABLE_P(obj) ? 'A' : 'S',
-                     RHASH_TRANSIENT_P(obj) ? 'T' : ' ',
                      RHASH_SIZE(obj));
             break;
           }

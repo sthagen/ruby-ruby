@@ -1702,11 +1702,6 @@ class TestProcess < Test::Unit::TestCase
   end
 
   def test_wait_and_sigchild
-    if /freebsd|openbsd/ =~ RUBY_PLATFORM
-      # this relates #4173
-      # When ruby can use 2 cores, signal and wait4 may miss the signal.
-      omit "this fails on FreeBSD and OpenBSD on multithreaded environment"
-    end
     signal_received = []
     IO.pipe do |sig_r, sig_w|
       Signal.trap(:CHLD) do
@@ -1796,7 +1791,9 @@ class TestProcess < Test::Unit::TestCase
     exs << Errno::EINVAL if windows?
     exs << Errno::E2BIG if defined?(Errno::E2BIG)
     opts = {[STDOUT, STDERR]=>File::NULL}
-    opts[:rlimit_nproc] = 128 if defined?(Process::RLIMIT_NPROC)
+    if defined?(Process::RLIMIT_NPROC)
+      opts[:rlimit_nproc] = /openbsd/i =~ RUBY_PLATFORM ? 64 : 128
+    end
     EnvUtil.suppress_warning do
       assert_raise(*exs, mesg) do
         begin
