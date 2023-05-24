@@ -1160,10 +1160,6 @@ ar_copy(VALUE hash1, VALUE hash2)
     ar_table *old_tab = RHASH_AR_TABLE(hash2);
     ar_table *new_tab = RHASH_AR_TABLE(hash1);
 
-    if (new_tab == NULL) {
-        new_tab = ar_alloc_table(hash1);
-    }
-
     *new_tab = *old_tab;
     RHASH_AR_TABLE(hash1)->ar_hint.word = RHASH_AR_TABLE(hash2)->ar_hint.word;
     RHASH_AR_TABLE_BOUND_SET(hash1, RHASH_AR_TABLE_BOUND(hash2));
@@ -1714,17 +1710,21 @@ set_proc_default(VALUE hash, VALUE proc)
 static VALUE
 rb_hash_initialize(int argc, VALUE *argv, VALUE hash)
 {
-    VALUE ifnone;
-
     rb_hash_modify(hash);
+
     if (rb_block_given_p()) {
         rb_check_arity(argc, 0, 0);
-        ifnone = rb_block_proc();
-        SET_PROC_DEFAULT(hash, ifnone);
+        SET_PROC_DEFAULT(hash, rb_block_proc());
     }
     else {
         rb_check_arity(argc, 0, 1);
-        ifnone = argc == 0 ? Qnil : argv[0];
+
+        VALUE options, ifnone;
+        rb_scan_args(argc, argv, "01:", &ifnone, &options);
+        if (NIL_P(ifnone) && !NIL_P(options)) {
+            ifnone = options;
+            rb_warn_deprecated_to_remove("3.4", "Calling Hash.new with keyword arguments", "Hash.new({ key: value })");
+        }
         RHASH_SET_IFNONE(hash, ifnone);
     }
 
@@ -2906,13 +2906,32 @@ rb_hash_replace(VALUE hash, VALUE hash2)
     else {
         RHASH_ST_CLEAR(hash);
     }
-    hash_copy(hash, hash2);
-    if (RHASH_EMPTY_P(hash2) && RHASH_ST_TABLE_P(hash2)) {
-        /* ident hash */
-        hash_st_table_init(hash, RHASH_TYPE(hash2), 0);
-    }
 
-    rb_gc_writebarrier_remember(hash);
+    if (RHASH_AR_TABLE_P(hash2)) {
+        if (RHASH_AR_TABLE_P(hash)) {
+            ar_copy(hash, hash2);
+        }
+        else {
+            st_table *tab = RHASH_ST_TABLE(hash);
+            rb_st_init_existing_table_with_size(tab, &objhash, RHASH_AR_TABLE_SIZE(hash2));
+
+            int bound = RHASH_AR_TABLE_BOUND(hash2);
+            for (int i = 0; i < bound; i++) {
+                if (ar_cleared_entry(hash2, i)) continue;
+
+                ar_table_pair *pair = RHASH_AR_TABLE_REF(hash2, i);
+                st_add_direct(tab, pair->key, pair->val);
+                RB_OBJ_WRITTEN(hash, Qundef, pair->key);
+                RB_OBJ_WRITTEN(hash, Qundef, pair->val);
+            }
+        }
+    }
+    else {
+        HASH_ASSERT(sizeof(st_table) <= sizeof(ar_table));
+
+        RHASH_ST_TABLE_SET(hash, st_copy(RHASH_ST_TABLE(hash2)));
+        rb_gc_writebarrier_remember(hash);
+    }
 
     return hash;
 }
