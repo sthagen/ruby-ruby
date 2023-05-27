@@ -56,6 +56,7 @@ The following default gems are updated.
 * fiddle 1.1.2
 * fileutils 1.7.1
 * irb 1.6.4
+* nkf 0.1.3
 * optparse 0.4.0.pre.1
 * psych 5.1.0
 * reline 0.3.4
@@ -69,7 +70,7 @@ The following default gems are updated.
 The following bundled gems are updated.
 
 * minitest 5.18.0
-* test-unit 3.5.8
+* test-unit 3.5.9
 * rbs 3.1.0
 * typeprof 0.21.7
 * debug 1.8.0
