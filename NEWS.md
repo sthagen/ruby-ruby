@@ -55,7 +55,7 @@ The following default gems are updated.
 * csv 3.2.7
 * fiddle 1.1.2
 * fileutils 1.7.1
-* irb 1.6.4
+* irb 1.7.0
 * nkf 0.1.3
 * optparse 0.4.0.pre.1
 * psych 5.1.0
@@ -75,6 +75,10 @@ The following bundled gems are updated.
 * typeprof 0.21.7
 * debug 1.8.0
 
+The following default gem is now bundled.
+
+* racc 1.7.0
+
 See GitHub releases like [Logger](https://github.com/ruby/logger/releases) or
 changelog for details of the default gems or bundled gems.
 
@@ -84,10 +88,11 @@ changelog for details of the default gems or bundled gems.
 
 ## Stdlib compatibility issues
 
-### `ext/readline` is retired
-
-* We have `reline` that is pure Ruby implementation compatible with `ext/readline` API. We rely on `reline` in the future. If you need to use `ext/readline`, you can install `ext/readline` via rubygems.org with `gem install readline-ext`.
-* We no longer need to install libraries like `libreadline` or `libedit`.
+* `racc` is promoted bundled gems.
+  * You need to add `racc` to your `Gemfile` if you use `racc` under bundler environment.
+* `ext/readline` is retired
+  * We have `reline` that is pure Ruby implementation compatible with `ext/readline` API. We rely on `reline` in the future. If you need to use `ext/readline`, you can install `ext/readline` via rubygems.org with `gem install readline-ext`.
+  * We no longer need to install libraries like `libreadline` or `libedit`.
 
 ## C API updates
 

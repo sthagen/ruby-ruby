@@ -101,6 +101,16 @@ class TestSingleton < Test::Unit::TestCase
     assert_not_same a, b
   end
 
+  def test_inheritance_instantiation
+    klass = Class.new do
+      include Singleton
+
+      public_class_method :new
+    end
+
+    assert Class.new(klass).new
+  end
+
   def test_class_level_cloning_preserves_singleton_behavior
     klass = SingletonTest.clone
 
