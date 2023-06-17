@@ -69,15 +69,16 @@ The following default gems are updated.
 
 The following bundled gems are updated.
 
-* minitest 5.18.0
-* test-unit 3.5.9
+* minitest 5.18.1
+* test-unit 3.6.0
+* net-imap 0.3.6
 * rbs 3.1.0
 * typeprof 0.21.7
 * debug 1.8.0
 
 The following default gem is now bundled.
 
-* racc 1.7.0
+* racc 1.7.1
 
 See GitHub releases like [Logger](https://github.com/ruby/logger/releases) or
 changelog for details of the default gems or bundled gems.
