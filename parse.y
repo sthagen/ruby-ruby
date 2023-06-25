@@ -442,7 +442,6 @@ struct parser_params {
 #endif
     /* compile_option */
     signed int frozen_string_literal:2; /* -1: not specified, 0: false, 1: true */
-    signed int coverage_enabled:2; /* -1: not specified, 0: false, 1: true */
 
     unsigned int command_start:1;
     unsigned int eofp: 1;
@@ -5332,7 +5331,7 @@ string_content	: tSTRING_CONTENT
                         $<num>$ = p->heredoc_indent;
                         p->heredoc_indent = 0;
                     }
-                  compstmt tSTRING_DEND
+                  compstmt string_dend
                     {
                         COND_POP();
                         CMDARG_POP();
@@ -5347,6 +5346,10 @@ string_content	: tSTRING_CONTENT
                     /*% %*/
                     /*% ripper: string_embexpr!($7) %*/
                     }
+                ;
+
+string_dend	: tSTRING_DEND
+                | END_OF_INPUT
                 ;
 
 string_dvar	: tGVAR
@@ -6830,11 +6833,10 @@ yycompile0(VALUE arg)
         VALUE tokens = p->tokens;
         NODE *prelude;
         NODE *body = parser_append_options(p, tree->nd_body);
-        p->coverage_enabled = cov;
         prelude = block_append(p, p->eval_tree_begin, body);
         tree->nd_body = prelude;
         p->ast->body.frozen_string_literal = p->frozen_string_literal;
-        p->ast->body.coverage_enabled = p->coverage_enabled;
+        p->ast->body.coverage_enabled = cov;
         if (p->keep_tokens) {
             rb_obj_freeze(tokens);
             rb_ast_set_tokens(p->ast, tokens);
@@ -7119,6 +7121,7 @@ static void
 pushback(struct parser_params *p, int c)
 {
     if (c == -1) return;
+    p->eofp = 0;
     p->lex.pcur--;
     if (p->lex.pcur > p->lex.pbeg && p->lex.pcur[0] == '\n' && p->lex.pcur[-1] == '\r') {
         p->lex.pcur--;
@@ -9162,6 +9165,7 @@ parse_numeric(struct parser_params *p, int c)
             c = nextc(p);
             if (c != '-' && c != '+' && !ISDIGIT(c)) {
                 pushback(p, c);
+                c = nondigit;
                 nondigit = 0;
                 goto decode_num;
             }
@@ -13673,7 +13677,6 @@ parser_initialize(struct parser_params *p)
     p->node_id = 0;
     p->delayed.token = Qnil;
     p->frozen_string_literal = -1; /* not specified */
-    p->coverage_enabled = -1; /* not specified */
 #ifdef RIPPER
     p->result = Qnil;
     p->parsing_thread = Qnil;

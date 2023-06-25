@@ -85,7 +85,7 @@ class RubyLex
             # Avoid appending duplicated token. Tokens that include "\n" like multiline tstring_content can exist in multiple lines.
             tokens_until_line << token if token != tokens_until_line.last
           end
-          continue = process_continue(tokens_until_line)
+          continue = should_continue?(tokens_until_line)
           prompt(next_opens, continue, line_num_offset)
         end
       end
@@ -93,16 +93,12 @@ class RubyLex
 
     if @io.respond_to?(:auto_indent) and @context.auto_indent_mode
       @io.auto_indent do |lines, line_index, byte_pointer, is_newline|
-        if is_newline
-          tokens = self.class.ripper_lex_without_warning(lines[0..line_index].join("\n"), context: @context)
-          process_indent_level(tokens, lines)
-        else
-          code = line_index.zero? ? '' : lines[0..(line_index - 1)].map{ |l| l + "\n" }.join
-          last_line = lines[line_index]&.byteslice(0, byte_pointer)
-          code += last_line if last_line
-          tokens = self.class.ripper_lex_without_warning(code, context: @context)
-          check_corresponding_token_depth(tokens, lines, line_index)
-        end
+        next nil if lines == [nil] # Workaround for exit IRB with CTRL+d
+        next nil if !is_newline && lines[line_index]&.byteslice(0, byte_pointer)&.match?(/\A\s*\z/)
+
+        code = lines[0..line_index].map { |l| "#{l}\n" }.join
+        tokens = self.class.ripper_lex_without_warning(code, context: @context)
+        process_indent_level(tokens, lines, line_index, is_newline)
       end
     end
   end
@@ -124,9 +120,42 @@ class RubyLex
     "#{local_variables.join('=')}=nil;" unless local_variables.empty?
   end
 
+  # Some part of the code is not included in Ripper's token.
+  # Example: DATA part, token after heredoc_beg when heredoc has unclosed embexpr.
+  # With interpolated tokens, tokens.map(&:tok).join will be equal to code.
+  def self.interpolate_ripper_ignored_tokens(code, tokens)
+    line_positions = [0]
+    code.lines.each do |line|
+      line_positions << line_positions.last + line.bytesize
+    end
+    prev_byte_pos = 0
+    interpolated = []
+    prev_line = 1
+    tokens.each do |t|
+      line, col = t.pos
+      byte_pos = line_positions[line - 1] + col
+      if prev_byte_pos < byte_pos
+        tok = code.byteslice(prev_byte_pos...byte_pos)
+        pos = [prev_line, prev_byte_pos - line_positions[prev_line - 1]]
+        interpolated << Ripper::Lexer::Elem.new(pos, :on_ignored_by_ripper, tok, 0)
+        prev_line += tok.count("\n")
+      end
+      interpolated << t
+      prev_byte_pos = byte_pos + t.tok.bytesize
+      prev_line += t.tok.count("\n")
+    end
+    if prev_byte_pos < code.bytesize
+      tok = code.byteslice(prev_byte_pos..)
+      pos = [prev_line, prev_byte_pos - line_positions[prev_line - 1]]
+      interpolated << Ripper::Lexer::Elem.new(pos, :on_ignored_by_ripper, tok, 0)
+    end
+    interpolated
+  end
+
   def self.ripper_lex_without_warning(code, context: nil)
     verbose, $VERBOSE = $VERBOSE, nil
     lvars_code = generate_local_variables_assign_code(context&.local_variables || [])
+    original_code = code
     if lvars_code
       code = "#{lvars_code}\n#{code}"
       line_no = 0
@@ -136,7 +165,8 @@ class RubyLex
 
     compile_with_errors_suppressed(code, line_no: line_no) do |inner_code, line_no|
       lexer = Ripper::Lexer.new(inner_code, '-', line_no)
-      lexer.scan.each_with_object([]) do |t, tokens|
+      tokens = []
+      lexer.scan.each do |t|
         next if t.pos.first == 0
         prev_tk = tokens.last
         position_overlapped = prev_tk && t.pos[0] == prev_tk.pos[0] && t.pos[1] < prev_tk.pos[1] + prev_tk.tok.bytesize
@@ -146,6 +176,7 @@ class RubyLex
           tokens << t
         end
       end
+      interpolate_ripper_ignored_tokens(original_code, tokens)
     end
   ensure
     $VERBOSE = verbose
@@ -153,8 +184,8 @@ class RubyLex
 
   def prompt(opens, continue, line_num_offset)
     ltype = ltype_from_open_tokens(opens)
-    _indent_level, nesting_level = calc_nesting_depth(opens)
-    @prompt&.call(ltype, nesting_level, opens.any? || continue, @line_no + line_num_offset)
+    indent_level = calc_indent_level(opens)
+    @prompt&.call(ltype, indent_level, opens.any? || continue, @line_no + line_num_offset)
   end
 
   def check_code_state(code)
@@ -165,7 +196,16 @@ class RubyLex
   end
 
   def code_terminated?(code, tokens, opens)
-    opens.empty? && !process_continue(tokens) && !check_code_block(code, tokens)
+    case check_code_syntax(code)
+    when :unrecoverable_error
+      true
+    when :recoverable_error
+      false
+    when :other_error
+      opens.empty? && !should_continue?(tokens)
+    when :valid
+      !should_continue?(tokens)
+    end
   end
 
   def save_prompt_to_context_io(opens, continue, line_num_offset)
@@ -196,7 +236,7 @@ class RubyLex
       return code if terminated
 
       line_offset += 1
-      continue = process_continue(tokens)
+      continue = should_continue?(tokens)
       save_prompt_to_context_io(opens, continue, line_offset)
     end
   end
@@ -215,29 +255,33 @@ class RubyLex
     end
   end
 
-  def process_continue(tokens)
-    # last token is always newline
-    if tokens.size >= 2 and tokens[-2].event == :on_regexp_end
-      # end of regexp literal
-      return false
-    elsif tokens.size >= 2 and tokens[-2].event == :on_semicolon
-      return false
-    elsif tokens.size >= 2 and tokens[-2].event == :on_kw and ['begin', 'else', 'ensure'].include?(tokens[-2].tok)
-      return false
-    elsif !tokens.empty? and tokens.last.tok == "\\\n"
-      return true
-    elsif tokens.size >= 1 and tokens[-1].event == :on_heredoc_end # "EOH\n"
-      return false
-    elsif tokens.size >= 2 and tokens[-2].state.anybits?(Ripper::EXPR_BEG | Ripper::EXPR_FNAME) and tokens[-2].tok !~ /\A\.\.\.?\z/
-      # end of literal except for regexp
-      # endless range at end of line is not a continue
-      return true
+  def should_continue?(tokens)
+    # Look at the last token and check if IRB need to continue reading next line.
+    # Example code that should continue: `a\` `a +` `a.`
+    # Trailing spaces, newline, comments are skipped
+    return true if tokens.last&.event == :on_sp && tokens.last.tok == "\\\n"
+
+    tokens.reverse_each do |token|
+      case token.event
+      when :on_sp, :on_nl, :on_ignored_nl, :on_comment, :on_embdoc_beg, :on_embdoc, :on_embdoc_end
+        # Skip
+      when :on_regexp_end, :on_heredoc_end, :on_semicolon
+        # State is EXPR_BEG but should not continue
+        return false
+      else
+        # Endless range should not continue
+        return false if token.event == :on_op && token.tok.match?(/\A\.\.\.?\z/)
+
+        # EXPR_DOT and most of the EXPR_BEG should continue
+        return token.state.anybits?(Ripper::EXPR_BEG | Ripper::EXPR_DOT)
+      end
     end
     false
   end
 
-  def check_code_block(code, tokens)
-    return true if tokens.empty?
+  def check_code_syntax(code)
+    lvars_code = RubyLex.generate_local_variables_assign_code(@context.local_variables)
+    code = "#{lvars_code}\n#{code}"
 
     begin # check if parser error are available
       verbose, $VERBOSE = $VERBOSE, nil
@@ -256,6 +300,7 @@ class RubyLex
       end
     rescue EncodingError
       # This is for a hash with invalid encoding symbol, {"\xAE": 1}
+      :unrecoverable_error
     rescue SyntaxError => e
       case e.message
       when /unterminated (?:string|regexp) meets end of file/
@@ -268,7 +313,7 @@ class RubyLex
         #
         #   example:
         #     '
-        return true
+        return :recoverable_error
       when /syntax error, unexpected end-of-input/
         # "syntax error, unexpected end-of-input, expecting keyword_end"
         #
@@ -278,7 +323,7 @@ class RubyLex
         #       if false
         #         fuga
         #       end
-        return true
+        return :recoverable_error
       when /syntax error, unexpected keyword_end/
         # "syntax error, unexpected keyword_end"
         #
@@ -288,51 +333,40 @@ class RubyLex
         #
         #   example:
         #     end
-        return false
+        return :unrecoverable_error
       when /syntax error, unexpected '\.'/
         # "syntax error, unexpected '.'"
         #
         #   example:
         #     .
-        return false
+        return :unrecoverable_error
       when /unexpected tREGEXP_BEG/
         # "syntax error, unexpected tREGEXP_BEG, expecting keyword_do or '{' or '('"
         #
         #   example:
         #     method / f /
-        return false
+        return :unrecoverable_error
+      else
+        return :other_error
       end
     ensure
       $VERBOSE = verbose
     end
-
-    last_lex_state = tokens.last.state
-
-    if last_lex_state.allbits?(Ripper::EXPR_BEG)
-      return false
-    elsif last_lex_state.allbits?(Ripper::EXPR_DOT)
-      return true
-    elsif last_lex_state.allbits?(Ripper::EXPR_CLASS)
-      return true
-    elsif last_lex_state.allbits?(Ripper::EXPR_FNAME)
-      return true
-    elsif last_lex_state.allbits?(Ripper::EXPR_VALUE)
-      return true
-    elsif last_lex_state.allbits?(Ripper::EXPR_ARG)
-      return false
-    end
-
-    false
+    :valid
   end
 
-  # Calculates [indent_level, nesting_level]. nesting_level is used in prompt string.
-  def calc_nesting_depth(opens)
+  def calc_indent_level(opens)
     indent_level = 0
-    nesting_level = 0
-    opens.each do |t|
+    opens.each_with_index do |t, index|
       case t.event
       when :on_heredoc_beg
-        # TODO: indent heredoc
+        if opens[index + 1]&.event != :on_heredoc_beg
+          if t.tok.match?(/^<<[~-]/)
+            indent_level += 1
+          else
+            indent_level = 0
+          end
+        end
       when :on_tstring_beg, :on_regexp_beg, :on_symbeg
         # can be indented if t.tok starts with `%`
       when :on_words_beg, :on_qwords_beg, :on_symbols_beg, :on_qsymbols_beg, :on_embexpr_beg
@@ -340,53 +374,75 @@ class RubyLex
       when :on_embdoc_beg
         indent_level = 0
       else
-        nesting_level += 1
         indent_level += 1
       end
     end
-    [indent_level, nesting_level]
+    indent_level
   end
 
-  def free_indent_token(opens, line_index)
-    last_token = opens.last
-    return unless last_token
-    if last_token.event == :on_heredoc_beg && last_token.pos.first < line_index + 1
-      # accept extra indent spaces inside heredoc
-      last_token
-    end
+  FREE_INDENT_TOKENS = %i[on_tstring_beg on_backtick on_regexp_beg on_symbeg]
+
+  def free_indent_token?(token)
+    FREE_INDENT_TOKENS.include?(token&.event)
   end
 
-  def process_indent_level(tokens, lines)
-    opens = IRB::NestingParser.open_tokens(tokens)
-    indent_level, _nesting_level = calc_nesting_depth(opens)
-    indent = indent_level * 2
-    line_index = lines.size - 2
-    if free_indent_token(opens, line_index)
-      return [indent, lines[line_index][/^ */].length].max
-    end
-
-    indent
-  end
-
-  def check_corresponding_token_depth(tokens, lines, line_index)
+  def process_indent_level(tokens, lines, line_index, is_newline)
     line_results = IRB::NestingParser.parse_by_line(tokens)
     result = line_results[line_index]
-    return unless result
+    if result
+      _tokens, prev_opens, next_opens, min_depth = result
+    else
+      # When last line is empty
+      prev_opens = next_opens = line_results.last[2]
+      min_depth = next_opens.size
+    end
 
     # To correctly indent line like `end.map do`, we use shortest open tokens on each line for indent calculation.
     # Shortest open tokens can be calculated by `opens.take(min_depth)`
-    _tokens, prev_opens, opens, min_depth = result
-    indent_level, _nesting_level = calc_nesting_depth(opens.take(min_depth))
-    indent = indent_level * 2
-    free_indent_tok = free_indent_token(opens, line_index)
-    prev_line_free_indent_tok = free_indent_token(prev_opens, line_index - 1)
-    if prev_line_free_indent_tok && prev_line_free_indent_tok != free_indent_tok
-      return indent
-    elsif free_indent_tok
-      return lines[line_index][/^ */].length
+    indent = 2 * calc_indent_level(prev_opens.take(min_depth))
+
+    preserve_indent = lines[line_index - (is_newline ? 1 : 0)][/^ */].size
+
+    prev_open_token = prev_opens.last
+    next_open_token = next_opens.last
+
+    if free_indent_token?(prev_open_token)
+      if is_newline && prev_open_token.pos[0] == line_index
+        # First newline inside free-indent token
+        indent
+      else
+        # Accept any number of indent inside free-indent token
+        preserve_indent
+      end
+    elsif prev_open_token&.event == :on_embdoc_beg || next_open_token&.event == :on_embdoc_beg
+      if prev_open_token&.event == next_open_token&.event
+        # Accept any number of indent inside embdoc content
+        preserve_indent
+      else
+        # =begin or =end
+        0
+      end
+    elsif prev_open_token&.event == :on_heredoc_beg
+      tok = prev_open_token.tok
+      if prev_opens.size <= next_opens.size
+        if is_newline && lines[line_index].empty? && line_results[line_index - 1][1].last != next_open_token
+          # First line in heredoc
+          indent
+        elsif tok.match?(/^<<~/)
+          # Accept extra indent spaces inside `<<~` heredoc
+          [indent, preserve_indent].max
+        else
+          # Accept any number of indent inside other heredoc
+          preserve_indent
+        end
+      else
+        # Heredoc close
+        prev_line_indent_level = calc_indent_level(prev_opens)
+        tok.match?(/^<<[~-]/) ? 2 * (prev_line_indent_level - 1) : 0
+      end
+    else
+      indent
     end
-    prev_indent_level, _prev_nesting_level = calc_nesting_depth(prev_opens)
-    indent if indent_level < prev_indent_level
   end
 
   LTYPE_TOKENS = %i[
