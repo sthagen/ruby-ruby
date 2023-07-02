@@ -73,10 +73,7 @@ jobs:
         continue-on-error: true
 
       - name: Install libraries
-        run: |
-          set -x
-          sudo apt-get update -q || :
-          sudo apt-get install --no-install-recommends -q -y build-essential libssl-dev libyaml-dev libreadline6-dev zlib1g-dev libncurses5-dev libffi-dev autoconf ruby
+        uses: ./.gituhb/actions/setup/ubuntu
         if: ${{ steps.diff.outcome == 'failure' }}
 
       - name: Build
@@ -123,16 +120,7 @@ jobs:
           GIT_COMMITTER_NAME: git
         if: ${{ github.repository == 'ruby/ruby' && !startsWith(github.event_name, 'pull') && steps.show.outcome == 'failure' }}
 
-      - uses: ruby/action-slack@0bd85c72233cdbb6a0fe01d37aaeff1d21b5fce1 # v3.2.1
+      - uses: ./.github/actions/slack
         with:
-          payload: |
-            {
-              "ci": "GitHub Actions",
-              "env": "${{ github.workflow }} / update",
-              "url": "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}",
-              "commit": "${{ github.sha }}",
-              "branch": "${{ github.ref_name }}"
-            }
-        env:
           SLACK_WEBHOOK_URL: ${{ secrets.SIMPLER_ALERTS_URL }} # ruby-lang slack: ruby/simpler-alerts-bot
         if: ${{ failure() && github.event_name == 'push' }}

@@ -25,7 +25,7 @@ It is simple, straightforward, and extensible.
 * Dynamic Loading of Object Files (on some architectures)
 * Highly Portable (works on many Unix-like/POSIX compatible platforms as
   well as Windows, macOS, etc.) cf.
-  https://github.com/ruby/ruby/blob/master/doc/maintainers.md#platform-maintainers
+    https://docs.ruby-lang.org/en/master/maintainers_md.html#label-Platform+Maintainers
 
 ## How to get Ruby
 
@@ -53,7 +53,7 @@ if you are a committer.
 
 ## How to build
 
-see [Building Ruby](doc/contributing/building_ruby.md)
+See [Building Ruby](https://docs.ruby-lang.org/en/master/contributing/building_ruby_md.html)
 
 ## Ruby home page
 

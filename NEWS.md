@@ -56,10 +56,10 @@ The following default gems are updated.
 * RubyGems 3.5.0.dev
 * bigdecimal 3.1.4
 * bundler 2.5.0.dev
-* csv 3.2.7
+* csv 3.2.8
 * fiddle 1.1.2
 * fileutils 1.7.1
-* irb 1.7.0
+* irb 1.7.1
 * nkf 0.1.3
 * optparse 0.4.0.pre.1
 * psych 5.1.0
@@ -69,7 +69,7 @@ The following default gems are updated.
 * syntax_suggest 1.1.0
 * time 0.2.2
 * timeout 0.4.0
-* uri 0.12.1
+* uri 0.12.2
 
 The following bundled gems are updated.
 

@@ -3911,7 +3911,7 @@ rb_fd_init_copy(rb_fdset_t *dst, rb_fdset_t *src)
 void
 rb_fd_term(rb_fdset_t *fds)
 {
-    if (fds->fdset) xfree(fds->fdset);
+    xfree(fds->fdset);
     fds->maxfd = 0;
     fds->fdset = 0;
 }
@@ -5437,6 +5437,9 @@ Init_Thread(void)
     rb_thread_create_timer_thread();
 
     Init_thread_sync();
+
+    // TODO: Suppress unused function warning for now
+    if (0) rb_thread_sched_destroy(NULL);
 }
 
 int

@@ -128,31 +128,18 @@ jobs:
       - run: make
       - run: make test
       - run: make install
-        if: ${{ matrix.entry.check }}
       - run: make test-tool
-        if: ${{ matrix.entry.check }}
       ### test-all doesn't work: https://github.com/ruby/ruby/actions/runs/4340112185/jobs/7578344307
       # - run: make test-all TESTS='-- ruby -ext-'
-      #   if: ${{ matrix.entry.check }}
       ### test-spec doesn't work: https://github.com/ruby/ruby/actions/runs/4340193212/jobs/7578505652
       # - run: make test-spec
       #   env:
       #     CHECK_LEAKS: true
-      #   if: ${{ matrix.entry.check }}
       - run: make test-annocheck
-        if: ${{ matrix.entry.check && endsWith(matrix.entry.name, 'annocheck') }}
 
-      - uses: ruby/action-slack@0bd85c72233cdbb6a0fe01d37aaeff1d21b5fce1 # v3.2.1
+      - uses: ./src/.github/actions/slack
         with:
-          payload: |
-            {
-              "ci": "GitHub Actions",
-              "env": "${{ github.workflow }} / ${{ matrix.entry.name }}",
-              "url": "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}",
-              "commit": "${{ github.sha }}",
-              "branch": "${{ github.ref_name }}"
-            }
-        env:
+          label: ${{ matrix.entry.name }}
           SLACK_WEBHOOK_URL: ${{ secrets.SIMPLER_ALERTS_URL }} # ruby-lang slack: ruby/simpler-alerts-bot
         if: ${{ failure() && github.event_name == 'push' }}
 

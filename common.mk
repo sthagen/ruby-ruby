@@ -430,7 +430,7 @@ ruby.imp: $(COMMONOBJS)
 	sort -u -o $@
 
 install: install-$(INSTALLDOC)
-docs: $(DOCTARGETS)
+docs: srcs-doc $(DOCTARGETS)
 pkgconfig-data: $(ruby_pc)
 $(ruby_pc): $(srcdir)/template/ruby.pc.in config.status
 
@@ -624,15 +624,15 @@ do-install-dbg: $(PROGRAM) pre-install-dbg
 post-install-dbg::
 	@$(NULLCMD)
 
-rdoc: PHONY main
+rdoc: PHONY main srcs-doc
 	@echo Generating RDoc documentation
 	$(Q) $(RDOC) --ri --op "$(RDOCOUT)" $(RDOC_GEN_OPTS) $(RDOCFLAGS) "$(srcdir)"
 
-html: PHONY main
+html: PHONY main srcs-doc
 	@echo Generating RDoc HTML files
 	$(Q) $(RDOC) --op "$(HTMLOUT)" $(RDOC_GEN_OPTS) $(RDOCFLAGS) "$(srcdir)"
 
-rdoc-coverage: PHONY main
+rdoc-coverage: PHONY main srcs-doc
 	@echo Generating RDoc coverage report
 	$(Q) $(RDOC) --quiet -C $(RDOCFLAGS) "$(srcdir)"
 
@@ -1142,9 +1142,16 @@ common-srcs: $(srcs_vpath)parse.c $(srcs_vpath)lex.c $(srcs_vpath)enc/trans/newl
 
 missing-srcs: $(srcdir)/missing/des_tables.c
 
-srcs: common-srcs missing-srcs srcs-enc
+srcs: common-srcs missing-srcs srcs-enc srcs-doc
 
-EXT_SRCS = $(srcdir)/ext/ripper/ripper.c \
+RIPPER_SRCS = $(srcdir)/ext/ripper/ripper.c \
+	      $(srcdir)/ext/ripper/ripper_init.c \
+	      $(srcdir)/ext/ripper/eventids1.h \
+	      $(srcdir)/ext/ripper/eventids1.c \
+	      $(srcdir)/ext/ripper/eventids2table.c \
+	      # RIPPER_SRCS
+
+EXT_SRCS = ripper_srcs \
 	   $(srcdir)/ext/rbconfig/sizeof/sizes.c \
 	   $(srcdir)/ext/rbconfig/sizeof/limits.c \
 	   $(srcdir)/ext/socket/constdefs.c \
@@ -1260,7 +1267,12 @@ $(REVISION_H)$(yes_baseruby:yes=~disabled~):
 # uncommon.mk: $(REVISION_H)
 # $(MKFILES): $(REVISION_H)
 
-$(srcdir)/ext/ripper/ripper.c: $(srcdir)/ext/ripper/tools/preproc.rb $(srcdir)/parse.y $(srcdir)/defs/id.def $(srcdir)/ext/ripper/depend
+ripper_srcs: $(RIPPER_SRCS)
+.NOTPARALLEL: ripper_srcs
+
+$(RIPPER_SRCS): $(srcdir)/parse.y $(srcdir)/defs/id.def
+$(RIPPER_SRCS): $(srcdir)/ext/ripper/tools/preproc.rb $(srcdir)/ext/ripper/tools/dsl.rb
+$(RIPPER_SRCS): $(srcdir)/ext/ripper/ripper_init.c.tmpl $(srcdir)/ext/ripper/eventids2.c
 	$(ECHO) generating $@
 	$(Q) $(CHDIR) $(@D) && \
 	$(CAT_DEPEND) depend | \
@@ -1718,6 +1730,16 @@ $(UNICODE_HDR_DIR)/name2ctype.h:
 		$(UNICODE_SRC_DATA_DIR) $(UNICODE_SRC_EMOJI_DATA_DIR) > $@.new
 	$(MV) $@.new $@
 
+srcs-doc: $(srcdir)/doc/regexp/unicode_properties.rdoc
+$(srcdir)/doc/regexp/$(ALWAYS_UPDATE_UNICODE:yes=unicode_properties.rdoc): \
+	$(UNICODE_HDR_DIR)/name2ctype.h $(UNICODE_PROPERTY_FILES)
+
+$(srcdir)/doc/regexp/unicode_properties.rdoc:
+	$(Q) $(BOOTSTRAPRUBY) $(tooldir)/generic_erb.rb -c -o $@ \
+		$(srcdir)/template/unicode_properties.rdoc.tmpl \
+		$(UNICODE_SRC_DATA_DIR) $(UNICODE_HDR_DIR)/name2ctype.h || \
+	$(TOUCH) $@
+
 # the next non-comment line was:
 # $(UNICODE_HDR_DIR)/casefold.h: $(tooldir)/enc-case-folding.rb \
 # but was changed to make sure CI works on systems that don't have gperf
@@ -1829,7 +1851,7 @@ help: PHONY
 	"  golf:                  build goruby for golfers" \
 	$(HELP_EXTRA_TASKS) \
 	"see DeveloperHowto for more detail: " \
-	"  https://bugs.ruby-lang.org/projects/ruby/wiki/DeveloperHowto" \
+	"  https://github.com/ruby/ruby/wiki/Developer-How-To" \
 	$(MESSAGE_END)
 
 $(CROSS_COMPILING:yes=)builtin.$(OBJEXT): {$(VPATH)}mini_builtin.c

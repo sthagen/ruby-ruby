@@ -56,23 +56,15 @@ jobs:
           ruby-version: ${{ matrix.ruby }}
           bundler: none
       - run: echo "GNUMAKEFLAGS=-j$((1 + $(nproc --all)))" >> $GITHUB_ENV
-      - run: sudo apt-get install build-essential autoconf libyaml-dev
+      - uses: ./.github/actions/setup/ubuntu
       - run: ./autogen.sh
       - run: ./configure --disable-install-doc
       - run: make common-srcs
       - run: make incs
       - run: make all
       - run: make test
-      - uses: ruby/action-slack@0bd85c72233cdbb6a0fe01d37aaeff1d21b5fce1 # v3.2.1
+      - uses: ./.github/actions/slack
         with:
-          payload: |
-            {
-              "ci": "GitHub Actions",
-              "env": "${{ github.workflow }} / BASERUBY @ ${{ matrix.ruby }}",
-              "url": "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}",
-              "commit": "${{ github.sha }}",
-              "branch": "${{ github.ref_name }}"
-            }
-        env:
+          label: ${{ matrix.ruby }}
           SLACK_WEBHOOK_URL: ${{ secrets.SIMPLER_ALERTS_URL }} # ruby-lang slack: ruby/simpler-alerts-bot
         if: ${{ failure() && github.event_name == 'push' }}
