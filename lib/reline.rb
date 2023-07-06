@@ -91,36 +91,36 @@ module Reline
       if val.nil?
         @completion_append_character = nil
       elsif val.size == 1
-        @completion_append_character = val.encode(Reline::IOGate.encoding)
+        @completion_append_character = val.encode(encoding)
       elsif val.size > 1
-        @completion_append_character = val[0].encode(Reline::IOGate.encoding)
+        @completion_append_character = val[0].encode(encoding)
       else
         @completion_append_character = nil
       end
     end
 
     def basic_word_break_characters=(v)
-      @basic_word_break_characters = v.encode(Reline::IOGate.encoding)
+      @basic_word_break_characters = v.encode(encoding)
     end
 
     def completer_word_break_characters=(v)
-      @completer_word_break_characters = v.encode(Reline::IOGate.encoding)
+      @completer_word_break_characters = v.encode(encoding)
     end
 
     def basic_quote_characters=(v)
-      @basic_quote_characters = v.encode(Reline::IOGate.encoding)
+      @basic_quote_characters = v.encode(encoding)
     end
 
     def completer_quote_characters=(v)
-      @completer_quote_characters = v.encode(Reline::IOGate.encoding)
+      @completer_quote_characters = v.encode(encoding)
     end
 
     def filename_quote_characters=(v)
-      @filename_quote_characters = v.encode(Reline::IOGate.encoding)
+      @filename_quote_characters = v.encode(encoding)
     end
 
     def special_prefixes=(v)
-      @special_prefixes = v.encode(Reline::IOGate.encoding)
+      @special_prefixes = v.encode(encoding)
     end
 
     def completion_case_fold=(v)
@@ -181,20 +181,16 @@ module Reline
 
     def input=(val)
       raise TypeError unless val.respond_to?(:getc) or val.nil?
-      if val.respond_to?(:getc)
-        if defined?(Reline::ANSI) and Reline::IOGate == Reline::ANSI
-          Reline::ANSI.input = val
-        elsif Reline::IOGate == Reline::GeneralIO
-          Reline::GeneralIO.input = val
-        end
+      if val.respond_to?(:getc) && Reline::IOGate.respond_to?(:input=)
+        Reline::IOGate.input = val
       end
     end
 
     def output=(val)
       raise TypeError unless val.respond_to?(:write) or val.nil?
       @output = val
-      if defined?(Reline::ANSI) and Reline::IOGate == Reline::ANSI
-        Reline::ANSI.output = val
+      if Reline::IOGate.respond_to?(:output=)
+        Reline::IOGate.output = val
       end
     end
 
@@ -270,6 +266,7 @@ module Reline
     Reline::DEFAULT_DIALOG_CONTEXT = Array.new
 
     def readmultiline(prompt = '', add_hist = false, &confirm_multiline_termination)
+      Reline.update_iogate
       Reline::IOGate.with_raw_input do
         unless confirm_multiline_termination
           raise ArgumentError.new('#readmultiline needs block to confirm multiline termination')
@@ -288,6 +285,7 @@ module Reline
     end
 
     def readline(prompt = '', add_hist = false)
+      Reline.update_iogate
       inner_readline(prompt, add_hist, false)
 
       line = line_editor.line.dup
@@ -313,7 +311,7 @@ module Reline
       otio = Reline::IOGate.prep
 
       may_req_ambiguous_char_width
-      line_editor.reset(prompt, encoding: Reline::IOGate.encoding)
+      line_editor.reset(prompt, encoding: encoding)
       if multiline
         line_editor.multiline_on
         if block_given?
@@ -565,7 +563,7 @@ module Reline
     @core ||= Core.new { |core|
       core.config = Reline::Config.new
       core.key_stroke = Reline::KeyStroke.new(core.config)
-      core.line_editor = Reline::LineEditor.new(core.config, Reline::IOGate.encoding)
+      core.line_editor = Reline::LineEditor.new(core.config, core.encoding)
 
       core.basic_word_break_characters = " \t\n`><=;|&{("
       core.completer_word_break_characters = " \t\n`><=;|&{("
@@ -583,6 +581,18 @@ module Reline
 
   def self.line_editor
     core.line_editor
+  end
+
+  def self.update_iogate
+    return if core.config.test_mode
+
+    # Need to change IOGate when `$stdout.tty?` change from false to true by `$stdout.reopen`
+    # Example: rails/spring boot the application in non-tty, then run console in tty.
+    if ENV['TERM'] != 'dumb' && Reline::IOGate == Reline::GeneralIO && $stdout.tty?
+      require 'reline/ansi'
+      remove_const(:IOGate)
+      const_set(:IOGate, Reline::ANSI)
+    end
   end
 end
 
