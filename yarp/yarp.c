@@ -4868,7 +4868,7 @@ lex_global_variable(yp_parser_t *parser) {
             parser->current.end++;
             size_t width;
 
-            if ((width = char_is_identifier(parser, parser->current.end)) > 0) {
+            if (parser->current.end < parser->end && (width = char_is_identifier(parser, parser->current.end)) > 0) {
                 do {
                     parser->current.end += width;
                 } while (parser->current.end < parser->end && (width = char_is_identifier(parser, parser->current.end)) > 0);
@@ -12898,6 +12898,40 @@ yp_parse_serialize(const char *source, size_t size, yp_buffer_t *buffer) {
 
     yp_node_destroy(&parser, node);
     yp_parser_free(&parser);
+}
+
+static yp_code_position_t
+yp_code_position(yp_newline_list_t newline_list, size_t loc) {
+    int line = 0;
+    while (line < (int)newline_list.size && newline_list.offsets[line] < loc) {
+        line++;
+    }
+
+    if (line > 0) {
+        line--;
+    }
+
+    int column = (int) (loc - newline_list.offsets[line]);
+
+    yp_code_position_t position;
+    position.lineno = line;
+    position.column = column;
+
+    return position;
+}
+
+yp_code_location_t
+yp_location_for_node(yp_parser_t *parser, yp_node_t *node) {
+    yp_newline_list_t newline_list = parser->newline_list;
+
+    yp_code_position_t start = yp_code_position(newline_list, (size_t)(node->location.start - parser->start));
+    yp_code_position_t end = yp_code_position(newline_list, (size_t)(node->location.end - parser->start));
+
+    yp_code_location_t location;
+    location.beg_pos = start;
+    location.end_pos = end;
+
+    return location;
 }
 
 #undef YP_CASE_KEYWORD

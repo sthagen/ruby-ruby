@@ -37,6 +37,9 @@ jobs:
         os:
           - macos-11
           - macos-12
+        configure:
+          - ''
+          - '--enable-shared'
       fail-fast: false
 
     env:
@@ -61,15 +64,8 @@ jobs:
           builddir: build
           makeup: true
 
-      - name: Set ENV
-        run: |
-          for lib in openssl@1.1 readline; do
-            CONFIGURE_ARGS="${CONFIGURE_ARGS:+$CONFIGURE_ARGS }--with-${lib%@*}-dir=$(brew --prefix $lib)"
-          done
-          echo CONFIGURE_ARGS="${CONFIGURE_ARGS}" >> $GITHUB_ENV
-
       - name: Run configure
-        run: ../src/configure -C --disable-install-doc
+        run: ../src/configure -C --disable-install-doc ${{ matrix.configure }}
 
       - run: make prepare-gems
         if: ${{ matrix.test_task == 'test-bundled-gems' }}
