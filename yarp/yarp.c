@@ -3412,7 +3412,6 @@ yp_required_destructured_parameter_node_closing_set(yp_required_destructured_par
 // Allocate a new RequiredParameterNode node.
 static yp_required_parameter_node_t *
 yp_required_parameter_node_create(yp_parser_t *parser, const yp_token_t *token) {
-    assert(token->type == YP_TOKEN_MISSING || token->type == YP_TOKEN_IDENTIFIER);
     yp_required_parameter_node_t *node = YP_ALLOC_NODE(parser, yp_required_parameter_node_t);
 
     *node = (yp_required_parameter_node_t) {
@@ -8244,8 +8243,27 @@ parse_parameters(
                 }
                 break;
             }
-            case YP_TOKEN_IDENTIFIER: {
+            case YP_TOKEN_CLASS_VARIABLE:
+            case YP_TOKEN_IDENTIFIER:
+            case YP_TOKEN_CONSTANT:
+            case YP_TOKEN_INSTANCE_VARIABLE:
+            case YP_TOKEN_GLOBAL_VARIABLE: {
                 parser_lex(parser);
+                switch (parser->previous.type) {
+                    case YP_TOKEN_CONSTANT:
+                        yp_diagnostic_list_append(&parser->error_list, parser->previous.start, parser->previous.end, "Formal argument cannot be a constant");
+                        break;
+                    case YP_TOKEN_INSTANCE_VARIABLE:
+                        yp_diagnostic_list_append(&parser->error_list, parser->previous.start, parser->previous.end, "Formal argument cannot be an instance variable");
+                        break;
+                    case YP_TOKEN_GLOBAL_VARIABLE:
+                        yp_diagnostic_list_append(&parser->error_list, parser->previous.start, parser->previous.end, "Formal argument cannot be a global variable");
+                        break;
+                    case YP_TOKEN_CLASS_VARIABLE:
+                        yp_diagnostic_list_append(&parser->error_list, parser->previous.start, parser->previous.end, "Formal argument cannot be a class variable");
+                        break;
+                    default: break;
+                }
 
                 if (parser->current.type == YP_TOKEN_EQUAL) {
                     update_parameter_state(parser, &parser->current, &order);
@@ -8387,22 +8405,6 @@ parse_parameters(
                 yp_parameters_node_keyword_rest_set(params, param);
                 break;
             }
-            case YP_TOKEN_CONSTANT:
-                parser_lex(parser);
-                yp_diagnostic_list_append(&parser->error_list, parser->previous.start, parser->previous.end, "Formal argument cannot be a constant");
-                break;
-            case YP_TOKEN_INSTANCE_VARIABLE:
-                parser_lex(parser);
-                yp_diagnostic_list_append(&parser->error_list, parser->previous.start, parser->previous.end, "Formal argument cannot be an instance variable");
-                break;
-            case YP_TOKEN_GLOBAL_VARIABLE:
-                parser_lex(parser);
-                yp_diagnostic_list_append(&parser->error_list, parser->previous.start, parser->previous.end, "Formal argument cannot be a global variable");
-                break;
-            case YP_TOKEN_CLASS_VARIABLE:
-                parser_lex(parser);
-                yp_diagnostic_list_append(&parser->error_list, parser->previous.start, parser->previous.end, "Formal argument cannot be a class variable");
-                break;
             default:
                 if (parser->previous.type == YP_TOKEN_COMMA) {
                     if (allows_trailing_comma) {
@@ -8427,6 +8429,13 @@ parse_parameters(
     } while (looping && accept(parser, YP_TOKEN_COMMA));
 
     yp_do_loop_stack_pop(parser);
+
+    // If we don't have any parameters, return `NULL` instead of an empty `ParametersNode`.
+    if (params->base.location.start == params->base.location.end) {
+        yp_node_destroy(parser, (yp_node_t *) params);
+        return NULL;
+    }
+
     return params;
 }
 
@@ -10941,7 +10950,7 @@ parse_expression_prefix(yp_parser_t *parser, yp_binding_power_t binding_power) {
                 context_push(parser, YP_CONTEXT_DEF);
                 statements = (yp_node_t *) yp_statements_node_create(parser);
 
-                yp_node_t *statement = parse_expression(parser, YP_BINDING_POWER_ASSIGNMENT + 1, "Expected to be able to parse body of endless method definition.");
+                yp_node_t *statement = parse_expression(parser, YP_BINDING_POWER_DEFINED + 1, "Expected to be able to parse body of endless method definition.");
 
                 if (accept(parser, YP_TOKEN_KEYWORD_RESCUE_MODIFIER)) {
                     yp_token_t rescue_keyword = parser->previous;
@@ -12898,40 +12907,6 @@ yp_parse_serialize(const char *source, size_t size, yp_buffer_t *buffer) {
 
     yp_node_destroy(&parser, node);
     yp_parser_free(&parser);
-}
-
-static yp_code_position_t
-yp_code_position(yp_newline_list_t newline_list, size_t loc) {
-    int line = 0;
-    while (line < (int)newline_list.size && newline_list.offsets[line] < loc) {
-        line++;
-    }
-
-    if (line > 0) {
-        line--;
-    }
-
-    int column = (int) (loc - newline_list.offsets[line]);
-
-    yp_code_position_t position;
-    position.lineno = line;
-    position.column = column;
-
-    return position;
-}
-
-yp_code_location_t
-yp_location_for_node(yp_parser_t *parser, yp_node_t *node) {
-    yp_newline_list_t newline_list = parser->newline_list;
-
-    yp_code_position_t start = yp_code_position(newline_list, (size_t)(node->location.start - parser->start));
-    yp_code_position_t end = yp_code_position(newline_list, (size_t)(node->location.end - parser->start));
-
-    yp_code_location_t location;
-    location.beg_pos = start;
-    location.end_pos = end;
-
-    return location;
 }
 
 #undef YP_CASE_KEYWORD
