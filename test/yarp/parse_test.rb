@@ -28,8 +28,11 @@ class ParseTest < Test::Unit::TestCase
 
   known_failures = %w[
     seattlerb/heredoc_nested.txt
-    seattlerb/pct_w_heredoc_interp_nested.txt
   ]
+
+  if RUBY_VERSION < "3.3.0"
+    known_failures << "seattlerb/pct_w_heredoc_interp_nested.txt"
+  end
 
   def find_source_file_node(node)
     if node.is_a?(YARP::SourceFileNode)
