@@ -282,6 +282,29 @@ rb_iseq_mark_and_move_each_value(const rb_iseq_t *iseq, VALUE *original_iseq)
     }
 }
 
+static bool
+cc_is_active(const struct rb_callcache *cc, bool reference_updating)
+{
+    if (cc) {
+        if (reference_updating) {
+            cc = (const struct rb_callcache *)rb_gc_location((VALUE)cc);
+        }
+
+        if (vm_cc_markable(cc)) {
+            if (cc->klass) { // cc is not invalidated
+                const struct rb_callable_method_entry_struct *cme = vm_cc_cme(cc);
+                if (reference_updating) {
+                    cme = (const struct rb_callable_method_entry_struct *)rb_gc_location((VALUE)cme);
+                }
+                if (!METHOD_ENTRY_INVALIDATED(cme)) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
 void
 rb_iseq_mark_and_move(rb_iseq_t *iseq, bool reference_updating)
 {
@@ -310,27 +333,11 @@ rb_iseq_mark_and_move(rb_iseq_t *iseq, bool reference_updating)
 
                 if (cds[i].ci) rb_gc_mark_and_move_ptr(&cds[i].ci);
 
-                const struct rb_callcache *cc = cds[i].cc;
-                if (cc) {
-                    if (reference_updating) {
-                        cc = (const struct rb_callcache *)rb_gc_location((VALUE)cc);
-                    }
-
-                    if (vm_cc_markable(cc)) {
-                        VM_ASSERT((cc->flags & VM_CALLCACHE_ON_STACK) == 0);
-
-                        const struct rb_callable_method_entry_struct *cme = vm_cc_cme(cc);
-                        if (reference_updating) {
-                            cme = (const struct rb_callable_method_entry_struct *)rb_gc_location((VALUE)cme);
-                        }
-
-                        if (cc->klass && !METHOD_ENTRY_INVALIDATED(cme)) {
-                            rb_gc_mark_and_move_ptr(&cds[i].cc);
-                        }
-                        else {
-                            cds[i].cc = rb_vm_empty_cc();
-                        }
-                    }
+                if (cc_is_active(cds[i].cc, reference_updating)) {
+                    rb_gc_mark_and_move_ptr(&cds[i].cc);
+                }
+                else {
+                    cds[i].cc = rb_vm_empty_cc();
                 }
             }
         }
@@ -706,7 +713,6 @@ static rb_compile_option_t COMPILE_OPTION_DEFAULT = {
     OPT_SPECIALISED_INSTRUCTION, /* int specialized_instruction; */
     OPT_OPERANDS_UNIFICATION, /* int operands_unification; */
     OPT_INSTRUCTIONS_UNIFICATION, /* int instructions_unification; */
-    OPT_STACK_CACHING, /* int stack_caching; */
     OPT_FROZEN_STRING_LITERAL,
     OPT_DEBUG_FROZEN_STRING_LITERAL,
     TRUE,			/* coverage_enabled */
@@ -732,7 +738,6 @@ set_compile_option_from_hash(rb_compile_option_t *option, VALUE opt)
     SET_COMPILE_OPTION(option, opt, specialized_instruction);
     SET_COMPILE_OPTION(option, opt, operands_unification);
     SET_COMPILE_OPTION(option, opt, instructions_unification);
-    SET_COMPILE_OPTION(option, opt, stack_caching);
     SET_COMPILE_OPTION(option, opt, frozen_string_literal);
     SET_COMPILE_OPTION(option, opt, debug_frozen_string_literal);
     SET_COMPILE_OPTION(option, opt, coverage_enabled);
@@ -795,7 +800,6 @@ make_compile_option_value(rb_compile_option_t *option)
         SET_COMPILE_OPTION(option, opt, specialized_instruction);
         SET_COMPILE_OPTION(option, opt, operands_unification);
         SET_COMPILE_OPTION(option, opt, instructions_unification);
-        SET_COMPILE_OPTION(option, opt, stack_caching);
         SET_COMPILE_OPTION(option, opt, frozen_string_literal);
         SET_COMPILE_OPTION(option, opt, debug_frozen_string_literal);
         SET_COMPILE_OPTION(option, opt, coverage_enabled);
@@ -1431,7 +1435,6 @@ iseqw_s_compile_file(int argc, VALUE *argv, VALUE self)
  *  * +:operands_unification+
  *  * +:peephole_optimization+
  *  * +:specialized_instruction+
- *  * +:stack_caching+
  *  * +:tailcall_optimization+
  *
  *  Additionally, +:debug_level+ can be set to an integer.

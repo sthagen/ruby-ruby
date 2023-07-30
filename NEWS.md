@@ -70,7 +70,7 @@ The following default gems are updated.
 * nkf 0.1.3
 * optparse 0.4.0.pre.1
 * psych 5.1.0
-* reline 0.3.6
+* reline 0.3.7
 * stringio 3.0.8
 * strscan 3.0.7
 * syntax_suggest 1.1.0
@@ -81,10 +81,11 @@ The following default gems are updated.
 
 The following bundled gems are updated.
 
-* minitest 5.18.1
+* minitest 5.19.0
 * test-unit 3.6.1
-* net-imap 0.3.6
-* rbs 3.1.1
+* rexml 3.2.6
+* net-imap 0.3.7
+* rbs 3.1.2
 * typeprof 0.21.7
 * debug 1.8.0
 

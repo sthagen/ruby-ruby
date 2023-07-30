@@ -325,6 +325,8 @@ fn main() {
         .allowlist_function("rb_yjit_icache_invalidate")
         .allowlist_function("rb_optimized_call")
         .allowlist_function("rb_yjit_assert_holding_vm_lock")
+        .allowlist_function("rb_yjit_sendish_sp_pops")
+        .allowlist_function("rb_yjit_invokeblock_sp_pops")
 
         // from vm_sync.h
         .allowlist_function("rb_vm_barrier")
@@ -439,6 +441,7 @@ fn main() {
         .allowlist_function("rb_method_basic_definition_p")
         .allowlist_function("rb_yjit_array_len")
         .allowlist_function("rb_obj_class")
+        .allowlist_function("rb_obj_is_proc")
 
         // We define VALUE manually, don't import it
         .blocklist_type("VALUE")
