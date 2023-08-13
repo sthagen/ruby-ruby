@@ -10,6 +10,30 @@ require_relative "nesting_parser"
 
 # :stopdoc:
 class RubyLex
+  ASSIGNMENT_NODE_TYPES = [
+    # Local, instance, global, class, constant, instance, and index assignment:
+    #   "foo = bar",
+    #   "@foo = bar",
+    #   "$foo = bar",
+    #   "@@foo = bar",
+    #   "::Foo = bar",
+    #   "a::Foo = bar",
+    #   "Foo = bar"
+    #   "foo.bar = 1"
+    #   "foo[1] = bar"
+    :assign,
+
+    # Operation assignment:
+    #   "foo += bar"
+    #   "foo -= bar"
+    #   "foo ||= bar"
+    #   "foo &&= bar"
+    :opassign,
+
+    # Multiple assignment:
+    #   "foo, bar = 1, 2
+    :massign,
+  ]
 
   class TerminateLineInput < StandardError
     def initialize
@@ -189,8 +213,7 @@ class RubyLex
   end
 
   def check_code_state(code)
-    check_target_code = code.gsub(/\s*\z/, '').concat("\n")
-    tokens = self.class.ripper_lex_without_warning(check_target_code, context: @context)
+    tokens = self.class.ripper_lex_without_warning(code, context: @context)
     opens = IRB::NestingParser.open_tokens(tokens)
     [tokens, opens, code_terminated?(code, tokens, opens)]
   end
@@ -248,11 +271,29 @@ class RubyLex
 
       if code != "\n"
         code.force_encoding(@io.encoding)
-        yield code, @line_no
+        yield code, @line_no, assignment_expression?(code)
       end
       @line_no += code.count("\n")
     rescue TerminateLineInput
     end
+  end
+
+  def assignment_expression?(line)
+    # Try to parse the line and check if the last of possibly multiple
+    # expressions is an assignment type.
+
+    # If the expression is invalid, Ripper.sexp should return nil which will
+    # result in false being returned. Any valid expression should return an
+    # s-expression where the second element of the top level array is an
+    # array of parsed expressions. The first element of each expression is the
+    # expression's type.
+    verbose, $VERBOSE = $VERBOSE, nil
+    code = "#{RubyLex.generate_local_variables_assign_code(@context.local_variables) || 'nil;'}\n#{line}"
+    # Get the last node_type of the line. drop(1) is to ignore the local_variables_assign_code part.
+    node_type = Ripper.sexp(code)&.dig(1)&.drop(1)&.dig(-1, 0)
+    ASSIGNMENT_NODE_TYPES.include?(node_type)
+  ensure
+    $VERBOSE = verbose
   end
 
   def should_continue?(tokens)

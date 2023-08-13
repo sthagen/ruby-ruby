@@ -230,8 +230,7 @@ module Bundler
       if Gem.respond_to?(:discover_gems_on_require=)
         Gem.discover_gems_on_require = false
       else
-        kernel = (class << ::Kernel; self; end)
-        [kernel, ::Kernel].each do |k|
+        [::Kernel.singleton_class, ::Kernel].each do |k|
           if k.private_method_defined?(:gem_original_require)
             redefine_method(k, :require, k.instance_method(:gem_original_require))
           end
@@ -254,8 +253,9 @@ module Bundler
                             rescue GemfileNotFound
                               "inline Gemfile"
                             end
-              warn "#{name} is not part of the default gems since Ruby #{::Gem::BUNDLED_GEMS::SINCE[file]}." \
-              " Add it to your #{target_file}."
+              be = RUBY_VERSION < ::Gem::BUNDLED_GEMS::SINCE[name] ? "will be" : "is"
+              warn "#{name} #{be} not part of the default gems since Ruby #{::Gem::BUNDLED_GEMS::SINCE[name]}." \
+              " Add it to your #{target_file}.", uplevel: 1
             end
           end
           kernel_class.send(:no_warning_require, file)
@@ -271,8 +271,7 @@ module Bundler
     def replace_gem(specs, specs_by_name)
       executables = nil
 
-      kernel = (class << ::Kernel; self; end)
-      [kernel, ::Kernel].each do |kernel_class|
+      [::Kernel.singleton_class, ::Kernel].each do |kernel_class|
         redefine_method(kernel_class, :gem) do |dep, *reqs|
           if executables&.include?(File.basename(caller.first.split(":").first))
             break

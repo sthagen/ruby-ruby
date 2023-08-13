@@ -2276,6 +2276,17 @@ assert_equal '[1, 2, nil]', %q{
   expandarray_rhs_too_small
 }
 
+assert_equal '[nil, 2, nil]', %q{
+  def foo(arr)
+    a, b, c = arr
+  end
+
+  a, b, c1 = foo([0, 1])
+  a, b, c2 = foo([0, 1, 2])
+  a, b, c3 = foo([0, 1])
+  [c1, c2, c3]
+}
+
 assert_equal '[1, [2]]', %q{
   def expandarray_splat
     a, *b = [1, 2]
@@ -3992,4 +4003,38 @@ assert_equal '[]', %q{
   proc do
     _x, _y = func.call
   end.call
+}
+
+# Catch TAG_BREAK in a non-FINISH frame with JIT code
+assert_equal '1', %q{
+  def entry
+    catch_break
+  end
+
+  def catch_break
+    while_true do
+      break
+    end
+    1
+  end
+
+  def while_true
+    while true
+      yield
+    end
+  end
+
+  entry
+}
+
+assert_equal '6', %q{
+  class Base
+    def number = 1 + yield
+  end
+
+  class Sub < Base
+    def number = super + 2
+  end
+
+  Sub.new.number { 3 }
 }

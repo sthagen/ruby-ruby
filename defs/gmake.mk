@@ -27,7 +27,7 @@ TEST_TARGETS := $(filter $(CHECK_TARGETS),$(MAKECMDGOALS))
 TEST_DEPENDS := $(filter-out commit $(TEST_TARGETS),$(MAKECMDGOALS))
 TEST_TARGETS := $(patsubst great,exam,$(TEST_TARGETS))
 TEST_DEPENDS := $(filter-out great $(TEST_TARGETS),$(TEST_DEPENDS))
-TEST_TARGETS := $(patsubst exam,test-bundled-gems yes-test-bundler-parallel check,$(TEST_TARGETS))
+TEST_TARGETS := $(patsubst exam,test-bundled-gems test-bundler-parallel check,$(TEST_TARGETS))
 TEST_TARGETS := $(patsubst check,test-syntax-suggest test-spec test-all test-tool test-short,$(TEST_TARGETS))
 TEST_TARGETS := $(patsubst test-rubyspec,test-spec,$(TEST_TARGETS))
 TEST_DEPENDS := $(filter-out exam check test-spec $(TEST_TARGETS),$(TEST_DEPENDS))
@@ -45,6 +45,7 @@ TEST_TARGETS := $(patsubst test-bundler-parallel,test-bundler-parallel $(PREPARE
 TEST_TARGETS := $(patsubst test-syntax-suggest,test-syntax-suggest $(PREPARE_SYNTAX_SUGGEST),$(TEST_TARGETS))
 TEST_DEPENDS := $(filter-out test-short $(TEST_TARGETS),$(TEST_DEPENDS))
 TEST_DEPENDS += $(if $(filter great exam love check,$(MAKECMDGOALS)),all exts)
+TEST_TARGETS := $(patsubst yes-%,%,$(filter-out no-%,$(TEST_TARGETS)))
 endif
 
 in-srcdir := $(if $(filter-out .,$(srcdir)),$(CHDIR) $(srcdir) &&)
@@ -304,6 +305,7 @@ foreach-bundled-gems-rev-0 = \
 bundled-gem-gemfile = $(srcdir)/gems/$(1)-$(2).gem
 bundled-gem-gemspec = $(srcdir)/gems/src/$(1)/$(1).gemspec
 bundled-gem-extracted = $(srcdir)/.bundle/gems/$(1)-$(2)
+bundled-gem-revision = $(srcdir)/.bundle/.timestamp/$(1).revision
 
 update-gems: | $(patsubst %,$(srcdir)/gems/%.gem,$(bundled-gems))
 update-gems: | $(call foreach-bundled-gems-rev,bundled-gem-gemfile)
@@ -343,7 +345,7 @@ $(srcdir)/gems/src/$(1)/.git: | $(srcdir)/gems/src
 	$(ECHO) Cloning $(4)
 	$(Q) $(GIT) clone $(4) $$(@D)
 
-$(srcdir)/.bundle/.timestamp/$(1).revision: \
+$(bundled-gem-revision): \
 	$(if $(if $(wildcard $$(@)),$(filter $(3),$(shell cat $$(@)))),,PHONY) \
 	| $(srcdir)/.bundle/.timestamp $(srcdir)/gems/src/$(1)/.git
 	$(ECHO) Update $(1) to $(3)
@@ -355,12 +357,11 @@ $(srcdir)/.bundle/.timestamp/$(1).revision: \
 
 # The repository of minitest does not include minitest.gemspec because it uses hoe.
 # This creates a dummy gemspec.
-$(srcdir)/gems/src/$(1)/$(1).gemspec: $(srcdir)/.bundle/.timestamp/$(1).revision \
+$(bundled-gem-gemspec): $(bundled-gem-revision) \
 	| $(srcdir)/gems/src/$(1)/.git
 	$(Q) $(BASERUBY) -I$(tooldir)/lib -rbundled_gem -e 'BundledGem.dummy_gemspec(*ARGV)' $$(@)
 
-$(srcdir)/gems/$(1)-$(2).gem: $(srcdir)/gems/src/$(1)/$(1).gemspec \
-		$(srcdir)/.bundle/.timestamp/$(1).revision
+$(bundled-gem-gemfile): $(bundled-gem-gemspec) $(bundled-gem-revision)
 	$(ECHO) Building $(1)@$(3) to $$(@)
 	$(Q) $(BASERUBY) -C "$(srcdir)" \
 	    -Itool/lib -rbundled_gem \

@@ -115,12 +115,10 @@ module TestIRB
     def check_state(lines, local_variables: [])
       context = build_context(local_variables)
       code = lines.map { |l| "#{l}\n" }.join # code should end with "\n"
-      tokens = RubyLex.ripper_lex_without_warning(code, context: context)
-      opens = IRB::NestingParser.open_tokens(tokens)
       ruby_lex = RubyLex.new(context)
+      tokens, opens, terminated = ruby_lex.check_code_state(code)
       indent_level = ruby_lex.calc_indent_level(opens)
       continue = ruby_lex.should_continue?(tokens)
-      terminated = ruby_lex.code_terminated?(code, tokens, opens)
       [indent_level, continue, !terminated]
     end
 
@@ -717,6 +715,16 @@ module TestIRB
       assert_dynamic_prompt(input_with_prompt)
     end
 
+    def test_literal_ends_with_space
+      assert_code_block_open(['% a'], true)
+      assert_code_block_open(['% a '], false)
+    end
+
+    def test_literal_ends_with_newline
+      assert_code_block_open(['%'], true)
+      assert_code_block_open(['%', ''], false)
+    end
+
     def test_should_continue
       assert_should_continue(['a'], false)
       assert_should_continue(['/a/'], false)
@@ -811,6 +819,60 @@ module TestIRB
       assert_indent_level(reference_code.lines, expected)
       assert_indent_level(code_with_heredoc.lines, expected)
       assert_indent_level(code_with_embdoc.lines, expected)
+    end
+
+    def test_assignment_expression
+      context = build_context
+      ruby_lex = RubyLex.new(context)
+
+      [
+        "foo = bar",
+        "@foo = bar",
+        "$foo = bar",
+        "@@foo = bar",
+        "::Foo = bar",
+        "a::Foo = bar",
+        "Foo = bar",
+        "foo.bar = 1",
+        "foo[1] = bar",
+        "foo += bar",
+        "foo -= bar",
+        "foo ||= bar",
+        "foo &&= bar",
+        "foo, bar = 1, 2",
+        "foo.bar=(1)",
+        "foo; foo = bar",
+        "foo; foo = bar; ;\n ;",
+        "foo\nfoo = bar",
+      ].each do |exp|
+        assert(
+          ruby_lex.assignment_expression?(exp),
+          "#{exp.inspect}: should be an assignment expression"
+        )
+      end
+
+      [
+        "foo",
+        "foo.bar",
+        "foo[0]",
+        "foo = bar; foo",
+        "foo = bar\nfoo",
+      ].each do |exp|
+        refute(
+          ruby_lex.assignment_expression?(exp),
+          "#{exp.inspect}: should not be an assignment expression"
+        )
+      end
+    end
+
+    def test_assignment_expression_with_local_variable
+      context = build_context
+      ruby_lex = RubyLex.new(context)
+      code = "a /1;x=1#/"
+      refute(ruby_lex.assignment_expression?(code), "#{code}: should not be an assignment expression")
+      context.workspace.binding.eval('a = 1')
+      assert(ruby_lex.assignment_expression?(code), "#{code}: should be an assignment expression")
+      refute(ruby_lex.assignment_expression?(""), "empty code should not be an assignment expression")
     end
 
     private

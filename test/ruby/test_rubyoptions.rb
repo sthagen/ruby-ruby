@@ -84,9 +84,18 @@ class TestRubyOptions < Test::Unit::TestCase
                        /^\t \.{3} \d+ levels\.{3}\n/])
     assert_kind_of(Integer, Thread::Backtrace.limit)
     assert_in_out_err(%w(--backtrace-limit=1), "p Thread::Backtrace.limit", ['1'], [])
+    assert_in_out_err(%w(--backtrace-limit 1), "p Thread::Backtrace.limit", ['1'], [])
     env = {"RUBYOPT" => "--backtrace-limit=5"}
     assert_in_out_err([env], "p Thread::Backtrace.limit", ['5'], [])
     assert_in_out_err([env, "--backtrace-limit=1"], "p Thread::Backtrace.limit", ['1'], [])
+    assert_in_out_err([env, "--backtrace-limit=-1"], "p Thread::Backtrace.limit", ['-1'], [])
+    assert_in_out_err([env, "--backtrace-limit=3", "--backtrace-limit=1"],
+                      "p Thread::Backtrace.limit", ['1'], [])
+    assert_in_out_err([{"RUBYOPT" => "--backtrace-limit=5 --backtrace-limit=3"}],
+                      "p Thread::Backtrace.limit", ['3'], [])
+    long_max = RbConfig::LIMITS["LONG_MAX"]
+    assert_in_out_err(%W(--backtrace-limit=#{long_max}), "p Thread::Backtrace.limit",
+                      ["#{long_max}"], [])
   end
 
   def test_warning
@@ -789,11 +798,10 @@ class TestRubyOptions < Test::Unit::TestCase
   end
 
   def assert_segv(args, message=nil)
-    omit if ENV['RUBY_ON_BUG']
-
     # We want YJIT to be enabled in the subprocess if it's enabled for us
     # so that the Ruby description matches.
     args.unshift("--yjit") if self.class.yjit_enabled?
+    args.unshift({'RUBY_ON_BUG' => nil})
 
     test_stdin = ""
     opt = SEGVTest::ExecOptions.dup

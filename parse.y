@@ -2045,7 +2045,7 @@ command_asgn	: lhs '=' lex_ctxt command_rhs
                     /*%%%*/
                         $$ = new_attr_op_assign(p, $1, ID2VAL(idCOLON2), $3, $4, $6, &@$);
                     /*% %*/
-                    /*% ripper: opassign!(field!($1, ID2VAL(idCOLON2), $3), $4, $6) %*/
+                    /*% ripper: opassign!(field!($1, $2, $3), $4, $6) %*/
                     }
                 | defn_head f_opt_paren_args '=' endless_command
                     {
@@ -2316,14 +2316,14 @@ command		: fcall command_args       %prec tLOWEST
                     /*%%%*/
                         $$ = new_command_qcall(p, ID2VAL(idCOLON2), $1, $3, $4, Qnull, &@3, &@$);
                     /*% %*/
-                    /*% ripper: command_call!($1, ID2VAL(idCOLON2), $3, $4) %*/
+                    /*% ripper: command_call!($1, $2, $3, $4) %*/
                     }
                 | primary_value tCOLON2 operation2 command_args cmd_brace_block
                     {
                     /*%%%*/
                         $$ = new_command_qcall(p, ID2VAL(idCOLON2), $1, $3, $4, $5, &@3, &@$);
                     /*% %*/
-                    /*% ripper: method_add_block!(command_call!($1, ID2VAL(idCOLON2), $3, $4), $5) %*/
+                    /*% ripper: method_add_block!(command_call!($1, $2, $3, $4), $5) %*/
                    }
                 | keyword_super command_args
                     {
@@ -2599,7 +2599,7 @@ lhs		: user_variable
                     /*%%%*/
                         $$ = attrset(p, $1, idCOLON2, $3, &@$);
                     /*% %*/
-                    /*% ripper: field!($1, ID2VAL(idCOLON2), $3) %*/
+                    /*% ripper: field!($1, $2, $3) %*/
                     }
                 | primary_value call_op tCONSTANT
                     {
@@ -2790,7 +2790,7 @@ arg		: lhs '=' lex_ctxt arg_rhs
                     /*%%%*/
                         $$ = new_attr_op_assign(p, $1, ID2VAL(idCOLON2), $3, $4, $6, &@$);
                     /*% %*/
-                    /*% ripper: opassign!(field!($1, ID2VAL(idCOLON2), $3), $4, $6) %*/
+                    /*% ripper: opassign!(field!($1, $2, $3), $4, $6) %*/
                     }
                 | primary_value tCOLON2 tCONSTANT tOP_ASGN lex_ctxt arg_rhs
                     {
@@ -4351,14 +4351,14 @@ method_call	: fcall paren_args
                         $$ = new_qcall(p, ID2VAL(idCOLON2), $1, $3, $4, &@3, &@$);
                         nd_set_line($$, @3.end_pos.lineno);
                     /*% %*/
-                    /*% ripper: method_add_arg!(call!($1, ID2VAL(idCOLON2), $3), $4) %*/
+                    /*% ripper: method_add_arg!(call!($1, $2, $3), $4) %*/
                     }
                 | primary_value tCOLON2 operation3
                     {
                     /*%%%*/
                         $$ = new_qcall(p, ID2VAL(idCOLON2), $1, $3, Qnull, &@3, &@$);
                     /*% %*/
-                    /*% ripper: call!($1, ID2VAL(idCOLON2), $3) %*/
+                    /*% ripper: call!($1, $2, $3) %*/
                     }
                 | primary_value call_op paren_args
                     {
@@ -4374,7 +4374,7 @@ method_call	: fcall paren_args
                         $$ = new_qcall(p, ID2VAL(idCOLON2), $1, ID2VAL(idCall), $3, &@2, &@$);
                         nd_set_line($$, @2.end_pos.lineno);
                     /*% %*/
-                    /*% ripper: method_add_arg!(call!($1, ID2VAL(idCOLON2), ID2VAL(idCall)), $3) %*/
+                    /*% ripper: method_add_arg!(call!($1, $2, ID2VAL(idCall)), $3) %*/
                     }
                 | keyword_super paren_args
                     {
@@ -12360,6 +12360,7 @@ reduce_nodes(struct parser_params *p, NODE **body)
             if (!subnodes(nd_head, nd_resq)) goto end;
             break;
           case NODE_RESCUE:
+            newline = 0; // RESBODY should not be a NEWLINE
             if (node->nd_else) {
                 body = &node->nd_resq;
                 break;
@@ -13228,26 +13229,43 @@ local_push(struct parser_params *p, int toplevel_scope)
 }
 
 static void
+vtable_chain_free(struct parser_params *p, struct vtable *table)
+{
+    while (!DVARS_TERMINAL_P(table)) {
+        struct vtable *cur_table = table;
+        table = cur_table->prev;
+        vtable_free(cur_table);
+    }
+}
+
+static void
+local_free(struct parser_params *p, struct local_vars *local)
+{
+    vtable_chain_free(p, local->used);
+
+# if WARN_PAST_SCOPE
+    vtable_chain_free(p, local->past);
+# endif
+
+    vtable_chain_free(p, local->args);
+    vtable_chain_free(p, local->vars);
+
+    ruby_sized_xfree(local, sizeof(struct local_vars));
+}
+
+static void
 local_pop(struct parser_params *p)
 {
     struct local_vars *local = p->lvtbl->prev;
     if (p->lvtbl->used) {
         warn_unused_var(p, p->lvtbl);
-        vtable_free(p->lvtbl->used);
     }
-# if WARN_PAST_SCOPE
-    while (p->lvtbl->past) {
-        struct vtable *past = p->lvtbl->past;
-        p->lvtbl->past = past->prev;
-        vtable_free(past);
-    }
-# endif
-    vtable_free(p->lvtbl->args);
-    vtable_free(p->lvtbl->vars);
+
+    local_free(p, p->lvtbl);
+    p->lvtbl = local;
+
     CMDARG_POP();
     COND_POP();
-    ruby_sized_xfree(p->lvtbl, sizeof(*p->lvtbl));
-    p->lvtbl = local;
 }
 
 #ifndef RIPPER
@@ -13855,11 +13873,12 @@ rb_ruby_parser_free(void *ptr)
     if (p->tokenbuf) {
         ruby_sized_xfree(p->tokenbuf, p->toksiz);
     }
+
     for (local = p->lvtbl; local; local = prev) {
-        xfree(local->vars);
         prev = local->prev;
-        xfree(local);
+        local_free(p, local);
     }
+
     {
         token_info *ptinfo;
         while ((ptinfo = p->token_info) != 0) {

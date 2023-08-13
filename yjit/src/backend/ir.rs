@@ -423,8 +423,11 @@ pub enum Insn {
     // Produces no output
     IncrCounter { mem: Opnd, value: Opnd },
 
-    /// Jump if below or equal
+    /// Jump if below or equal (unsigned)
     Jbe(Target),
+
+    /// Jump if below (unsigned)
+    Jb(Target),
 
     /// Jump if equal
     Je(Target),
@@ -504,8 +507,11 @@ pub enum Insn {
     // Low-level instruction to store a value to memory.
     Store { dest: Opnd, src: Opnd },
 
-    // This is the same as the OP_ADD instruction, except for subtraction.
+    // This is the same as the add instruction, except for subtraction.
     Sub { left: Opnd, right: Opnd, out: Opnd },
+
+    // Integer multiplication
+    Mul { left: Opnd, right: Opnd, out: Opnd },
 
     // Bitwise AND test instruction
     Test { left: Opnd, right: Opnd },
@@ -535,8 +541,10 @@ impl Insn {
     pub(super) fn target_mut(&mut self) -> Option<&mut Target> {
         match self {
             Insn::Jbe(target) |
+            Insn::Jb(target) |
             Insn::Je(target) |
             Insn::Jl(target) |
+            Insn::Jg(target) |
             Insn::Jmp(target) |
             Insn::Jne(target) |
             Insn::Jnz(target) |
@@ -579,6 +587,7 @@ impl Insn {
             Insn::FrameTeardown => "FrameTeardown",
             Insn::IncrCounter { .. } => "IncrCounter",
             Insn::Jbe(_) => "Jbe",
+            Insn::Jb(_) => "Jb",
             Insn::Je(_) => "Je",
             Insn::Jl(_) => "Jl",
             Insn::Jg(_) => "Jg",
@@ -604,6 +613,7 @@ impl Insn {
             Insn::RShift { .. } => "RShift",
             Insn::Store { .. } => "Store",
             Insn::Sub { .. } => "Sub",
+            Insn::Mul { .. } => "Mul",
             Insn::Test { .. } => "Test",
             Insn::URShift { .. } => "URShift",
             Insn::Xor { .. } => "Xor"
@@ -636,6 +646,7 @@ impl Insn {
             Insn::Or { out, .. } |
             Insn::RShift { out, .. } |
             Insn::Sub { out, .. } |
+            Insn::Mul { out, .. } |
             Insn::URShift { out, .. } |
             Insn::Xor { out, .. } => Some(out),
             _ => None
@@ -668,6 +679,7 @@ impl Insn {
             Insn::Or { out, .. } |
             Insn::RShift { out, .. } |
             Insn::Sub { out, .. } |
+            Insn::Mul { out, .. } |
             Insn::URShift { out, .. } |
             Insn::Xor { out, .. } => Some(out),
             _ => None
@@ -678,8 +690,10 @@ impl Insn {
     pub fn target(&self) -> Option<&Target> {
         match self {
             Insn::Jbe(target) |
+            Insn::Jb(target) |
             Insn::Je(target) |
             Insn::Jl(target) |
+            Insn::Jg(target) |
             Insn::Jmp(target) |
             Insn::Jne(target) |
             Insn::Jnz(target) |
@@ -727,6 +741,7 @@ impl<'a> Iterator for InsnOpndIterator<'a> {
             Insn::FrameSetup |
             Insn::FrameTeardown |
             Insn::Jbe(_) |
+            Insn::Jb(_) |
             Insn::Je(_) |
             Insn::Jl(_) |
             Insn::Jg(_) |
@@ -775,6 +790,7 @@ impl<'a> Iterator for InsnOpndIterator<'a> {
             Insn::RShift { opnd: opnd0, shift: opnd1, .. } |
             Insn::Store { dest: opnd0, src: opnd1 } |
             Insn::Sub { left: opnd0, right: opnd1, .. } |
+            Insn::Mul { left: opnd0, right: opnd1, .. } |
             Insn::Test { left: opnd0, right: opnd1 } |
             Insn::URShift { opnd: opnd0, shift: opnd1, .. } |
             Insn::Xor { left: opnd0, right: opnd1, .. } => {
@@ -825,6 +841,7 @@ impl<'a> InsnOpndMutIterator<'a> {
             Insn::FrameSetup |
             Insn::FrameTeardown |
             Insn::Jbe(_) |
+            Insn::Jb(_) |
             Insn::Je(_) |
             Insn::Jl(_) |
             Insn::Jg(_) |
@@ -873,6 +890,7 @@ impl<'a> InsnOpndMutIterator<'a> {
             Insn::RShift { opnd: opnd0, shift: opnd1, .. } |
             Insn::Store { dest: opnd0, src: opnd1 } |
             Insn::Sub { left: opnd0, right: opnd1, .. } |
+            Insn::Mul { left: opnd0, right: opnd1, .. } |
             Insn::Test { left: opnd0, right: opnd1 } |
             Insn::URShift { opnd: opnd0, shift: opnd1, .. } |
             Insn::Xor { left: opnd0, right: opnd1, .. } => {
@@ -1815,12 +1833,20 @@ impl Assembler {
         self.push_insn(Insn::Jbe(target));
     }
 
+    pub fn jb(&mut self, target: Target) {
+        self.push_insn(Insn::Jb(target));
+    }
+
     pub fn je(&mut self, target: Target) {
         self.push_insn(Insn::Je(target));
     }
 
     pub fn jl(&mut self, target: Target) {
         self.push_insn(Insn::Jl(target));
+    }
+
+    pub fn jg(&mut self, target: Target) {
+        self.push_insn(Insn::Jg(target));
     }
 
     pub fn jmp(&mut self, target: Target) {
@@ -1938,6 +1964,13 @@ impl Assembler {
     pub fn sub(&mut self, left: Opnd, right: Opnd) -> Opnd {
         let out = self.next_opnd_out(Opnd::match_num_bits(&[left, right]));
         self.push_insn(Insn::Sub { left, right, out });
+        out
+    }
+
+    #[must_use]
+    pub fn mul(&mut self, left: Opnd, right: Opnd) -> Opnd {
+        let out = self.next_opnd_out(Opnd::match_num_bits(&[left, right]));
+        self.push_insn(Insn::Mul { left, right, out });
         out
     }
 

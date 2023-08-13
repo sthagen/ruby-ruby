@@ -204,8 +204,8 @@ pub(crate) use ptr_to_counter;
 make_counters! {
     yjit_insns_count,
 
+    // Method calls that fallback to dynamic dispatch
     send_keywords,
-    send_klass_megamorphic,
     send_kw_splat,
     send_args_splat_super,
     send_iseq_zsuper,
@@ -245,11 +245,6 @@ make_counters! {
     send_iseq_too_many_kwargs,
     send_not_implemented_method,
     send_getter_arity,
-    send_se_cf_overflow,
-    send_se_protected_check_failed,
-    send_splatarray_length_not_equal,
-    send_splatarray_last_ruby_2_keywords,
-    send_splat_not_array,
     send_args_splat_non_iseq,
     send_args_splat_ivar,
     send_args_splat_attrset,
@@ -268,45 +263,62 @@ make_counters! {
     send_send_null_mid,
     send_send_null_cme,
     send_send_nested,
-    send_send_chain,
     send_send_chain_string,
-    send_send_chain_not_string,
-    send_send_chain_not_sym,
     send_send_chain_not_string_or_sym,
     send_send_getter,
     send_send_builtin,
     send_iseq_has_rest_and_captured,
-    send_iseq_has_rest_and_send,
+    send_iseq_has_rest_and_splat,
     send_iseq_has_rest_and_kw_supplied,
     send_iseq_has_rest_opt_and_block,
-    send_iseq_has_rest_and_splat_not_equal,
-    send_is_a_class_mismatch,
-    send_instance_of_class_mismatch,
-    send_interrupted,
-    send_not_fixnums,
-    send_not_string,
-    send_mid_mismatch,
-
     send_bmethod_ractor,
     send_bmethod_block_arg,
 
-    traced_cfunc_return,
+    invokesuper_defined_class_mismatch,
+    invokesuper_kw_splat,
+    invokesuper_kwarg,
+    invokesuper_megamorphic,
+    invokesuper_no_cme,
+    invokesuper_no_me,
+    invokesuper_not_iseq_or_cfunc,
+    invokesuper_refinement,
 
-    invokesuper_me_changed,
-    invokesuper_block,
-
+    invokeblock_megamorphic,
     invokeblock_none,
     invokeblock_iseq_arg0_optional,
     invokeblock_iseq_arg0_has_kw,
     invokeblock_iseq_arg0_args_splat,
     invokeblock_iseq_arg0_not_array,
     invokeblock_iseq_arg0_wrong_len,
-    invokeblock_iseq_block_changed,
-    invokeblock_tag_changed,
     invokeblock_ifunc_args_splat,
     invokeblock_ifunc_kw_splat,
     invokeblock_proc,
     invokeblock_symbol,
+
+    // Method calls that exit to the interpreter
+    guard_send_klass_megamorphic,
+    guard_send_se_cf_overflow,
+    guard_send_se_protected_check_failed,
+    guard_send_splatarray_length_not_equal,
+    guard_send_splatarray_last_ruby_2_keywords,
+    guard_send_splat_not_array,
+    guard_send_send_chain,
+    guard_send_send_chain_not_string,
+    guard_send_send_chain_not_sym,
+    guard_send_iseq_has_rest_and_splat_not_equal,
+    guard_send_is_a_class_mismatch,
+    guard_send_instance_of_class_mismatch,
+    guard_send_interrupted,
+    guard_send_not_fixnums,
+    guard_send_not_string,
+    guard_send_respond_to_mid_mismatch,
+
+    guard_invokesuper_me_changed,
+
+    guard_invokeblock_tag_changed,
+    guard_invokeblock_iseq_block_changed,
+
+    traced_cfunc_return,
 
     leave_se_interrupt,
     leave_interp_return,
@@ -323,7 +335,6 @@ make_counters! {
     setivar_not_heap,
     setivar_frozen,
     setivar_megamorphic,
-    setivar_too_complex,
 
     definedivar_not_heap,
     definedivar_megamorphic,
@@ -336,7 +347,7 @@ make_counters! {
     opt_mod_zero,
     opt_div_zero,
 
-    lshift_range,
+    lshift_amt_changed,
     lshift_overflow,
 
     opt_aref_argc_not_one,
@@ -352,12 +363,15 @@ make_counters! {
 
     opt_case_dispatch_megamorphic,
 
-    opt_getinlinecache_miss,
+    opt_getconstant_path_ic_miss,
+    opt_getconstant_path_no_ic_entry,
+    opt_getconstant_path_multi_ractor,
 
     expandarray_splat,
     expandarray_postarg,
     expandarray_not_array,
-    expandarray_rhs_too_small,
+    expandarray_comptime_not_array,
+    expandarray_chain_max_depth,
 
     // getblockparam
     gbp_wb_required,
@@ -420,6 +434,11 @@ make_counters! {
 
     num_getivar_megamorphic,
     num_setivar_megamorphic,
+
+    num_throw,
+    num_throw_break,
+    num_throw_retry,
+    num_throw_return,
 
     iseq_stack_too_large,
     iseq_too_long,

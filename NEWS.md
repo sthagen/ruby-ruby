@@ -56,6 +56,11 @@ Note: We're only listing outstanding class updates.
       for long running applications. The actual optimizations performed are entirely
       implementation specific and may change in the future without notice. [[Feature #18885]
 
+* Refinement
+
+    * Add Refinement#target as an alternative of Refinement#refined_class.
+      Refinement#refined_class is deprecated and will be removed in Ruby 3.4. [[Feature #19714]]
+
 ## Stdlib updates
 
 The following default gems are updated.
@@ -84,8 +89,9 @@ The following bundled gems are updated.
 * minitest 5.19.0
 * test-unit 3.6.1
 * rexml 3.2.6
+* rss 0.3.0
 * net-imap 0.3.7
-* rbs 3.1.2
+* rbs 3.1.3
 * typeprof 0.21.7
 * debug 1.8.0
 
@@ -149,3 +155,4 @@ changelog for details of the default gems or bundled gems.
 [Feature #19521]: https://bugs.ruby-lang.org/issues/19521
 [Feature #19538]: https://bugs.ruby-lang.org/issues/19538
 [Feature #19591]: https://bugs.ruby-lang.org/issues/19591
+[Feature #19714]: https://bugs.ruby-lang.org/issues/19714

@@ -2276,7 +2276,7 @@ rb_str_times(VALUE str, VALUE times)
  *    "%05d" % 123 # => "00123"
  *
  *  If +self+ contains multiple substitutions, +object+ must be
- *  an \Array or \Hash containing the values to be substituted:
+ *  an Array or Hash containing the values to be substituted:
  *
  *    "%-5s: %016x" % [ "ID", self.object_id ] # => "ID   : 00002b054ec93168"
  *    "foo = %{foo}" % {foo: 'bar'} # => "foo = bar"
@@ -2732,15 +2732,30 @@ str_subseq(VALUE str, long beg, long len)
 {
     VALUE str2;
 
-    const long rstring_embed_capa_max = ((sizeof(struct RString) - offsetof(struct RString, as.embed.ary)) / sizeof(char)) - 1;
+    assert(beg >= 0);
+    assert(len >= 0);
+    assert(beg+len <= RSTRING_LEN(str));
 
-    if (!SHARABLE_SUBSTRING_P(beg, len, RSTRING_LEN(str)) ||
-            len <= rstring_embed_capa_max) {
+    const int termlen = TERM_LEN(str);
+    if (!SHARABLE_SUBSTRING_P(beg, len, RSTRING_LEN(str))) {
         str2 = rb_str_new(RSTRING_PTR(str) + beg, len);
+        RB_GC_GUARD(str);
+        return str2;
+    }
+
+    str2 = str_alloc_heap(rb_cString);
+    if (str_embed_capa(str2) >= len + termlen) {
+        char *ptr2 = RSTRING(str2)->as.embed.ary;
+        STR_SET_EMBED(str2);
+        memcpy(ptr2, RSTRING_PTR(str) + beg, len);
+        TERM_FILL(ptr2+len, termlen);
+
+        STR_SET_LEN(str2, len);
         RB_GC_GUARD(str);
     }
     else {
-        str2 = str_new_shared(rb_cString, str);
+        str_replace_shared(str2, str);
+        assert(!STR_EMBED_P(str2));
         ENC_CODERANGE_CLEAR(str2);
         RSTRING(str2)->as.heap.ptr += beg;
         if (RSTRING_LEN(str2) > len) {
@@ -3293,7 +3308,7 @@ rb_str_concat_literals(size_t num, const VALUE *strary)
  *    s.concat('bar', 'baz') # => "foobarbaz"
  *    s                      # => "foobarbaz"
  *
- *  For each given object +object+ that is an \Integer,
+ *  For each given object +object+ that is an Integer,
  *  the value is considered a codepoint and converted to a character before concatenation:
  *
  *    s = 'foo'
@@ -3332,7 +3347,7 @@ rb_str_concat_multi(int argc, VALUE *argv, VALUE str)
  *    s << 'bar' # => "foobar"
  *    s          # => "foobar"
  *
- *  If +object+ is an \Integer,
+ *  If +object+ is an Integer,
  *  the value is considered a codepoint and converted to a character before concatenation:
  *
  *    s = 'foo'
@@ -3924,7 +3939,7 @@ str_ensure_byte_pos(VALUE str, long pos)
  *    byteindex(substring, offset = 0) -> integer or nil
  *    byteindex(regexp, offset = 0) -> integer or nil
  *
- *  Returns the \Integer byte-based index of the first occurrence of the given +substring+,
+ *  Returns the Integer byte-based index of the first occurrence of the given +substring+,
  *  or +nil+ if none found:
  *
  *    'foo'.byteindex('f') # => 0
@@ -3932,7 +3947,7 @@ str_ensure_byte_pos(VALUE str, long pos)
  *    'foo'.byteindex('oo') # => 1
  *    'foo'.byteindex('ooo') # => nil
  *
- *  Returns the \Integer byte-based index of the first match for the given \Regexp +regexp+,
+ *  Returns the Integer byte-based index of the first match for the given Regexp +regexp+,
  *  or +nil+ if none found:
  *
  *    'foo'.byteindex(/f/) # => 0
@@ -3940,7 +3955,7 @@ str_ensure_byte_pos(VALUE str, long pos)
  *    'foo'.byteindex(/oo/) # => 1
  *    'foo'.byteindex(/ooo/) # => nil
  *
- *  \Integer argument +offset+, if given, specifies the byte-based position in the
+ *  Integer argument +offset+, if given, specifies the byte-based position in the
  *  string to begin the search:
  *
  *    'foo'.byteindex('o', 1) # => 1
@@ -4093,7 +4108,7 @@ rb_str_rindex(VALUE str, VALUE sub, long pos)
  *    rindex(substring, offset = self.length) -> integer or nil
  *    rindex(regexp, offset = self.length) -> integer or nil
  *
- *  Returns the \Integer index of the _last_ occurrence of the given +substring+,
+ *  Returns the Integer index of the _last_ occurrence of the given +substring+,
  *  or +nil+ if none found:
  *
  *    'foo'.rindex('f') # => 0
@@ -4101,7 +4116,7 @@ rb_str_rindex(VALUE str, VALUE sub, long pos)
  *    'foo'.rindex('oo') # => 1
  *    'foo'.rindex('ooo') # => nil
  *
- *  Returns the \Integer index of the _last_ match for the given \Regexp +regexp+,
+ *  Returns the Integer index of the _last_ match for the given Regexp +regexp+,
  *  or +nil+ if none found:
  *
  *    'foo'.rindex(/f/) # => 0
@@ -4126,7 +4141,7 @@ rb_str_rindex(VALUE str, VALUE sub, long pos)
  *    'foo'.index(/o+(?!.*o)/) # => 1
  *    $~ #=> #<MatchData "oo">
  *
- *  \Integer argument +offset+, if given and non-negative, specifies the maximum starting position in the
+ *  Integer argument +offset+, if given and non-negative, specifies the maximum starting position in the
  *   string to _end_ the search:
  *
  *    'foo'.rindex('o', 0) # => nil
@@ -4134,7 +4149,7 @@ rb_str_rindex(VALUE str, VALUE sub, long pos)
  *    'foo'.rindex('o', 2) # => 2
  *    'foo'.rindex('o', 3) # => 2
  *
- *  If +offset+ is a negative \Integer, the maximum starting position in the
+ *  If +offset+ is a negative Integer, the maximum starting position in the
  *  string to _end_ the search is the sum of the string's length and +offset+:
  *
  *    'foo'.rindex('o', -1) # => 2
@@ -4226,7 +4241,7 @@ rb_str_byterindex(VALUE str, VALUE sub, long pos)
  *    byterindex(substring, offset = self.bytesize) -> integer or nil
  *    byterindex(regexp, offset = self.bytesize) -> integer or nil
  *
- *  Returns the \Integer byte-based index of the _last_ occurrence of the given +substring+,
+ *  Returns the Integer byte-based index of the _last_ occurrence of the given +substring+,
  *  or +nil+ if none found:
  *
  *    'foo'.byterindex('f') # => 0
@@ -4234,7 +4249,7 @@ rb_str_byterindex(VALUE str, VALUE sub, long pos)
  *    'foo'.byterindex('oo') # => 1
  *    'foo'.byterindex('ooo') # => nil
  *
- *  Returns the \Integer byte-based index of the _last_ match for the given \Regexp +regexp+,
+ *  Returns the Integer byte-based index of the _last_ match for the given Regexp +regexp+,
  *  or +nil+ if none found:
  *
  *    'foo'.byterindex(/f/) # => 0
@@ -4259,7 +4274,7 @@ rb_str_byterindex(VALUE str, VALUE sub, long pos)
  *    'foo'.byteindex(/o+(?!.*o)/) # => 1
  *    $~ #=> #<MatchData "oo">
  *
- *  \Integer argument +offset+, if given and non-negative, specifies the maximum starting byte-based position in the
+ *  Integer argument +offset+, if given and non-negative, specifies the maximum starting byte-based position in the
  *   string to _end_ the search:
  *
  *    'foo'.byterindex('o', 0) # => nil
@@ -4267,7 +4282,7 @@ rb_str_byterindex(VALUE str, VALUE sub, long pos)
  *    'foo'.byterindex('o', 2) # => 2
  *    'foo'.byterindex('o', 3) # => 2
  *
- *  If +offset+ is a negative \Integer, the maximum starting position in the
+ *  If +offset+ is a negative Integer, the maximum starting position in the
  *  string to _end_ the search is the sum of the string's length and +offset+:
  *
  *    'foo'.byterindex('o', -1) # => 2
@@ -4325,7 +4340,7 @@ rb_str_byterindex_m(int argc, VALUE *argv, VALUE str)
  *    string =~ regexp -> integer or nil
  *    string =~ object -> integer or nil
  *
- *  Returns the \Integer index of the first substring that matches
+ *  Returns the Integer index of the first substring that matches
  *  the given +regexp+, or +nil+ if no match found:
  *
  *    'foo' =~ /f/ # => 0
@@ -4334,7 +4349,7 @@ rb_str_byterindex_m(int argc, VALUE *argv, VALUE str)
  *
  *  Note: also updates Regexp@Global+Variables.
  *
- *  If the given +object+ is not a \Regexp, returns the value
+ *  If the given +object+ is not a Regexp, returns the value
  *  returned by <tt>object =~ self</tt>.
  *
  *  Note that <tt>string =~ regexp</tt> is different from <tt>regexp =~ string</tt>
@@ -4372,13 +4387,13 @@ static VALUE get_pat(VALUE);
  *    match(pattern, offset = 0) -> matchdata or nil
  *    match(pattern, offset = 0) {|matchdata| ... } -> object
  *
- *  Returns a \MatchData object (or +nil+) based on +self+ and the given +pattern+.
+ *  Returns a MatchData object (or +nil+) based on +self+ and the given +pattern+.
  *
  *  Note: also updates Regexp@Global+Variables.
  *
- *  - Computes +regexp+ by converting +pattern+ (if not already a \Regexp).
+ *  - Computes +regexp+ by converting +pattern+ (if not already a Regexp).
  *      regexp = Regexp.new(pattern)
- *  - Computes +matchdata+, which will be either a \MatchData object or +nil+
+ *  - Computes +matchdata+, which will be either a MatchData object or +nil+
  *    (see Regexp#match):
  *      matchdata = <tt>regexp.match(self)
  *
@@ -4388,7 +4403,7 @@ static VALUE get_pat(VALUE);
  *    'foo'.match('o') # => #<MatchData "o">
  *    'foo'.match('x') # => nil
  *
- *  If \Integer argument +offset+ is given, the search begins at index +offset+:
+ *  If Integer argument +offset+ is given, the search begins at index +offset+:
  *
  *    'foo'.match('f', 1) # => nil
  *    'foo'.match('o', 1) # => #<MatchData "o">
@@ -4425,17 +4440,17 @@ rb_str_match_m(int argc, VALUE *argv, VALUE str)
  *
  *  Note: does not update Regexp@Global+Variables.
  *
- *  Computes +regexp+ by converting +pattern+ (if not already a \Regexp).
+ *  Computes +regexp+ by converting +pattern+ (if not already a Regexp).
  *    regexp = Regexp.new(pattern)
  *
- *  Returns +true+ if <tt>self+.match(regexp)</tt> returns a \MatchData object,
+ *  Returns +true+ if <tt>self+.match(regexp)</tt> returns a MatchData object,
  *  +false+ otherwise:
  *
  *    'foo'.match?(/o/) # => true
  *    'foo'.match?('o') # => true
  *    'foo'.match?(/x/) # => false
  *
- *  If \Integer argument +offset+ is given, the search begins at index +offset+:
+ *  If Integer argument +offset+ is given, the search begins at index +offset+:
  *    'foo'.match?('f', 1) # => false
  *    'foo'.match?('o', 1) # => true
  *
@@ -4851,7 +4866,7 @@ str_upto_i(VALUE str, VALUE arg)
  *    '25'.upto('5') {|s| fail s }
  *    'aa'.upto('a') {|s| fail s }
  *
- *  With no block given, returns a new \Enumerator:
+ *  With no block given, returns a new Enumerator:
  *
  *    'a8'.upto('b6') # => #<Enumerator: "a8":upto("b6")>
  *
@@ -5363,11 +5378,11 @@ rb_str_aset_m(int argc, VALUE *argv, VALUE str)
  *
  *  Inserts the given +other_string+ into +self+; returns +self+.
  *
- *  If the \Integer +index+ is positive, inserts +other_string+ at offset +index+:
+ *  If the Integer +index+ is positive, inserts +other_string+ at offset +index+:
  *
  *    'foo'.insert(1, 'bar') # => "fbaroo"
  *
- *  If the \Integer +index+ is negative, counts backward from the end of +self+
+ *  If the Integer +index+ is negative, counts backward from the end of +self+
  *  and inserts +other_string+ at offset <tt>index+1</tt>
  *  (that is, _after_ <tt>self[index]</tt>):
  *
@@ -11221,17 +11236,17 @@ rb_str_unicode_normalized_p(int argc, VALUE *argv, VALUE str)
 /**********************************************************************
  * Document-class: Symbol
  *
- * Symbol objects represent named identifiers inside the Ruby interpreter.
+ * \Symbol objects represent named identifiers inside the Ruby interpreter.
  *
  * You can create a \Symbol object explicitly with:
  *
  * - A {symbol literal}[rdoc-ref:syntax/literals.rdoc@Symbol+Literals].
  *
- * The same Symbol object will be
+ * The same \Symbol object will be
  * created for a given name or string for the duration of a program's
  * execution, regardless of the context or meaning of that name. Thus
  * if <code>Fred</code> is a constant in one context, a method in
- * another, and a class in a third, the Symbol <code>:Fred</code>
+ * another, and a class in a third, the \Symbol <code>:Fred</code>
  * will be the same object in all three contexts.
  *
  *     module One
@@ -11274,8 +11289,8 @@ rb_str_unicode_normalized_p(int argc, VALUE *argv, VALUE str)
  *     local_variables
  *     # => [:seven]
  *
- * Symbol objects are different from String objects in that
- * Symbol objects represent identifiers, while String objects
+ * \Symbol objects are different from String objects in that
+ * \Symbol objects represent identifiers, while String objects
  * represent text or data.
  *
  * == What's Here
