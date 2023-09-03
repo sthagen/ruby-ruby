@@ -28,7 +28,7 @@ ProgramNode(0...77)(
        nil,
        nil,
        StatementsNode(36...45)(
-         [ConstantPathOperatorOrWriteNode(36...45)(
+         [ConstantPathOrWriteNode(36...45)(
             ConstantPathNode(36...39)(
               nil,
               ConstantReadNode(38...39)(),
@@ -51,7 +51,7 @@ ProgramNode(0...77)(
        nil,
        nil,
        StatementsNode(59...72)(
-         [ConstantPathOperatorOrWriteNode(59...72)(
+         [ConstantPathOrWriteNode(59...72)(
             ConstantPathNode(59...66)(
               SelfNode(59...63)(),
               ConstantReadNode(65...66)(),

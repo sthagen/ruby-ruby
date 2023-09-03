@@ -5,7 +5,7 @@ ProgramNode(0...246)(
        (0...2),
        RegularExpressionNode(3...8)((3...4), (4...7), (7...8), "foo", 0),
        StatementsNode(11...14)(
-         [CallNode(11...14)(nil, nil, (11...14), nil, nil, nil, nil, 0, "bar")]
+         [CallNode(11...14)(nil, nil, (11...14), nil, nil, nil, nil, 2, "bar")]
        ),
        nil,
        (15...18)
@@ -44,7 +44,7 @@ ProgramNode(0...246)(
      ),
      IfNode(90...100)(
        (90...92),
-       CallNode(93...96)(nil, nil, (93...96), nil, nil, nil, nil, 0, "foo"),
+       CallNode(93...96)(nil, nil, (93...96), nil, nil, nil, nil, 2, "foo"),
        nil,
        nil,
        (97...100)
@@ -61,6 +61,7 @@ ProgramNode(0...246)(
               [LocalVariableWriteNode(113...122)(
                  :foo,
                  0,
+                 (113...116),
                  CallNode(119...122)(
                    nil,
                    nil,
@@ -69,10 +70,9 @@ ProgramNode(0...246)(
                    nil,
                    nil,
                    nil,
-                   0,
+                   2,
                    "bar"
                  ),
-                 (113...116),
                  (117...118)
                )]
             ),
@@ -80,7 +80,8 @@ ProgramNode(0...246)(
             nil
           )]
        ),
-       (130...133)
+       (130...133),
+       "A"
      ),
      ModuleNode(135...170)(
        [:foo],
@@ -94,6 +95,7 @@ ProgramNode(0...246)(
               [LocalVariableWriteNode(146...155)(
                  :foo,
                  0,
+                 (146...149),
                  CallNode(152...155)(
                    nil,
                    nil,
@@ -102,10 +104,9 @@ ProgramNode(0...246)(
                    nil,
                    nil,
                    nil,
-                   0,
+                   2,
                    "bar"
                  ),
-                 (146...149),
                  (150...151)
                )]
             ),
@@ -113,7 +114,8 @@ ProgramNode(0...246)(
             nil
           )]
        ),
-       (167...170)
+       (167...170),
+       "B"
      ),
      UnlessNode(171...197)(
        (171...177),
@@ -125,13 +127,14 @@ ProgramNode(0...246)(
          nil,
          nil,
          nil,
-         0,
+         2,
          "foo"
        ),
        StatementsNode(184...193)(
          [LocalVariableWriteNode(184...193)(
             :foo,
             0,
+            (184...187),
             CallNode(190...193)(
               nil,
               nil,
@@ -140,10 +143,9 @@ ProgramNode(0...246)(
               nil,
               nil,
               nil,
-              0,
+              2,
               "bar"
             ),
-            (184...187),
             (188...189)
           )]
        ),
@@ -188,8 +190,8 @@ ProgramNode(0...246)(
          [LocalVariableWriteNode(225...236)(
             :pair,
             0,
-            SymbolNode(232...236)((232...233), (233...236), nil, "foo"),
             (225...229),
+            SymbolNode(232...236)((232...233), (233...236), nil, "foo"),
             (230...231)
           ),
           LocalVariableReadNode(239...242)(:foo, 0)]

@@ -43,6 +43,7 @@
 #include "builtin.h"
 #include "insns.inc"
 #include "insns_info.inc"
+#include "yarp/yarp.h"
 
 #undef RUBY_UNTYPED_DATA_WARNING
 #define RUBY_UNTYPED_DATA_WARNING 0
@@ -851,6 +852,45 @@ rb_iseq_compile_node(rb_iseq_t *iseq, const NODE *node)
         validate_labels(iseq, labels_table);
     }
 #endif
+    CHECK(iseq_setup_insn(iseq, ret));
+    return iseq_setup(iseq, ret);
+}
+
+typedef struct yp_compile_context {
+    yp_parser_t *parser;
+    struct yp_compile_context *previous;
+    ID *constants;
+    st_table *index_lookup_table;
+} yp_compile_context_t;
+
+static VALUE rb_translate_yarp(rb_iseq_t *iseq, const yp_node_t *node, LINK_ANCHOR *const ret, yp_compile_context_t *compile_context);
+
+VALUE
+rb_iseq_compile_yarp_node(rb_iseq_t * iseq, const yp_node_t *yarp_pointer, yp_parser_t *parser)
+{
+    DECL_ANCHOR(ret);
+    INIT_ANCHOR(ret);
+
+    ID *constants = calloc(parser->constant_pool.size, sizeof(ID));
+    rb_encoding *encoding = rb_enc_find(parser->encoding.name);
+
+    for (size_t index = 0; index < parser->constant_pool.capacity; index++) {
+        yp_constant_t constant = parser->constant_pool.constants[index];
+
+        if (constant.id != 0) {
+            constants[constant.id - 1] = rb_intern3((const char *) constant.start, constant.length, encoding);
+        }
+    }
+
+    yp_compile_context_t compile_context = {
+        .parser = parser,
+        .previous = NULL,
+        .constants = constants
+    };
+
+    CHECK(rb_translate_yarp(iseq, yarp_pointer, ret, &compile_context));
+    free(constants);
+
     CHECK(iseq_setup_insn(iseq, ret));
     return iseq_setup(iseq, ret);
 }
@@ -5348,7 +5388,7 @@ defined_expr0(rb_iseq_t *iseq, LINK_ANCHOR *const ret,
       case NODE_GVAR:
         ADD_INSN(ret, line_node, putnil);
         ADD_INSN3(ret, line_node, defined, INT2FIX(DEFINED_GVAR),
-                  ID2SYM(node->nd_entry), PUSH_VAL(DEFINED_GVAR));
+                  ID2SYM(node->nd_vid), PUSH_VAL(DEFINED_GVAR));
         return;
 
       case NODE_CVAR:
@@ -9471,7 +9511,7 @@ iseq_compile_each0(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *const no
         if (!popped) {
             ADD_INSN(ret, node, dup);
         }
-        ADD_INSN1(ret, node, setglobal, ID2SYM(node->nd_entry));
+        ADD_INSN1(ret, node, setglobal, ID2SYM(node->nd_vid));
         break;
       }
       case NODE_IASGN:{
@@ -9601,7 +9641,7 @@ iseq_compile_each0(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *const no
         break;
       }
       case NODE_GVAR:{
-        ADD_INSN1(ret, node, getglobal, ID2SYM(node->nd_entry));
+        ADD_INSN1(ret, node, getglobal, ID2SYM(node->nd_vid));
         if (popped) {
             ADD_INSN(ret, node, pop);
         }
@@ -10215,12 +10255,6 @@ dump_disasm_list_with_cursor(const LINK_ELEMENT *link, const LINK_ELEMENT *curr,
     }
     printf("---------------------\n");
     fflush(stdout);
-}
-
-bool
-rb_insns_leaf_p(int i)
-{
-    return insn_leaf_p(i);
 }
 
 int
@@ -13294,3 +13328,5 @@ rb_iseq_ibf_load_extra_data(VALUE str)
     RB_GC_GUARD(loader_obj);
     return extra_str;
 }
+
+#include "yarp/yarp_compiler.c"

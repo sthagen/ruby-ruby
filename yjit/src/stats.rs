@@ -296,6 +296,7 @@ make_counters! {
     invokeblock_symbol,
 
     // Method calls that exit to the interpreter
+    guard_send_block_arg_type,
     guard_send_klass_megamorphic,
     guard_send_se_cf_overflow,
     guard_send_se_protected_check_failed,
@@ -343,6 +344,7 @@ make_counters! {
 
     opt_plus_overflow,
     opt_minus_overflow,
+    opt_mult_overflow,
 
     opt_mod_zero,
     opt_div_zero,
@@ -456,6 +458,17 @@ make_counters! {
 pub extern "C" fn rb_yjit_stats_enabled_p(_ec: EcPtr, _ruby_self: VALUE) -> VALUE {
 
     if get_option!(gen_stats) {
+        return Qtrue;
+    } else {
+        return Qfalse;
+    }
+}
+
+/// Primitive called in yjit.rb
+/// Check if stats generation should print at exit
+#[no_mangle]
+pub extern "C" fn rb_yjit_print_stats_p(_ec: EcPtr, _ruby_self: VALUE) -> VALUE {
+    if get_option!(print_stats) {
         return Qtrue;
     } else {
         return Qfalse;

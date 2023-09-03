@@ -1063,20 +1063,24 @@ rb_gc_for_fd(int err)
     return 0;
 }
 
+/* try `expr` upto twice while it returns false and `errno`
+ * is to GC.  Each `errno`s are available as `first_errno` and
+ * `retried_errno` respectively */
+#define TRY_WITH_GC(expr) \
+    for (int first_errno, retried_errno = 0, retried = 0; \
+         (!retried && \
+          !(expr) && \
+          (!rb_gc_for_fd(first_errno = errno) || !(expr)) &&   \
+          (retried_errno = errno, 1)); \
+         (void)retried_errno, retried = 1)
+
 static int
 ruby_dup(int orig)
 {
-    int fd;
+    int fd = -1;
 
-    fd = rb_cloexec_dup(orig);
-    if (fd < 0) {
-        int e = errno;
-        if (rb_gc_for_fd(e)) {
-            fd = rb_cloexec_dup(orig);
-        }
-        if (fd < 0) {
-            rb_syserr_fail(e, 0);
-        }
+    TRY_WITH_GC((fd = rb_cloexec_dup(orig)) >= 0) {
+        rb_syserr_fail(first_errno, 0);
     }
     rb_update_max_fd(fd);
     return fd;
@@ -4140,8 +4144,7 @@ rb_io_getline_0(VALUE rs, long limit, int chomp, rb_io_t *fptr)
                 s = RSTRING_PTR(str);
                 e = RSTRING_END(str);
                 p = e - rslen;
-                pp = rb_enc_left_char_head(s, p, e, enc);
-                if (pp != p) continue;
+                if (!at_char_boundary(s, p, e, enc)) continue;
                 if (!rspara) rscheck(rsptr, rslen, rs);
                 if (memcmp(p, rsptr, rslen) == 0) {
                     if (chomp) {
@@ -6945,7 +6948,7 @@ rb_sysopen_internal(struct sysopen_struct *data)
 static int
 rb_sysopen(VALUE fname, int oflags, mode_t perm)
 {
-    int fd;
+    int fd = -1;
     struct sysopen_struct data;
 
     data.fname = rb_str_encode_ospath(fname);
@@ -6953,21 +6956,14 @@ rb_sysopen(VALUE fname, int oflags, mode_t perm)
     data.oflags = oflags;
     data.perm = perm;
 
-    fd = rb_sysopen_internal(&data);
-    if (fd < 0) {
-        int e = errno;
-        if (rb_gc_for_fd(e)) {
-            fd = rb_sysopen_internal(&data);
-        }
-        if (fd < 0) {
-            rb_syserr_fail_path(e, fname);
-        }
+    TRY_WITH_GC((fd = rb_sysopen_internal(&data)) >= 0) {
+        rb_syserr_fail_path(first_errno, fname);
     }
     return fd;
 }
 
-FILE *
-rb_fdopen(int fd, const char *modestr)
+static inline FILE *
+fdopen_internal(int fd, const char *modestr)
 {
     FILE *file;
 
@@ -6976,26 +6972,22 @@ rb_fdopen(int fd, const char *modestr)
 #endif
     file = fdopen(fd, modestr);
     if (!file) {
-        int e = errno;
-#if defined(__sun)
-        if (e == 0) {
-            rb_gc();
-            errno = 0;
-            file = fdopen(fd, modestr);
-        }
-        else
-#endif
-        if (rb_gc_for_fd(e)) {
-            file = fdopen(fd, modestr);
-        }
-        if (!file) {
 #ifdef _WIN32
-            if (e == 0) e = EINVAL;
+        if (errno == 0) errno = EINVAL;
 #elif defined(__sun)
-            if (e == 0) e = EMFILE;
+        if (errno == 0) errno = EMFILE;
 #endif
-            rb_syserr_fail(e, 0);
-        }
+    }
+    return file;
+}
+
+FILE *
+rb_fdopen(int fd, const char *modestr)
+{
+    FILE *file = 0;
+
+    TRY_WITH_GC((file = fdopen_internal(fd, modestr)) != 0) {
+        rb_syserr_fail(first_errno, 0);
     }
 
     /* xxx: should be _IONBF?  A buffer in FILE may have trouble. */
@@ -7286,12 +7278,7 @@ int
 rb_pipe(int *pipes)
 {
     int ret;
-    ret = rb_cloexec_pipe(pipes);
-    if (ret < 0) {
-        if (rb_gc_for_fd(errno)) {
-            ret = rb_cloexec_pipe(pipes);
-        }
-    }
+    TRY_WITH_GC((ret = rb_cloexec_pipe(pipes)) >= 0);
     if (ret == 0) {
         rb_update_max_fd(pipes[0]);
         rb_update_max_fd(pipes[1]);
@@ -8957,6 +8944,10 @@ rb_p_result(int argc, const VALUE *argv)
  *     0..4
  *     [0..4, 0..4, 0..4]
  *
+ *  Kernel#p is designed for debugging purposes.
+ *  Ruby implementations may define Kernel#p to be uninterruptible
+ *  in whole or in part.
+ *  On CRuby, Kernel#p's writing of data is uninterruptible.
  */
 
 static VALUE
@@ -11381,7 +11372,7 @@ rb_fcntl(VALUE io, VALUE req, VALUE arg)
  *  a file-oriented I/O stream. Arguments and results are platform
  *  dependent.
  *
- *  If +argument is a number, its value is passed directly;
+ *  If +argument+ is a number, its value is passed directly;
  *  if it is a string, it is interpreted as a binary sequence of bytes.
  *  (Array#pack might be a useful way to build this string.)
  *

@@ -2,6 +2,12 @@
 
 #define YP_BUFFER_INITIAL_SIZE 1024
 
+// Return the size of the yp_buffer_t struct.
+size_t
+yp_buffer_sizeof(void) {
+    return sizeof(yp_buffer_t);
+}
+
 // Initialize a yp_buffer_t with its default values.
 bool
 yp_buffer_init(yp_buffer_t *buffer) {
@@ -10,6 +16,18 @@ yp_buffer_init(yp_buffer_t *buffer) {
 
     buffer->value = (char *) malloc(YP_BUFFER_INITIAL_SIZE);
     return buffer->value != NULL;
+}
+
+// Return the value of the buffer.
+char *
+yp_buffer_value(yp_buffer_t *buffer) {
+    return buffer->value;
+}
+
+// Return the length of the buffer.
+size_t
+yp_buffer_length(yp_buffer_t *buffer) {
+    return buffer->length;
 }
 
 // Append the given amount of space to the buffer.
@@ -45,8 +63,13 @@ yp_buffer_append_zeroes(yp_buffer_t *buffer, size_t length) {
 // Append a string to the buffer.
 void
 yp_buffer_append_str(yp_buffer_t *buffer, const char *value, size_t length) {
-    const void *source = value;
-    yp_buffer_append(buffer, source, length);
+    yp_buffer_append(buffer, value, length);
+}
+
+// Append a list of bytes to the buffer.
+void
+yp_buffer_append_bytes(yp_buffer_t *buffer, const uint8_t *value, size_t length) {
+    yp_buffer_append(buffer, (const char *) value, length);
 }
 
 // Append a single byte to the buffer.

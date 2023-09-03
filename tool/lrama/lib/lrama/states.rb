@@ -102,43 +102,27 @@ module Lrama
     end
 
     def direct_read_sets
-      h = {}
-
-      @direct_read_sets.each do |k, v|
-        h[k] = bitmap_to_terms(v)
+      @direct_read_sets.transform_values do |v|
+        bitmap_to_terms(v)
       end
-
-      return h
     end
 
     def read_sets
-      h = {}
-
-      @read_sets.each do |k, v|
-        h[k] = bitmap_to_terms(v)
+      @read_sets.transform_values do |v|
+        bitmap_to_terms(v)
       end
-
-      return h
     end
 
     def follow_sets
-      h = {}
-
-      @follow_sets.each do |k, v|
-        h[k] = bitmap_to_terms(v)
+      @follow_sets.transform_values do |v|
+        bitmap_to_terms(v)
       end
-
-      return h
     end
 
     def la
-      h = {}
-
-      @la.each do |k, v|
-        h[k] = bitmap_to_terms(v)
+      @la.transform_values do |v|
+        bitmap_to_terms(v)
       end
-
-      return h
     end
 
     private
@@ -452,7 +436,7 @@ module Lrama
 
             # Can resolve only when both have prec
             unless shift_prec && reduce_prec
-              state.conflicts << State::Conflict.new(symbols: [sym], reduce: reduce, type: :shift_reduce)
+              state.conflicts << State::ShiftReduceConflict.new(symbols: [sym], shift: shift, reduce: reduce)
               next
             end
 
@@ -471,6 +455,11 @@ module Lrama
 
             # shift_prec == reduce_prec, then check associativity
             case sym.precedence.type
+            when :precedence
+              # %precedence only specifies precedence and not specify associativity
+              # then a conflict is unresolved if precedence is same.
+              state.conflicts << State::ShiftReduceConflict.new(symbols: [sym], shift: shift, reduce: reduce)
+              next
             when :right
               # Shift is selected
               state.resolved_conflicts << State::ResolvedConflict.new(symbol: sym, reduce: reduce, which: :shift, same_prec: true)
@@ -501,16 +490,21 @@ module Lrama
 
     def compute_reduce_reduce_conflicts
       states.each do |state|
-        a = []
+        count = state.reduces.count
 
-        state.reduces.each do |reduce|
-          next if reduce.look_ahead.nil?
+        for i in 0...count do
+          reduce1 = state.reduces[i]
+          next if reduce1.look_ahead.nil?
 
-          intersection = a & reduce.look_ahead
-          a += reduce.look_ahead
+          for j in (i+1)...count do
+            reduce2 = state.reduces[j]
+            next if reduce2.look_ahead.nil?
 
-          if !intersection.empty?
-            state.conflicts << State::Conflict.new(symbols: intersection.dup, reduce: reduce, type: :reduce_reduce)
+            intersection = reduce1.look_ahead & reduce2.look_ahead
+
+            if !intersection.empty?
+              state.conflicts << State::ReduceReduceConflict.new(symbols: intersection, reduce1: reduce1, reduce2: reduce2)
+            end
           end
         end
       end
@@ -526,9 +520,9 @@ module Lrama
 
         state.default_reduction_rule = state.reduces.map do |r|
           [r.rule, r.rule.id, (r.look_ahead || []).count]
-        end.sort_by do |rule, rule_id, count|
+        end.min_by do |rule, rule_id, count|
           [-count, rule_id]
-        end.first.first
+        end.first
       end
     end
 

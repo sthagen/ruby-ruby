@@ -226,7 +226,9 @@ module RubyVM::YJIT
   # Avoid calling a method here to not interfere with compilation tests
   if Primitive.rb_yjit_stats_enabled_p
     at_exit do
-      _print_stats
+      if Primitive.rb_yjit_print_stats_p
+        _print_stats
+      end
       _dump_locations
     end
   end
@@ -270,6 +272,8 @@ module RubyVM::YJIT
 
       # Number of failed compiler invocations
       compilation_failure = stats[:compilation_failure]
+
+      code_region_overhead = stats[:code_region_size] - (stats[:inline_code_size] + stats[:outlined_code_size])
 
       out.puts "num_send:              " + format_number(13, stats[:num_send])
       out.puts "num_send_known_class:  " + format_number_pct(13, stats[:num_send_known_class], stats[:num_send])
@@ -316,6 +320,8 @@ module RubyVM::YJIT
       out.puts "inline_code_size:      " + format_number(13, stats[:inline_code_size])
       out.puts "outlined_code_size:    " + format_number(13, stats[:outlined_code_size])
       out.puts "code_region_size:      " + format_number(13, stats[:code_region_size])
+      out.puts "code_region_overhead:  " + format_number_pct(13, code_region_overhead, stats[:code_region_size])
+
       out.puts "freed_code_size:       " + format_number(13, stats[:freed_code_size])
       out.puts "yjit_alloc_size:       " + format_number(13, stats[:yjit_alloc_size]) if stats.key?(:yjit_alloc_size)
       out.puts "live_context_size:     " + format_number(13, stats[:live_context_size])

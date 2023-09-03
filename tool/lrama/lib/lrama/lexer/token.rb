@@ -1,7 +1,8 @@
+require 'lrama/lexer/token/type'
+
 module Lrama
   class Lexer
-    class Token < Struct.new(:type, :s_value, :alias, keyword_init: true)
-      Type = Struct.new(:id, :name, keyword_init: true)
+    class Token
 
       attr_accessor :line, :column, :referred
       # For User_code
@@ -60,6 +61,7 @@ module Lrama
       define_type(:P_nonassoc)       # %nonassoc
       define_type(:P_left)           # %left
       define_type(:P_right)          # %right
+      define_type(:P_precedence)     # %precedence
       define_type(:P_prec)           # %prec
       define_type(:User_code)        # { ... }
       define_type(:Tag)              # <int>

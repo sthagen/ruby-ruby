@@ -82,30 +82,62 @@ ossl_pkey_new(EVP_PKEY *pkey)
 #if OSSL_OPENSSL_PREREQ(3, 0, 0)
 # include <openssl/decoder.h>
 
-EVP_PKEY *
-ossl_pkey_read_generic(BIO *bio, VALUE pass)
+static EVP_PKEY *
+ossl_pkey_read(BIO *bio, const char *input_type, int selection, VALUE pass)
 {
     void *ppass = (void *)pass;
     OSSL_DECODER_CTX *dctx;
     EVP_PKEY *pkey = NULL;
     int pos = 0, pos2;
 
-    dctx = OSSL_DECODER_CTX_new_for_pkey(&pkey, "DER", NULL, NULL, 0, NULL, NULL);
+    dctx = OSSL_DECODER_CTX_new_for_pkey(&pkey, input_type, NULL, NULL,
+                                         selection, NULL, NULL);
     if (!dctx)
         goto out;
-    if (OSSL_DECODER_CTX_set_pem_password_cb(dctx, ossl_pem_passwd_cb, ppass) != 1)
+    if (OSSL_DECODER_CTX_set_pem_password_cb(dctx, ossl_pem_passwd_cb,
+                                             ppass) != 1)
         goto out;
-
-    /* First check DER */
-    if (OSSL_DECODER_from_bio(dctx, bio) == 1)
-        goto out;
+    while (1) {
+        if (OSSL_DECODER_from_bio(dctx, bio) == 1)
+            goto out;
+        if (BIO_eof(bio))
+            break;
+        pos2 = BIO_tell(bio);
+        if (pos2 < 0 || pos2 <= pos)
+            break;
+        ossl_clear_error();
+        pos = pos2;
+    }
+  out:
     OSSL_BIO_reset(bio);
+    OSSL_DECODER_CTX_free(dctx);
+    return pkey;
+}
 
+EVP_PKEY *
+ossl_pkey_read_generic(BIO *bio, VALUE pass)
+{
+    EVP_PKEY *pkey = NULL;
+    /* First check DER, then check PEM. */
+    const char *input_types[] = {"DER", "PEM"};
+    int input_type_num = (int)(sizeof(input_types) / sizeof(char *));
     /*
-     * Then check PEM; multiple OSSL_DECODER_from_bio() calls may be needed.
+     * Non-zero selections to try to decode.
      *
-     * First check for private key formats. This is to keep compatibility with
-     * ruby/openssl < 3.0 which decoded the following as a private key.
+     * See EVP_PKEY_fromdata(3) - Selections to see all the selections.
+     *
+     * This is a workaround for the decoder failing to decode or returning
+     * bogus keys with selection 0, if a key management provider is different
+     * from a decoder provider. The workaround is to avoid using selection 0.
+     *
+     * Affected OpenSSL versions: >= 3.1.0, <= 3.1.2, or >= 3.0.0, <= 3.0.10
+     * Fixed OpenSSL versions: 3.2, next release of the 3.1.z and 3.0.z
+     *
+     * See https://github.com/openssl/openssl/pull/21519 for details.
+     *
+     * First check for private key formats (EVP_PKEY_KEYPAIR). This is to keep
+     * compatibility with ruby/openssl < 3.0 which decoded the following as a
+     * private key.
      *
      *     $ openssl ecparam -name prime256v1 -genkey -outform PEM
      *     -----BEGIN EC PARAMETERS-----
@@ -126,50 +158,25 @@ ossl_pkey_read_generic(BIO *bio, VALUE pass)
      *
      * Note that we need to create the OSSL_DECODER_CTX variable each time when
      * we use the different selection as a workaround.
-     * https://github.com/openssl/openssl/issues/20657
+     * See https://github.com/openssl/openssl/issues/20657 for details.
      */
-    OSSL_DECODER_CTX_free(dctx);
-    dctx = NULL;
-    dctx = OSSL_DECODER_CTX_new_for_pkey(&pkey, "PEM", NULL, NULL,
-                                         EVP_PKEY_KEYPAIR, NULL, NULL);
-    if (!dctx)
-        goto out;
-    if (OSSL_DECODER_CTX_set_pem_password_cb(dctx, ossl_pem_passwd_cb, ppass) != 1)
-        goto out;
-    while (1) {
-        if (OSSL_DECODER_from_bio(dctx, bio) == 1)
-            goto out;
-        if (BIO_eof(bio))
-            break;
-        pos2 = BIO_tell(bio);
-        if (pos2 < 0 || pos2 <= pos)
-            break;
-        ossl_clear_error();
-        pos = pos2;
-    }
+    int selections[] = {
+        EVP_PKEY_KEYPAIR,
+        EVP_PKEY_KEY_PARAMETERS,
+        EVP_PKEY_PUBLIC_KEY
+    };
+    int selection_num = (int)(sizeof(selections) / sizeof(int));
+    int i, j;
 
-    OSSL_BIO_reset(bio);
-    OSSL_DECODER_CTX_free(dctx);
-    dctx = NULL;
-    dctx = OSSL_DECODER_CTX_new_for_pkey(&pkey, "PEM", NULL, NULL, 0, NULL, NULL);
-    if (!dctx)
-        goto out;
-    if (OSSL_DECODER_CTX_set_pem_password_cb(dctx, ossl_pem_passwd_cb, ppass) != 1)
-        goto out;
-    while (1) {
-        if (OSSL_DECODER_from_bio(dctx, bio) == 1)
-            goto out;
-        if (BIO_eof(bio))
-            break;
-        pos2 = BIO_tell(bio);
-        if (pos2 < 0 || pos2 <= pos)
-            break;
-        ossl_clear_error();
-        pos = pos2;
+    for (i = 0; i < input_type_num; i++) {
+        for (j = 0; j < selection_num; j++) {
+            pkey = ossl_pkey_read(bio, input_types[i], selections[j], pass);
+            if (pkey) {
+                goto out;
+            }
+        }
     }
-
   out:
-    OSSL_DECODER_CTX_free(dctx);
     return pkey;
 }
 #else
@@ -875,6 +882,18 @@ ossl_pkey_private_to_der(int argc, VALUE *argv, VALUE self)
  *
  * Serializes the private key to PEM-encoded PKCS #8 format. See #private_to_der
  * for more details.
+ *
+ * An unencrypted PEM-encoded key will look like:
+ *
+ *   -----BEGIN PRIVATE KEY-----
+ *   [...]
+ *   -----END PRIVATE KEY-----
+ *
+ * An encrypted PEM-encoded key will look like:
+ *
+ *   -----BEGIN ENCRYPTED PRIVATE KEY-----
+ *   [...]
+ *   -----END ENCRYPTED PRIVATE KEY-----
  */
 static VALUE
 ossl_pkey_private_to_pem(int argc, VALUE *argv, VALUE self)
@@ -953,6 +972,12 @@ ossl_pkey_public_to_der(VALUE self)
  *    pkey.public_to_pem -> string
  *
  * Serializes the public key to PEM-encoded X.509 SubjectPublicKeyInfo format.
+ *
+ * A PEM-encoded key will look like:
+ *
+ *   -----BEGIN PUBLIC KEY-----
+ *   [...]
+ *   -----END PUBLIC KEY-----
  */
 static VALUE
 ossl_pkey_public_to_pem(VALUE self)

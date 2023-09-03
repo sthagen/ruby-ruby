@@ -229,8 +229,19 @@ module IRB
     #
     # See IRB@Customizing+the+IRB+Prompt for more information.
     attr_accessor :prompt_c
-    # See IRB@Customizing+the+IRB+Prompt for more information.
-    attr_accessor :prompt_n
+
+    # TODO: Remove this when developing v2.0
+    def prompt_n
+      warn "IRB::Context#prompt_n is deprecated and will be removed in the next major release."
+      ""
+    end
+
+    # TODO: Remove this when developing v2.0
+    def prompt_n=(_)
+      warn "IRB::Context#prompt_n= is deprecated and will be removed in the next major release."
+      ""
+    end
+
     # Can be either the default <code>IRB.conf[:AUTO_INDENT]</code>, or the
     # mode set by #prompt_mode=
     #
@@ -345,6 +356,8 @@ module IRB
     # User-defined IRB command aliases
     attr_accessor :command_aliases
 
+    attr_accessor :with_debugger
+
     # Alias for #use_multiline
     alias use_multiline? use_multiline
     # Alias for #use_singleline
@@ -412,7 +425,6 @@ module IRB
       @prompt_i = pconf[:PROMPT_I]
       @prompt_s = pconf[:PROMPT_S]
       @prompt_c = pconf[:PROMPT_C]
-      @prompt_n = pconf[:PROMPT_N]
       @return_format = pconf[:RETURN]
       @return_format = "%s\n" if @return_format == nil
       if ai = pconf.include?(:AUTO_INDENT)

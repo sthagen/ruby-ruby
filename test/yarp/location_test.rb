@@ -1,9 +1,9 @@
 # frozen_string_literal: true
 
-require "yarp_test_helper"
+require_relative "test_helper"
 
 module YARP
-  class LocationTest < Test::Unit::TestCase
+  class LocationTest < TestCase
     def test_AliasNode
       assert_location(AliasNode, "alias foo bar")
     end
@@ -59,8 +59,8 @@ module YARP
       assert_location(BeginNode, "begin foo; rescue bar\nelse baz end")
       assert_location(BeginNode, "begin foo; rescue bar\nelse baz\nensure qux end")
 
-      assert_location(BeginNode, "class Foo\nrescue then end", 10..25, &:statements)
-      assert_location(BeginNode, "module Foo\nrescue then end", 11..26, &:statements)
+      assert_location(BeginNode, "class Foo\nrescue then end", 10..25, &:body)
+      assert_location(BeginNode, "module Foo\nrescue then end", 11..26, &:body)
     end
 
     def test_BlockArgumentNode
@@ -199,24 +199,34 @@ module YARP
       assert_location(ClassNode, "class Foo < Bar end")
     end
 
-    def test_ClassVariableOperatorAndWriteNode
-      assert_location(ClassVariableOperatorAndWriteNode, "@@foo &&= bar")
+    def test_ClassVariableAndWriteNode
+      assert_location(ClassVariableAndWriteNode, "@@foo &&= bar")
     end
 
     def test_ClassVariableOperatorWriteNode
       assert_location(ClassVariableOperatorWriteNode, "@@foo += bar")
     end
 
-    def test_ClassVariableOperatorOrWriteNode
-      assert_location(ClassVariableOperatorOrWriteNode, "@@foo ||= bar")
+    def test_ClassVariableOrWriteNode
+      assert_location(ClassVariableOrWriteNode, "@@foo ||= bar")
     end
 
     def test_ClassVariableReadNode
       assert_location(ClassVariableReadNode, "@@foo")
     end
 
+    def test_ClassVariableTargetNode
+      assert_location(ClassVariableTargetNode, "@@foo, @@bar = baz", 0...5) do |node|
+        node.targets.first
+      end
+    end
+
     def test_ClassVariableWriteNode
       assert_location(ClassVariableWriteNode, "@@foo = bar")
+    end
+
+    def test_ConstantPathAndWriteNode
+      assert_location(ConstantPathAndWriteNode, "Parent::Child &&= bar")
     end
 
     def test_ConstantPathNode
@@ -225,39 +235,51 @@ module YARP
       assert_location(ConstantPathNode, "::Foo::Bar")
     end
 
+    def test_ConstantPathOperatorWriteNode
+      assert_location(ConstantPathOperatorWriteNode, "Parent::Child += bar")
+    end
+
+    def test_ConstantPathOrWriteNode
+      assert_location(ConstantPathOrWriteNode, "Parent::Child ||= bar")
+    end
+
+    def test_ConstantPathTargetNode
+      assert_location(ConstantPathTargetNode, "::Foo, ::Bar = baz", 0...5) do |node|
+        node.targets.first
+      end
+    end
+
     def test_ConstantPathWriteNode
       assert_location(ConstantPathWriteNode, "Foo::Bar = baz")
       assert_location(ConstantPathWriteNode, "::Foo = bar")
       assert_location(ConstantPathWriteNode, "::Foo::Bar = baz")
     end
 
-    def test_ConstantPathOperatorAndWriteNode
-      assert_location(ConstantPathOperatorAndWriteNode, "Parent::Child &&= bar")
-    end
-
-    def test_ConstantPathOperatorWriteNode
-      assert_location(ConstantPathOperatorWriteNode, "Parent::Child += bar")
-    end
-
-    def test_ConstantPathOperatorOrWriteNode
-      assert_location(ConstantPathOperatorOrWriteNode, "Parent::Child ||= bar")
-    end
-
-    def test_ConstantOperatorAndWriteNode
-      assert_location(ConstantOperatorAndWriteNode, "Foo &&= bar")
+    def test_ConstantAndWriteNode
+      assert_location(ConstantAndWriteNode, "Foo &&= bar")
     end
 
     def test_ConstantOperatorWriteNode
       assert_location(ConstantOperatorWriteNode, "Foo += bar")
     end
 
-    def test_ConstantOperatorOrWriteNode
-      assert_location(ConstantOperatorOrWriteNode, "Foo ||= bar")
+    def test_ConstantOrWriteNode
+      assert_location(ConstantOrWriteNode, "Foo ||= bar")
     end
 
     def test_ConstantReadNode
       assert_location(ConstantReadNode, "Foo")
       assert_location(ConstantReadNode, "Foo::Bar", 5...8, &:child)
+    end
+
+    def test_ConstantTargetNode
+      assert_location(ConstantTargetNode, "Foo, Bar = baz", 0...3) do |node|
+        node.targets.first
+      end
+    end
+
+    def test_ConstantWriteNode
+      assert_location(ConstantWriteNode, "Foo = bar")
     end
 
     def test_DefNode
@@ -299,6 +321,10 @@ module YARP
       end
     end
 
+    def test_FlipFlopNode
+      assert_location(FlipFlopNode, "if foo..bar; end", 3..11, &:predicate)
+    end
+
     def test_FloatNode
       assert_location(FloatNode, "0.0")
       assert_location(FloatNode, "1.0")
@@ -313,7 +339,7 @@ module YARP
 
     def test_ForwardingArgumentsNode
       assert_location(ForwardingArgumentsNode, "def foo(...); bar(...); end", 18...21) do |node|
-        node.statements.body.first.arguments.arguments.first
+        node.body.body.first.arguments.arguments.first
       end
     end
 
@@ -328,20 +354,26 @@ module YARP
       assert_location(ForwardingSuperNode, "super {}")
     end
 
-    def test_GlobalVariableOperatorAndWriteNode
-      assert_location(GlobalVariableOperatorAndWriteNode, "$foo &&= bar")
+    def test_GlobalVariableAndWriteNode
+      assert_location(GlobalVariableAndWriteNode, "$foo &&= bar")
     end
 
     def test_GlobalVariableOperatorWriteNode
       assert_location(GlobalVariableOperatorWriteNode, "$foo += bar")
     end
 
-    def test_GlobalVariableOperatorOrWriteNode
-      assert_location(GlobalVariableOperatorOrWriteNode, "$foo ||= bar")
+    def test_GlobalVariableOrWriteNode
+      assert_location(GlobalVariableOrWriteNode, "$foo ||= bar")
     end
 
     def test_GlobalVariableReadNode
       assert_location(GlobalVariableReadNode, "$foo")
+    end
+
+    def test_GlobalVariableTargetNode
+      assert_location(GlobalVariableTargetNode, "$foo, $bar = baz", 0...4) do |node|
+        node.targets.first
+      end
     end
 
     def test_GlobalVariableWriteNode
@@ -374,20 +406,26 @@ module YARP
       end
     end
 
-    def test_InstanceVariableOperatorAndWriteNode
-      assert_location(InstanceVariableOperatorAndWriteNode, "@foo &&= bar")
+    def test_InstanceVariableAndWriteNode
+      assert_location(InstanceVariableAndWriteNode, "@foo &&= bar")
     end
 
     def test_InstanceVariableOperatorWriteNode
       assert_location(InstanceVariableOperatorWriteNode, "@foo += bar")
     end
 
-    def test_InstanceVariableOperatorOrWriteNode
-      assert_location(InstanceVariableOperatorOrWriteNode, "@foo ||= bar")
+    def test_InstanceVariableOrWriteNode
+      assert_location(InstanceVariableOrWriteNode, "@foo ||= bar")
     end
 
     def test_InstanceVariableReadNode
       assert_location(InstanceVariableReadNode, "@foo")
+    end
+
+    def test_InstanceVariableTargetNode
+      assert_location(InstanceVariableTargetNode, "@foo, @bar = baz", 0...4) do |node|
+        node.targets.first
+      end
     end
 
     def test_InstanceVariableWriteNode
@@ -411,7 +449,8 @@ module YARP
     end
 
     def test_InterpolatedStringNode
-      assert_location(InterpolatedStringNode, "<<~A\nhello world\nA")
+      assert_location(InterpolatedStringNode, "\"foo \#@bar baz\"")
+      assert_location(InterpolatedStringNode, "<<~A\nhello world\nA", 0...4)
     end
 
     def test_InterpolatedSymbolNode
@@ -451,9 +490,9 @@ module YARP
       assert_location(LambdaNode, "-> do foo end")
     end
 
-    def test_LocalVariableOperatorAndWriteNode
-      assert_location(LocalVariableOperatorAndWriteNode, "foo &&= bar")
-      assert_location(LocalVariableOperatorAndWriteNode, "foo = 1; foo &&= bar", 9...20)
+    def test_LocalVariableAndWriteNode
+      assert_location(LocalVariableAndWriteNode, "foo &&= bar")
+      assert_location(LocalVariableAndWriteNode, "foo = 1; foo &&= bar", 9...20)
     end
 
     def test_LocalVariableOperatorWriteNode
@@ -461,13 +500,19 @@ module YARP
       assert_location(LocalVariableOperatorWriteNode, "foo = 1; foo += bar", 9...19)
     end
 
-    def test_LocalVariableOperatorOrWriteNode
-      assert_location(LocalVariableOperatorOrWriteNode, "foo ||= bar")
-      assert_location(LocalVariableOperatorOrWriteNode, "foo = 1; foo ||= bar", 9...20)
+    def test_LocalVariableOrWriteNode
+      assert_location(LocalVariableOrWriteNode, "foo ||= bar")
+      assert_location(LocalVariableOrWriteNode, "foo = 1; foo ||= bar", 9...20)
     end
 
     def test_LocalVariableReadNode
       assert_location(LocalVariableReadNode, "foo = 1; foo", 9...12)
+    end
+
+    def test_LocalVariableTargetNode
+      assert_location(LocalVariableTargetNode, "foo, bar = baz", 0...3) do |node|
+        node.targets.first
+      end
     end
 
     def test_LocalVariableWriteNode
@@ -643,13 +688,13 @@ module YARP
     end
 
     def test_StatementsNode
-      assert_location(StatementsNode, "foo { 1 }", 6...7) { |node| node.block.statements }
+      assert_location(StatementsNode, "foo { 1 }", 6...7) { |node| node.block.body }
 
-      assert_location(StatementsNode, "(1)", 1...2, &:statements)
+      assert_location(StatementsNode, "(1)", 1...2, &:body)
 
-      assert_location(StatementsNode, "def foo; 1; end", 9...10, &:statements)
-      assert_location(StatementsNode, "def foo = 1", 10...11, &:statements)
-      assert_location(StatementsNode, "def foo; 1\n2; end", 9...12, &:statements)
+      assert_location(StatementsNode, "def foo; 1; end", 9...10, &:body)
+      assert_location(StatementsNode, "def foo = 1", 10...11, &:body)
+      assert_location(StatementsNode, "def foo; 1\n2; end", 9...12, &:body)
 
       assert_location(StatementsNode, "if foo; bar; end", 8...11, &:statements)
       assert_location(StatementsNode, "foo if bar", 0...3, &:statements)
@@ -675,11 +720,11 @@ module YARP
       assert_location(StatementsNode, "begin; ensure; foo; end", 15...18) { |node| node.ensure_clause.statements }
       assert_location(StatementsNode, "begin; rescue; else; foo; end", 21...24) { |node| node.else_clause.statements }
 
-      assert_location(StatementsNode, "class Foo; foo; end", 11...14, &:statements)
-      assert_location(StatementsNode, "module Foo; foo; end", 12...15, &:statements)
-      assert_location(StatementsNode, "class << self; foo; end", 15...18, &:statements)
+      assert_location(StatementsNode, "class Foo; foo; end", 11...14, &:body)
+      assert_location(StatementsNode, "module Foo; foo; end", 12...15, &:body)
+      assert_location(StatementsNode, "class << self; foo; end", 15...18, &:body)
 
-      assert_location(StatementsNode, "-> { foo }", 5...8, &:statements)
+      assert_location(StatementsNode, "-> { foo }", 5...8, &:body)
       assert_location(StatementsNode, "BEGIN { foo }", 8...11, &:statements)
       assert_location(StatementsNode, "END { foo }", 6...9, &:statements)
 
@@ -750,12 +795,20 @@ module YARP
       assert_location(YieldNode, "yield(foo)")
     end
 
+    def test_all_tested
+      expected = YARP.constants.grep(/.Node$/).sort - %i[MissingNode ProgramNode]
+      actual = LocationTest.instance_methods(false).grep(/.Node$/).map { |name| name[5..].to_sym }.sort
+      assert_equal expected, actual
+    end
+
     private
 
     def assert_location(kind, source, expected = 0...source.length)
-      YARP.parse(source) => ParseResult[comments: [], errors: [], value: node]
+      result = YARP.parse(source)
+      assert_equal [], result.comments
+      assert_equal [], result.errors
 
-      node => ProgramNode[statements: [*, node]]
+      node = result.value.statements.body.last
       node = yield node if block_given?
 
       assert_kind_of kind, node

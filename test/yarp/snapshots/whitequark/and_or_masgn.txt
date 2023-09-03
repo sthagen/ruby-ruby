@@ -2,12 +2,12 @@ ProgramNode(0...40)(
   [:a, :b],
   StatementsNode(0...40)(
     [AndNode(0...19)(
-       CallNode(0...3)(nil, nil, (0...3), nil, nil, nil, nil, 0, "foo"),
+       CallNode(0...3)(nil, nil, (0...3), nil, nil, nil, nil, 2, "foo"),
        ParenthesesNode(7...19)(
          StatementsNode(8...18)(
            [MultiWriteNode(8...18)(
-              [LocalVariableWriteNode(8...9)(:a, 0, nil, (8...9), nil),
-               LocalVariableWriteNode(11...12)(:b, 0, nil, (11...12), nil)],
+              [LocalVariableTargetNode(8...9)(:a, 0),
+               LocalVariableTargetNode(11...12)(:b, 0)],
               (13...14),
               CallNode(15...18)(
                 nil,
@@ -17,7 +17,7 @@ ProgramNode(0...40)(
                 nil,
                 nil,
                 nil,
-                0,
+                2,
                 "bar"
               ),
               nil,
@@ -30,12 +30,12 @@ ProgramNode(0...40)(
        (4...6)
      ),
      OrNode(21...40)(
-       CallNode(21...24)(nil, nil, (21...24), nil, nil, nil, nil, 0, "foo"),
+       CallNode(21...24)(nil, nil, (21...24), nil, nil, nil, nil, 2, "foo"),
        ParenthesesNode(28...40)(
          StatementsNode(29...39)(
            [MultiWriteNode(29...39)(
-              [LocalVariableWriteNode(29...30)(:a, 0, nil, (29...30), nil),
-               LocalVariableWriteNode(32...33)(:b, 0, nil, (32...33), nil)],
+              [LocalVariableTargetNode(29...30)(:a, 0),
+               LocalVariableTargetNode(32...33)(:b, 0)],
               (34...35),
               CallNode(36...39)(
                 nil,
@@ -45,7 +45,7 @@ ProgramNode(0...40)(
                 nil,
                 nil,
                 nil,
-                0,
+                2,
                 "bar"
               ),
               nil,

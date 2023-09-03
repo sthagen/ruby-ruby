@@ -55,6 +55,9 @@ module YARP
       EQUAL_GREATER: :on_op,
       EQUAL_TILDE: :on_op,
       FLOAT: :on_float,
+      FLOAT_IMAGINARY: :on_imaginary,
+      FLOAT_RATIONAL: :on_rational,
+      FLOAT_RATIONAL_IMAGINARY: :on_imaginary,
       GREATER: :on_op,
       GREATER_EQUAL: :on_op,
       GREATER_GREATER: :on_op,
@@ -64,8 +67,10 @@ module YARP
       HEREDOC_START: :on_heredoc_beg,
       IDENTIFIER: :on_ident,
       IGNORED_NEWLINE: :on_ignored_nl,
-      IMAGINARY_NUMBER: :on_imaginary,
       INTEGER: :on_int,
+      INTEGER_IMAGINARY: :on_imaginary,
+      INTEGER_RATIONAL: :on_rational,
+      INTEGER_RATIONAL_IMAGINARY: :on_imaginary,
       INSTANCE_VARIABLE: :on_ivar,
       INVALID: :INVALID,
       KEYWORD___ENCODING__: :on_kw,
@@ -145,7 +150,8 @@ module YARP
       PLUS: :on_op,
       PLUS_EQUAL: :on_op,
       QUESTION_MARK: :on_op,
-      RATIONAL_NUMBER: :on_rational,
+      RATIONAL_FLOAT: :on_rational,
+      RATIONAL_INTEGER: :on_rational,
       REGEXP_BEGIN: :on_regexp_beg,
       REGEXP_END: :on_regexp_end,
       SEMICOLON: :on_semicolon,
@@ -160,6 +166,7 @@ module YARP
       STRING_END: :on_tstring_end,
       SYMBOL_BEGIN: :on_symbeg,
       TILDE: :on_op,
+      UAMPERSAND: :on_op,
       UCOLON_COLON: :on_op,
       UDOT_DOT: :on_op,
       UDOT_DOT_DOT: :on_op,
@@ -201,18 +208,9 @@ module YARP
       end
     end
 
-    # It is extremely non obvious which state the parser is in when comments get
-    # dispatched. Because of this we don't both comparing state when comparing
-    # against other comment tokens.
-    class CommentToken < Token
-      def ==(other)
-        self[0...-1] == other[0...-1]
-      end
-    end
-
-    # Heredoc end tokens are emitted in an odd order, so we don't compare the
-    # state on them.
-    class HeredocEndToken < Token
+    # Tokens where state should be ignored
+    # used for :on_comment, :on_heredoc_end, :on_embexpr_end
+    class IgnoreStateToken < Token
       def ==(other)
         self[0...-1] == other[0...-1]
       end
@@ -242,6 +240,23 @@ module YARP
         else
           self[4] == other[4]
         end
+      end
+    end
+
+    # If we have an identifier that follows a method name like:
+    #
+    #     def foo bar
+    #
+    # then Ripper will mark bar as END|LABEL if there is a local in a parent
+    # scope named bar because it hasn't pushed the local table yet. We do this
+    # more accurately, so we need to allow comparing against both END and
+    # END|LABEL.
+    class ParamToken < Token
+      def ==(other)
+        (self[0...-1] == other[0...-1]) && (
+          (other[3] == Ripper::EXPR_END) ||
+          (other[3] == Ripper::EXPR_END | Ripper::EXPR_LABEL)
+        )
       end
     end
 
@@ -551,18 +566,45 @@ module YARP
       result_value = result.value
       previous_state = nil
 
-      # If there's a UTF-8 byte-order mark as the start of the file, then ripper
-      # sets every token's on the first line back by 6 bytes. It also keeps the
-      # byte order mark in the first token's value. This is weird, and I don't
-      # want to mirror that in our parser. So instead, we'll match up the values
-      # here, and then match up the locations as we process the tokens.
-      bom = source.bytes[0..2] == [0xEF, 0xBB, 0xBF]
-      result_value[0][0].value.prepend("\xEF\xBB\xBF") if bom
+      # In previous versions of Ruby, Ripper wouldn't flush the bom before the
+      # first token, so we had to have a hack in place to account for that. This
+      # checks for that behavior.
+      bom_flushed = Ripper.lex("\xEF\xBB\xBF# test")[0][0][1] == 0
+      bom = source.byteslice(0..2) == "\xEF\xBB\xBF"
 
       result_value.each_with_index do |(token, lex_state), index|
         lineno = token.location.start_line
         column = token.location.start_column
-        column -= index == 0 ? 6 : 3 if bom && lineno == 1
+
+        # If there's a UTF-8 byte-order mark as the start of the file, then for
+        # certain tokens ripper sets the first token back by 3 bytes. It also
+        # keeps the byte order mark in the first token's value. This is weird,
+        # and I don't want to mirror that in our parser. So instead, we'll match
+        # up the columns and values here.
+        if bom && lineno == 1
+          column -= 3
+
+          if index == 0 && column == 0 && !bom_flushed
+            flushed =
+              case token.type
+              when :BACK_REFERENCE, :INSTANCE_VARIABLE, :CLASS_VARIABLE,
+                  :GLOBAL_VARIABLE, :NUMBERED_REFERENCE, :PERCENT_LOWER_I,
+                  :PERCENT_LOWER_X, :PERCENT_LOWER_W, :PERCENT_UPPER_I,
+                  :PERCENT_UPPER_W, :STRING_BEGIN
+                true
+              when :REGEXP_BEGIN, :SYMBOL_BEGIN
+                token.value.start_with?("%")
+              else
+                false
+              end
+
+            unless flushed
+              column -= 3
+              value = token.value
+              value.prepend(String.new("\xEF\xBB\xBF", encoding: value.encoding))
+            end
+          end
+        end
 
         event = RIPPER.fetch(token.type)
         value = token.value
@@ -573,13 +615,23 @@ module YARP
           when :on___end__
             EndContentToken.new([[lineno, column], event, value, lex_state])
           when :on_comment
-            CommentToken.new([[lineno, column], event, value, lex_state])
+            IgnoreStateToken.new([[lineno, column], event, value, lex_state])
           when :on_heredoc_end
             # Heredoc end tokens can be emitted in an odd order, so we don't
             # want to bother comparing the state on them.
-            HeredocEndToken.new([[lineno, column], event, value, lex_state])
-          when :on_embexpr_end, :on_ident
-            if lex_state == Ripper::EXPR_END | Ripper::EXPR_LABEL
+            IgnoreStateToken.new([[lineno, column], event, value, lex_state])
+          when :on_ident
+            if lex_state == Ripper::EXPR_END
+              # If we have an identifier that follows a method name like:
+              #
+              #     def foo bar
+              #
+              # then Ripper will mark bar as END|LABEL if there is a local in a
+              # parent scope named bar because it hasn't pushed the local table
+              # yet. We do this more accurately, so we need to allow comparing
+              # against both END and END|LABEL.
+              ParamToken.new([[lineno, column], event, value, lex_state])
+            elsif lex_state == Ripper::EXPR_END | Ripper::EXPR_LABEL
               # In the event that we're comparing identifiers, we're going to
               # allow a little divergence. Ripper doesn't account for local
               # variables introduced through named captures in regexes, and we
@@ -588,6 +640,8 @@ module YARP
             else
               Token.new([[lineno, column], event, value, lex_state])
             end
+          when :on_embexpr_end
+            IgnoreStateToken.new([[lineno, column], event, value, lex_state])
           when :on_ignored_nl
             # Ignored newlines can occasionally have a LABEL state attached to
             # them which doesn't actually impact anything. We don't mirror that
@@ -623,6 +677,26 @@ module YARP
               end
 
             Token.new([[lineno, column], event, value, lex_state])
+          when :on_eof
+            previous_token = result_value[index - 1][0]
+
+            # If we're at the end of the file and the previous token was a
+            # comment and there is still whitespace after the comment, then
+            # Ripper will append a on_nl token (even though there isn't
+            # necessarily a newline). We mirror that here.
+            start_offset = previous_token.location.end_offset
+            end_offset = token.location.start_offset
+
+            if previous_token.type == :COMMENT && start_offset < end_offset
+              if bom
+                start_offset += 3
+                end_offset += 3
+              end
+
+              tokens << Token.new([[lineno, 0], :on_nl, source.byteslice(start_offset...end_offset), lex_state])
+            end
+
+            Token.new([[lineno, column], event, value, lex_state])
           else
             Token.new([[lineno, column], event, value, lex_state])
           end
@@ -640,19 +714,34 @@ module YARP
         # can shuffle around the token to match Ripper's output.
         case state
         when :default
+          # The default state is when there are no heredocs at all. In this
+          # state we can append the token to the list of tokens and move on.
           tokens << token
 
+          # If we get the declaration of a heredoc, then we open a new heredoc
+          # and move into the heredoc_opened state.
           if event == :on_heredoc_beg
             state = :heredoc_opened
             heredoc_stack.last << Heredoc.build(token)
           end
         when :heredoc_opened
+          # The heredoc_opened state is when we've seen the declaration of a
+          # heredoc and are now lexing the body of the heredoc. In this state we
+          # push tokens onto the most recently created heredoc.
           heredoc_stack.last.last << token
 
           case event
           when :on_heredoc_beg
+            # If we receive a heredoc declaration while lexing the body of a
+            # heredoc, this means we have nested heredocs. In this case we'll
+            # push a new heredoc onto the stack and stay in the heredoc_opened
+            # state since we're now lexing the body of the new heredoc.
             heredoc_stack << [Heredoc.build(token)]
           when :on_heredoc_end
+            # If we receive the end of a heredoc, then we're done lexing the
+            # body of the heredoc. In this case we now have a completed heredoc
+            # but need to wait for the next newline to push it into the token
+            # stream.
             state = :heredoc_closed
           end
         when :heredoc_closed
@@ -691,7 +780,8 @@ module YARP
         end
       end
 
-      tokens.reject! { |t| t.event == :on_eof }
+      # Drop the EOF token from the list
+      tokens = tokens[0...-1]
 
       # We sort by location to compare against Ripper's output
       tokens.sort_by!(&:location)
@@ -727,8 +817,7 @@ module YARP
       when :on_sp
         # skip
       when :on_tstring_content
-        if previous[1] == :on_tstring_content &&
-            (token[2].start_with?("\#$") || token[2].start_with?("\#@"))
+        if previous[1] == :on_tstring_content && (token[2].start_with?("\#$") || token[2].start_with?("\#@"))
           previous[2] << token[2]
         else
           results << token

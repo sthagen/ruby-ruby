@@ -4,7 +4,7 @@ ProgramNode(0...578)(
     [BeginNode(0...33)(
        (0...5),
        StatementsNode(7...8)(
-         [CallNode(7...8)(nil, nil, (7...8), nil, nil, nil, nil, 0, "a")]
+         [CallNode(7...8)(nil, nil, (7...8), nil, nil, nil, nil, 2, "a")]
        ),
        RescueNode(10...19)(
          (10...16),
@@ -12,14 +12,14 @@ ProgramNode(0...578)(
          nil,
          nil,
          StatementsNode(18...19)(
-           [CallNode(18...19)(nil, nil, (18...19), nil, nil, nil, nil, 0, "b")]
+           [CallNode(18...19)(nil, nil, (18...19), nil, nil, nil, nil, 2, "b")]
          ),
          nil
        ),
        ElseNode(21...33)(
          (21...25),
          StatementsNode(27...28)(
-           [CallNode(27...28)(nil, nil, (27...28), nil, nil, nil, nil, 0, "c")]
+           [CallNode(27...28)(nil, nil, (27...28), nil, nil, nil, nil, 2, "c")]
          ),
          (30...33)
        ),
@@ -29,7 +29,7 @@ ProgramNode(0...578)(
      BeginNode(35...79)(
        (35...40),
        StatementsNode(42...43)(
-         [CallNode(42...43)(nil, nil, (42...43), nil, nil, nil, nil, 0, "a")]
+         [CallNode(42...43)(nil, nil, (42...43), nil, nil, nil, nil, 2, "a")]
        ),
        RescueNode(45...54)(
          (45...51),
@@ -37,21 +37,21 @@ ProgramNode(0...578)(
          nil,
          nil,
          StatementsNode(53...54)(
-           [CallNode(53...54)(nil, nil, (53...54), nil, nil, nil, nil, 0, "b")]
+           [CallNode(53...54)(nil, nil, (53...54), nil, nil, nil, nil, 2, "b")]
          ),
          nil
        ),
        ElseNode(56...71)(
          (56...60),
          StatementsNode(62...63)(
-           [CallNode(62...63)(nil, nil, (62...63), nil, nil, nil, nil, 0, "c")]
+           [CallNode(62...63)(nil, nil, (62...63), nil, nil, nil, nil, 2, "c")]
          ),
          (65...71)
        ),
        EnsureNode(65...79)(
          (65...71),
          StatementsNode(73...74)(
-           [CallNode(73...74)(nil, nil, (73...74), nil, nil, nil, nil, 0, "d")]
+           [CallNode(73...74)(nil, nil, (73...74), nil, nil, nil, nil, 2, "d")]
          ),
          (76...79)
        ),
@@ -60,7 +60,7 @@ ProgramNode(0...578)(
      BeginNode(81...92)(
        (81...86),
        StatementsNode(87...88)(
-         [CallNode(87...88)(nil, nil, (87...88), nil, nil, nil, nil, 0, "a")]
+         [CallNode(87...88)(nil, nil, (87...88), nil, nil, nil, nil, 2, "a")]
        ),
        nil,
        nil,
@@ -78,7 +78,7 @@ ProgramNode(0...578)(
             nil,
             nil,
             nil,
-            0,
+            2,
             "a"
           )]
        ),
@@ -98,7 +98,7 @@ ProgramNode(0...578)(
             nil,
             nil,
             nil,
-            0,
+            2,
             "a"
           )]
        ),
@@ -118,7 +118,7 @@ ProgramNode(0...578)(
             nil,
             nil,
             nil,
-            0,
+            2,
             "a"
           )]
        ),
@@ -138,7 +138,7 @@ ProgramNode(0...578)(
             nil,
             nil,
             nil,
-            0,
+            2,
             "a"
           )]
        ),
@@ -156,7 +156,7 @@ ProgramNode(0...578)(
               nil,
               nil,
               nil,
-              0,
+              2,
               "b"
             )]
          ),
@@ -174,7 +174,7 @@ ProgramNode(0...578)(
                 nil,
                 nil,
                 nil,
-                0,
+                2,
                 "c"
               )]
            ),
@@ -192,7 +192,7 @@ ProgramNode(0...578)(
                   nil,
                   nil,
                   nil,
-                  0,
+                  2,
                   "d"
                 )]
              ),
@@ -215,7 +215,7 @@ ProgramNode(0...578)(
             nil,
             nil,
             nil,
-            0,
+            2,
             "a"
           )]
        ),
@@ -223,7 +223,7 @@ ProgramNode(0...578)(
          (187...193),
          [ConstantReadNode(194...203)()],
          (204...206),
-         LocalVariableWriteNode(207...209)(:ex, 0, nil, (207...209), nil),
+         LocalVariableTargetNode(207...209)(:ex, 0),
          StatementsNode(212...213)(
            [CallNode(212...213)(
               nil,
@@ -233,7 +233,7 @@ ProgramNode(0...578)(
               nil,
               nil,
               nil,
-              0,
+              2,
               "b"
             )]
          ),
@@ -241,7 +241,7 @@ ProgramNode(0...578)(
            (214...220),
            [ConstantReadNode(221...237)(), ConstantReadNode(239...255)()],
            (256...258),
-           LocalVariableWriteNode(259...261)(:ex, 0, nil, (259...261), nil),
+           LocalVariableTargetNode(259...261)(:ex, 0),
            StatementsNode(264...265)(
              [CallNode(264...265)(
                 nil,
@@ -251,7 +251,7 @@ ProgramNode(0...578)(
                 nil,
                 nil,
                 nil,
-                0,
+                2,
                 "c"
               )]
            ),
@@ -273,7 +273,7 @@ ProgramNode(0...578)(
             nil,
             nil,
             nil,
-            0,
+            2,
             "a"
           )]
        ),
@@ -281,7 +281,7 @@ ProgramNode(0...578)(
          (281...287),
          [ConstantReadNode(288...297)()],
          (298...300),
-         LocalVariableWriteNode(301...303)(:ex, 0, nil, (301...303), nil),
+         LocalVariableTargetNode(301...303)(:ex, 0),
          StatementsNode(306...307)(
            [CallNode(306...307)(
               nil,
@@ -291,7 +291,7 @@ ProgramNode(0...578)(
               nil,
               nil,
               nil,
-              0,
+              2,
               "b"
             )]
          ),
@@ -309,7 +309,7 @@ ProgramNode(0...578)(
               nil,
               nil,
               nil,
-              0,
+              2,
               "b"
             )]
          ),
@@ -329,7 +329,7 @@ ProgramNode(0...578)(
             nil,
             nil,
             nil,
-            0,
+            2,
             "a"
           )]
        ),
@@ -347,7 +347,7 @@ ProgramNode(0...578)(
               nil,
               nil,
               nil,
-              0,
+              2,
               "b"
             )]
          ),
@@ -368,7 +368,7 @@ ProgramNode(0...578)(
             nil,
             nil,
             nil,
-            0,
+            2,
             "a"
           )]
        ),
@@ -386,7 +386,7 @@ ProgramNode(0...578)(
               nil,
               nil,
               nil,
-              0,
+              2,
               "b"
             )]
          ),
@@ -407,7 +407,7 @@ ProgramNode(0...578)(
             nil,
             nil,
             nil,
-            0,
+            2,
             "a"
           )]
        ),
@@ -425,7 +425,7 @@ ProgramNode(0...578)(
               nil,
               nil,
               nil,
-              0,
+              2,
               "b"
             )]
          ),
@@ -446,7 +446,7 @@ ProgramNode(0...578)(
             nil,
             nil,
             nil,
-            0,
+            2,
             "a"
           )]
        ),
@@ -464,7 +464,7 @@ ProgramNode(0...578)(
               nil,
               nil,
               nil,
-              0,
+              2,
               "b"
             )]
          ),
@@ -485,7 +485,7 @@ ProgramNode(0...578)(
             nil,
             nil,
             nil,
-            0,
+            2,
             "a"
           )]
        ),
@@ -503,7 +503,7 @@ ProgramNode(0...578)(
               nil,
               nil,
               nil,
-              0,
+              2,
               "b"
             )]
          ),
@@ -524,7 +524,7 @@ ProgramNode(0...578)(
             nil,
             nil,
             nil,
-            0,
+            2,
             "a"
           )]
        ),
@@ -532,7 +532,7 @@ ProgramNode(0...578)(
          (489...495),
          [ConstantReadNode(496...505)(), ConstantReadNode(507...522)()],
          (523...525),
-         LocalVariableWriteNode(526...528)(:ex, 0, nil, (526...528), nil),
+         LocalVariableTargetNode(526...528)(:ex, 0),
          StatementsNode(531...532)(
            [CallNode(531...532)(
               nil,
@@ -542,7 +542,7 @@ ProgramNode(0...578)(
               nil,
               nil,
               nil,
-              0,
+              2,
               "b"
             )]
          ),
@@ -563,7 +563,7 @@ ProgramNode(0...578)(
             nil,
             nil,
             nil,
-            0,
+            2,
             "a"
           )]
        ),
@@ -571,7 +571,7 @@ ProgramNode(0...578)(
          (548...554),
          [ConstantReadNode(555...564)()],
          (565...567),
-         LocalVariableWriteNode(568...570)(:ex, 0, nil, (568...570), nil),
+         LocalVariableTargetNode(568...570)(:ex, 0),
          StatementsNode(573...574)(
            [CallNode(573...574)(
               nil,
@@ -581,7 +581,7 @@ ProgramNode(0...578)(
               nil,
               nil,
               nil,
-              0,
+              2,
               "b"
             )]
          ),

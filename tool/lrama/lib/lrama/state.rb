@@ -1,11 +1,11 @@
 require "lrama/state/reduce"
-require "lrama/state/shift"
+require "lrama/state/reduce_reduce_conflict"
 require "lrama/state/resolved_conflict"
+require "lrama/state/shift"
+require "lrama/state/shift_reduce_conflict"
 
 module Lrama
   class State
-    Conflict = Struct.new(:symbols, :reduce, :type, keyword_init: true)
-
     attr_reader :id, :accessing_symbol, :kernels, :conflicts, :resolved_conflicts,
                 :default_reduction_rule, :closure, :items
     attr_accessor :shifts, :reduces
@@ -62,7 +62,6 @@ module Lrama
       @items_to_state[items] = next_state
     end
 
-    #
     def set_look_ahead(rule, look_ahead)
       reduce = reduces.find do |r|
         r.rule == rule
@@ -99,6 +98,10 @@ module Lrama
       end
 
       @term_transitions
+    end
+
+    def transitions
+      term_transitions + nterm_transitions
     end
 
     def selected_term_transitions
@@ -142,6 +145,10 @@ module Lrama
           r.default_reduction = true
         end
       end
+    end
+
+    def has_conflicts?
+      !@conflicts.empty?
     end
 
     def sr_conflicts

@@ -252,7 +252,7 @@ module Lrama
     end
 
     def extract_param_name(param)
-      /\A(.)+([a-zA-Z0-9_]+)\z/.match(param)[2]
+      param[/\b([a-zA-Z0-9_]+)(?=\s*\z)/]
     end
 
     def parse_param_name
