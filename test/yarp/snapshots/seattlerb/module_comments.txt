@@ -4,9 +4,10 @@ ProgramNode(24...77)(
     [ModuleNode(24...77)(
        [],
        (24...30),
-       ConstantReadNode(31...32)(),
+       ConstantReadNode(31...32)(:X),
        StatementsNode(46...73)(
          [DefNode(46...73)(
+            :blah,
             (50...54),
             nil,
             nil,
@@ -21,7 +22,7 @@ ProgramNode(24...77)(
           )]
        ),
        (74...77),
-       "X"
+       :X
      )]
   )
 )

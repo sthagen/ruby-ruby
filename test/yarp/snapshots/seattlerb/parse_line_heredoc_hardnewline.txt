@@ -14,12 +14,12 @@ ProgramNode(0...48)(
      ClassNode(35...48)(
        [],
        (35...40),
-       ConstantReadNode(41...44)(),
+       ConstantReadNode(41...44)(:Foo),
        nil,
        nil,
        nil,
        (45...48),
-       "Foo"
+       :Foo
      )]
   )
 )

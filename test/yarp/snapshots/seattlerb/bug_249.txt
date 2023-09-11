@@ -11,7 +11,7 @@ ProgramNode(0...67)(
             ParenthesesNode(6...44)(
               StatementsNode(7...43)(
                 [CallNode(7...43)(
-                   ConstantReadNode(7...12)(),
+                   ConstantReadNode(7...12)(:Class),
                    (12...13),
                    (13...16),
                    nil,
@@ -22,6 +22,7 @@ ProgramNode(0...67)(
                      nil,
                      StatementsNode(20...38)(
                        [DefNode(20...38)(
+                          :initialize,
                           (24...34),
                           nil,
                           nil,

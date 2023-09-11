@@ -2742,13 +2742,16 @@ EOS
       ary.clear
       ary = nil
 
+      # Disable GC so we can make sure GC only runs in Process.warmup
+      GC.disable
+
       total_pages_before = GC.stat(:heap_eden_pages) + GC.stat(:heap_allocatable_pages)
 
       Process.warmup
 
       # Number of pages freed should cause equal increase in number of allocatable pages.
       assert_equal(total_pages_before, GC.stat(:heap_eden_pages) + GC.stat(:heap_allocatable_pages))
-      assert_equal(0, GC.stat(:heap_tomb_pages))
+      assert_equal(0, GC.stat(:heap_tomb_pages), GC.stat)
       assert_operator(GC.stat(:total_freed_pages), :>, 0)
     end;
   end

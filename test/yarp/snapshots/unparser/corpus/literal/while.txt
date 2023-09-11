@@ -4,7 +4,7 @@ ProgramNode(0...620)(
     [ModuleNode(0...68)(
        [],
        (0...6),
-       ConstantReadNode(7...8)(),
+       ConstantReadNode(7...8)(:A),
        StatementsNode(11...64)(
          [CallNode(11...64)(
             nil,
@@ -64,9 +64,10 @@ ProgramNode(0...620)(
           )]
        ),
        (65...68),
-       "A"
+       :A
      ),
      DefNode(70...110)(
+       :foo,
        (74...77),
        nil,
        nil,
@@ -130,7 +131,7 @@ ProgramNode(0...620)(
      ModuleNode(112...146)(
        [:foo],
        (112...118),
-       ConstantReadNode(119...120)(),
+       ConstantReadNode(119...120)(:A),
        StatementsNode(123...142)(
          [WhileNode(123...142)(
             (133...138),
@@ -159,12 +160,12 @@ ProgramNode(0...620)(
           )]
        ),
        (143...146),
-       "A"
+       :A
      ),
      ModuleNode(148...182)(
        [:foo],
        (148...154),
-       ConstantReadNode(155...156)(),
+       ConstantReadNode(155...156)(:A),
        StatementsNode(159...178)(
          [UntilNode(159...178)(
             (169...174),
@@ -193,12 +194,12 @@ ProgramNode(0...620)(
           )]
        ),
        (179...182),
-       "A"
+       :A
      ),
      ModuleNode(184...228)(
        [:foo],
        (184...190),
-       ConstantReadNode(191...192)(),
+       ConstantReadNode(191...192)(:A),
        StatementsNode(195...224)(
          [WhileNode(195...224)(
             (195...200),
@@ -237,12 +238,12 @@ ProgramNode(0...620)(
           )]
        ),
        (225...228),
-       "A"
+       :A
      ),
      ModuleNode(230...299)(
        [],
        (230...236),
-       ConstantReadNode(237...238)(),
+       ConstantReadNode(237...238)(:A),
        StatementsNode(241...295)(
          [CallNode(241...295)(
             nil,
@@ -312,12 +313,12 @@ ProgramNode(0...620)(
           )]
        ),
        (296...299),
-       "A"
+       :A
      ),
      ModuleNode(301...370)(
        [],
        (301...307),
-       ConstantReadNode(308...309)(),
+       ConstantReadNode(308...309)(:A),
        StatementsNode(312...366)(
          [CallNode(312...366)(
             nil,
@@ -377,7 +378,7 @@ ProgramNode(0...620)(
           )]
        ),
        (367...370),
-       "A"
+       :A
      ),
      LocalVariableWriteNode(371...402)(
        :x,

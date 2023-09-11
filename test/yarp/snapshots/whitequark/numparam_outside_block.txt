@@ -15,16 +15,17 @@ ProgramNode(0...83)(
      ClassNode(27...43)(
        [],
        (27...32),
-       ConstantReadNode(33...34)(),
+       ConstantReadNode(33...34)(:A),
        nil,
        nil,
        StatementsNode(36...38)(
          [CallNode(36...38)(nil, nil, (36...38), nil, nil, nil, nil, 2, "_1")]
        ),
        (40...43),
-       "A"
+       :A
      ),
      DefNode(45...64)(
+       :m,
        (54...55),
        SelfNode(49...53)(),
        nil,
@@ -42,12 +43,12 @@ ProgramNode(0...83)(
      ModuleNode(66...83)(
        [],
        (66...72),
-       ConstantReadNode(73...74)(),
+       ConstantReadNode(73...74)(:A),
        StatementsNode(76...78)(
          [CallNode(76...78)(nil, nil, (76...78), nil, nil, nil, nil, 2, "_1")]
        ),
        (80...83),
-       "A"
+       :A
      )]
   )
 )

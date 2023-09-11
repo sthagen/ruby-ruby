@@ -249,6 +249,9 @@ pub enum JCCKinds {
 
 #[inline(always)]
 fn gen_counter_incr(asm: &mut Assembler, counter: Counter) {
+    // Assert that default counters are not incremented by generated code as this would impact performance
+    assert!(!DEFAULT_COUNTERS.contains(&counter), "gen_counter_incr incremented {:?}", counter);
+
     if get_option!(gen_stats) {
         asm.comment(&format!("increment counter {}", counter.get_name()));
         let ptr = get_counter_ptr(&counter.get_name());
@@ -2032,11 +2035,11 @@ fn jit_chain_guard(
     }
 }
 
-// up to 5 different classes, and embedded or not for each
-pub const GET_IVAR_MAX_DEPTH: i32 = 10;
+// up to 8 different shapes for each
+pub const GET_IVAR_MAX_DEPTH: i32 = 8;
 
-// up to 5 different classes, and embedded or not for each
-pub const SET_IVAR_MAX_DEPTH: i32 = 10;
+// up to 8 different shapes for each
+pub const SET_IVAR_MAX_DEPTH: i32 = 8;
 
 // hashes and arrays
 pub const OPT_AREF_MAX_CHAIN_DEPTH: i32 = 2;
@@ -2044,11 +2047,8 @@ pub const OPT_AREF_MAX_CHAIN_DEPTH: i32 = 2;
 // expandarray
 pub const EXPANDARRAY_MAX_CHAIN_DEPTH: i32 = 4;
 
-// up to 10 different classes
-pub const SEND_MAX_DEPTH: i32 = 20;
-
-// up to 20 different methods for send
-pub const SEND_MAX_CHAIN_DEPTH: i32 = 20;
+// up to 5 different methods for send
+pub const SEND_MAX_DEPTH: i32 = 5;
 
 // up to 20 different offsets for case-when
 pub const CASE_WHEN_MAX_DEPTH: i32 = 20;
@@ -4382,7 +4382,7 @@ fn jit_rb_kernel_instance_of(
         jit,
         asm,
         ocb,
-        SEND_MAX_CHAIN_DEPTH,
+        SEND_MAX_DEPTH,
         Counter::guard_send_instance_of_class_mismatch,
     );
 
@@ -4694,9 +4694,48 @@ fn jit_rb_str_bytesize(
     asm.comment("String#bytesize");
 
     let recv = asm.stack_pop(1);
-    let ret_opnd = asm.ccall(rb_str_bytesize as *const u8, vec![recv]);
+
+    asm.comment("get string length");
+    let str_len_opnd = Opnd::mem(
+        std::os::raw::c_long::BITS as u8,
+        asm.load(recv),
+        RUBY_OFFSET_RSTRING_LEN as i32,
+    );
+
+    let len = asm.load(str_len_opnd);
+    let shifted_val = asm.lshift(len, Opnd::UImm(1));
+    let out_val = asm.or(shifted_val, Opnd::UImm(RUBY_FIXNUM_FLAG as u64));
 
     let out_opnd = asm.stack_push(Type::Fixnum);
+
+    asm.mov(out_opnd, out_val);
+
+    true
+}
+
+fn jit_rb_str_getbyte(
+    jit: &mut JITState,
+    asm: &mut Assembler,
+    _ocb: &mut OutlinedCb,
+    _ci: *const rb_callinfo,
+    _cme: *const rb_callable_method_entry_t,
+    _block: Option<BlockHandler>,
+    _argc: i32,
+    _known_recv_class: *const VALUE,
+) -> bool {
+    asm.comment("String#getbyte");
+    extern "C" {
+        fn rb_str_getbyte(str: VALUE, index: VALUE) -> VALUE;
+    }
+    // Raises when non-integers are passed in
+    jit_prepare_routine_call(jit, asm);
+
+    let index = asm.stack_pop(1);
+    let recv = asm.stack_pop(1);
+    let ret_opnd = asm.ccall(rb_str_getbyte as *const u8, vec![recv, index]);
+
+    // Can either return a FIXNUM or nil
+    let out_opnd = asm.stack_push(Type::UnknownImm);
     asm.mov(out_opnd, ret_opnd);
 
     true
@@ -4972,7 +5011,7 @@ fn jit_obj_respond_to(
         jit,
         asm,
         ocb,
-        SEND_MAX_CHAIN_DEPTH,
+        SEND_MAX_DEPTH,
         Counter::guard_send_respond_to_mid_mismatch,
     );
 
@@ -5223,12 +5262,13 @@ fn gen_push_frame(
     let ep = asm.sub(sp, SIZEOF_VALUE.into());
     asm.mov(cfp_opnd(RUBY_OFFSET_CFP_EP), ep);
 
-    asm.comment("switch to new CFP");
     let new_cfp = asm.lea(cfp_opnd(0));
     if set_sp_cfp {
+        asm.comment("switch to new CFP");
         asm.mov(CFP, new_cfp);
         asm.store(Opnd::mem(64, EC, RUBY_OFFSET_EC_CFP), CFP);
     } else {
+        asm.comment("set ec->cfp");
         asm.store(Opnd::mem(64, EC, RUBY_OFFSET_EC_CFP), new_cfp);
     }
 }
@@ -6023,7 +6063,7 @@ fn gen_send_iseq(
                 jit,
                 asm,
                 ocb,
-                SEND_MAX_CHAIN_DEPTH,
+                SEND_MAX_DEPTH,
                 Counter::guard_send_block_arg_type,
             );
 
@@ -7171,7 +7211,7 @@ fn gen_send_general(
                             jit,
                             asm,
                             ocb,
-                            SEND_MAX_CHAIN_DEPTH,
+                            SEND_MAX_DEPTH,
                             Counter::guard_send_send_chain,
                         );
 
@@ -7413,7 +7453,7 @@ fn gen_invokeblock_specialized(
     }
 
     // Fallback to dynamic dispatch if this callsite is megamorphic
-    if asm.ctx.get_chain_depth() as i32 >= SEND_MAX_CHAIN_DEPTH {
+    if asm.ctx.get_chain_depth() as i32 >= SEND_MAX_DEPTH {
         gen_counter_incr(asm, Counter::invokeblock_megamorphic);
         return None;
     }
@@ -7447,7 +7487,7 @@ fn gen_invokeblock_specialized(
             jit,
             asm,
             ocb,
-            SEND_MAX_CHAIN_DEPTH,
+            SEND_MAX_DEPTH,
             Counter::guard_invokeblock_tag_changed,
         );
 
@@ -7463,7 +7503,7 @@ fn gen_invokeblock_specialized(
             jit,
             asm,
             ocb,
-            SEND_MAX_CHAIN_DEPTH,
+            SEND_MAX_DEPTH,
             Counter::guard_invokeblock_iseq_block_changed,
         );
 
@@ -7506,7 +7546,7 @@ fn gen_invokeblock_specialized(
             jit,
             asm,
             ocb,
-            SEND_MAX_CHAIN_DEPTH,
+            SEND_MAX_DEPTH,
             Counter::guard_invokeblock_tag_changed,
         );
 
@@ -7587,7 +7627,7 @@ fn gen_invokesuper_specialized(
     };
 
     // Fallback to dynamic dispatch if this callsite is megamorphic
-    if asm.ctx.get_chain_depth() as i32 >= SEND_MAX_CHAIN_DEPTH {
+    if asm.ctx.get_chain_depth() as i32 >= SEND_MAX_DEPTH {
         gen_counter_incr(asm, Counter::invokesuper_megamorphic);
         return None;
     }
@@ -7671,7 +7711,7 @@ fn gen_invokesuper_specialized(
         jit,
         asm,
         ocb,
-        SEND_MAX_CHAIN_DEPTH,
+        SEND_MAX_DEPTH,
         Counter::guard_invokesuper_me_changed,
     );
 
@@ -8581,9 +8621,6 @@ pub struct CodegenGlobals {
 
     /// Page indexes for outlined code that are not associated to any ISEQ.
     ocb_pages: Vec<usize>,
-
-    /// How many times code GC has been executed.
-    code_gc_count: usize,
 }
 
 /// For implementing global code invalidation. A position in the inline
@@ -8679,7 +8716,6 @@ impl CodegenGlobals {
             global_inval_patches: Vec::new(),
             method_codegen_table: HashMap::new(),
             ocb_pages,
-            code_gc_count: 0,
         };
 
         // Register the method codegen functions
@@ -8750,6 +8786,7 @@ impl CodegenGlobals {
             self.yjit_reg_method(rb_cString, "to_s", jit_rb_str_to_s);
             self.yjit_reg_method(rb_cString, "to_str", jit_rb_str_to_s);
             self.yjit_reg_method(rb_cString, "bytesize", jit_rb_str_bytesize);
+            self.yjit_reg_method(rb_cString, "getbyte", jit_rb_str_getbyte);
             self.yjit_reg_method(rb_cString, "<<", jit_rb_str_concat);
             self.yjit_reg_method(rb_cString, "+@", jit_rb_str_uplus);
 
@@ -8840,14 +8877,6 @@ impl CodegenGlobals {
 
     pub fn get_ocb_pages() -> &'static Vec<usize> {
         &CodegenGlobals::get_instance().ocb_pages
-    }
-
-    pub fn incr_code_gc_count() {
-        CodegenGlobals::get_instance().code_gc_count += 1;
-    }
-
-    pub fn get_code_gc_count() -> usize {
-        CodegenGlobals::get_instance().code_gc_count
     }
 }
 

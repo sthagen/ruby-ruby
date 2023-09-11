@@ -72,6 +72,7 @@ ProgramNode(0...314)(
        (111...116),
        (158...161),
        DefNode(117...149)(
+         :foo,
          (126...129),
          SelfNode(121...125)(),
          ParametersNode(130...144)(
@@ -116,7 +117,7 @@ ProgramNode(0...314)(
        ClassNode(169...198)(
          [:a],
          (169...174),
-         ConstantReadNode(175...178)(),
+         ConstantReadNode(175...178)(:Foo),
          nil,
          nil,
          StatementsNode(179...193)(
@@ -139,7 +140,7 @@ ProgramNode(0...314)(
             )]
          ),
          (195...198),
-         "Foo"
+         :Foo
        ),
        StatementsNode(200...205)([BreakNode(200...205)(nil, (200...205))]),
        0

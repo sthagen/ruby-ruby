@@ -4,11 +4,12 @@ ProgramNode(18...90)(
     [ClassNode(18...90)(
        [],
        (18...23),
-       ConstantReadNode(24...52)(),
+       ConstantReadNode(24...52)(:ExampleUTF8ClassNameVarietà),
        nil,
        nil,
        StatementsNode(54...86)(
          [DefNode(54...86)(
+            :è,
             (63...65),
             SelfNode(58...62)(),
             nil,
@@ -31,7 +32,7 @@ ProgramNode(18...90)(
           )]
        ),
        (87...90),
-       "ExampleUTF8ClassNameVarietà"
+       :ExampleUTF8ClassNameVarietà
      )]
   )
 )

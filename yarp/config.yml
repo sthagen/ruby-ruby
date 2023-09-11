@@ -520,6 +520,15 @@ nodes:
 
           bar(&args)
           ^^^^^^^^^^
+  - name: BlockLocalVariableNode
+    fields:
+      - name: name
+        type: constant
+    comment: |
+      Represents a block local variable.
+
+          a { |; b| }
+                 ^
   - name: BlockNode
     fields:
       - name: locals
@@ -540,6 +549,8 @@ nodes:
                      ^^^^^^^^^^^^^^
   - name: BlockParameterNode
     fields:
+      - name: name
+        type: constant?
       - name: name_loc
         type: location?
       - name: operator_loc
@@ -556,7 +567,7 @@ nodes:
         type: node?
         kind: ParametersNode
       - name: locals
-        type: location[]
+        type: node[]
       - name: opening_loc
         type: location?
       - name: closing_loc
@@ -582,11 +593,42 @@ nodes:
 
           break foo
           ^^^^^^^^^
+  - name: CallAndWriteNode
+    fields:
+      - name: receiver
+        type: node?
+      - name: call_operator_loc
+        type: location?
+      - name: message_loc
+        type: location?
+      - name: opening_loc
+        type: location?
+      - name: arguments
+        type: node?
+        kind: ArgumentsNode
+      - name: closing_loc
+        type: location?
+      - name: flags
+        type: flags
+        kind: CallNodeFlags
+      - name: read_name
+        type: string
+      - name: write_name
+        type: string
+      - name: operator_loc
+        type: location
+      - name: value
+        type: node
+    comment: |
+      Represents the use of the `&&=` operator on a call.
+
+          foo.bar &&= value
+          ^^^^^^^^^^^^^^^^^
   - name: CallNode
     fields:
       - name: receiver
         type: node?
-      - name: operator_loc
+      - name: call_operator_loc
         type: location?
       - name: message_loc
         type: location?
@@ -625,50 +667,70 @@ nodes:
 
           foo&.bar
           ^^^^^^^^
-  - name: CallOperatorAndWriteNode
-    fields:
-      - name: target
-        type: node
-        kind: CallNode
-      - name: operator_loc
-        type: location
-      - name: value
-        type: node
-    comment: |
-      Represents the use of the `&&=` operator on a call.
-
-          foo.bar &&= value
-          ^^^^^^^^^^^^^^^^^
-  - name: CallOperatorOrWriteNode
-    fields:
-      - name: target
-        type: node
-        kind: CallNode
-      - name: value
-        type: node
-      - name: operator_loc
-        type: location
-    comment: |
-      Represents the use of the `||=` operator on a call.
-
-          foo.bar ||= value
-          ^^^^^^^^^^^^^^^^^
   - name: CallOperatorWriteNode
     fields:
-      - name: target
-        type: node
-        kind: CallNode
+      - name: receiver
+        type: node?
+      - name: call_operator_loc
+        type: location?
+      - name: message_loc
+        type: location?
+      - name: opening_loc
+        type: location?
+      - name: arguments
+        type: node?
+        kind: ArgumentsNode
+      - name: closing_loc
+        type: location?
+      - name: flags
+        type: flags
+        kind: CallNodeFlags
+      - name: read_name
+        type: string
+      - name: write_name
+        type: string
+      - name: operator
+        type: constant
       - name: operator_loc
         type: location
       - name: value
         type: node
-      - name: operator
-        type: constant
     comment: |
       Represents the use of an assignment operator on a call.
 
           foo.bar += baz
           ^^^^^^^^^^^^^^
+  - name: CallOrWriteNode
+    fields:
+      - name: receiver
+        type: node?
+      - name: call_operator_loc
+        type: location?
+      - name: message_loc
+        type: location?
+      - name: opening_loc
+        type: location?
+      - name: arguments
+        type: node?
+        kind: ArgumentsNode
+      - name: closing_loc
+        type: location?
+      - name: flags
+        type: flags
+        kind: CallNodeFlags
+      - name: read_name
+        type: string
+      - name: write_name
+        type: string
+      - name: operator_loc
+        type: location
+      - name: value
+        type: node
+    comment: |
+      Represents the use of the `||=` operator on a call.
+
+          foo.bar ||= value
+          ^^^^^^^^^^^^^^^^^
   - name: CapturePatternNode
     fields:
       - name: value
@@ -719,7 +781,7 @@ nodes:
       - name: end_keyword_loc
         type: location
       - name: name
-        type: string
+        type: constant
     comment: |
       Represents a class declaration involving the `class` keyword.
 
@@ -797,7 +859,7 @@ nodes:
       - name: name_loc
         type: location
       - name: value
-        type: node?
+        type: node
       - name: operator_loc
         type: location?
     comment: |
@@ -807,6 +869,8 @@ nodes:
           ^^^^^^^^^
   - name: ConstantAndWriteNode
     fields:
+      - name: name
+        type: constant
       - name: name_loc
         type: location
       - name: operator_loc
@@ -820,6 +884,8 @@ nodes:
           ^^^^^^^^^^^^^^^^
   - name: ConstantOperatorWriteNode
     fields:
+      - name: name
+        type: constant
       - name: name_loc
         type: location
       - name: operator_loc
@@ -835,6 +901,8 @@ nodes:
           ^^^^^^^^^^^^^^^
   - name: ConstantOrWriteNode
     fields:
+      - name: name
+        type: constant
       - name: name_loc
         type: location
       - name: operator_loc
@@ -937,12 +1005,18 @@ nodes:
           ::Foo::Bar = 1
           ^^^^^^^^^^^^^^
   - name: ConstantReadNode
+    fields:
+      - name: name
+        type: constant
     comment: |
       Represents referencing a constant.
 
           Foo
           ^^^
   - name: ConstantTargetNode
+    fields:
+      - name: name
+        type: constant
     comment: |
       Represents writing to a constant in a context that doesn't have an explicit value.
 
@@ -950,6 +1024,8 @@ nodes:
           ^^^  ^^^
   - name: ConstantWriteNode
     fields:
+      - name: name
+        type: constant
       - name: name_loc
         type: location
       - name: value
@@ -963,6 +1039,8 @@ nodes:
           ^^^^^^^
   - name: DefNode
     fields:
+      - name: name
+        type: constant
       - name: name_loc
         type: location
       - name: receiver
@@ -1480,6 +1558,8 @@ nodes:
               ^^^^
   - name: KeywordParameterNode
     fields:
+      - name: name
+        type: constant
       - name: name_loc
         type: location
       - name: value
@@ -1496,10 +1576,12 @@ nodes:
           end
   - name: KeywordRestParameterNode
     fields:
-      - name: operator_loc
-        type: location
+      - name: name
+        type: constant?
       - name: name_loc
         type: location?
+      - name: operator_loc
+        type: location
     comment: |
       Represents a keyword rest parameter to a method, block, or lambda definition.
 
@@ -1663,26 +1745,39 @@ nodes:
       - name: end_keyword_loc
         type: location
       - name: name
-        type: string
+        type: constant
     comment: |
       Represents a module declaration involving the `module` keyword.
 
           module Foo end
           ^^^^^^^^^^^^^^
-  - name: MultiWriteNode
+  - name: MultiTargetNode
     fields:
       - name: targets
         type: node[]
-      - name: operator_loc
-        type: location?
-      - name: value
-        type: node?
       - name: lparen_loc
         type: location?
       - name: rparen_loc
         type: location?
     comment: |
       Represents a multi-target expression.
+
+          a, b, c = 1, 2, 3
+          ^^^^^^^
+  - name: MultiWriteNode
+    fields:
+      - name: targets
+        type: node[]
+      - name: lparen_loc
+        type: location?
+      - name: rparen_loc
+        type: location?
+      - name: operator_loc
+        type: location
+      - name: value
+        type: node
+    comment: |
+      Represents a write to a multi-target expression.
 
           a, b, c = 1, 2, 3
           ^^^^^^^^^^^^^^^^^
@@ -1979,10 +2074,12 @@ nodes:
       `ex` is in the `exception` field.
   - name: RestParameterNode
     fields:
-      - name: operator_loc
-        type: location
+      - name: name
+        type: constant?
       - name: name_loc
         type: location?
+      - name: operator_loc
+        type: location
     comment: |
       Represents a rest parameter to a method, block, or lambda definition.
 

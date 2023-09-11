@@ -20,6 +20,10 @@ module YARP
       offsets.bsearch_index { |offset| offset > value } || offsets.length
     end
 
+    def line_offset(value)
+      offsets[line(value) - 1]
+    end
+
     def column(value)
       value - offsets[line(value) - 1]
     end
@@ -46,10 +50,14 @@ module YARP
     # The length of this location in bytes.
     attr_reader :length
 
+    # The list of comments attached to this location
+    attr_reader :comments
+
     def initialize(source, start_offset, length)
       @source = source
       @start_offset = start_offset
       @length = length
+      @comments = []
     end
 
     # Create a new location object with the given options.
@@ -81,6 +89,12 @@ module YARP
       source.line(start_offset)
     end
 
+    # The content of the line where this location starts before this location.
+    def start_line_slice
+      offset = source.line_offset(start_offset)
+      source.slice(offset, start_offset - offset)
+    end
+
     # The line number where this location ends.
     def end_line
       source.line(end_offset - 1)
@@ -95,7 +109,7 @@ module YARP
     # The column number in bytes where this location ends from the start of the
     # line.
     def end_column
-      source.column(end_offset - 1)
+      source.column(end_offset)
     end
 
     def deconstruct_keys(keys)
@@ -140,6 +154,11 @@ module YARP
 
     def deconstruct_keys(keys)
       { type: type, location: location }
+    end
+
+    # Returns true if the comment happens on the same line as other code and false if the comment is by itself
+    def trailing?
+      type == :inline && !location.start_line_slice.strip.empty?
     end
 
     def inspect
@@ -228,45 +247,6 @@ module YARP
 
     def failure?
       !success?
-    end
-
-    # Keep in sync with Java MarkNewlinesVisitor
-    class MarkNewlinesVisitor < YARP::Visitor
-      def initialize(newline_marked)
-        @newline_marked = newline_marked
-      end
-
-      def visit_block_node(node)
-        old_newline_marked = @newline_marked
-        @newline_marked = Array.new(old_newline_marked.size, false)
-        begin
-          super(node)
-        ensure
-          @newline_marked = old_newline_marked
-        end
-      end
-      alias_method :visit_lambda_node, :visit_block_node
-
-      def visit_if_node(node)
-        node.set_newline_flag(@newline_marked)
-        super(node)
-      end
-      alias_method :visit_unless_node, :visit_if_node
-
-      def visit_statements_node(node)
-        node.body.each do |child|
-          child.set_newline_flag(@newline_marked)
-        end
-        super(node)
-      end
-    end
-    private_constant :MarkNewlinesVisitor
-
-    def mark_newlines
-      newline_marked = Array.new(1 + @source.offsets.size, false)
-      visitor = MarkNewlinesVisitor.new(newline_marked)
-      value.accept(visitor)
-      value
     end
   end
 
@@ -540,10 +520,10 @@ module YARP
             sorted = [
               *params.requireds.grep(RequiredParameterNode).map(&:name),
               *params.optionals.map(&:name),
-              *((params.rest.name ? params.rest.name.to_sym : :*) if params.rest && params.rest.operator != ","),
+              *((params.rest.name || :*) if params.rest && params.rest.operator != ","),
               *params.posts.grep(RequiredParameterNode).map(&:name),
-              *params.keywords.reject(&:value).map { |param| param.name.chomp(":").to_sym },
-              *params.keywords.select(&:value).map { |param| param.name.chomp(":").to_sym }
+              *params.keywords.reject(&:value).map(&:name),
+              *params.keywords.select(&:value).map(&:name)
             ]
 
             # TODO: When we get a ... parameter, we should be pushing * and &
@@ -609,6 +589,10 @@ require_relative "yarp/node"
 require_relative "yarp/ripper_compat"
 require_relative "yarp/serialize"
 require_relative "yarp/pack"
+require_relative "yarp/pattern"
+
+require_relative "yarp/parse_result/comments"
+require_relative "yarp/parse_result/newlines"
 
 if RUBY_ENGINE == "ruby" and !ENV["YARP_FFI_BACKEND"]
   require "yarp/yarp"

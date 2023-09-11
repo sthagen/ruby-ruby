@@ -48,6 +48,16 @@ module YARP
       }.compact.join(", ") %>]
     end
 
+    # def comment_targets: () -> Array[Node | Location]
+    def comment_targets
+      [<%= node.fields.map { |field|
+        case field
+        when YARP::NodeField, YARP::LocationField then field.name
+        when YARP::OptionalNodeField, YARP::NodeListField, YARP::OptionalLocationField then "*#{field.name}"
+        end
+      }.compact.join(", ") %>]
+    end
+
     # def copy: (**params) -> <%= node.name %>
     def copy(**params)
       <%= node.name %>.new(
@@ -100,7 +110,7 @@ module YARP
       <%- case field -%>
       <%- when YARP::NodeListField -%>
       inspector << "<%= pointer %><%= field.name %>: #{inspector.list("#{inspector.prefix}<%= preadd %>", <%= field.name %>)}"
-      <%- when YARP::LocationListField, YARP::ConstantListField -%>
+      <%- when YARP::ConstantListField -%>
       inspector << "<%= pointer %><%= field.name %>: #{<%= field.name %>.inspect}\n"
       <%- when YARP::NodeField -%>
       inspector << "<%= pointer %><%= field.name %>:\n"
@@ -112,7 +122,7 @@ module YARP
         inspector << "<%= pointer %><%= field.name %>:\n"
         inspector << <%= field.name %>.inspect(inspector.child_inspector("<%= preadd %>")).delete_prefix(inspector.prefix)
       end
-      <%- when YARP::ConstantField, YARP::StringField, YARP::UInt32Field -%>
+      <%- when YARP::ConstantField, YARP::OptionalConstantField, YARP::StringField, YARP::UInt32Field -%>
       inspector << "<%= pointer %><%= field.name %>: #{<%= field.name %>.inspect}\n"
       <%- when YARP::FlagsField -%>
       <%- flag = flags.find { |flag| flag.name == field.kind }.tap { |flag| raise unless flag } -%>

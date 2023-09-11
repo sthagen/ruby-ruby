@@ -2,6 +2,7 @@ ProgramNode(0...55)(
   [],
   StatementsNode(0...55)(
     [DefNode(0...21)(
+       :foo,
        (4...7),
        nil,
        nil,
@@ -55,6 +56,7 @@ ProgramNode(0...55)(
        (18...21)
      ),
      DefNode(23...55)(
+       :foo,
        (27...30),
        nil,
        nil,
@@ -62,7 +64,7 @@ ProgramNode(0...55)(
          [RescueModifierNode(33...51)(
             CallNode(33...34)(nil, nil, (33...34), nil, nil, nil, nil, 2, "a"),
             (35...41),
-            ConstantReadNode(42...51)()
+            ConstantReadNode(42...51)(:Exception)
           )]
        ),
        [],

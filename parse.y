@@ -1617,7 +1617,7 @@ static int looking_at_eol_p(struct parser_params *p);
 %type <id>   f_kwrest f_label f_arg_asgn call_op call_op2 reswords relop dot_or_colon
 %type <id>   p_kwrest p_kwnorest p_any_kwrest p_kw_label
 %type <id>   f_no_kwarg f_any_kwrest args_forward excessed_comma nonlocal_var
- %type <ctxt> lex_ctxt /* keep <ctxt> in ripper */
+ %type <ctxt> lex_ctxt k_class k_module /* keep <ctxt> in ripper */
 %token END_OF_INPUT 0	"end-of-input"
 %token <id> '.'
 /* escaped chars, should be ignored otherwise */
@@ -3609,8 +3609,8 @@ primary		: literal
                     /*% %*/
                     /*% ripper: class!($2, $3, $5) %*/
                         local_pop(p);
-                        p->ctxt.in_class = $<ctxt>1.in_class;
-                        p->ctxt.shareable_constant_value = $<ctxt>1.shareable_constant_value;
+                        p->ctxt.in_class = $1.in_class;
+                        p->ctxt.shareable_constant_value = $1.shareable_constant_value;
                     }
                 | k_class tLSHFT expr
                     {
@@ -3630,9 +3630,9 @@ primary		: literal
                     /*% %*/
                     /*% ripper: sclass!($3, $6) %*/
                         local_pop(p);
-                        p->ctxt.in_def = $<ctxt>1.in_def;
-                        p->ctxt.in_class = $<ctxt>1.in_class;
-                        p->ctxt.shareable_constant_value = $<ctxt>1.shareable_constant_value;
+                        p->ctxt.in_def = $1.in_def;
+                        p->ctxt.in_class = $1.in_class;
+                        p->ctxt.shareable_constant_value = $1.shareable_constant_value;
                     }
                 | k_module cpath
                     {
@@ -3654,8 +3654,8 @@ primary		: literal
                     /*% %*/
                     /*% ripper: module!($2, $4) %*/
                         local_pop(p);
-                        p->ctxt.in_class = $<ctxt>1.in_class;
-                        p->ctxt.shareable_constant_value = $<ctxt>1.shareable_constant_value;
+                        p->ctxt.in_class = $1.in_class;
+                        p->ctxt.shareable_constant_value = $1.shareable_constant_value;
                     }
                 | defn_head
                   f_arglist
@@ -3807,7 +3807,7 @@ k_for		: keyword_for
 k_class		: keyword_class
                     {
                         token_info_push(p, "class", &@$);
-                        $<ctxt>$ = p->ctxt;
+                        $$ = p->ctxt;
                     /*%%%*/
                         push_end_expect_token_locations(p, &@1.beg_pos);
                     /*% %*/
@@ -3817,7 +3817,7 @@ k_class		: keyword_class
 k_module	: keyword_module
                     {
                         token_info_push(p, "module", &@$);
-                        $<ctxt>$ = p->ctxt;
+                        $$ = p->ctxt;
                     /*%%%*/
                         push_end_expect_token_locations(p, &@1.beg_pos);
                     /*% %*/
@@ -5432,24 +5432,10 @@ string_dend	: tSTRING_DEND
                 | END_OF_INPUT
                 ;
 
-string_dvar	: tGVAR
+string_dvar	: nonlocal_var
                     {
                     /*%%%*/
-                        $$ = NEW_GVAR($1, &@$);
-                    /*% %*/
-                    /*% ripper: var_ref!($1) %*/
-                    }
-                | tIVAR
-                    {
-                    /*%%%*/
-                        $$ = NEW_IVAR($1, &@$);
-                    /*% %*/
-                    /*% ripper: var_ref!($1) %*/
-                    }
-                | tCVAR
-                    {
-                    /*%%%*/
-                        $$ = NEW_CVAR($1, &@$);
+                        if (!($$ = gettable(p, $1, &@$))) $$ = NEW_BEGIN(0, &@$);
                     /*% %*/
                     /*% ripper: var_ref!($1) %*/
                     }
@@ -12176,6 +12162,7 @@ value_expr_gen(struct parser_params *p, NODE *node)
     }
     return TRUE;
 }
+
 static void
 void_expr(struct parser_params *p, NODE *node)
 {

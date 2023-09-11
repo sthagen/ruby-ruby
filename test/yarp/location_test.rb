@@ -67,6 +67,12 @@ module YARP
       assert_location(BlockArgumentNode, "foo(&bar)", 4...8) { |node| node.arguments.arguments.last }
     end
 
+    def test_BlockLocalVariableNode
+      assert_location(BlockLocalVariableNode, "foo { |;bar| }", 8...11) do |node|
+        node.block.parameters.locals.first
+      end
+    end
+
     def test_BlockNode
       assert_location(BlockNode, "foo {}", 4...6, &:block)
       assert_location(BlockNode, "foo do end", 4...10, &:block)
@@ -166,9 +172,9 @@ module YARP
       assert_location(CallNode, "foo bar('baz')")
     end
 
-    def test_CallOperatorAndWriteNode
-      assert_location(CallOperatorAndWriteNode, "foo.foo &&= bar")
-      assert_location(CallOperatorAndWriteNode, "foo[foo] &&= bar")
+    def test_CallAndWriteNode
+      assert_location(CallAndWriteNode, "foo.foo &&= bar")
+      assert_location(CallAndWriteNode, "foo[foo] &&= bar")
     end
 
     def test_CallOperatorWriteNode
@@ -176,9 +182,9 @@ module YARP
       assert_location(CallOperatorWriteNode, "foo[foo] += bar")
     end
 
-    def test_CallOperatorOrWriteNode
-      assert_location(CallOperatorOrWriteNode, "foo.foo ||= bar")
-      assert_location(CallOperatorOrWriteNode, "foo[foo] ||= bar")
+    def test_CallOrWriteNode
+      assert_location(CallOrWriteNode, "foo.foo ||= bar")
+      assert_location(CallOrWriteNode, "foo[foo] ||= bar")
     end
 
     def test_CapturePatternNode
@@ -531,6 +537,11 @@ module YARP
       assert_location(ModuleNode, "module Foo end")
     end
 
+    def test_MultiTargetNode
+      assert_location(MultiTargetNode, "for foo, bar in baz do end", 4...12, &:index)
+      assert_location(MultiTargetNode, "foo, (bar, baz) = qux", 5...15) { |node| node.targets.last }
+    end
+
     def test_MultiWriteNode
       assert_location(MultiWriteNode, "foo, bar = baz")
     end
@@ -810,6 +821,14 @@ module YARP
 
       node = result.value.statements.body.last
       node = yield node if block_given?
+
+      if expected.begin == 0
+        assert_equal 0, node.location.start_column
+      end
+
+      if expected.end == source.length
+        assert_equal source.split("\n").last.length, node.location.end_column
+      end
 
       assert_kind_of kind, node
       assert_equal expected.begin, node.location.start_offset

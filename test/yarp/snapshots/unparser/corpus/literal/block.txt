@@ -56,7 +56,7 @@ ProgramNode(0...737)(
              [RequiredParameterNode(27...28)(:a)],
              [],
              [],
-             RestParameterNode(28...29)((28...29), nil),
+             RestParameterNode(28...29)(nil, nil, (28...29)),
              [],
              nil,
              nil
@@ -86,12 +86,12 @@ ProgramNode(0...737)(
              [RequiredParameterNode(40...41)(:a)],
              [],
              [],
-             RestParameterNode(41...42)((41...42), nil),
+             RestParameterNode(41...42)(nil, nil, (41...42)),
              [],
              nil,
              nil
            ),
-           [(44...45)],
+           [BlockLocalVariableNode(44...45)(:x)],
            (39...40),
            (45...46)
          ),
@@ -164,7 +164,7 @@ ProgramNode(0...737)(
              [RequiredParameterNode(88...89)(:a)],
              [],
              [],
-             RestParameterNode(91...93)((91...92), (92...93)),
+             RestParameterNode(91...93)(:b, (92...93), (91...92)),
              [],
              nil,
              nil
@@ -194,7 +194,7 @@ ProgramNode(0...737)(
              [RequiredParameterNode(110...111)(:a)],
              [],
              [],
-             RestParameterNode(113...114)((113...114), nil),
+             RestParameterNode(113...114)(nil, nil, (113...114)),
              [],
              nil,
              nil
@@ -321,12 +321,12 @@ ProgramNode(0...737)(
              [],
              [],
              [],
-             RestParameterNode(177...179)((177...178), (178...179)),
+             RestParameterNode(177...179)(:a, (178...179), (177...178)),
              [],
              nil,
              nil
            ),
-           [(181...182)],
+           [BlockLocalVariableNode(181...182)(:b)],
            (176...177),
            (182...183)
          ),
@@ -366,7 +366,7 @@ ProgramNode(0...737)(
              nil,
              nil
            ),
-           [(200...201)],
+           [BlockLocalVariableNode(200...201)(:b)],
            (196...197),
            (201...202)
          ),
@@ -398,7 +398,8 @@ ProgramNode(0...737)(
          [:a, :b],
          BlockParametersNode(215...223)(
            nil,
-           [(218...219), (221...222)],
+           [BlockLocalVariableNode(218...219)(:a),
+            BlockLocalVariableNode(221...222)(:b)],
            (215...216),
            (222...223)
          ),
@@ -433,7 +434,7 @@ ProgramNode(0...737)(
              [],
              [],
              [],
-             RestParameterNode(237...238)((237...238), nil),
+             RestParameterNode(237...238)(nil, nil, (237...238)),
              [],
              nil,
              nil
@@ -741,7 +742,7 @@ ProgramNode(0...737)(
            nil,
            RescueNode(365...386)(
              (365...371),
-             [ConstantReadNode(372...381)()],
+             [ConstantReadNode(372...381)(:Exception)],
              (382...384),
              LocalVariableTargetNode(385...386)(:e, 0),
              nil,
@@ -784,7 +785,7 @@ ProgramNode(0...737)(
            ),
            RescueNode(402...431)(
              (402...408),
-             [ConstantReadNode(409...418)()],
+             [ConstantReadNode(409...418)(:Exception)],
              (419...421),
              LocalVariableTargetNode(422...425)(:bar, 0),
              StatementsNode(428...431)(
@@ -829,7 +830,7 @@ ProgramNode(0...737)(
            ),
            RescueNode(447...475)(
              (447...453),
-             [ConstantReadNode(454...463)(),
+             [ConstantReadNode(454...463)(:SomeError),
               SplatNode(465...469)(
                 (465...466),
                 CallNode(466...469)(
@@ -898,7 +899,7 @@ ProgramNode(0...737)(
            ),
            RescueNode(491...532)(
              (491...497),
-             [ConstantReadNode(498...507)(),
+             [ConstantReadNode(498...507)(:SomeError),
               SplatNode(509...513)(
                 (509...510),
                 CallNode(510...513)(
@@ -1035,7 +1036,7 @@ ProgramNode(0...737)(
            ),
            RescueNode(581...597)(
              (581...587),
-             [ConstantReadNode(588...597)()],
+             [ConstantReadNode(588...597)(:LoadError)],
              nil,
              nil,
              nil,

@@ -4,11 +4,12 @@ ProgramNode(0...28)(
     [ClassNode(0...28)(
        [],
        (0...5),
-       ConstantReadNode(6...7)(),
+       ConstantReadNode(6...7)(:X),
        nil,
        nil,
        StatementsNode(10...24)(
          [DefNode(10...24)(
+            :==,
             (14...16),
             nil,
             ParametersNode(17...18)(
@@ -31,7 +32,7 @@ ProgramNode(0...28)(
           )]
        ),
        (25...28),
-       "X"
+       :X
      )]
   )
 )
