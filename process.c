@@ -566,30 +566,21 @@ proc_get_ppid(VALUE _)
  *
  * Document-class: Process::Status
  *
- *  Process::Status encapsulates the information on the
- *  status of a running or terminated system process. The built-in
- *  variable <code>$?</code> is either +nil+ or a
- *  Process::Status object.
+ *  A Process::Status contains information about a system process.
  *
- *     fork { exit 99 }   #=> 26557
- *     Process.wait       #=> 26557
- *     $?.class           #=> Process::Status
- *     $?.to_i            #=> 25344
- *     $? >> 8            #=> 99
- *     $?.stopped?        #=> false
- *     $?.exited?         #=> true
- *     $?.exitstatus      #=> 99
+ *  Thread-local variable <tt>$?</tt> is initially +nil+.
+ *  Some methods assign to it a Process::Status object
+ *  that represents a system process (either running or terminated):
  *
- *  Posix systems record information on processes using a 16-bit
- *  integer.  The lower bits record the process status (stopped,
- *  exited, signaled) and the upper bits possibly contain additional
- *  information (for example the program's return code in the case of
- *  exited processes). Pre Ruby 1.8, these bits were exposed directly
- *  to the Ruby program. Ruby now encapsulates these in a
- *  Process::Status object. To maximize compatibility,
- *  however, these objects retain a bit-oriented interface. In the
- *  descriptions that follow, when we talk about the integer value of
- *  _stat_, we're referring to this 16 bit value.
+ *    `ruby -e "exit 99"`
+ *    stat = $?       # => #<Process::Status: pid 1262862 exit 99>
+ *    stat.class      # => Process::Status
+ *    stat.to_i       # => 25344
+ *    stat >> 8       # => 99
+ *    stat.stopped?   # => false
+ *    stat.exited?    # => true
+ *    stat.exitstatus # => 99
+ *
  */
 
 static VALUE rb_cProcessStatus;
@@ -716,14 +707,12 @@ pst_status(VALUE pst)
 
 /*
  *  call-seq:
- *     stat.to_i     -> integer
+ *    to_i     -> integer
  *
- *  Returns the bits in _stat_ as an Integer. Poking
- *  around in these bits is platform dependent.
+ *  Returns the system-dependent integer status of +self+:
  *
- *     fork { exit 0xab }         #=> 26566
- *     Process.wait               #=> 26566
- *     sprintf('%04x', $?.to_i)   #=> "ab00"
+ *    `cat /nop`
+ *    $?.to_i # => 256
  */
 
 static VALUE
@@ -737,13 +726,13 @@ pst_to_i(VALUE self)
 
 /*
  *  call-seq:
- *     stat.pid   -> integer
+ *    pid -> integer
  *
- *  Returns the process ID that this status object represents.
+ *  Returns the process ID of the process:
  *
- *     fork { exit }   #=> 26569
- *     Process.wait    #=> 26569
- *     $?.pid          #=> 26569
+ *    system("false")
+ *    $?.pid # => 1247002
+ *
  */
 
 static VALUE
@@ -799,12 +788,13 @@ pst_message_status(VALUE str, int status)
 
 /*
  *  call-seq:
- *     stat.to_s   -> string
+ *    to_s -> string
  *
- *  Show pid and exit status as a string.
+ *  Returns a string representation of +self+:
  *
- *    system("false")
- *    p $?.to_s         #=> "pid 12766 exit 1"
+ *    `cat /nop`
+ *    $?.to_s # => "pid 1262141 exit 1"
+ *
  *
  */
 
@@ -826,12 +816,12 @@ pst_to_s(VALUE st)
 
 /*
  *  call-seq:
- *     stat.inspect   -> string
+ *    inspect -> string
  *
- *  Override the inspection method.
+ *  Returns a string representation of +self+:
  *
  *    system("false")
- *    p $?.inspect #=> "#<Process::Status: pid 12861 exit 1>"
+ *    $?.inspect # => "#<Process::Status: pid 1303494 exit 1>"
  *
  */
 
@@ -880,6 +870,8 @@ pst_equal(VALUE st1, VALUE st2)
  *  call-seq:
  *    stat & mask -> integer
  *
+ *  This method is deprecated; use other attribute methods.
+ *
  *  Returns the logical AND of the value of #to_i with +mask+:
  *
  *    `cat /nop`
@@ -887,12 +879,40 @@ pst_equal(VALUE st1, VALUE st2)
  *    sprintf('%x', stat.to_i)  # => "100"
  *    stat & 0x00               # => 0
  *
+ *  ArgumentError is raised if +mask+ is negative.
  */
 
 static VALUE
 pst_bitand(VALUE st1, VALUE st2)
 {
-    int status = PST2INT(st1) & NUM2INT(st2);
+    int status = PST2INT(st1);
+    int mask = NUM2INT(st2);
+
+    if (mask < 0) {
+        rb_raise(rb_eArgError, "negative mask value: %d", mask);
+    }
+#define WARN_SUGGEST(suggest) \
+    rb_warn_deprecated_to_remove_at(3.4, "Process::Status#&", suggest)
+
+    switch (mask) {
+      case 0x80:
+        WARN_SUGGEST("Process::Status#coredump?");
+        break;
+      case 0x7f:
+        WARN_SUGGEST("Process::Status#signaled? or Process::Status#termsig");
+        break;
+      case 0xff:
+        WARN_SUGGEST("Process::Status#exited?, Process::Status#stopped? or Process::Status#coredump?");
+        break;
+      case 0xff00:
+        WARN_SUGGEST("Process::Status#exitstatus or Process::Status#stopsig");
+        break;
+      default:
+        WARN_SUGGEST("other Process::Status predicates");
+        break;
+    }
+#undef WARN_SUGGEST
+    status &= mask;
 
     return INT2NUM(status);
 }
@@ -902,6 +922,8 @@ pst_bitand(VALUE st1, VALUE st2)
  *  call-seq:
  *    stat >> places -> integer
  *
+ *  This method is deprecated; use other predicate methods.
+ *
  *  Returns the value of #to_i, shifted +places+ to the right:
  *
  *     `cat /nop`
@@ -910,13 +932,34 @@ pst_bitand(VALUE st1, VALUE st2)
  *     stat >> 1                 # => 128
  *     stat >> 2                 # => 64
  *
- *  The behavior is unspecified if +places+ is negative.
+ *  ArgumentError is raised if +places+ is negative.
  */
 
 static VALUE
 pst_rshift(VALUE st1, VALUE st2)
 {
-    int status = PST2INT(st1) >> NUM2INT(st2);
+    int status = PST2INT(st1);
+    int places = NUM2INT(st2);
+
+    if (places < 0) {
+        rb_raise(rb_eArgError, "negative shift value: %d", places);
+    }
+#define WARN_SUGGEST(suggest) \
+    rb_warn_deprecated_to_remove_at(3.4, "Process::Status#>>", suggest)
+
+    switch (places) {
+      case 7:
+        WARN_SUGGEST("Process::Status#coredump?");
+        break;
+      case 8:
+        WARN_SUGGEST("Process::Status#exitstatus or Process::Status#stopsig");
+        break;
+      default:
+        WARN_SUGGEST("other Process::Status attributes");
+        break;
+    }
+#undef WARN_SUGGEST
+    status >>= places;
 
     return INT2NUM(status);
 }
@@ -924,11 +967,11 @@ pst_rshift(VALUE st1, VALUE st2)
 
 /*
  *  call-seq:
- *     stat.stopped?   -> true or false
+ *    stopped? -> true or false
  *
- *  Returns +true+ if this process is stopped. This is only returned
- *  if the corresponding #wait call had the Process::WUNTRACED flag
- *  set.
+ *  Returns +true+ if this process is stopped,
+ *  and if the corresponding #wait call had the Process::WUNTRACED flag set,
+ *  +false+ otherwise.
  */
 
 static VALUE
@@ -942,10 +985,10 @@ pst_wifstopped(VALUE st)
 
 /*
  *  call-seq:
- *     stat.stopsig   -> integer or nil
+ *    stopsig -> integer or nil
  *
- *  Returns the number of the signal that caused _stat_ to stop
- *  (or +nil+ if self is not stopped).
+ *  Returns the number of the signal that caused the process to stop,
+ *  or +nil+ if the process is not stopped.
  */
 
 static VALUE
@@ -961,10 +1004,10 @@ pst_wstopsig(VALUE st)
 
 /*
  *  call-seq:
- *     stat.signaled?   -> true or false
+ *    signaled? -> true or false
  *
- *  Returns +true+ if _stat_ terminated because of
- *  an uncaught signal.
+ *  Returns +true+ if the process terminated because of an uncaught signal,
+ *  +false+ otherwise.
  */
 
 static VALUE
@@ -978,11 +1021,10 @@ pst_wifsignaled(VALUE st)
 
 /*
  *  call-seq:
- *     stat.termsig   -> integer or nil
+ *    termsig -> integer or nil
  *
- *  Returns the number of the signal that caused _stat_ to
- *  terminate (or +nil+ if self was not terminated by an
- *  uncaught signal).
+ *  Returns the number of the signal that caused the process to terminate
+ *  or +nil+ if the process was not terminated by an uncaught signal.
  */
 
 static VALUE
@@ -998,11 +1040,11 @@ pst_wtermsig(VALUE st)
 
 /*
  *  call-seq:
- *     stat.exited?   -> true or false
+ *    exited? -> true or false
  *
- *  Returns +true+ if _stat_ exited normally (for
- *  example using an <code>exit()</code> call or finishing the
- *  program).
+ *  Returns +true+ if the process exited normally
+ *  (for example using an <code>exit()</code> call or finishing the
+ *  program), +false+ if not.
  */
 
 static VALUE
@@ -1016,20 +1058,15 @@ pst_wifexited(VALUE st)
 
 /*
  *  call-seq:
- *     stat.exitstatus   -> integer or nil
+ *    exitstatus -> integer or nil
  *
- *  Returns the least significant eight bits of the return code of
- *  _stat_. Only available if #exited? is +true+.
+ *  Returns the least significant eight bits of the return code
+ *  of the process if it has exited;
+ *  +nil+ otherwise:
  *
- *     fork { }           #=> 26572
- *     Process.wait       #=> 26572
- *     $?.exited?         #=> true
- *     $?.exitstatus      #=> 0
+ *    `exit 99`
+ *    $?.exitstatus # => 99
  *
- *     fork { exit 99 }   #=> 26573
- *     Process.wait       #=> 26573
- *     $?.exited?         #=> true
- *     $?.exitstatus      #=> 99
  */
 
 static VALUE
@@ -1045,10 +1082,14 @@ pst_wexitstatus(VALUE st)
 
 /*
  *  call-seq:
- *     stat.success?   -> true, false or nil
+ *    success? -> true, false, or nil
  *
- *  Returns +true+ if _stat_ is successful, +false+ if not.
- *  Returns +nil+ if #exited? is not +true+.
+ *  Returns:
+ *
+ *  - +true+ if the process has completed successfully and exited.
+ *  - +false+ if the process has completed unsuccessfully and exited.
+ *  - +nil+ if the process has not exited.
+ *
  */
 
 static VALUE
@@ -1064,10 +1105,12 @@ pst_success_p(VALUE st)
 
 /*
  *  call-seq:
- *     stat.coredump?   -> true or false
+ *    coredump? -> true or false
  *
- *  Returns +true+ if _stat_ generated a coredump
- *  when it terminated. Not available on all platforms.
+ *  Returns +true+ if the process generated a coredump
+ *  when it terminated, +false+ if not.
+ *
+ *  Not available on all platforms.
  */
 
 static VALUE
@@ -8746,6 +8789,7 @@ static VALUE rb_mProcID_Syscall;
  *  * Precomputes the coderange of all strings.
  *  * Frees all empty heap pages and increments the allocatable pages counter
  *    by the number of pages freed.
+ *  * Invoke +malloc_trim+ if available to free empty malloc pages.
  */
 
 static VALUE

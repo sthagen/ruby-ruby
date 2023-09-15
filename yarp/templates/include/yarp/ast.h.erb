@@ -47,18 +47,13 @@ enum yp_node_type {
     YP_SCOPE_NODE
 };
 
-// Deprecated aliases
-#define YP_NODE_SCOPE_NODE YP_SCOPE_NODE
-<%- nodes.each do |node| -%>
-#define <%= node.type.sub(/^YP_/, 'YP_NODE_') %> <%= node.type %>
-<%- end -%>
-
 typedef uint16_t yp_node_type_t;
 typedef uint16_t yp_node_flags_t;
 
 // We store the flags enum in every node in the tree. Some flags are common to
 // all nodes (the ones listed below). Others are specific to certain node types.
 static const yp_node_flags_t YP_NODE_FLAG_NEWLINE = 0x1;
+static const yp_node_flags_t YP_NODE_FLAG_STATIC_LITERAL = 0x2;
 
 // For easy access, we define some macros to check node type
 #define YP_NODE_TYPE(node) ((enum yp_node_type)node->type)

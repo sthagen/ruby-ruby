@@ -307,20 +307,7 @@ module YARP
     end
 
     def pretty_print(q)
-      q.group do
-        q.text(self.class.name.split("::").last)
-        location.pretty_print(q)
-        q.text("[Li:#{location.start_line}]") if newline?
-        q.text("(")
-        q.nest(2) do
-          deconstructed = deconstruct_keys([])
-          deconstructed.delete(:location)
-          q.breakable("")
-          q.seplist(deconstructed, lambda { q.comma_breakable }, :each_value) { |value| q.pp(value) }
-        end
-        q.breakable("")
-        q.text(")")
-      end
+      q.text(inspect.chomp)
     end
   end
 
@@ -389,30 +376,6 @@ module YARP
     end
   end
 
-  class FloatNode < Node
-    def value
-      Float(slice)
-    end
-  end
-
-  class ImaginaryNode < Node
-    def value
-      Complex(0, numeric.value)
-    end
-  end
-
-  class IntegerNode < Node
-    def value
-      Integer(slice)
-    end
-  end
-
-  class RationalNode < Node
-    def value
-      Rational(slice.chomp("r"))
-    end
-  end
-
   # Load the serialized AST using the source as a reference into a tree.
   def self.load(source, serialized)
     Serialize.load(source, serialized)
@@ -476,10 +439,6 @@ module YARP
             # CRuby will push on a special local variable when there are keyword
             # arguments. We get rid of that here.
             names = names.grep_v(Integer)
-
-            # TODO: We don't support numbered local variables yet, so we get rid
-            # of those here.
-            names = names.grep_v(/^_\d$/)
 
             # For some reason, CRuby occasionally pushes this special local
             # variable when there are splat arguments. We get rid of that here.
@@ -598,4 +557,58 @@ if RUBY_ENGINE == "ruby" and !ENV["YARP_FFI_BACKEND"]
   require "yarp/yarp"
 else
   require_relative "yarp/ffi"
+end
+
+# Reopening the YARP module after yarp/node is required so that constant
+# reflection APIs will find the constants defined in the node file before these.
+# This block is meant to contain extra APIs we define on YARP nodes that aren't
+# templated and are meant as convenience methods.
+module YARP
+  class FloatNode < Node
+    # Returns the value of the node as a Ruby Float.
+    def value
+      Float(slice)
+    end
+  end
+
+  class ImaginaryNode < Node
+    # Returns the value of the node as a Ruby Complex.
+    def value
+      Complex(0, numeric.value)
+    end
+  end
+
+  class IntegerNode < Node
+    # Returns the value of the node as a Ruby Integer.
+    def value
+      Integer(slice)
+    end
+  end
+
+  class InterpolatedRegularExpressionNode < Node
+    # Returns a numeric value that represents the flags that were used to create
+    # the regular expression. This mirrors the Regexp#options method in Ruby.
+    # Note that this is effectively masking only the three common flags that are
+    # used in Ruby, and does not include the full set of flags like encoding.
+    def options
+      flags & 0b111
+    end
+  end
+
+  class RationalNode < Node
+    # Returns the value of the node as a Ruby Rational.
+    def value
+      Rational(slice.chomp("r"))
+    end
+  end
+
+  class RegularExpressionNode < Node
+    # Returns a numeric value that represents the flags that were used to create
+    # the regular expression. This mirrors the Regexp#options method in Ruby.
+    # Note that this is effectively masking only the three common flags that are
+    # used in Ruby, and does not include the full set of flags like encoding.
+    def options
+      flags & 0b111
+    end
+  end
 end

@@ -42,7 +42,7 @@ module YARP
       )
 
       assert_errors expected, "for in 1..10\ni\nend", [
-        ["Expected an index after `for`", 0..0]
+        ["Expected an index after `for`", 0..3]
       ]
     end
 
@@ -58,7 +58,7 @@ module YARP
       )
 
       assert_errors expected, "for end", [
-        ["Expected an index after `for`", 0..0],
+        ["Expected an index after `for`", 0..3],
         ["Expected an `in` after the index in a `for` statement", 3..3],
         ["Expected a collection after the `in` in a `for` statement", 3..3]
       ]
@@ -149,6 +149,13 @@ module YARP
     def test_unterminated_string
       assert_errors expression('"hello'), '"hello', [
         ["Expected a closing delimiter for the interpolated string", 1..1]
+      ]
+    end
+
+    def test_incomplete_instance_var_string
+      assert_errors expression('%@#@@#'), '%@#@@#', [
+        ["Incomplete instance variable", 4..5],
+        ["Expected a newline or semicolon after the statement", 4..4]
       ]
     end
 
@@ -283,7 +290,8 @@ module YARP
 
     def test_def_with_expression_receiver_and_no_identifier
       assert_errors expression("def (a); end"), "def (a); end", [
-        ["Expected a `.` or `::` after the receiver in a method definition", 7..7]
+        ["Expected a `.` or `::` after the receiver in a method definition", 7..7],
+        ["Expected a method name", 7..7]
       ]
     end
 
@@ -291,6 +299,7 @@ module YARP
       assert_errors expression("def (\na\nb\n).c; end"), "def (\na\nb\n).c; end", [
         ["Expected a matching `)`", 7..7],
         ["Expected a `.` or `::` after the receiver in a method definition", 7..7],
+        ["Expected a method name", 7..7],
         ["Cannot parse the expression", 10..10],
         ["Cannot parse the expression", 11..11]
       ]
@@ -494,7 +503,7 @@ module YARP
           RequiredParameterNode(:@a),
           RequiredParameterNode(:$A),
           RequiredParameterNode(:@@a),
-        ], [], [], nil, [], nil, nil),
+        ], [], nil, [], [], nil, nil),
         nil,
         [:A, :@a, :$A, :@@a],
         Location(),
@@ -560,8 +569,8 @@ module YARP
         ParametersNode(
           [RequiredParameterNode(:a), RequiredParameterNode(:b), RequiredParameterNode(:c)],
           [],
-          [],
           nil,
+          [],
           [],
           nil,
           nil
@@ -588,7 +597,7 @@ module YARP
         Location(),
         Location(),
         BlockParametersNode(
-          ParametersNode([RequiredParameterNode(:a), RequiredParameterNode(:b)], [], [], nil, [], nil, nil),
+          ParametersNode([RequiredParameterNode(:a), RequiredParameterNode(:b)], [], nil, [], [], nil, nil),
           [],
           Location(),
           Location()
@@ -601,7 +610,7 @@ module YARP
     end
 
     def test_do_not_allow_multiple_codepoints_in_a_single_character_literal
-      expected = StringNode(Location(), Location(), nil, "\u0001\u0002")
+      expected = StringNode(0, Location(), Location(), nil, "\u0001\u0002")
 
       assert_errors expected, '?\u{0001 0002}', [
         ["Invalid Unicode escape sequence; multiple codepoints are not allowed in a character literal", 9..12]
@@ -615,7 +624,7 @@ module YARP
     end
 
     def test_do_not_allow_more_than_6_hexadecimal_digits_in_u_Unicode_character_notation
-      expected = StringNode(Location(), Location(), Location(), "\u0001")
+      expected = StringNode(0, Location(), Location(), Location(), "\u0001")
 
       assert_errors expected, '"\u{0000001}"', [
         ["Invalid Unicode escape sequence; maximum length is 6 digits", 4..11],
@@ -623,7 +632,7 @@ module YARP
     end
 
     def test_do_not_allow_characters_other_than_0_9_a_f_and_A_F_in_u_Unicode_character_notation
-      expected = StringNode(Location(), Location(), Location(), "\u0000z}")
+      expected = StringNode(0, Location(), Location(), Location(), "\u0000z}")
 
       assert_errors expected, '"\u{000z}"', [
         ["Invalid Unicode escape sequence", 7..7],
@@ -644,8 +653,8 @@ module YARP
         ParametersNode(
           [],
           [],
-          [RequiredParameterNode(:a)],
           nil,
+          [RequiredParameterNode(:a)],
           [],
           nil,
           BlockParameterNode(:block, Location(), Location())
@@ -669,7 +678,7 @@ module YARP
         :foo,
         Location(),
         nil,
-        ParametersNode([], [], [RequiredParameterNode(:a)], nil, [], nil, BlockParameterNode(nil, nil, Location())),
+        ParametersNode([], [], nil, [RequiredParameterNode(:a)], [], nil, BlockParameterNode(nil, nil, Location())),
         nil,
         [:&, :a],
         Location(),
@@ -693,8 +702,8 @@ module YARP
         ParametersNode(
           [],
           [],
-          [RequiredParameterNode(:a)],
           nil,
+          [RequiredParameterNode(:a)],
           [],
           ForwardingParameterNode(),
           nil
@@ -721,8 +730,8 @@ module YARP
         ParametersNode(
           [],
           [],
-          [RequiredParameterNode(:a)],
           nil,
+          [RequiredParameterNode(:a)],
           [KeywordParameterNode(:b, Location(), nil)],
           nil,
           nil
@@ -749,8 +758,8 @@ module YARP
         ParametersNode(
           [],
           [],
-          [],
           nil,
+          [],
           [KeywordParameterNode(:b, Location(), nil)],
           KeywordRestParameterNode(:rest, Location(), Location()),
           nil
@@ -775,7 +784,7 @@ module YARP
         :foo,
         Location(),
         nil,
-        ParametersNode([], [], [], nil, [], ForwardingParameterNode(), nil),
+        ParametersNode([], [], nil, [], [], ForwardingParameterNode(), nil),
         nil,
         [:"..."],
         Location(),
@@ -799,8 +808,8 @@ module YARP
         ParametersNode(
           [],
           [],
-          [RequiredParameterNode(:a)],
           nil,
+          [RequiredParameterNode(:a)],
           [KeywordParameterNode(:b, Location(), nil)],
           KeywordRestParameterNode(:args, Location(), Location()),
           nil
@@ -829,8 +838,8 @@ module YARP
         ParametersNode(
           [],
           [],
-          [RequiredParameterNode(:a)],
           nil,
+          [RequiredParameterNode(:a)],
           [KeywordParameterNode(:b, Location(), nil)],
           KeywordRestParameterNode(:args, Location(), Location()),
           nil
@@ -859,8 +868,8 @@ module YARP
         ParametersNode(
           [],
           [],
-          [RequiredParameterNode(:a)],
           nil,
+          [RequiredParameterNode(:a)],
           [KeywordParameterNode(:b, Location(), nil)],
           KeywordRestParameterNode(:args, Location(), Location()),
           nil
@@ -889,11 +898,11 @@ module YARP
         ParametersNode(
           [RequiredParameterNode(:a)],
           [
-            OptionalParameterNode(:b, Location(), Location(), IntegerNode()),
-            OptionalParameterNode(:d, Location(), Location(), IntegerNode())
+            OptionalParameterNode(:b, Location(), Location(), IntegerNode(IntegerBaseFlags::DECIMAL)),
+            OptionalParameterNode(:d, Location(), Location(), IntegerNode(IntegerBaseFlags::DECIMAL))
           ],
-          [RequiredParameterNode(:c), RequiredParameterNode(:e)],
           nil,
+          [RequiredParameterNode(:c), RequiredParameterNode(:e)],
           [],
           nil,
           nil
@@ -933,7 +942,7 @@ module YARP
         Location(),
         nil,
         nil,
-        StatementsNode([IntegerNode()]),
+        StatementsNode([IntegerNode(IntegerBaseFlags::DECIMAL)]),
         [],
         Location(),
         nil,
@@ -954,7 +963,7 @@ module YARP
         Location(),
         Location(),
         Location(),
-        BlockParametersNode(ParametersNode([], [], [], nil, [], ForwardingParameterNode(), nil), [], Location(), Location()),
+        BlockParametersNode(ParametersNode([], [], nil, [], [], ForwardingParameterNode(), nil), [], Location(), Location()),
         nil
       )
 
@@ -973,7 +982,7 @@ module YARP
         nil,
         BlockNode(
           [:"..."],
-          BlockParametersNode(ParametersNode([], [], [], nil, [], ForwardingParameterNode(), nil), [], Location(), Location()),
+          BlockParametersNode(ParametersNode([], [], nil, [], [], ForwardingParameterNode(), nil), [], Location(), Location()),
           nil,
           Location(),
           Location()
@@ -1046,7 +1055,7 @@ module YARP
           :foo,
           Location(),
           nil,
-          ParametersNode([RequiredParameterNode(:a), RequiredParameterNode(:b), RequiredParameterNode(:a)], [], [], nil, [], nil, nil),
+          ParametersNode([RequiredParameterNode(:a), RequiredParameterNode(:b), RequiredParameterNode(:a)], [], nil, [], [], nil, nil),
           nil,
           [:a, :b],
           Location(),
@@ -1066,7 +1075,7 @@ module YARP
         :foo,
         Location(),
         nil,
-        ParametersNode([RequiredParameterNode(:a), RequiredParameterNode(:b)], [], [], RestParameterNode(:a, Location(), Location()), [], nil, nil),
+        ParametersNode([RequiredParameterNode(:a), RequiredParameterNode(:b)], [], RestParameterNode(:a, Location(), Location()), [], [], nil, nil),
         nil,
         [:a, :b],
         Location(),
@@ -1085,7 +1094,7 @@ module YARP
         :foo,
         Location(),
         nil,
-        ParametersNode([RequiredParameterNode(:a), RequiredParameterNode(:b)], [], [], nil, [], KeywordRestParameterNode(:a, Location(), Location()), nil),
+        ParametersNode([RequiredParameterNode(:a), RequiredParameterNode(:b)], [], nil, [], [], KeywordRestParameterNode(:a, Location(), Location()), nil),
         nil,
         [:a, :b],
         Location(),
@@ -1104,7 +1113,7 @@ module YARP
         :foo,
         Location(),
         nil,
-        ParametersNode([RequiredParameterNode(:a), RequiredParameterNode(:b)], [], [], nil, [], nil, BlockParameterNode(:a, Location(), Location())),
+        ParametersNode([RequiredParameterNode(:a), RequiredParameterNode(:b)], [], nil, [], [], nil, BlockParameterNode(:a, Location(), Location())),
         nil,
         [:a, :b],
         Location(),
@@ -1123,7 +1132,7 @@ module YARP
         :foo,
         Location(),
         nil,
-        ParametersNode([], [OptionalParameterNode(:a, Location(), Location(), IntegerNode())], [RequiredParameterNode(:b)], RestParameterNode(:c, Location(), Location()), [], nil, nil),
+        ParametersNode([], [OptionalParameterNode(:a, Location(), Location(), IntegerNode(IntegerBaseFlags::DECIMAL))], RestParameterNode(:c, Location(), Location()), [RequiredParameterNode(:b)], [], nil, nil),
         nil,
         [:a, :b, :c],
         Location(),
@@ -1137,17 +1146,85 @@ module YARP
       assert_errors expected, "def foo(a = 1,b,*c);end", [["Unexpected parameter `*`", 16..17]]
     end
 
+    def test_invalid_message_name
+      result = YARP.parse("+.@foo,+=foo")
+      assert_equal "", result.value.statements.body.first.write_name
+    end
+
+    def test_invalid_operator_write_fcall
+      source = "foo! += 1"
+      assert_errors expression(source), source, [
+        ["Unexpected write target", 0..4]
+      ]
+    end
+
+    def test_invalid_operator_write_dot
+      source = "foo.+= 1"
+      assert_errors expression(source), source, [
+        ["Unexpected write target", 5..6]
+      ]
+    end
+
     def test_unterminated_global_variable
       assert_errors expression("$"), "$", [
         ["Invalid global variable", 0..1]
       ]
     end
 
+    def test_invalid_global_variable_write
+      assert_errors expression("$',"), "$',", [
+        ["Immutable variable as a write target", 0..2]
+      ]
+    end
+
+    def test_call_with_block_and_write
+      source = "foo {} &&= 1"
+      assert_errors expression(source), source, [
+        ["Unexpected write target", 0..6],
+        ["Unexpected operator after a call with a block", 7..10]
+      ]
+    end
+
+    def test_call_with_block_or_write
+      source = "foo {} ||= 1"
+      assert_errors expression(source), source, [
+        ["Unexpected write target", 0..6],
+        ["Unexpected operator after a call with a block", 7..10]
+      ]
+    end
+
+    def test_call_with_block_operator_write
+      source = "foo {} += 1"
+      assert_errors expression(source), source, [
+        ["Unexpected write target", 0..6],
+        ["Unexpected operator after a call with a block", 7..9]
+      ]
+    end
+
+    def test_writing_numbered_parameter
+      assert_errors expression("-> { _1 = 0 }"), "-> { _1 = 0 }", [
+        ["Token reserved for a numbered parameter", 5..7]
+      ]
+    end
+
+    def test_targeting_numbered_parameter
+      assert_errors expression("-> { _1, = 0 }"), "-> { _1, = 0 }", [
+        ["Token reserved for a numbered parameter", 5..7]
+      ]
+    end
+
+    def test_double_scope_numbered_parameters
+      source = "-> { _1 + -> { _2 } }"
+      errors = [["Numbered parameter is already used in outer scope", 15..17]]
+
+      assert_errors expression(source), source, errors, compare_ripper: false
+    end
+
     private
 
-    def assert_errors(expected, source, errors)
+    def assert_errors(expected, source, errors, compare_ripper: RUBY_ENGINE == "ruby")
       # Ripper behaves differently on JRuby/TruffleRuby, so only check this on CRuby
-      assert_nil Ripper.sexp_raw(source) if RUBY_ENGINE == "ruby"
+      assert_nil Ripper.sexp_raw(source) if compare_ripper
 
       result = YARP.parse(source)
       node = result.value.statements.body.last

@@ -573,6 +573,7 @@ static void numparam_name(struct parser_params *p, ID id);
 #define STR_NEW2(ptr) rb_enc_str_new((ptr),strlen(ptr),p->enc)
 #define STR_NEW3(ptr,len,e,func) parser_str_new(p, (ptr),(len),(e),(func),p->enc)
 #define TOK_INTERN() intern_cstr(tok(p), toklen(p), p->enc)
+#define VALID_SYMNAME_P(s, l, enc, type) (rb_enc_symname_type(s, l, enc, (1U<<(type))) == (int)(type))
 
 static st_table *
 push_pvtbl(struct parser_params *p)
@@ -875,10 +876,10 @@ static NODE* node_newnode_with_locals(struct parser_params *, enum node_type, VA
 static NODE* node_newnode(struct parser_params *, enum node_type, VALUE, VALUE, VALUE, const rb_code_location_t*);
 #define rb_node_newnode(type, a1, a2, a3, loc) node_newnode(p, (type), (a1), (a2), (a3), (loc))
 
-/* Make a new temporal node, which should not be appeared in the
+/* Make a new internal node, which should not be appeared in the
  * result AST and does not have node_id and location. */
-static NODE* node_new_temporal(struct parser_params *p, enum node_type type, VALUE a0, VALUE a1, VALUE a2);
-#define NODE_NEW_TEMPORAL(t,a0,a1,a2) node_new_temporal(p, (t),(VALUE)(a0),(VALUE)(a1),(VALUE)(a2))
+static NODE* node_new_internal(struct parser_params *p, enum node_type type, VALUE a0, VALUE a1, VALUE a2);
+#define NODE_NEW_INTERNAL(t,a0,a1,a2) node_new_internal(p, (t),(VALUE)(a0),(VALUE)(a1),(VALUE)(a2))
 
 static NODE *nd_set_loc(NODE *nd, const YYLTYPE *loc);
 
@@ -915,6 +916,15 @@ set_embraced_location(NODE *node, const rb_code_location_t *beg, const rb_code_l
 {
     node->nd_body->nd_loc = code_loc_gen(beg, end);
     nd_set_line(node, beg->end_pos.lineno);
+}
+
+static NODE *
+last_expr_node(NODE *expr)
+{
+    if (nd_type_p(expr, NODE_BLOCK)) {
+        expr = expr->nd_end->nd_head;
+    }
+    return expr;
 }
 
 #define yyparse ruby_yyparse
@@ -1617,7 +1627,7 @@ static int looking_at_eol_p(struct parser_params *p);
 %type <id>   f_kwrest f_label f_arg_asgn call_op call_op2 reswords relop dot_or_colon
 %type <id>   p_kwrest p_kwnorest p_any_kwrest p_kw_label
 %type <id>   f_no_kwarg f_any_kwrest args_forward excessed_comma nonlocal_var
- %type <ctxt> lex_ctxt k_class k_module /* keep <ctxt> in ripper */
+ %type <ctxt> lex_ctxt begin_defined k_class k_module /* keep <ctxt> in ripper */
 %token END_OF_INPUT 0	"end-of-input"
 %token <id> '.'
 /* escaped chars, should be ignored otherwise */
@@ -2177,7 +2187,7 @@ def_name	: fname
                         YYSTYPE c = {.ctxt = p->ctxt};
                         numparam_name(p, fname);
                         NODE *save =
-                            NODE_NEW_TEMPORAL(NODE_SELF,
+                            NODE_NEW_INTERNAL(NODE_SELF,
                                               /*head*/numparam_push(p),
                                               /*nth*/p->max_numparam,
                                               /*cval*/c.val);
@@ -2966,9 +2976,9 @@ arg		: lhs '=' lex_ctxt arg_rhs
                     {
                         $$ = logop(p, idOROP, $1, $3, &@2, &@$);
                     }
-                | keyword_defined opt_nl {p->ctxt.in_defined = 1;} arg
+                | keyword_defined opt_nl begin_defined arg
                     {
-                        p->ctxt.in_defined = 0;
+                        p->ctxt.in_defined = $3.in_defined;
                         $$ = new_defined(p, $4, &@$);
                     }
                 | arg '?' arg opt_nl ':' arg
@@ -3042,6 +3052,13 @@ rel_expr	: arg relop arg   %prec '>'
 lex_ctxt	: none
                     {
                         $$ = p->ctxt;
+                    }
+                ;
+
+begin_defined	: lex_ctxt
+                    {
+                        p->ctxt.in_defined = 1;
+                        $$ = $1;
                     }
                 ;
 
@@ -3435,9 +3452,9 @@ primary		: literal
                     /*% %*/
                     /*% ripper: yield0! %*/
                     }
-                | keyword_defined opt_nl '(' {p->ctxt.in_defined = 1;} expr rparen
+                | keyword_defined opt_nl '(' begin_defined expr rparen
                     {
-                        p->ctxt.in_defined = 0;
+                        p->ctxt.in_defined = $4.in_defined;
                         $$ = new_defined(p, $5, &@$);
                     }
                 | keyword_not '(' expr rparen
@@ -6043,16 +6060,18 @@ singleton	: var_ref
                 | '(' {SET_LEX_STATE(EXPR_BEG);} expr rparen
                     {
                     /*%%%*/
-                        switch (nd_type($3)) {
+                        NODE *expr = last_expr_node($3);
+                        switch (nd_type(expr)) {
                           case NODE_STR:
                           case NODE_DSTR:
                           case NODE_XSTR:
                           case NODE_DXSTR:
                           case NODE_DREGX:
                           case NODE_LIT:
+                          case NODE_DSYM:
                           case NODE_LIST:
                           case NODE_ZLIST:
-                            yyerror1(&@3, "can't define singleton method for literals");
+                            yyerror1(&expr->nd_loc, "can't define singleton method for literals");
                             break;
                           default:
                             value_expr($3);
@@ -9622,7 +9641,13 @@ parse_gvar(struct parser_params *p, const enum lex_state_e last_state)
 
     if (tokadd_ident(p, c)) return 0;
     SET_LEX_STATE(EXPR_END);
-    tokenize_ident(p);
+    if (VALID_SYMNAME_P(tok(p), toklen(p), p->enc, ID_GLOBAL)) {
+        tokenize_ident(p);
+    }
+    else {
+        compile_error(p, "`%.*s' is not allowed as a global variable name", toklen(p), tok(p));
+        set_yylval_noname();
+    }
     return tGVAR;
 }
 
@@ -10578,7 +10603,7 @@ yylex(YYSTYPE *lval, YYLTYPE *yylloc, struct parser_params *p)
 #define LVAR_USED ((ID)1 << (sizeof(ID) * CHAR_BIT - 1))
 
 static NODE*
-node_new_temporal(struct parser_params *p, enum node_type type, VALUE a0, VALUE a1, VALUE a2)
+node_new_internal(struct parser_params *p, enum node_type type, VALUE a0, VALUE a1, VALUE a2)
 {
     NODE *n = rb_ast_newnode(p->ast, type);
 
@@ -10589,7 +10614,7 @@ node_new_temporal(struct parser_params *p, enum node_type type, VALUE a0, VALUE 
 static NODE*
 node_newnode(struct parser_params *p, enum node_type type, VALUE a0, VALUE a1, VALUE a2, const rb_code_location_t *loc)
 {
-    NODE *n = node_new_temporal(p, type, a0, a1, a2);
+    NODE *n = node_new_internal(p, type, a0, a1, a2);
 
     nd_set_loc(n, loc);
     nd_set_node_id(n, parser_get_node_id(p));
@@ -10947,6 +10972,16 @@ new_command_qcall(struct parser_params* p, ID atype, NODE *recv, ID mid, NODE *a
 }
 
 #define nd_once_body(node) (nd_type_p((node), NODE_ONCE) ? (node)->nd_body : node)
+
+static NODE*
+last_expr_once_body(NODE *node)
+{
+    if (!node) return 0;
+    node = last_expr_node(node);
+    if (!node) return 0;
+    return nd_once_body(node);
+}
+
 static NODE*
 match_op(struct parser_params *p, NODE *node1, NODE *node2, const YYLTYPE *op_loc, const YYLTYPE *loc)
 {
@@ -10955,7 +10990,8 @@ match_op(struct parser_params *p, NODE *node1, NODE *node2, const YYLTYPE *op_lo
 
     value_expr(node1);
     value_expr(node2);
-    if (node1 && (n = nd_once_body(node1)) != 0) {
+
+    if ((n = last_expr_once_body(node1)) != 0) {
         switch (nd_type(n)) {
           case NODE_DREGX:
             {
@@ -10975,7 +11011,7 @@ match_op(struct parser_params *p, NODE *node1, NODE *node2, const YYLTYPE *op_lo
         }
     }
 
-    if (node2 && (n = nd_once_body(node2)) != 0) {
+    if ((n = last_expr_once_body(node2)) != 0) {
         NODE *match3;
 
         switch (nd_type(n)) {
@@ -12443,6 +12479,10 @@ cond0(struct parser_params *p, NODE *node, enum cond_type type, const YYLTYPE *l
 
         return NEW_MATCH2(node, NEW_GVAR(idLASTLINE, loc), loc);
 
+      case NODE_BLOCK:
+        node->nd_end->nd_head = cond0(p, node->nd_end->nd_head, type, loc);
+        break;
+
       case NODE_AND:
       case NODE_OR:
         node->nd_1st = cond0(p, node->nd_1st, COND_IN_COND, loc);
@@ -13600,23 +13640,8 @@ reg_named_capture_assign_iter(const OnigUChar *name, const OnigUChar *name_end,
     rb_encoding *enc = arg->enc;
     long len = name_end - name;
     const char *s = (const char *)name;
-    ID var;
-    NODE *node, *succ;
 
-    if (!len) return ST_CONTINUE;
-    if (rb_enc_symname_type(s, len, enc, (1U<<ID_LOCAL)) != ID_LOCAL)
-        return ST_CONTINUE;
-
-    var = intern_cstr(s, len, enc);
-    if (len < MAX_WORD_LENGTH && rb_reserved_word(s, (int)len)) {
-        if (!lvar_defined(p, var)) return ST_CONTINUE;
-    }
-    node = node_assign(p, assignable(p, var, 0, arg->loc), NEW_LIT(ID2SYM(var), arg->loc), NO_LEX_CTXT, arg->loc);
-    succ = arg->succ_block;
-    if (!succ) succ = NEW_BEGIN(0, arg->loc);
-    succ = block_append(p, succ, node);
-    arg->succ_block = succ;
-    return ST_CONTINUE;
+    return rb_reg_named_capture_assign_iter_impl(p, s, len, enc, &arg->succ_block, arg->loc);
 }
 
 static NODE *
@@ -13643,7 +13668,7 @@ rb_reg_named_capture_assign_iter_impl(struct parser_params *p, const char *s, lo
     NODE *node, *succ;
 
     if (!len) return ST_CONTINUE;
-    if (rb_enc_symname_type(s, len, enc, (1U<<ID_LOCAL)) != ID_LOCAL)
+    if (!VALID_SYMNAME_P(s, len, enc, ID_LOCAL))
         return ST_CONTINUE;
 
     var = intern_cstr(s, len, enc);
