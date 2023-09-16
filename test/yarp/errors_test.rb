@@ -167,8 +167,15 @@ module YARP
 
     def test_unterminated_parenthesized_expression
       assert_errors expression('(1 + 2'), '(1 + 2', [
+        ["Expected a newline or semicolon after the statement", 6..6],
         ["Cannot parse the expression", 6..6],
         ["Expected a matching `)`", 6..6]
+      ]
+    end
+
+    def test_missing_terminator_in_parentheses
+      assert_error_messages "(0 0)", [
+        "Expected a newline or semicolon after the statement"
       ]
     end
 
@@ -176,6 +183,12 @@ module YARP
       assert_errors expression('a %'), 'a %', [
         ["Invalid `%` token", 2..3],
         ["Expected an expression after the operator", 3..3],
+      ]
+    end
+
+    def test_unterminated_interpolated_symbol
+      assert_error_messages ":\"#", [
+        "Expected a closing delimiter for the interpolated symbol"
       ]
     end
 
@@ -187,6 +200,7 @@ module YARP
 
     def test_1_2_3
       assert_errors expression("(1, 2, 3)"), "(1, 2, 3)", [
+        ["Expected a newline or semicolon after the statement", 2..2],
         ["Cannot parse the expression", 2..2],
         ["Expected a matching `)`", 2..2],
         ["Expected a newline or semicolon after the statement", 2..2],
@@ -194,16 +208,17 @@ module YARP
         ["Expected a newline or semicolon after the statement", 5..5],
         ["Cannot parse the expression", 5..5],
         ["Expected a newline or semicolon after the statement", 8..8],
-        ["Cannot parse the expression", 8..8],
+        ["Cannot parse the expression", 8..8]
       ]
     end
 
     def test_return_1_2_3
       assert_error_messages "return(1, 2, 3)", [
+        "Expected a newline or semicolon after the statement",
         "Cannot parse the expression",
         "Expected a matching `)`",
         "Expected a newline or semicolon after the statement",
-        "Cannot parse the expression",
+        "Cannot parse the expression"
       ]
     end
 
@@ -215,10 +230,11 @@ module YARP
 
     def test_next_1_2_3
       assert_errors expression("next(1, 2, 3)"), "next(1, 2, 3)", [
+        ["Expected a newline or semicolon after the statement", 6..6],
         ["Cannot parse the expression", 6..6],
         ["Expected a matching `)`", 6..6],
         ["Expected a newline or semicolon after the statement", 12..12],
-        ["Cannot parse the expression", 12..12],
+        ["Cannot parse the expression", 12..12]
       ]
     end
 
@@ -230,10 +246,11 @@ module YARP
 
     def test_break_1_2_3
       assert_errors expression("break(1, 2, 3)"), "break(1, 2, 3)", [
+        ["Expected a newline or semicolon after the statement", 7..7],
         ["Cannot parse the expression", 7..7],
         ["Expected a matching `)`", 7..7],
         ["Expected a newline or semicolon after the statement", 13..13],
-        ["Cannot parse the expression", 13..13],
+        ["Cannot parse the expression", 13..13]
       ]
     end
 
@@ -932,7 +949,21 @@ module YARP
       )
 
       assert_errors expected, "case :a\nelse\nend", [
-        ["Unexpected `else` in `case` statement; a `when` clause must precede `else`", 8..12]
+        ["Expected a `when` or `in` clause after `case`", 0..4]
+      ]
+    end
+
+    def test_case_without_clauses
+      expected = CaseNode(
+        SymbolNode(Location(), Location(), nil, "a"),
+        [],
+        nil,
+        Location(),
+        Location()
+      )
+
+      assert_errors expected, "case :a\nend", [
+        ["Expected a `when` or `in` clause after `case`", 0..4]
       ]
     end
 
@@ -1173,8 +1204,30 @@ module YARP
 
     def test_invalid_global_variable_write
       assert_errors expression("$',"), "$',", [
-        ["Immutable variable as a write target", 0..2]
+        ["Immutable variable as a write target", 0..2],
+        ["Unexpected write target", 0..3]
       ]
+    end
+
+    def test_invalid_multi_target
+      error_messages = ["Unexpected write target"]
+      immutable = "Immutable variable as a write target"
+
+      assert_error_messages "foo,", error_messages
+      assert_error_messages "foo = 1; foo,", error_messages
+      assert_error_messages "foo.bar,", error_messages
+      assert_error_messages "*foo,", error_messages
+      assert_error_messages "@foo,", error_messages
+      assert_error_messages "@@foo,", error_messages
+      assert_error_messages "$foo,", error_messages
+      assert_error_messages "$1,", [immutable, *error_messages]
+      assert_error_messages "$+,", [immutable, *error_messages]
+      assert_error_messages "Foo,", error_messages
+      assert_error_messages "::Foo,", error_messages
+      assert_error_messages "Foo::Foo,", error_messages
+      assert_error_messages "Foo::foo,", error_messages
+      assert_error_messages "foo[foo],", error_messages
+      assert_error_messages "(foo, bar)", error_messages
     end
 
     def test_call_with_block_and_write
@@ -1220,6 +1273,38 @@ module YARP
       assert_errors expression(source), source, errors, compare_ripper: false
     end
 
+    def test_invalid_number_underscores
+      error_messages = ["Invalid underscore placement in number"]
+
+      assert_error_messages "1__1", error_messages
+      assert_error_messages "0b1__1", error_messages
+      assert_error_messages "0o1__1", error_messages
+      assert_error_messages "01__1", error_messages
+      assert_error_messages "0d1__1", error_messages
+      assert_error_messages "0x1__1", error_messages
+
+      assert_error_messages "1_1_", error_messages
+      assert_error_messages "0b1_1_", error_messages
+      assert_error_messages "0o1_1_", error_messages
+      assert_error_messages "01_1_", error_messages
+      assert_error_messages "0d1_1_", error_messages
+      assert_error_messages "0x1_1_", error_messages
+    end
+
+    def test_alnum_delimiters
+      error_messages = ["Invalid `%` token"]
+
+      assert_error_messages "%qXfooX", error_messages
+      assert_error_messages "%QXfooX", error_messages
+      assert_error_messages "%wXfooX", error_messages
+      assert_error_messages "%WxfooX", error_messages
+      assert_error_messages "%iXfooX", error_messages
+      assert_error_messages "%IXfooX", error_messages
+      assert_error_messages "%xXfooX", error_messages
+      assert_error_messages "%rXfooX", error_messages
+      assert_error_messages "%sXfooX", error_messages
+    end
+
     private
 
     def assert_errors(expected, source, errors, compare_ripper: RUBY_ENGINE == "ruby")
@@ -1233,8 +1318,8 @@ module YARP
       assert_equal(errors, result.errors.map { |e| [e.message, e.location.start_offset..e.location.end_offset] })
     end
 
-    def assert_error_messages(source, errors)
-      assert_nil Ripper.sexp_raw(source)
+    def assert_error_messages(source, errors, compare_ripper: RUBY_ENGINE == "ruby")
+      assert_nil Ripper.sexp_raw(source) if compare_ripper
       result = YARP.parse(source)
       assert_equal(errors, result.errors.map(&:message))
     end

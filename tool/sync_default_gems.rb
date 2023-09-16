@@ -598,6 +598,8 @@ module SyncDefaultGems
       if picked
         system(*%w"git commit --amend --no-edit --", *remove, %i[out err] => File::NULL)
       end
+      remove = remove.map {|d| d + "/"}
+      changed.delete_if {|f| remove.any? {|d| f.start_with?(d)}}
     end
 
     unless ignore.empty?
