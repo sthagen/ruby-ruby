@@ -1820,6 +1820,7 @@ range_string_cover_internal(VALUE range, VALUE val)
             return r_cover_p(range, beg, end, val);
         }
         if (NIL_P(beg)) {
+unbounded_begin:;
             VALUE r = rb_funcall(val, id_cmp, 1, end);
             if (NIL_P(r)) return Qfalse;
             if (RANGE_EXCL(range)) {
@@ -1828,10 +1829,18 @@ range_string_cover_internal(VALUE range, VALUE val)
             return RBOOL(rb_cmpint(r, val, end) <= 0);
         }
         else if (NIL_P(end)) {
+unbounded_end:;
             VALUE r = rb_funcall(beg, id_cmp, 1, val);
             if (NIL_P(r)) return Qfalse;
             return RBOOL(rb_cmpint(r, beg, val) <= 0);
         }
+    }
+
+    if (!NIL_P(beg) && NIL_P(end)) {
+        goto unbounded_end;
+    }
+    if (NIL_P(beg) && !NIL_P(end)) {
+        goto unbounded_begin;
     }
 
     return range_include_fallback(beg, end, val);
@@ -1879,7 +1888,7 @@ static int r_cover_range_p(VALUE range, VALUE beg, VALUE end, VALUE val);
  *    r.cover?(0)     # => false
  *    r.cover?(5)     # => false
  *    r.cover?('foo') # => false
-
+ *
  *    r = ('a'..'d')
  *    r.cover?('a')     # => true
  *    r.cover?('d')     # => true
@@ -1900,7 +1909,7 @@ static int r_cover_range_p(VALUE range, VALUE beg, VALUE end, VALUE val);
  *    r.cover?(0)     # => false
  *    r.cover?(4)     # => false
  *    r.cover?('foo') # => false
-
+ *
  *    r = ('a'...'d')
  *    r.cover?('a')     # => true
  *    r.cover?('c')     # => true
@@ -1916,7 +1925,7 @@ static int r_cover_range_p(VALUE range, VALUE beg, VALUE end, VALUE val);
  *    r.cover?(0..4)     # => false
  *    r.cover?(1..5)     # => false
  *    r.cover?('a'..'d') # => false
-
+ *
  *    r = (1...4)
  *    r.cover?(1..3)     # => true
  *    r.cover?(1..4)     # => false
