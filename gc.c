@@ -697,6 +697,8 @@ typedef struct mark_stack {
 #define SIZE_POOL_EDEN_HEAP(size_pool) (&(size_pool)->eden_heap)
 #define SIZE_POOL_TOMB_HEAP(size_pool) (&(size_pool)->tomb_heap)
 
+typedef int (*gc_compact_compare_func)(const void *l, const void *r, void *d);
+
 typedef struct rb_heap_struct {
     struct heap_page *free_pages;
     struct ccan_list_head pages;
@@ -870,6 +872,9 @@ typedef struct rb_objspace {
         size_t moved_up_count_table[T_MASK];
         size_t moved_down_count_table[T_MASK];
         size_t total_moved;
+
+        /* This function will be used, if set, to sort the heap prior to compaction */
+        gc_compact_compare_func compare_func;
     } rcompactor;
 
     struct {
@@ -961,6 +966,7 @@ struct heap_page {
     short total_slots;
     short free_slots;
     short final_slots;
+    short pinned_slots;
     struct {
         unsigned int before_sweep : 1;
         unsigned int has_remembered_objects : 1;
@@ -5665,11 +5671,26 @@ gc_sweep_start_heap(rb_objspace_t *objspace, rb_heap_t *heap)
 #if defined(__GNUC__) && __GNUC__ == 4 && __GNUC_MINOR__ == 4
 __attribute__((noinline))
 #endif
+
+#if GC_CAN_COMPILE_COMPACTION
+static void gc_sort_heap_by_compare_func(rb_objspace_t *objspace, gc_compact_compare_func compare_func);
+static int compare_pinned_slots(const void *left, const void *right, void *d);
+#endif
+
 static void
 gc_sweep_start(rb_objspace_t *objspace)
 {
     gc_mode_transition(objspace, gc_mode_sweeping);
     objspace->rincgc.pooled_slots = 0;
+
+#if GC_CAN_COMPILE_COMPACTION
+    if (objspace->flags.during_compacting) {
+        gc_sort_heap_by_compare_func(
+            objspace,
+            objspace->rcompactor.compare_func ? objspace->rcompactor.compare_func : compare_pinned_slots
+        );
+    }
+#endif
 
     for (int i = 0; i < SIZE_POOL_COUNT; i++) {
         rb_size_pool_t *size_pool = &size_pools[i];
@@ -6856,7 +6877,10 @@ gc_pin(rb_objspace_t *objspace, VALUE obj)
     GC_ASSERT(is_markable_object(obj));
     if (UNLIKELY(objspace->flags.during_compacting)) {
         if (LIKELY(during_gc)) {
-            MARK_IN_BITMAP(GET_HEAP_PINNED_BITS(obj), obj);
+            if (!MARKED_IN_BITMAP(GET_HEAP_PINNED_BITS(obj), obj)) {
+                GET_HEAP_PAGE(obj)->pinned_slots++;
+                MARK_IN_BITMAP(GET_HEAP_PINNED_BITS(obj), obj);
+            }
         }
     }
 }
@@ -9921,6 +9945,18 @@ gc_move(rb_objspace_t *objspace, VALUE scan, VALUE free, size_t src_slot_size, s
 
 #if GC_CAN_COMPILE_COMPACTION
 static int
+compare_pinned_slots(const void *left, const void *right, void *dummy)
+{
+    struct heap_page *left_page;
+    struct heap_page *right_page;
+
+    left_page = *(struct heap_page * const *)left;
+    right_page = *(struct heap_page * const *)right;
+
+    return left_page->pinned_slots - right_page->pinned_slots;
+}
+
+static int
 compare_free_slots(const void *left, const void *right, void *dummy)
 {
     struct heap_page *left_page;
@@ -9933,7 +9969,7 @@ compare_free_slots(const void *left, const void *right, void *dummy)
 }
 
 static void
-gc_sort_heap_by_empty_slots(rb_objspace_t *objspace)
+gc_sort_heap_by_compare_func(rb_objspace_t *objspace, gc_compact_compare_func compare_func)
 {
     for (int j = 0; j < SIZE_POOL_COUNT; j++) {
         rb_size_pool_t *size_pool = &size_pools[j];
@@ -9953,7 +9989,7 @@ gc_sort_heap_by_empty_slots(rb_objspace_t *objspace)
 
         /* Sort the heap so "filled pages" are first. `heap_add_page` adds to the
          * head of the list, so empty pages will end up at the start of the heap */
-        ruby_qsort(page_list, total_pages, sizeof(struct heap_page *), compare_free_slots, NULL);
+        ruby_qsort(page_list, total_pages, sizeof(struct heap_page *), compare_func, NULL);
 
         /* Reset the eden heap */
         ccan_list_head_init(&SIZE_POOL_EDEN_HEAP(size_pool)->pages);
@@ -10893,7 +10929,7 @@ gc_verify_compaction_references(rb_execution_context_t *ec, VALUE self, VALUE do
         }
 
         if (RTEST(toward_empty)) {
-            gc_sort_heap_by_empty_slots(objspace);
+            objspace->rcompactor.compare_func = compare_free_slots;
         }
     }
     RB_VM_LOCK_LEAVE();
@@ -10903,6 +10939,7 @@ gc_verify_compaction_references(rb_execution_context_t *ec, VALUE self, VALUE do
     objspace_reachable_objects_from_root(objspace, root_obj_check_moved_i, NULL);
     objspace_each_objects(objspace, heap_check_moved_i, NULL, TRUE);
 
+    objspace->rcompactor.compare_func = NULL;
     return gc_compact_stats(self);
 }
 #else

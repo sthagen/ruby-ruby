@@ -99,8 +99,7 @@ class TestRubyOptions < Test::Unit::TestCase
   end
 
   def test_warning
-    save_rubyopt = ENV['RUBYOPT']
-    ENV['RUBYOPT'] = nil
+    save_rubyopt = ENV.delete('RUBYOPT')
     assert_in_out_err(%w(-W0 -e) + ['p $-W'], "", %w(0), [])
     assert_in_out_err(%w(-W1 -e) + ['p $-W'], "", %w(1), [])
     assert_in_out_err(%w(-Wx -e) + ['p $-W'], "", %w(2), [])
@@ -417,12 +416,11 @@ class TestRubyOptions < Test::Unit::TestCase
     assert_in_out_err(%w(), "p Warning[:experimental]", ["false"])
     ENV['RUBYOPT'] = '-W:qux'
     assert_in_out_err(%w(), "", [], /unknown warning category: `qux'/)
+
+    ENV['RUBYOPT'] = 'w'
+    assert_in_out_err(%w(), "p $VERBOSE", ["true"])
   ensure
-    if rubyopt_orig
-      ENV['RUBYOPT'] = rubyopt_orig
-    else
-      ENV.delete('RUBYOPT')
-    end
+    ENV['RUBYOPT'] = rubyopt_orig
   end
 
   def test_search
