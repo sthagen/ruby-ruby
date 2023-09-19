@@ -46,8 +46,8 @@ module YARP
     end
 
     # To accurately compare against Ripper, we need to make sure that we're
-    # running on Ruby 3.2+.
-    ripper_enabled = RUBY_VERSION >= "3.2.0"
+    # running on CRuby 3.2+.
+    ripper_enabled = RUBY_ENGINE == "ruby" && RUBY_VERSION >= "3.2.0"
 
     # The FOCUS environment variable allows you to specify one particular fixture
     # to test, instead of all of them.
@@ -204,7 +204,7 @@ module YARP
       queue = [program]
       while (node = queue.shift)
         return node if node.is_a?(SourceFileNode)
-        queue.concat(node.child_nodes.compact)
+        queue.concat(node.compact_child_nodes)
       end
     end
 

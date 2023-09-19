@@ -307,7 +307,10 @@ module YARP
     end
 
     def pretty_print(q)
-      q.text(inspect.chomp)
+      q.seplist(inspect.chomp.each_line, -> { q.breakable }) do |line|
+        q.text(line.chomp)
+      end
+      q.current_group.break
     end
   end
 
@@ -520,7 +523,7 @@ module YARP
           locals << [] if node.once?
         end
 
-        stack.concat(node.child_nodes.compact)
+        stack.concat(node.compact_child_nodes)
       end
 
       locals
