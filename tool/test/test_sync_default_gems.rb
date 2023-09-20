@@ -94,8 +94,15 @@ module Test_SyncDefaultGems
       Dir.chdir(@testdir)
       ["src", @target].each do |dir|
         git(*%W"init -q #{dir}")
+        File.write("#{dir}/.gitignore", "*~\n")
+        Dir.mkdir("#{dir}/lib")
+        File.write("#{dir}/lib/common.rb", ":ok\n")
+        Dir.mkdir("#{dir}/.github")
+        Dir.mkdir("#{dir}/.github/workflows")
+        File.write("#{dir}/.github/workflows/default.yml", "default:\n")
+        git(*%W"add .gitignore lib/common.rb .github", chdir: dir)
+        git(*%W"commit -q -m", "Initialize", chdir: dir)
         if dir == "src"
-          Dir.mkdir("#{dir}/lib")
           File.write("#{dir}/lib/fine.rb", "return\n")
           Dir.mkdir("#{dir}/test")
           File.write("#{dir}/test/test_fine.rb", "return\n")
@@ -166,6 +173,18 @@ module Test_SyncDefaultGems
       out
     end
 
+    def test_sync
+      File.write("#@target/lib/common.rb", "# OK!\n")
+      git(*%W"commit -q -m", "OK", "lib/common.rb", chdir: @target)
+      out = assert_sync()
+      assert_not_equal(@sha["src"], top_commit("src"), out)
+      assert_equal("# OK!\n", File.read("src/lib/common.rb"))
+      log = top_commit("src", format: "%B").lines
+      assert_equal("[ruby/#@target] OK\n", log.first, out)
+      assert_match(%r[/ruby/#{@target}/commit/\h+$], log.last, out)
+      assert_operator(top_commit(@target), :start_with?, log.last[/\h+$/], out)
+    end
+
     def test_skip_tool
       git(*%W"rm -q tool/ok", chdir: @target)
       git(*%W"commit -q -m", "Remove tool", chdir: @target)
@@ -197,7 +216,6 @@ module Test_SyncDefaultGems
     def test_adding_toplevel
       Dir.mkdir("#@target/docs")
       File.write("#@target/docs/NEWS.md", "= New library\n")
-      Dir.mkdir("#@target/lib")
       File.write("#@target/lib/news.rb", "return\n")
       git(*%W"add --", "docs/NEWS.md", "lib/news.rb", chdir: @target)
       git(*%W"commit -q -m", "New lib", chdir: @target)
@@ -206,6 +224,20 @@ module Test_SyncDefaultGems
       assert_equal "return\n", File.read("src/lib/news.rb")
       assert_include top_commit("src", format: "oneline"), "[ruby/#{@target}] New lib"
       assert_not_operator File, :exist?, "src/docs"
+    end
+
+    def test_gitignore
+      File.write("#@target/.gitignore", "*.bak\n", mode: "a")
+      File.write("#@target/lib/common.rb", "Should.be_merged\n", mode: "a")
+      File.write("#@target/.github/workflows/main.yml", "# Should not merge\n", mode: "a")
+      git(*%W"add .github", chdir: @target)
+      git(*%W"commit -q -m", "Should be common.rb only",
+          *%W".gitignore lib/common.rb .github", chdir: @target)
+      out = assert_sync()
+      assert_not_equal(@sha["src"], top_commit("src"), out)
+      assert_equal("*~\n", File.read("src/.gitignore"), out)
+      assert_equal("#!/bin/sh\n""echo ok\n", File.read("src/tool/ok"), out)
+      assert_not_operator(File, :exist?, "src/.github/workflows/.yml", out)
     end
   end
 end

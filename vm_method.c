@@ -693,10 +693,12 @@ rb_method_entry_create(ID called_id, VALUE klass, rb_method_visibility_t visi, c
 const rb_method_entry_t *
 rb_method_entry_clone(const rb_method_entry_t *src_me)
 {
-    rb_method_entry_t *me = rb_method_entry_alloc(src_me->called_id, src_me->owner, src_me->defined_class,
-                                                  method_definition_addref(src_me->def));
+    rb_method_entry_t *me = rb_method_entry_alloc(src_me->called_id, src_me->owner, src_me->defined_class, src_me->def);
     if (METHOD_ENTRY_COMPLEMENTED(src_me)) {
         method_definition_addref_complement(src_me->def);
+    }
+    else {
+        method_definition_addref(src_me->def);
     }
 
     METHOD_ENTRY_FLAGS_COPY(me, src_me);
@@ -724,7 +726,7 @@ rb_method_entry_complement_defined_class(const rb_method_entry_t *src_me, ID cal
         def = NULL;
     }
     else {
-        def = method_definition_addref_complement(def);
+        method_definition_addref_complement(def);
     }
     me = rb_method_entry_alloc(called_id, src_me->owner, defined_class, def);
     METHOD_ENTRY_FLAGS_COPY(me, src_me);
@@ -1445,7 +1447,7 @@ rb_method_entry_with_refinements(VALUE klass, ID id, VALUE *defined_class_ptr)
 }
 
 static const rb_callable_method_entry_t *
-callable_method_entry_refeinements0(VALUE klass, ID id, VALUE *defined_class_ptr, bool with_refinements,
+callable_method_entry_refinements0(VALUE klass, ID id, VALUE *defined_class_ptr, bool with_refinements,
                                     const rb_callable_method_entry_t *cme)
 {
     if (cme == NULL || LIKELY(cme->def->type != VM_METHOD_TYPE_REFINED)) {
@@ -1462,7 +1464,7 @@ static const rb_callable_method_entry_t *
 callable_method_entry_refinements(VALUE klass, ID id, VALUE *defined_class_ptr, bool with_refinements)
 {
     const rb_callable_method_entry_t *cme = callable_method_entry(klass, id, defined_class_ptr);
-    return callable_method_entry_refeinements0(klass, id, defined_class_ptr, with_refinements, cme);
+    return callable_method_entry_refinements0(klass, id, defined_class_ptr, with_refinements, cme);
 }
 
 const rb_callable_method_entry_t *
