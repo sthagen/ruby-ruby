@@ -1302,11 +1302,41 @@ module YARP
       assert_error_messages "%sXfooX", error_messages
     end
 
+    def test_begin_at_toplevel
+      source = "def foo; BEGIN {}; end"
+      assert_errors expression(source), source, [
+        ["BEGIN is permitted only at toplevel", 9..14],
+      ]
+    end
+
+    def test_numbered_parameters_in_block_arguments
+      source = "foo { |_1| }"
+      assert_errors expression(source), source, [
+        ["Token reserved for a numbered parameter", 7..9],
+      ]
+    end
+
     def test_conditional_predicate_closed
       source = "if 0 0; end\nunless 0 0; end"
       assert_errors expression(source), source, [
         ["Expected `then` or `;` or '\n" + "'", 5..6],
         ["Expected `then` or `;` or '\n" + "'", 21..22],
+      ]
+    end
+
+    def test_parameter_name_ending_with_bang_or_question_mark
+      source = "def foo(x!,y?); end"
+      errors = [
+        ["Unexpected name for a parameter", 8..10],
+        ["Unexpected name for a parameter", 11..13]
+      ]
+      assert_errors expression(source), source, errors, compare_ripper: false
+    end
+
+    def test_class_name
+      source = "class 0.X end"
+      assert_errors expression(source), source, [
+        ["Expected a constant name after `class`", 6..9],
       ]
     end
 

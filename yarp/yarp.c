@@ -725,6 +725,10 @@ yp_statements_node_create(yp_parser_t *parser);
 static void
 yp_statements_node_body_append(yp_statements_node_t *node, yp_node_t *statement);
 
+// Get the length of the given StatementsNode node's body.
+static size_t
+yp_statements_node_body_length(yp_statements_node_t *node);
+
 // This function is here to allow us a place to extend in the future when we
 // implement our own arena allocation.
 static inline void *
@@ -2654,7 +2658,7 @@ yp_if_node_create(yp_parser_t *parser,
         end = end_keyword->end;
     } else if (consequent != NULL) {
         end = consequent->location.end;
-    } else if ((statements != NULL) && (statements->body.size != 0)) {
+    } else if (yp_statements_node_body_length(statements) != 0) {
         end = statements->base.location.end;
     } else {
         end = predicate->location.end;
@@ -4008,7 +4012,7 @@ yp_rescue_node_reference_set(yp_rescue_node_t *node, yp_node_t *reference) {
 static void
 yp_rescue_node_statements_set(yp_rescue_node_t *node, yp_statements_node_t *statements) {
     node->statements = statements;
-    if ((statements != NULL) && (statements->body.size > 0)) {
+    if (yp_statements_node_body_length(statements) > 0) {
         node->base.location.end = statements->base.location.end;
     }
 }
@@ -4814,10 +4818,20 @@ yp_parser_local_add_owned(yp_parser_t *parser, const uint8_t *start, size_t leng
     if (constant_id != 0) yp_parser_local_add(parser, constant_id);
 }
 
+static inline bool
+token_is_numbered_parameter(const uint8_t *start, const uint8_t *end) {
+    return (end - start == 2) && (start[0] == '_') && (start[1] != '0') && (yp_char_is_decimal_digit(start[1]));
+}
+
 // Add a parameter name to the current scope and check whether the name of the
 // parameter is unique or not.
 static void
 yp_parser_parameter_name_check(yp_parser_t *parser, yp_token_t *name) {
+    // We want to check whether the parameter name is a numbered parameter or not.
+    if (token_is_numbered_parameter(name->start, name->end)) {
+        yp_diagnostic_list_append(&parser->error_list, name->start, name->end, YP_ERR_PARAMETER_NUMBERED_RESERVED);
+    }
+
     // We want to ignore any parameter name that starts with an underscore.
     if ((*name->start == '_')) return;
 
@@ -4896,11 +4910,6 @@ char_is_global_name_punctuation(const uint8_t b) {
     if (i <= 0x20 || 0x7e < i) return false;
 
     return (yp_global_name_punctuation_hash[(i - 0x20) / 32] >> (i % 32)) & 1;
-}
-
-static inline bool
-token_is_numbered_parameter(const uint8_t *start, const uint8_t *end) {
-    return (end - start == 2) && (start[0] == '_') && (start[1] != '0') && (yp_char_is_decimal_digit(start[1]));
 }
 
 static inline bool
@@ -5698,8 +5707,10 @@ lex_identifier(yp_parser_t *parser, bool previous_command_start) {
                 }
             }
 
-            return YP_TOKEN_IDENTIFIER;
-        } else if (lex_state_p(parser, YP_LEX_STATE_FNAME) && peek_offset(parser, 1) != '~' && peek_offset(parser, 1) != '>' && (peek_offset(parser, 1) != '=' || peek_offset(parser, 2) == '>') && match(parser, '=')) {
+            return YP_TOKEN_METHOD_NAME;
+        }
+
+        if (lex_state_p(parser, YP_LEX_STATE_FNAME) && peek_offset(parser, 1) != '~' && peek_offset(parser, 1) != '>' && (peek_offset(parser, 1) != '=' || peek_offset(parser, 2) == '>') && match(parser, '=')) {
             // If we're in a position where we can accept a = at the end of an
             // identifier, then we'll optionally accept it.
             return YP_TOKEN_IDENTIFIER;
@@ -7292,7 +7303,7 @@ parser_lex(yp_parser_t *parser) {
 
                     yp_lex_state_t last_state = parser->lex_state;
 
-                    if (type == YP_TOKEN_IDENTIFIER || type == YP_TOKEN_CONSTANT) {
+                    if (type == YP_TOKEN_IDENTIFIER || type == YP_TOKEN_CONSTANT || type == YP_TOKEN_METHOD_NAME) {
                         if (lex_state_p(parser, YP_LEX_STATE_BEG_ANY | YP_LEX_STATE_ARG_ANY | YP_LEX_STATE_DOT)) {
                             if (previous_command_start) {
                                 lex_state_set(parser, YP_LEX_STATE_CMDARG);
@@ -9280,7 +9291,8 @@ parse_parameters(
             case YP_TOKEN_IDENTIFIER:
             case YP_TOKEN_CONSTANT:
             case YP_TOKEN_INSTANCE_VARIABLE:
-            case YP_TOKEN_GLOBAL_VARIABLE: {
+            case YP_TOKEN_GLOBAL_VARIABLE:
+            case YP_TOKEN_METHOD_NAME: {
                 parser_lex(parser);
                 switch (parser->previous.type) {
                     case YP_TOKEN_CONSTANT:
@@ -9294,6 +9306,9 @@ parse_parameters(
                         break;
                     case YP_TOKEN_CLASS_VARIABLE:
                         yp_diagnostic_list_append(&parser->error_list, parser->previous.start, parser->previous.end, YP_ERR_ARGUMENT_FORMAL_CLASS);
+                        break;
+                    case YP_TOKEN_METHOD_NAME:
+                        yp_diagnostic_list_append(&parser->error_list, parser->previous.start, parser->previous.end, YP_ERR_PARAMETER_METHOD_NAME);
                         break;
                     default: break;
                 }
@@ -10124,6 +10139,7 @@ parse_symbol(yp_parser_t *parser, yp_lex_mode_t *lex_mode, yp_lex_state_t next_s
             case YP_TOKEN_IDENTIFIER:
             case YP_TOKEN_CONSTANT:
             case YP_TOKEN_INSTANCE_VARIABLE:
+            case YP_TOKEN_METHOD_NAME:
             case YP_TOKEN_CLASS_VARIABLE:
             case YP_TOKEN_GLOBAL_VARIABLE:
             case YP_TOKEN_NUMBERED_REFERENCE:
@@ -10138,7 +10154,7 @@ parse_symbol(yp_parser_t *parser, yp_lex_mode_t *lex_mode, yp_lex_state_t next_s
                 symbol = parser->previous;
                 break;
             default:
-                expect1(parser, YP_TOKEN_IDENTIFIER, YP_ERR_SYMBOL_INVALID);
+                expect2(parser, YP_TOKEN_IDENTIFIER, YP_TOKEN_METHOD_NAME, YP_ERR_SYMBOL_INVALID);
                 symbol = parser->previous;
                 break;
         }
@@ -10210,7 +10226,8 @@ parse_undef_argument(yp_parser_t *parser) {
         case YP_CASE_KEYWORD:
         case YP_CASE_OPERATOR:
         case YP_TOKEN_CONSTANT:
-        case YP_TOKEN_IDENTIFIER: {
+        case YP_TOKEN_IDENTIFIER:
+        case YP_TOKEN_METHOD_NAME: {
             parser_lex(parser);
 
             yp_token_t opening = not_provided(parser);
@@ -10240,7 +10257,8 @@ parse_alias_argument(yp_parser_t *parser, bool first) {
         case YP_CASE_OPERATOR:
         case YP_CASE_KEYWORD:
         case YP_TOKEN_CONSTANT:
-        case YP_TOKEN_IDENTIFIER: {
+        case YP_TOKEN_IDENTIFIER:
+        case YP_TOKEN_METHOD_NAME: {
             if (first) {
                 lex_state_set(parser, YP_LEX_STATE_FNAME | YP_LEX_STATE_FITEM);
             }
@@ -10347,6 +10365,7 @@ parse_method_definition_name(yp_parser_t *parser) {
         case YP_CASE_KEYWORD:
         case YP_TOKEN_CONSTANT:
         case YP_TOKEN_IDENTIFIER:
+        case YP_TOKEN_METHOD_NAME:
             parser_lex(parser);
             return parser->previous;
         case YP_CASE_OPERATOR:
@@ -10778,7 +10797,8 @@ parse_pattern_hash(yp_parser_t *parser, yp_node_t *first_assoc) {
 static yp_node_t *
 parse_pattern_primitive(yp_parser_t *parser, yp_diagnostic_id_t diag_id) {
     switch (parser->current.type) {
-        case YP_TOKEN_IDENTIFIER: {
+        case YP_TOKEN_IDENTIFIER:
+        case YP_TOKEN_METHOD_NAME: {
             parser_lex(parser);
             yp_parser_local_add_token(parser, &parser->previous);
             return (yp_node_t *) yp_local_variable_target_node_create(parser, &parser->previous);
@@ -11713,7 +11733,8 @@ parse_expression_prefix(yp_parser_t *parser, yp_binding_power_t binding_power) {
 
             return node;
         }
-        case YP_TOKEN_IDENTIFIER: {
+        case YP_TOKEN_IDENTIFIER:
+        case YP_TOKEN_METHOD_NAME: {
             parser_lex(parser);
             yp_token_t identifier = parser->previous;
             yp_node_t *node = parse_variable_call(parser);
@@ -12139,6 +12160,10 @@ parse_expression_prefix(yp_parser_t *parser, yp_binding_power_t binding_power) {
             yp_statements_node_t *statements = parse_statements(parser, YP_CONTEXT_PREEXE);
 
             expect1(parser, YP_TOKEN_BRACE_RIGHT, YP_ERR_BEGIN_UPCASE_TERM);
+            yp_context_t context = parser->current_context->context;
+            if ((context != YP_CONTEXT_MAIN) && (context != YP_CONTEXT_PREEXE)) {
+                yp_diagnostic_list_append(&parser->error_list, keyword.start, keyword.end, YP_ERR_BEGIN_UPCASE_TOPLEVEL);
+            }
             return (yp_node_t *) yp_pre_execution_node_create(parser, &keyword, &opening, statements, &parser->previous);
         }
         case YP_TOKEN_KEYWORD_BREAK:
@@ -12279,6 +12304,11 @@ parse_expression_prefix(yp_parser_t *parser, yp_binding_power_t binding_power) {
             yp_constant_id_list_t locals = parser->current_scope->locals;
             yp_parser_scope_pop(parser);
             yp_do_loop_stack_pop(parser);
+
+            if (!YP_NODE_TYPE_P(constant_path, YP_CONSTANT_PATH_NODE) && !(YP_NODE_TYPE_P(constant_path, YP_CONSTANT_READ_NODE))) {
+                yp_diagnostic_list_append(&parser->error_list, constant_path->location.start, constant_path->location.end, YP_ERR_CLASS_NAME);
+            }
+
             return (yp_node_t *) yp_class_node_create(parser, &locals, &class_keyword, constant_path, &name, &inheritance_operator, superclass, statements, &parser->previous);
         }
         case YP_TOKEN_KEYWORD_DEF: {
@@ -13936,7 +13966,8 @@ parse_expression_infix(yp_parser_t *parser, yp_node_t *node, yp_binding_power_t 
                 case YP_CASE_OPERATOR:
                 case YP_CASE_KEYWORD:
                 case YP_TOKEN_CONSTANT:
-                case YP_TOKEN_IDENTIFIER: {
+                case YP_TOKEN_IDENTIFIER:
+                case YP_TOKEN_METHOD_NAME: {
                     parser_lex(parser);
                     message = parser->previous;
                     break;
@@ -14066,7 +14097,8 @@ parse_expression_infix(yp_parser_t *parser, yp_node_t *node, yp_binding_power_t 
                 }
                 case YP_CASE_OPERATOR:
                 case YP_CASE_KEYWORD:
-                case YP_TOKEN_IDENTIFIER: {
+                case YP_TOKEN_IDENTIFIER:
+                case YP_TOKEN_METHOD_NAME: {
                     parser_lex(parser);
                     yp_token_t message = parser->previous;
 
@@ -14141,6 +14173,9 @@ parse_expression_infix(yp_parser_t *parser, yp_node_t *node, yp_binding_power_t 
             if (block != NULL) {
                 if (arguments.block != NULL) {
                     yp_diagnostic_list_append(&parser->error_list, block->base.location.start, block->base.location.end, YP_ERR_ARGUMENT_AFTER_BLOCK);
+                    if (arguments.arguments == NULL) {
+                        arguments.arguments = yp_arguments_node_create(parser);
+                    }
                     yp_arguments_node_arguments_append(arguments.arguments, arguments.block);
                 }
 
