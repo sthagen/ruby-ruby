@@ -822,6 +822,7 @@ rb_print_backtrace(FILE *errout)
         free(syms);
     }
   error:
+    /* ignore errors at writing */;
 #endif
 #elif defined(_WIN32)
     struct dump_thead_arg arg = {
@@ -1120,7 +1121,7 @@ rb_vm_bugreport(const void *ctx, FILE *errout)
     if (vm && ec) {
         rb_vmdebug_stack_dump_raw(ec, ec->cfp, errout);
         rb_backtrace_print_as_bugreport(errout);
-        fputs("\n", errout);
+        kputs("\n");
         // If we get here, hopefully things are intact enough that
         // we can read these two numbers. It is an estimate because
         // we are reading without synchronization.
@@ -1128,7 +1129,7 @@ rb_vm_bugreport(const void *ctx, FILE *errout)
                 "---------------------------------------------------\n");
         kprintf("Total ractor count: %u\n", vm->ractor.cnt);
         kprintf("Ruby thread count for this ractor: %u\n", rb_ec_ractor_ptr(ec)->threads.cnt);
-        fputs("\n", errout);
+        kputs("\n");
     }
 
     rb_dump_machine_register(errout, ctx);
@@ -1229,7 +1230,7 @@ rb_vm_bugreport(const void *ctx, FILE *errout)
         else {
             struct procstat *prstat = procstat_open_sysctl();
             kprintf("* Process memory map:\n\n");
-            procstat_vm(prstat, &kp);
+            procstat_vm(prstat, &kp, errout);
             procstat_close(prstat);
             kprintf("\n");
         }

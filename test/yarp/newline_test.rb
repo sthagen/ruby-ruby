@@ -6,20 +6,6 @@ return unless defined?(RubyVM::InstructionSequence)
 
 module YARP
   class NewlineTest < TestCase
-    class NewlineVisitor < Visitor
-      attr_reader :source, :newlines
-
-      def initialize(source)
-        @source = source
-        @newlines = []
-      end
-
-      def visit(node)
-        newlines << source.line(node.location.start_offset) if node&.newline?
-        super(node)
-      end
-    end
-
     base = File.dirname(__dir__)
     Dir["{lib,test}/**/*.rb", base: base].each do |relative|
       define_method("test_newline_flags_#{relative}") do
@@ -36,12 +22,7 @@ module YARP
 
       result = YARP.parse_file(filepath)
       assert_empty result.errors
-
-      result.mark_newlines!
-      visitor = NewlineVisitor.new(result.source)
-
-      result.value.accept(visitor)
-      actual = visitor.newlines
+      actual = yarp_lines(result)
 
       source.each_line.with_index(1) do |line, line_number|
         # Lines like `while (foo = bar)` result in two line flags in the
@@ -91,6 +72,20 @@ module YARP
       end
 
       lines.sort
+    end
+
+    def yarp_lines(result)
+      result.mark_newlines!
+
+      queue = [result.value]
+      newlines = []
+
+      while node = queue.shift
+        queue.concat(node.compact_child_nodes)
+        newlines << result.source.line(node.location.start_offset) if node&.newline?
+      end
+
+      newlines.sort
     end
   end
 end

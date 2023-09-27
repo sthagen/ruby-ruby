@@ -205,10 +205,25 @@ $(YARP_BUILD_DIR)/.time $(YARP_BUILD_DIR)/enc/.time $(YARP_BUILD_DIR)/util/.time
 	$(Q) $(MAKEDIRS) $(@D)
 	@$(NULLCMD) > $@
 
-main: $(srcdir)/lib/yarp/mutation_visitor.rb
-srcs: $(srcdir)/lib/yarp/mutation_visitor.rb
-$(srcdir)/lib/yarp/mutation_visitor.rb: $(YARP_SRCDIR)/config.yml $(YARP_SRCDIR)/templates/template.rb $(YARP_SRCDIR)/templates/lib/yarp/mutation_visitor.rb.erb
-	$(Q) $(BASERUBY) $(YARP_SRCDIR)/templates/template.rb lib/yarp/mutation_visitor.rb $(srcdir)/lib/yarp/mutation_visitor.rb
+main: $(srcdir)/lib/yarp/compiler.rb
+srcs: $(srcdir)/lib/yarp/compiler.rb
+$(srcdir)/lib/yarp/compiler.rb: $(YARP_SRCDIR)/config.yml $(YARP_SRCDIR)/templates/template.rb $(YARP_SRCDIR)/templates/lib/yarp/compiler.rb.erb
+	$(Q) $(BASERUBY) $(YARP_SRCDIR)/templates/template.rb lib/yarp/compiler.rb $(srcdir)/lib/yarp/compiler.rb
+
+main: $(srcdir)/lib/yarp/dispatcher.rb
+srcs: $(srcdir)/lib/yarp/dispatcher.rb
+$(srcdir)/lib/yarp/dispatcher.rb: $(YARP_SRCDIR)/config.yml $(YARP_SRCDIR)/templates/template.rb $(YARP_SRCDIR)/templates/lib/yarp/dispatcher.rb.erb
+	$(Q) $(BASERUBY) $(YARP_SRCDIR)/templates/template.rb lib/yarp/dispatcher.rb $(srcdir)/lib/yarp/dispatcher.rb
+
+main: $(srcdir)/lib/yarp/dsl.rb
+srcs: $(srcdir)/lib/yarp/dsl.rb
+$(srcdir)/lib/yarp/dsl.rb: $(YARP_SRCDIR)/config.yml $(YARP_SRCDIR)/templates/template.rb $(YARP_SRCDIR)/templates/lib/yarp/dsl.rb.erb
+	$(Q) $(BASERUBY) $(YARP_SRCDIR)/templates/template.rb lib/yarp/dsl.rb $(srcdir)/lib/yarp/dsl.rb
+
+main: $(srcdir)/lib/yarp/mutation_compiler.rb
+srcs: $(srcdir)/lib/yarp/mutation_compiler.rb
+$(srcdir)/lib/yarp/mutation_compiler.rb: $(YARP_SRCDIR)/config.yml $(YARP_SRCDIR)/templates/template.rb $(YARP_SRCDIR)/templates/lib/yarp/mutation_compiler.rb.erb
+	$(Q) $(BASERUBY) $(YARP_SRCDIR)/templates/template.rb lib/yarp/mutation_compiler.rb $(srcdir)/lib/yarp/mutation_compiler.rb
 
 main: $(srcdir)/lib/yarp/node.rb
 srcs: $(srcdir)/lib/yarp/node.rb
@@ -219,6 +234,11 @@ main: $(srcdir)/lib/yarp/serialize.rb
 srcs: $(srcdir)/lib/yarp/serialize.rb
 $(srcdir)/lib/yarp/serialize.rb: $(YARP_SRCDIR)/config.yml $(YARP_SRCDIR)/templates/template.rb $(YARP_SRCDIR)/templates/lib/yarp/serialize.rb.erb
 	$(Q) $(BASERUBY) $(YARP_SRCDIR)/templates/template.rb lib/yarp/serialize.rb $(srcdir)/lib/yarp/serialize.rb
+
+main: $(srcdir)/lib/yarp/visitor.rb
+srcs: $(srcdir)/lib/yarp/visitor.rb
+$(srcdir)/lib/yarp/visitor.rb: $(YARP_SRCDIR)/config.yml $(YARP_SRCDIR)/templates/template.rb $(YARP_SRCDIR)/templates/lib/yarp/visitor.rb.erb
+	$(Q) $(BASERUBY) $(YARP_SRCDIR)/templates/template.rb lib/yarp/visitor.rb $(srcdir)/lib/yarp/visitor.rb
 
 srcs: yarp/api_node.c
 yarp/api_node.c: $(YARP_SRCDIR)/config.yml $(YARP_SRCDIR)/templates/template.rb $(YARP_SRCDIR)/templates/ext/yarp/api_node.c.erb
@@ -692,8 +712,11 @@ clean-local:: clean-runnable
 	$(Q)$(RM) y.tab.c y.output encdb.h transdb.h config.log rbconfig.rb $(ruby_pc) $(COROUTINE_H:/Context.h=/.time)
 	$(Q)$(RM) probes.h probes.$(OBJEXT) probes.stamp ruby-glommed.$(OBJEXT) ruby.imp ChangeLog $(STATIC_RUBY)$(EXEEXT)
 	$(Q)$(RM) GNUmakefile.old Makefile.old $(arch)-fake.rb bisect.sh $(ENC_TRANS_D) builtin_binary.inc
+	$(Q)$(RM) $(YARP_BUILD_DIR)/.time $(YARP_BUILD_DIR)/*/.time
 	-$(Q)$(RMALL) yjit/target
-	-$(Q) $(RMDIR) enc/jis enc/trans enc $(COROUTINE_H:/Context.h=) coroutine yjit 2> $(NULL) || $(NULLCMD)
+	-$(Q) $(RMDIR) enc/jis enc/trans enc $(COROUTINE_H:/Context.h=) coroutine yjit \
+	  $(YARP_BUILD_DIR)/*/ $(YARP_BUILD_DIR) tmp \
+	2> $(NULL) || $(NULLCMD)
 
 bin/clean-runnable:: PHONY
 	$(Q)$(CHDIR) bin 2>$(NULL) && $(RM) $(PROGRAM) $(WPROGRAM) $(GORUBY)$(EXEEXT) bin/*.$(DLEXT) 2>$(NULL) || $(NULLCMD)
