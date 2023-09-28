@@ -1384,7 +1384,7 @@ rb_binding_add_dynavars(VALUE bindval, rb_binding_t *bind, int dyncount, const I
     rb_execution_context_t *ec = GET_EC();
     const rb_iseq_t *base_iseq, *iseq;
     rb_ast_body_t ast;
-    NODE tmp_node;
+    rb_node_scope_t tmp_node;
 
     if (dyncount < 0) return 0;
 
@@ -1396,8 +1396,12 @@ rb_binding_add_dynavars(VALUE bindval, rb_binding_t *bind, int dyncount, const I
     dyns->size = dyncount;
     MEMCPY(dyns->ids, dynvars, ID, dyncount);
 
-    rb_node_init(&tmp_node, NODE_SCOPE, (VALUE)dyns, 0, 0);
-    ast.root = &tmp_node;
+    rb_node_init(RNODE(&tmp_node), NODE_SCOPE);
+    tmp_node.nd_tbl = dyns;
+    tmp_node.nd_body = 0;
+    tmp_node.nd_args = 0;
+
+    ast.root = RNODE(&tmp_node);
     ast.frozen_string_literal = -1;
     ast.coverage_enabled = -1;
     ast.script_lines = INT2FIX(-1);
@@ -1744,6 +1748,17 @@ void
 rb_lastline_set(VALUE val)
 {
     vm_svar_set(GET_EC(), VM_SVAR_LASTLINE, val);
+}
+
+void
+rb_lastline_set_up(VALUE val, unsigned int up)
+{
+    rb_control_frame_t * cfp = GET_EC()->cfp;
+
+    for(unsigned int i = 0; i < up; i++) {
+        cfp = RUBY_VM_PREVIOUS_CONTROL_FRAME(cfp);
+    }
+    vm_cfp_svar_set(GET_EC(), cfp, VM_SVAR_LASTLINE, val);
 }
 
 /* misc */
