@@ -281,15 +281,19 @@ fn jit_save_pc(jit: &JITState, asm: &mut Assembler) {
 /// Note: this will change the current value of REG_SP,
 ///       which could invalidate memory operands
 fn gen_save_sp(asm: &mut Assembler) {
-    asm.spill_temps();
-    if asm.ctx.get_sp_offset() != 0 {
+    gen_save_sp_with_offset(asm, 0);
+}
+
+/// Save the current SP + offset on the CFP
+fn gen_save_sp_with_offset(asm: &mut Assembler, offset: i8) {
+    if asm.ctx.get_sp_offset() != -offset {
         asm_comment!(asm, "save SP to CFP");
-        let stack_pointer = asm.ctx.sp_opnd(0);
+        let stack_pointer = asm.ctx.sp_opnd((offset as i32 * SIZEOF_VALUE_I32) as isize);
         let sp_addr = asm.lea(stack_pointer);
         asm.mov(SP, sp_addr);
         let cfp_sp_opnd = Opnd::mem(64, CFP, RUBY_OFFSET_CFP_SP);
         asm.mov(cfp_sp_opnd, SP);
-        asm.ctx.set_sp_offset(0);
+        asm.ctx.set_sp_offset(-offset);
     }
 }
 
@@ -305,6 +309,9 @@ fn jit_prepare_routine_call(
     jit.record_boundary_patch_point = true;
     jit_save_pc(jit, asm);
     gen_save_sp(asm);
+    // After jit_prepare_routine_call(), we often pop operands before asm.ccall().
+    // They should be spilled here to let GC mark them.
+    asm.spill_temps();
 
     // In case the routine calls Ruby methods, it can set local variables
     // through Kernel#binding and other means.
@@ -4495,34 +4502,6 @@ fn jit_rb_int_equal(
     true
 }
 
-fn jit_rb_int_mul(
-    jit: &mut JITState,
-    asm: &mut Assembler,
-    ocb: &mut OutlinedCb,
-    _ci: *const rb_callinfo,
-    _cme: *const rb_callable_method_entry_t,
-    _block: Option<BlockHandler>,
-    _argc: i32,
-    _known_recv_class: *const VALUE,
-) -> bool {
-    if asm.ctx.two_fixnums_on_stack(jit) != Some(true) {
-        return false;
-    }
-    guard_two_fixnums(jit, asm, ocb);
-
-    // rb_fix_mul_fix may allocate memory for Bignum
-    jit_prepare_routine_call(jit, asm);
-
-    asm_comment!(asm, "Integer#*");
-    let obj = asm.stack_pop(1);
-    let recv = asm.stack_pop(1);
-    let ret = asm.ccall(rb_fix_mul_fix as *const u8, vec![recv, obj]);
-
-    let ret_opnd = asm.stack_push(Type::Unknown);
-    asm.mov(ret_opnd, ret);
-    true
-}
-
 fn jit_rb_int_div(
     jit: &mut JITState,
     asm: &mut Assembler,
@@ -5248,10 +5227,10 @@ fn gen_push_frame(
     asm.mov(cfp_opnd(RUBY_OFFSET_CFP_SELF), frame.recv);
     asm.mov(cfp_opnd(RUBY_OFFSET_CFP_BLOCK_CODE), 0.into());
 
-    // Spill stack temps to let the callee use them (must be done before changing SP)
-    asm.spill_temps();
-
     if set_sp_cfp {
+        // Spill stack temps to let the callee use them (must be done before changing the SP register)
+        asm.spill_temps();
+
         // Saving SP before calculating ep avoids a dependency on a register
         // However this must be done after referencing frame.recv, which may be SP-relative
         asm.mov(SP, sp);
@@ -5494,22 +5473,17 @@ fn gen_send_cfunc(
         asm.mov(stack_opnd, kwargs);
     }
 
-    // Copy SP because REG_SP will get overwritten
-    let sp = asm.lea(asm.ctx.sp_opnd(0));
-
-    // Pop the C function arguments from the stack (in the caller)
-    asm.stack_pop((argc + 1).try_into().unwrap());
-
     // Write interpreter SP into CFP.
-    // Needed in case the callee yields to the block.
-    gen_save_sp(asm);
+    // We don't pop arguments yet to use registers for passing them, but we
+    // have to set cfp->sp below them for full_cfunc_return() invalidation.
+    gen_save_sp_with_offset(asm, -(argc + 1) as i8);
 
     // Non-variadic method
     let args = if cfunc_argc >= 0 {
         // Copy the arguments from the stack to the C argument registers
         // self is the 0th argument and is at index argc from the stack top
         (0..=passed_argc).map(|i|
-            Opnd::mem(64, sp, -(argc + 1 - i) * SIZEOF_VALUE_I32)
+            asm.stack_opnd(argc - i)
         ).collect()
     }
     // Variadic method
@@ -5518,8 +5492,8 @@ fn gen_send_cfunc(
         // rb_f_puts(int argc, VALUE *argv, VALUE recv)
         vec![
             Opnd::Imm(passed_argc.into()),
-            asm.lea(Opnd::mem(64, sp, -(argc) * SIZEOF_VALUE_I32)),
-            Opnd::mem(64, sp, -(argc + 1) * SIZEOF_VALUE_I32),
+            asm.lea(asm.ctx.sp_opnd((-argc * SIZEOF_VALUE_I32) as isize)),
+            asm.stack_opnd(argc),
         ]
     }
     else {
@@ -5532,6 +5506,7 @@ fn gen_send_cfunc(
     // Invalidation logic is in yjit_method_lookup_change()
     asm_comment!(asm, "call C function");
     let ret = asm.ccall(unsafe { get_mct_func(cfunc) }.cast(), args);
+    asm.stack_pop((argc + 1).try_into().unwrap()); // Pop arguments after ccall to use registers for passing them.
 
     // Record code position for TracePoint patching. See full_cfunc_return().
     record_global_inval_patch(asm, CodegenGlobals::get_outline_full_cfunc_return_pos());
@@ -6156,11 +6131,12 @@ fn gen_send_iseq(
             let non_rest_arg_count = argc - 1;
             // We start by dupping the array because someone else might have
             // a reference to it. This also normalizes to an ::Array instance.
-            let array = asm.stack_pop(1);
+            let array = asm.stack_opnd(0);
             let array = asm.ccall(
                 rb_ary_dup as *const u8,
                 vec![array],
             );
+            asm.stack_pop(1); // Pop array after ccall to use a register for passing it.
 
             // This is the end stack state of all `non_rest_arg_count` situations below
             argc = required_num + opts_filled;
@@ -8773,7 +8749,6 @@ impl CodegenGlobals {
             self.yjit_reg_method(rb_cInteger, "==", jit_rb_int_equal);
             self.yjit_reg_method(rb_cInteger, "===", jit_rb_int_equal);
 
-            self.yjit_reg_method(rb_cInteger, "*", jit_rb_int_mul);
             self.yjit_reg_method(rb_cInteger, "/", jit_rb_int_div);
             self.yjit_reg_method(rb_cInteger, "<<", jit_rb_int_lshift);
             self.yjit_reg_method(rb_cInteger, "[]", jit_rb_int_aref);

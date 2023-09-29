@@ -479,10 +479,10 @@ dump_node(VALUE buf, VALUE indent, int comment, const NODE * node)
         ANN("example: struct.field += foo");
         F_NODE(nd_recv, RNODE_OP_ASGN2, "receiver");
         F_CUSTOM1(nd_next->nd_vid, "attr") {
-            if (RNODE_OP_ASGN2(node)->nd_next->nd_aid) A("? ");
-            A_ID(RNODE_OP_ASGN2(node)->nd_next->nd_vid);
+            if (RNODE_OP_ASGN2(node)->nd_aid) A("? ");
+            A_ID(RNODE_OP_ASGN2(node)->nd_vid);
         }
-        F_ID(nd_next->nd_mid, RNODE_OP_ASGN2, "operator");
+        F_ID(nd_mid, RNODE_OP_ASGN2, "operator");
         LAST_NODE;
         F_NODE(nd_value, RNODE_OP_ASGN2, "rvalue");
         return;
@@ -1105,7 +1105,6 @@ dump_node(VALUE buf, VALUE indent, int comment, const NODE * node)
 
       case NODE_ARGS_AUX:
       case NODE_DEF_TEMP:
-      case NODE_DEF_TEMP2:
       case NODE_RIPPER:
       case NODE_RIPPER_VALUES:
       case NODE_LAST:

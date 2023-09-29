@@ -174,39 +174,118 @@ pm_optimizable_range_item_p(pm_node_t *node)
 }
 
 /**
+ * Check the prism flags of a regular expression-like node and return the flags
+ * that are expected by the CRuby VM.
+ */
+static int
+pm_reg_flags(const pm_node_t *node) {
+    int flags = 0;
+
+    if (node->flags & PM_REGULAR_EXPRESSION_FLAGS_IGNORE_CASE) {
+        flags |= ONIG_OPTION_IGNORECASE;
+    }
+
+    if (node->flags & PM_REGULAR_EXPRESSION_FLAGS_MULTI_LINE) {
+        flags |= ONIG_OPTION_MULTILINE;
+    }
+
+    if (node->flags & PM_REGULAR_EXPRESSION_FLAGS_EXTENDED) {
+        flags |= ONIG_OPTION_EXTEND;
+    }
+
+    return flags;
+}
+
+/**
  * Certain nodes can be compiled literally, which can lead to further
  * optimizations. These nodes will all have the PM_NODE_FLAG_STATIC_LITERAL flag
  * set.
  */
 static inline bool
-pm_static_node_literal_p(pm_node_t *node)
+pm_static_literal_p(const pm_node_t *node)
 {
     return node->flags & PM_NODE_FLAG_STATIC_LITERAL;
 }
 
+/**
+ * Certain nodes can be compiled literally. This function returns the literal
+ * value described by the given node. For example, an array node with all static
+ * literal values can be compiled into a literal array.
+ */
 static inline VALUE
-pm_static_literal_value(pm_node_t *node)
+pm_static_literal_value(const pm_node_t *node, pm_compile_context_t *compile_context)
 {
-    switch(PM_NODE_TYPE(node)) {
+    // Every node that comes into this function should already be marked as
+    // static literal. If it's not, then we have a bug somewhere.
+    assert(pm_static_literal_p(node));
+
+    switch (PM_NODE_TYPE(node)) {
+      case PM_ARRAY_NODE: {
+        pm_array_node_t *cast = (pm_array_node_t *) node;
+        pm_node_list_t *elements = &cast->elements;
+
+        VALUE value = rb_ary_hidden_new(elements->size);
+        for (size_t index = 0; index < elements->size; index++) {
+            rb_ary_push(value, pm_static_literal_value(elements->nodes[index], compile_context));
+        }
+
+        OBJ_FREEZE(value);
+        return value;
+      }
       case PM_FALSE_NODE:
         return Qfalse;
       case PM_FLOAT_NODE:
         return parse_float(node);
+      case PM_HASH_NODE: {
+        pm_hash_node_t *cast = (pm_hash_node_t *) node;
+        pm_node_list_t *elements = &cast->elements;
+
+        VALUE array = rb_ary_hidden_new(elements->size * 2);
+        for (size_t index = 0; index < elements->size; index++) {
+            assert(PM_NODE_TYPE_P(elements->nodes[index], PM_ASSOC_NODE));
+            pm_assoc_node_t *cast = (pm_assoc_node_t *) elements->nodes[index];
+            VALUE pair[2] = { pm_static_literal_value(cast->key, compile_context), pm_static_literal_value(cast->value, compile_context) };
+            rb_ary_cat(array, pair, 2);
+        }
+
+        VALUE value = rb_hash_new_with_size(elements->size);
+        rb_hash_bulk_insert(RARRAY_LEN(array), RARRAY_CONST_PTR(array), value);
+
+        value = rb_obj_hide(value);
+        OBJ_FREEZE(value);
+        return value;
+      }
       case PM_IMAGINARY_NODE:
-        return parse_imaginary((pm_imaginary_node_t *)node);
+        return parse_imaginary((pm_imaginary_node_t *) node);
       case PM_INTEGER_NODE:
         return parse_integer((pm_integer_node_t *) node);
       case PM_NIL_NODE:
         return Qnil;
       case PM_RATIONAL_NODE:
         return parse_rational(node);
+      case PM_REGULAR_EXPRESSION_NODE: {
+        pm_regular_expression_node_t *cast = (pm_regular_expression_node_t *) node;
+
+        VALUE string = parse_string(&cast->unescaped);
+        return rb_reg_new(RSTRING_PTR(string), RSTRING_LEN(string), pm_reg_flags(node));
+      }
+      case PM_SOURCE_ENCODING_NODE: {
+        rb_encoding *encoding = rb_find_encoding(rb_str_new_cstr(compile_context->parser->encoding.name));
+        if (!encoding) rb_bug("Encoding not found!");
+        return rb_enc_from_encoding(encoding);
+      }
+      case PM_SOURCE_FILE_NODE: {
+        pm_source_file_node_t *cast = (pm_source_file_node_t *)node;
+        return cast->filepath.length ? parse_string(&cast->filepath) : rb_fstring_lit("<compiled>");
+      }
+      case PM_SOURCE_LINE_NODE:
+        return INT2FIX((int) pm_newline_list_line_column(&compile_context->parser->newline_list, node->location.start).line);
       case PM_STRING_NODE:
-        return parse_string(&((pm_string_node_t *)node)->unescaped);
+        return parse_string(&((pm_string_node_t *) node)->unescaped);
       case PM_SYMBOL_NODE:
-        return ID2SYM(parse_string_symbol(&((pm_symbol_node_t *)node)->unescaped));
+        return ID2SYM(parse_string_symbol(&((pm_symbol_node_t *) node)->unescaped));
       case PM_TRUE_NODE:
         return Qtrue;
-        // TODO: Implement this method for the other literal nodes described above
       default:
         rb_raise(rb_eArgError, "Don't have a literal value for this type");
         return Qfalse;
@@ -589,26 +668,173 @@ pm_compile_multi_write_lhs(rb_iseq_t *iseq, NODE dummy_line_node, const pm_node_
 }
 
 /**
- * Check the prism flags of a regular expression-like node and return the flags
- * that are expected by the CRuby VM.
+ * Compile a pattern matching expression.
  */
 static int
-pm_reg_flags(const pm_node_t *node) {
-    int flags = 0;
+pm_compile_pattern(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, const uint8_t *src, pm_compile_context_t *compile_context, LABEL *matched_label, LABEL *unmatched_label, bool in_alternation_pattern)
+{
+    int lineno = (int) pm_newline_list_line_column(&compile_context->parser->newline_list, node->location.start).line;
+    NODE dummy_line_node = generate_dummy_line_node(lineno, lineno);
 
-    if (node->flags & PM_REGULAR_EXPRESSION_FLAGS_IGNORE_CASE) {
-        flags |= ONIG_OPTION_IGNORECASE;
+    switch (PM_NODE_TYPE(node)) {
+      case PM_ARRAY_PATTERN_NODE:
+        rb_bug("Array pattern matching not yet supported.");
+        break;
+      case PM_FIND_PATTERN_NODE:
+        rb_bug("Find pattern matching not yet supported.");
+        break;
+      case PM_HASH_PATTERN_NODE:
+        rb_bug("Hash pattern matching not yet supported.");
+        break;
+      case PM_CAPTURE_PATTERN_NODE:
+        rb_bug("Capture pattern matching not yet supported.");
+        break;
+      case PM_IF_NODE: {
+        // If guards can be placed on patterns to further limit matches based on
+        // a dynamic predicate. This looks like:
+        //
+        //     case foo
+        //     in bar if baz
+        //     end
+        //
+        pm_if_node_t *cast = (pm_if_node_t *) node;
+
+        pm_compile_pattern(iseq, cast->statements->body.nodes[0], ret, src, compile_context, matched_label, unmatched_label, in_alternation_pattern);
+        PM_COMPILE_NOT_POPPED(cast->predicate);
+
+        ADD_INSNL(ret, &dummy_line_node, branchunless, unmatched_label);
+        ADD_INSNL(ret, &dummy_line_node, jump, matched_label);
+        break;
+      }
+      case PM_UNLESS_NODE: {
+        // Unless guards can be placed on patterns to further limit matches
+        // based on a dynamic predicate. This looks like:
+        //
+        //     case foo
+        //     in bar unless baz
+        //     end
+        //
+        pm_unless_node_t *cast = (pm_unless_node_t *) node;
+
+        pm_compile_pattern(iseq, cast->statements->body.nodes[0], ret, src, compile_context, matched_label, unmatched_label, in_alternation_pattern);
+        PM_COMPILE_NOT_POPPED(cast->predicate);
+
+        ADD_INSNL(ret, &dummy_line_node, branchif, unmatched_label);
+        ADD_INSNL(ret, &dummy_line_node, jump, matched_label);
+        break;
+      }
+      case PM_LOCAL_VARIABLE_TARGET_NODE: {
+        // Local variables can be targetted by placing identifiers in the place
+        // of a pattern. For example, foo in bar. This results in the value
+        // being matched being written to that local variable.
+        pm_local_variable_target_node_t *cast = (pm_local_variable_target_node_t *) node;
+        int index = pm_lookup_local_index(iseq, compile_context, cast->name);
+
+        // If this local variable is being written from within an alternation
+        // pattern, then it cannot actually be added to the local table since
+        // it's ambiguous which value should be used. So instead we indicate
+        // this with a compile error.
+        if (in_alternation_pattern) {
+            ID id = pm_constant_id_lookup(compile_context, cast->name);
+            const char *name = rb_id2name(id);
+
+            if (name && strlen(name) > 0 && name[0] != '_') {
+                COMPILE_ERROR(ERROR_ARGS "illegal variable in alternative pattern (%"PRIsVALUE")", rb_id2str(id));
+                return COMPILE_NG;
+            }
+        }
+
+        ADD_SETLOCAL(ret, &dummy_line_node, index, (int) cast->depth);
+        ADD_INSNL(ret, &dummy_line_node, jump, matched_label);
+        break;
+      }
+      case PM_ALTERNATION_PATTERN_NODE: {
+        // Alternation patterns allow you to specify multiple patterns in a
+        // single expression using the | operator.
+        pm_alternation_pattern_node_t *cast = (pm_alternation_pattern_node_t *) node;
+
+        LABEL *matched_left_label = NEW_LABEL(lineno);
+        LABEL *unmatched_left_label = NEW_LABEL(lineno);
+
+        // First, we're going to attempt to match against the left pattern. If
+        // that pattern matches, then we'll skip matching the right pattern.
+        ADD_INSN(ret, &dummy_line_node, dup);
+        pm_compile_pattern(iseq, cast->left, ret, src, compile_context, matched_left_label, unmatched_left_label, true);
+
+        // If we get here, then we matched on the left pattern. In this case we
+        // should pop out the duplicate value that we preemptively added to
+        // match against the right pattern and then jump to the match label.
+        ADD_LABEL(ret, matched_left_label);
+        ADD_INSN(ret, &dummy_line_node, pop);
+        ADD_INSNL(ret, &dummy_line_node, jump, matched_label);
+        ADD_INSN(ret, &dummy_line_node, putnil);
+
+        // If we get here, then we didn't match on the left pattern. In this
+        // case we attempt to match against the right pattern.
+        ADD_LABEL(ret, unmatched_left_label);
+        pm_compile_pattern(iseq, cast->right, ret, src, compile_context, matched_label, unmatched_label, true);
+        break;
+      }
+      case PM_ARRAY_NODE:
+      case PM_CLASS_VARIABLE_READ_NODE:
+      case PM_CONSTANT_PATH_NODE:
+      case PM_CONSTANT_READ_NODE:
+      case PM_FALSE_NODE:
+      case PM_FLOAT_NODE:
+      case PM_GLOBAL_VARIABLE_READ_NODE:
+      case PM_IMAGINARY_NODE:
+      case PM_INSTANCE_VARIABLE_READ_NODE:
+      case PM_INTEGER_NODE:
+      case PM_INTERPOLATED_REGULAR_EXPRESSION_NODE:
+      case PM_INTERPOLATED_STRING_NODE:
+      case PM_INTERPOLATED_SYMBOL_NODE:
+      case PM_INTERPOLATED_X_STRING_NODE:
+      case PM_LAMBDA_NODE:
+      case PM_LOCAL_VARIABLE_READ_NODE:
+      case PM_NIL_NODE:
+      case PM_RANGE_NODE:
+      case PM_RATIONAL_NODE:
+      case PM_REGULAR_EXPRESSION_NODE:
+      case PM_SELF_NODE:
+      case PM_STRING_NODE:
+      case PM_SYMBOL_NODE:
+      case PM_TRUE_NODE:
+      case PM_X_STRING_NODE:
+        // These nodes are all simple patterns, which means we'll use the
+        // checkmatch instruction to match against them, which is effectively a
+        // VM-level === operator.
+        PM_COMPILE_NOT_POPPED(node);
+        ADD_INSN1(ret, &dummy_line_node, checkmatch, INT2FIX(VM_CHECKMATCH_TYPE_CASE));
+        ADD_INSNL(ret, &dummy_line_node, branchif, matched_label);
+        ADD_INSNL(ret, &dummy_line_node, jump, unmatched_label);
+        break;
+      case PM_PINNED_VARIABLE_NODE: {
+        // Pinned variables are a way to match against the value of a variable
+        // without it looking like you're trying to write to the variable. This
+        // looks like: foo in ^@bar. To compile these, we compile the variable
+        // that they hold.
+        pm_pinned_variable_node_t *cast = (pm_pinned_variable_node_t *) node;
+        pm_compile_pattern(iseq, cast->variable, ret, src, compile_context, matched_label, unmatched_label, false);
+        break;
+      }
+      case PM_PINNED_EXPRESSION_NODE: {
+        // Pinned expressions are a way to match against the value of an
+        // expression that should be evaluated at runtime. This looks like:
+        // foo in ^(bar). To compile these, we compile the expression that they
+        // hold.
+        pm_pinned_expression_node_t *cast = (pm_pinned_expression_node_t *) node;
+        pm_compile_pattern(iseq, cast->expression, ret, src, compile_context, matched_label, unmatched_label, false);
+        break;
+      }
+      default:
+        // If we get here, then we have a node type that should not be in this
+        // position. This would be a bug in the parser, because a different node
+        // type should never have been created in this position in the tree.
+        rb_bug("Unexpected node type in pattern matching expression: %s", pm_node_type_to_str(PM_NODE_TYPE(node)));
+        break;
     }
 
-    if (node->flags & PM_REGULAR_EXPRESSION_FLAGS_MULTI_LINE) {
-        flags |= ONIG_OPTION_MULTILINE;
-    }
-
-    if (node->flags & PM_REGULAR_EXPRESSION_FLAGS_EXTENDED) {
-        flags |= ONIG_OPTION_EXTEND;
-    }
-
-    return flags;
+    return COMPILE_OK;
 }
 
 /*
@@ -667,22 +893,35 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
         return;
       }
       case PM_ARRAY_NODE: {
-        pm_array_node_t *array_node = (pm_array_node_t *) node;
-        pm_node_list_t elements = array_node->elements;
-        if (elements.size == 1 && pm_static_node_literal_p(elements.nodes[0]) && !popped) {
-            VALUE ary = rb_ary_hidden_new(1);
-            rb_ary_push(ary, pm_static_literal_value(elements.nodes[0]));
-            OBJ_FREEZE(ary);
+        // If every node in the array is static, then we can compile the entire
+        // array now instead of later.
+        if (pm_static_literal_p(node)) {
+            // We're only going to compile this node if it's not popped. If it
+            // is popped, then we know we don't need to do anything since it's
+            // statically known.
+            if (!popped) {
+                VALUE value = pm_static_literal_value(node, compile_context);
+                ADD_INSN1(ret, &dummy_line_node, duparray, value);
+                RB_OBJ_WRITTEN(iseq, Qundef, value);
+            }
+        } else {
+            // Here since we know there are possible side-effects inside the
+            // array contents, we're going to build it entirely at runtime.
+            // We'll do this by pushing all of the elements onto the stack and
+            // then combining them with newarray.
+            //
+            // If this hash is popped, then this serves only to ensure we enact
+            // all side-effects (like method calls) that are contained within
+            // the hash contents.
+            pm_array_node_t *cast = (pm_array_node_t *) node;
+            pm_node_list_t *elements = &cast->elements;
 
-            ADD_INSN1(ret, &dummy_line_node, duparray, ary);
-        }
-        else {
-            for (size_t index = 0; index < elements.size; index++) {
-                PM_COMPILE(elements.nodes[index]);
+            for (size_t index = 0; index < elements->size; index++) {
+                PM_COMPILE(elements->nodes[index]);
             }
 
             if (!popped) {
-                ADD_INSN1(ret, &dummy_line_node, newarray, INT2FIX(elements.size));
+                ADD_INSN1(ret, &dummy_line_node, newarray, INT2FIX(elements->size));
             }
         }
 
@@ -938,6 +1177,8 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
         pm_constant_path_node_t *constant_path_node = (pm_constant_path_node_t*) node;
         if (constant_path_node->parent) {
             PM_COMPILE_NOT_POPPED(constant_path_node->parent);
+        } else {
+            ADD_INSN1(ret, &dummy_line_node, putobject, rb_cObject);
         }
         ADD_INSN1(ret, &dummy_line_node, putobject, Qfalse);
 
@@ -1267,29 +1508,38 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
         return;
       }
       case PM_HASH_NODE: {
-        pm_hash_node_t *hash_node = (pm_hash_node_t *) node;
-        pm_node_list_t elements = hash_node->elements;
+        // If every node in the hash is static, then we can compile the entire
+        // hash now instead of later.
+        if (pm_static_literal_p(node)) {
+            // We're only going to compile this node if it's not popped. If it
+            // is popped, then we know we don't need to do anything since it's
+            // statically known.
+            if (!popped) {
+                VALUE value = pm_static_literal_value(node, compile_context);
+                ADD_INSN1(ret, &dummy_line_node, duphash, value);
+                RB_OBJ_WRITTEN(iseq, Qundef, value);
+            }
+        } else {
+            // Here since we know there are possible side-effects inside the
+            // hash contents, we're going to build it entirely at runtime. We'll
+            // do this by pushing all of the key-value pairs onto the stack and
+            // then combining them with newhash.
+            //
+            // If this hash is popped, then this serves only to ensure we enact
+            // all side-effects (like method calls) that are contained within
+            // the hash contents.
+            pm_hash_node_t *cast = (pm_hash_node_t *) node;
+            pm_node_list_t *elements = &cast->elements;
 
-        if (elements.size == 1) {
-            assert(PM_NODE_TYPE_P(elements.nodes[0], PM_ASSOC_NODE));
-            pm_assoc_node_t *assoc_node = (pm_assoc_node_t *) elements.nodes[0];
+            for (size_t index = 0; index < elements->size; index++) {
+                PM_COMPILE(elements->nodes[index]);
+            }
 
-            if (pm_static_node_literal_p(assoc_node->key) && pm_static_node_literal_p(assoc_node->value)) {
-                VALUE hash = rb_hash_new_with_size(1);
-                hash = rb_obj_hide(hash);
-                OBJ_FREEZE(hash);
-                ADD_INSN1(ret, &dummy_line_node, duphash, hash);
-                return;
+            if (!popped) {
+                ADD_INSN1(ret, &dummy_line_node, newhash, INT2FIX(elements->size * 2));
             }
         }
 
-        for (size_t index = 0; index < elements.size; index++) {
-            PM_COMPILE(elements.nodes[index]);
-        }
-
-        if (!popped) {
-            ADD_INSN1(ret, &dummy_line_node, newhash, INT2FIX(elements.size * 2));
-        }
         return;
       }
       case PM_IF_NODE: {
@@ -1306,6 +1556,19 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
         if (!popped) {
             ADD_INSN1(ret, &dummy_line_node, putobject, parse_imaginary((pm_imaginary_node_t *)node));
         }
+        return;
+      }
+      case PM_IMPLICIT_NODE: {
+        // Implicit nodes mark places in the syntax tree where explicit syntax
+        // was omitted, but implied. For example,
+        //
+        //     { foo: }
+        //
+        // In this case a method call/local variable read is implied by virtue
+        // of the missing value. To compile these nodes, we simply compile the
+        // value that is implied, which is helpfully supplied by the parser.
+        pm_implicit_node_t *cast = (pm_implicit_node_t *)node;
+        PM_COMPILE(cast->value);
         return;
       }
       case PM_INSTANCE_VARIABLE_AND_WRITE_NODE: {
@@ -1615,6 +1878,44 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
             ADD_SEND(ret, &dummy_line_node, idEqTilde, INT2NUM(1));
         }
 
+        return;
+      }
+      case PM_MATCH_PREDICATE_NODE: {
+        pm_match_predicate_node_t *cast = (pm_match_predicate_node_t *) node;
+
+        // First, allocate some stack space for the cached return value of any
+        // calls to #deconstruct.
+        ADD_INSN(ret, &dummy_line_node, putnil);
+
+        // Next, compile the expression that we're going to match against.
+        PM_COMPILE_NOT_POPPED(cast->value);
+        ADD_INSN(ret, &dummy_line_node, dup);
+
+        // Now compile the pattern that is going to be used to match against the
+        // expression.
+        LABEL *matched_label = NEW_LABEL(lineno);
+        LABEL *unmatched_label = NEW_LABEL(lineno);
+        LABEL *done_label = NEW_LABEL(lineno);
+        pm_compile_pattern(iseq, cast->pattern, ret, src, compile_context, matched_label, unmatched_label, false);
+
+        // If the pattern did not match, then compile the necessary instructions
+        // to handle pushing false onto the stack, then jump to the end.
+        ADD_LABEL(ret, unmatched_label);
+        ADD_INSN(ret, &dummy_line_node, pop);
+        ADD_INSN(ret, &dummy_line_node, pop);
+
+        if (!popped) ADD_INSN1(ret, &dummy_line_node, putobject, Qfalse);
+        ADD_INSNL(ret, &dummy_line_node, jump, done_label);
+        ADD_INSN(ret, &dummy_line_node, putnil);
+
+        // If the pattern did match, then compile the necessary instructions to
+        // handle pushing true onto the stack, then jump to the end.
+        ADD_LABEL(ret, matched_label);
+        ADD_INSN1(ret, &dummy_line_node, adjuststack, INT2FIX(2));
+        if (!popped) ADD_INSN1(ret, &dummy_line_node, putobject, Qtrue);
+        ADD_INSNL(ret, &dummy_line_node, jump, done_label);
+
+        ADD_LABEL(ret, done_label);
         return;
       }
       case PM_MATCH_WRITE_NODE: {
@@ -2044,35 +2345,33 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
         return;
       }
       case PM_SOURCE_ENCODING_NODE: {
-        const char *encoding = compile_context->parser->encoding.name;
+        // Source encoding nodes are generated by the __ENCODING__ syntax. They
+        // reference the encoding object corresponding to the encoding of the
+        // source file, and can be changed by a magic encoding comment.
         if (!popped) {
-            rb_encoding *enc = rb_find_encoding(rb_str_new_cstr(encoding));
-            if (!enc) {
-                rb_bug("Encoding not found!");
-            }
-            ADD_INSN1(ret, &dummy_line_node, putobject, rb_enc_from_encoding(enc));
+            VALUE value = pm_static_literal_value(node, compile_context);
+            ADD_INSN1(ret, &dummy_line_node, putobject, value);
+            RB_OBJ_WRITTEN(iseq, Qundef, value);
         }
         return;
       }
       case PM_SOURCE_FILE_NODE: {
-        pm_source_file_node_t *source_file_node = (pm_source_file_node_t *)node;
-
+        // Source file nodes are generated by the __FILE__ syntax. They
+        // reference the file name of the source file.
         if (!popped) {
-            VALUE filepath;
-            if (source_file_node->filepath.length == 0) {
-                filepath = rb_fstring_lit("<compiled>");
-            }
-            else {
-                filepath = parse_string(&source_file_node->filepath);
-            }
-
-            ADD_INSN1(ret, &dummy_line_node, putstring, filepath);
+            VALUE value = pm_static_literal_value(node, compile_context);
+            ADD_INSN1(ret, &dummy_line_node, putstring, value);
+            RB_OBJ_WRITTEN(iseq, Qundef, value);
         }
         return;
       }
       case PM_SOURCE_LINE_NODE: {
+        // Source line nodes are generated by the __LINE__ syntax. They
+        // reference the line number where they occur in the source file.
         if (!popped) {
-            ADD_INSN1(ret, &dummy_line_node, putobject, INT2FIX(lineno));
+            VALUE value = pm_static_literal_value(node, compile_context);
+            ADD_INSN1(ret, &dummy_line_node, putobject, value);
+            RB_OBJ_WRITTEN(iseq, Qundef, value);
         }
         return;
       }
@@ -2113,9 +2412,12 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
         return;
       }
       case PM_SYMBOL_NODE: {
-        pm_symbol_node_t *symbol_node = (pm_symbol_node_t *) node;
+        // Symbols nodes are symbol literals with no interpolation. They are
+        // always marked as static literals.
         if (!popped) {
-            ADD_INSN1(ret, &dummy_line_node, putobject, ID2SYM(parse_string_symbol(&symbol_node->unescaped)));
+            VALUE value = pm_static_literal_value(node, compile_context);
+            ADD_INSN1(ret, &dummy_line_node, putobject, value);
+            RB_OBJ_WRITTEN(iseq, Qundef, value);
         }
         return;
       }

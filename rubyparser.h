@@ -132,7 +132,6 @@ enum node_type {
     NODE_FNDPTN,
     NODE_ERROR,
     NODE_DEF_TEMP,
-    NODE_DEF_TEMP2,
     NODE_RIPPER,
     NODE_RIPPER_VALUES,
     NODE_LAST
@@ -209,7 +208,6 @@ typedef struct RNode_CASE {
 
     struct RNode *nd_head;
     struct RNode *nd_body;
-    VALUE not_used;
 } rb_node_case_t;
 
 typedef struct RNode_CASE2 {
@@ -217,7 +215,6 @@ typedef struct RNode_CASE2 {
 
     struct RNode *nd_head;
     struct RNode *nd_body;
-    VALUE not_used;
 } rb_node_case2_t;
 
 typedef struct RNode_CASE3 {
@@ -225,7 +222,6 @@ typedef struct RNode_CASE3 {
 
     struct RNode *nd_head;
     struct RNode *nd_body;
-    VALUE not_used;
 } rb_node_case3_t;
 
 typedef struct RNode_WHEN {
@@ -438,16 +434,10 @@ typedef struct RNode_OP_ASGN2 {
 
     struct RNode *nd_recv;
     struct RNode *nd_value;
-    struct RNode_OP_ASGN22 *nd_next;
-} rb_node_op_asgn2_t;
-
-typedef struct RNode_OP_ASGN22 {
-    NODE node;
-
     ID nd_vid;
     ID nd_mid;
     bool nd_aid;
-} rb_node_op_asgn22_t;
+} rb_node_op_asgn2_t;
 
 typedef struct RNode_OP_ASGN_AND {
     NODE node;
@@ -840,28 +830,11 @@ typedef struct RNode_DEFS {
     struct RNode *nd_defn;
 } rb_node_defs_t;
 
-typedef struct RNode_DEF_TEMP {
-    NODE node;
-
-    ID nd_vid;
-    ID nd_mid;
-    struct RNode_DEF_TEMP2 *nd_next;
-} rb_node_def_temp_t;
-
-typedef struct RNode_DEF_TEMP2 {
-    NODE node;
-
-    struct RNode *nd_head;
-    long nd_nth;
-    VALUE nd_cval;
-} rb_node_def_temp2_t;
-
 typedef struct RNode_ALIAS {
     NODE node;
 
     struct RNode *nd_1st;
     struct RNode *nd_2nd;
-    VALUE not_used;
 } rb_node_alias_t;
 
 typedef struct RNode_VALIAS {
@@ -869,15 +842,12 @@ typedef struct RNode_VALIAS {
 
     ID nd_alias;
     ID nd_orig;
-    VALUE not_used;
 } rb_node_valias_t;
 
 typedef struct RNode_UNDEF {
     NODE node;
 
-    VALUE not_used;
     struct RNode *nd_undef;
-    VALUE not_used2;
 } rb_node_undef_t;
 
 typedef struct RNode_CLASS {
@@ -926,7 +896,6 @@ typedef struct RNode_DOT2 {
 
     struct RNode *nd_beg;
     struct RNode *nd_end;
-    VALUE not_used;
 } rb_node_dot2_t;
 
 typedef struct RNode_DOT3 {
@@ -934,7 +903,6 @@ typedef struct RNode_DOT3 {
 
     struct RNode *nd_beg;
     struct RNode *nd_end;
-    VALUE not_used;
 } rb_node_dot3_t;
 
 typedef struct RNode_FLIP2 {
@@ -942,7 +910,6 @@ typedef struct RNode_FLIP2 {
 
     struct RNode *nd_beg;
     struct RNode *nd_end;
-    VALUE not_used;
 } rb_node_flip2_t;
 
 typedef struct RNode_FLIP3 {
@@ -950,39 +917,24 @@ typedef struct RNode_FLIP3 {
 
     struct RNode *nd_beg;
     struct RNode *nd_end;
-    VALUE not_used;
 } rb_node_flip3_t;
 
 typedef struct RNode_SELF {
     NODE node;
 
-    VALUE not_used;
-    VALUE not_used2;
     long nd_state; /* Default 1. See NEW_SELF. */
 } rb_node_self_t;
 
 typedef struct RNode_NIL {
     NODE node;
-
-    VALUE not_used;
-    VALUE not_used2;
-    VALUE not_used3;
 } rb_node_nil_t;
 
 typedef struct RNode_TRUE {
     NODE node;
-
-    VALUE not_used;
-    VALUE not_used2;
-    VALUE not_used3;
 } rb_node_true_t;
 
 typedef struct RNode_FALSE {
     NODE node;
-
-    VALUE not_used;
-    VALUE not_used2;
-    VALUE not_used3;
 } rb_node_false_t;
 
 typedef struct RNode_ERRINFO {
@@ -1147,8 +1099,6 @@ typedef struct RNode_ERROR {
 #define RNODE_BLOCK_PASS(node) ((struct RNode_BLOCK_PASS *)(node))
 #define RNODE_DEFN(node) ((struct RNode_DEFN *)(node))
 #define RNODE_DEFS(node) ((struct RNode_DEFS *)(node))
-#define RNODE_DEF_TEMP(node) ((struct RNode_DEF_TEMP *)(node))
-#define RNODE_DEF_TEMP2(node) ((struct RNode_DEF_TEMP2 *)(node))
 #define RNODE_ALIAS(node) ((struct RNode_ALIAS *)(node))
 #define RNODE_VALIAS(node) ((struct RNode_VALIAS *)(node))
 #define RNODE_UNDEF(node) ((struct RNode_UNDEF *)(node))
