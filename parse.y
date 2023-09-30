@@ -469,7 +469,6 @@ struct parser_params {
     stack_type cmdarg_stack;
     int tokidx;
     int toksiz;
-    int tokline;
     int heredoc_end;
     int heredoc_indent;
     int heredoc_line_indent;
@@ -2640,7 +2639,6 @@ fcall		: operation
                     {
                     /*%%%*/
                         $$ = NEW_FCALL($1, 0, &@$);
-                        nd_set_line($$, p->tokline);
                     /*% %*/
                     /*% ripper: $1 %*/
                     }
@@ -6767,9 +6765,6 @@ parser_dispatch_scan_event(struct parser_params *p, enum yytokentype t, int line
 static void
 parser_dispatch_delayed_token(struct parser_params *p, enum yytokentype t, int line)
 {
-    int saved_line = p->ruby_sourceline;
-    const char *saved_tokp = p->lex.ptok;
-
     debug_token_line(p, "parser_dispatch_delayed_token", line);
 
     if (!has_delayed_token(p)) return;
@@ -6777,11 +6772,7 @@ parser_dispatch_delayed_token(struct parser_params *p, enum yytokentype t, int l
     RUBY_SET_YYLLOC_OF_DELAYED_TOKEN(*p->yylloc);
 
     if (p->keep_tokens) {
-        p->ruby_sourceline = p->delayed.beg_line;
-        p->lex.ptok = p->lex.pbeg + p->delayed.beg_col;
         parser_append_tokens(p, p->delayed.token, t, line);
-        p->ruby_sourceline = saved_line;
-        p->lex.ptok = saved_tokp;
     }
 
     p->delayed.token = Qnil;
@@ -6819,6 +6810,7 @@ ripper_dispatch_scan_event(struct parser_params *p, enum yytokentype t)
 static void
 ripper_dispatch_delayed_token(struct parser_params *p, enum yytokentype t)
 {
+    /* save and adjust the location to delayed token for callbacks */
     int saved_line = p->ruby_sourceline;
     const char *saved_tokp = p->lex.ptok;
 
@@ -7617,7 +7609,6 @@ static char*
 newtok(struct parser_params *p)
 {
     p->tokidx = 0;
-    p->tokline = p->ruby_sourceline;
     if (!p->tokenbuf) {
         p->toksiz = 60;
         p->tokenbuf = ALLOC_N(char, 60);
@@ -11104,8 +11095,6 @@ rb_node_for_masgn_new(struct parser_params *p, NODE *nd_var, const YYLTYPE *loc)
 {
     rb_node_for_masgn_t *n = NODE_NEWNODE(NODE_FOR_MASGN, rb_node_for_masgn_t, loc);
     n->nd_var = nd_var;
-    n->not_used = 0;
-    n->not_used2 = 0;
 
     return n;
 }
@@ -11125,9 +11114,7 @@ static rb_node_begin_t *
 rb_node_begin_new(struct parser_params *p, NODE *nd_body, const YYLTYPE *loc)
 {
     rb_node_begin_t *n = NODE_NEWNODE(NODE_BEGIN, rb_node_begin_t, loc);
-    n->not_used = 0;
     n->nd_body = nd_body;
-    n->not_used2 = 0;
 
     return n;
 }
@@ -11522,7 +11509,6 @@ rb_node_hash_new(struct parser_params *p, NODE *nd_head, const YYLTYPE *loc)
     rb_node_hash_t *n = NODE_NEWNODE(NODE_HASH, rb_node_hash_t, loc);
     n->nd_head = nd_head;
     n->nd_brace = 0;
-    n->not_used = 0;
 
     return n;
 }
@@ -11623,7 +11609,6 @@ rb_node_op_asgn_or_new(struct parser_params *p, NODE *nd_head, NODE *nd_value, c
     rb_node_op_asgn_or_t *n = NODE_NEWNODE(NODE_OP_ASGN_OR, rb_node_op_asgn_or_t, loc);
     n->nd_head = nd_head;
     n->nd_value = nd_value;
-    n->not_used = 0;
 
     return n;
 }
@@ -11634,7 +11619,6 @@ rb_node_op_asgn_and_new(struct parser_params *p, NODE *nd_head, NODE *nd_value, 
     rb_node_op_asgn_and_t *n = NODE_NEWNODE(NODE_OP_ASGN_AND, rb_node_op_asgn_and_t, loc);
     n->nd_head = nd_head;
     n->nd_value = nd_value;
-    n->not_used = 0;
 
     return n;
 }
@@ -12620,7 +12604,7 @@ gettable(struct parser_params *p, ID id, const YYLTYPE *loc)
         }
         return node;
       case keyword__LINE__:
-        return NEW_LIT(INT2FIX(p->tokline), loc);
+        return NEW_LIT(INT2FIX(loc->beg_pos.lineno), loc);
       case keyword__ENCODING__:
         node = NEW_LIT(rb_enc_from_encoding(p->enc), loc);
         RB_OBJ_WRITTEN(p->ast, Qnil, RNODE_LIT(node)->nd_lit);
@@ -14221,7 +14205,6 @@ args_info_empty_p(struct rb_args_info *args)
 static NODE*
 new_args(struct parser_params *p, NODE *pre_args, NODE *opt_args, ID rest_arg, NODE *post_args, NODE *tail, const YYLTYPE *loc)
 {
-    int saved_line = p->ruby_sourceline;
     struct rb_args_info *args = RNODE_ARGS(tail)->nd_ainfo;
 
     if (args->forwarding) {
@@ -14249,7 +14232,6 @@ new_args(struct parser_params *p, NODE *pre_args, NODE *opt_args, ID rest_arg, N
     args->ruby2_keywords = 0;
 #endif
 
-    p->ruby_sourceline = saved_line;
     nd_set_loc(tail, loc);
 
     return tail;
@@ -14258,7 +14240,6 @@ new_args(struct parser_params *p, NODE *pre_args, NODE *opt_args, ID rest_arg, N
 static NODE*
 new_args_tail(struct parser_params *p, NODE *kw_args, ID kw_rest_arg, ID block, const YYLTYPE *kw_rest_loc)
 {
-    int saved_line = p->ruby_sourceline;
     NODE *node = NEW_ARGS(0, &NULL_LOC);
     struct rb_args_info *args = ZALLOC(struct rb_args_info);
     RNODE_ARGS(node)->nd_ainfo = args;
@@ -14311,7 +14292,6 @@ new_args_tail(struct parser_params *p, NODE *kw_args, ID kw_rest_arg, ID block, 
         args->kw_rest_arg = NEW_DVAR(kw_rest_arg, kw_rest_loc);
     }
 
-    p->ruby_sourceline = saved_line;
     return node;
 }
 
@@ -14349,8 +14329,6 @@ new_array_pattern(struct parser_params *p, NODE *constant, NODE *pre_arg, NODE *
 static NODE*
 new_array_pattern_tail(struct parser_params *p, NODE *pre_args, int has_rest, NODE *rest_arg, NODE *post_args, const YYLTYPE *loc)
 {
-    int saved_line = p->ruby_sourceline;
-
     if (has_rest) {
         rest_arg = rest_arg ? rest_arg : NODE_SPECIAL_NO_NAME_REST;
     }
@@ -14359,7 +14337,6 @@ new_array_pattern_tail(struct parser_params *p, NODE *pre_args, int has_rest, NO
     }
     NODE *node = NEW_ARYPTN(pre_args, rest_arg, post_args, loc);
 
-    p->ruby_sourceline = saved_line;
     return node;
 }
 
@@ -14374,13 +14351,10 @@ new_find_pattern(struct parser_params *p, NODE *constant, NODE *fndptn, const YY
 static NODE*
 new_find_pattern_tail(struct parser_params *p, NODE *pre_rest_arg, NODE *args, NODE *post_rest_arg, const YYLTYPE *loc)
 {
-    int saved_line = p->ruby_sourceline;
-
     pre_rest_arg = pre_rest_arg ? pre_rest_arg : NODE_SPECIAL_NO_NAME_REST;
     post_rest_arg = post_rest_arg ? post_rest_arg : NODE_SPECIAL_NO_NAME_REST;
     NODE *node = NEW_FNDPTN(pre_rest_arg, args, post_rest_arg, loc);
 
-    p->ruby_sourceline = saved_line;
     return node;
 }
 
@@ -14394,7 +14368,6 @@ new_hash_pattern(struct parser_params *p, NODE *constant, NODE *hshptn, const YY
 static NODE*
 new_hash_pattern_tail(struct parser_params *p, NODE *kw_args, ID kw_rest_arg, const YYLTYPE *loc)
 {
-    int saved_line = p->ruby_sourceline;
     NODE *node, *kw_rest_arg_node;
 
     if (kw_rest_arg == idNil) {
@@ -14409,7 +14382,6 @@ new_hash_pattern_tail(struct parser_params *p, NODE *kw_args, ID kw_rest_arg, co
 
     node = NEW_HSHPTN(0, kw_args, kw_rest_arg_node, loc);
 
-    p->ruby_sourceline = saved_line;
     return node;
 }
 

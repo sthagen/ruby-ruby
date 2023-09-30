@@ -276,8 +276,6 @@ typedef struct RNode_FOR_MASGN {
     NODE node;
 
     struct RNode *nd_var;
-    VALUE not_used;
-    VALUE not_used2;
 } rb_node_for_masgn_t;
 
 /* RNode_BREAK, RNode_NEXT and RNode_RETURN should be same structure */
@@ -316,9 +314,7 @@ typedef struct RNode_RETRY {
 typedef struct RNode_BEGIN {
     NODE node;
 
-    VALUE not_used;
     struct RNode *nd_body;
-    VALUE not_used2;
 } rb_node_begin_t;
 
 typedef struct RNode_RESCUE {
@@ -440,7 +436,6 @@ typedef struct RNode_OP_ASGN_AND {
 
     struct RNode *nd_head;
     struct RNode *nd_value;
-    VALUE not_used;
 } rb_node_op_asgn_and_t;
 
 typedef struct RNode_OP_ASGN_OR {
@@ -448,7 +443,6 @@ typedef struct RNode_OP_ASGN_OR {
 
     struct RNode *nd_head;
     struct RNode *nd_value;
-    VALUE not_used;
 } rb_node_op_asgn_or_t;
 
 typedef struct RNode_OP_CDECL {
@@ -560,7 +554,6 @@ typedef struct RNode_HASH {
 
     struct RNode *nd_head;
     long nd_brace;
-    VALUE not_used;
 } rb_node_hash_t;
 
 typedef struct RNode_RETURN {
