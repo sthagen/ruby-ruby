@@ -261,7 +261,6 @@ typedef struct RNode_UNTIL {
 typedef struct RNode_ITER {
     NODE node;
 
-    VALUE not_used;
     struct RNode *nd_body;
     struct RNode *nd_iter;
 } rb_node_iter_t;
@@ -269,7 +268,6 @@ typedef struct RNode_ITER {
 typedef struct RNode_FOR {
     NODE node;
 
-    VALUE not_used;
     struct RNode *nd_body;
     struct RNode *nd_iter;
 } rb_node_for_t;
@@ -353,7 +351,6 @@ typedef struct RNode_AND {
 
     struct RNode *nd_1st;
     struct RNode *nd_2nd;
-    VALUE not_used;
 } rb_node_and_t;
 
 typedef struct RNode_OR {
@@ -361,7 +358,6 @@ typedef struct RNode_OR {
 
     struct RNode *nd_1st;
     struct RNode *nd_2nd;
-    VALUE not_used;
 } rb_node_or_t;
 
 typedef struct RNode_MASGN {
@@ -636,17 +632,13 @@ typedef struct RNode_CVAR {
 typedef struct RNode_NTH_REF {
     NODE node;
 
-    VALUE not_used;
     long nd_nth;
-    VALUE not_used2;
 } rb_node_nth_ref_t;
 
 typedef struct RNode_BACK_REF {
     NODE node;
 
-    VALUE not_used;
     long nd_nth;
-    VALUE not_used2;
 } rb_node_back_ref_t;
 
 /* RNode_MATCH, RNode_LIT, RNode_STR and RNode_XSTR should be same structure */
@@ -737,16 +729,12 @@ typedef struct RNode_DREGX {
 typedef struct RNode_ONCE {
     NODE node;
 
-    VALUE not_used;
     struct RNode *nd_body;
-    VALUE not_used2;
 } rb_node_once_t;
 
 typedef struct RNode_ARGS {
     NODE node;
 
-    VALUE not_used;
-    VALUE not_used2;
     struct rb_args_info *nd_ainfo;
 } rb_node_args_t;
 
@@ -761,7 +749,6 @@ typedef struct RNode_ARGS_AUX {
 typedef struct RNode_OPT_ARG {
     NODE node;
 
-    VALUE not_used;
     struct RNode *nd_body;
     struct RNode *nd_next;
 } rb_node_opt_arg_t;
@@ -769,7 +756,6 @@ typedef struct RNode_OPT_ARG {
 typedef struct RNode_KW_ARG {
     NODE node;
 
-    VALUE not_used;
     struct RNode *nd_body;
     struct RNode *nd_next;
 } rb_node_kw_arg_t;
@@ -779,7 +765,6 @@ typedef struct RNode_POSTARG {
 
     struct RNode *nd_1st;
     struct RNode *nd_2nd;
-    VALUE not_used;
 } rb_node_postarg_t;
 
 typedef struct RNode_ARGSCAT {
@@ -787,7 +772,6 @@ typedef struct RNode_ARGSCAT {
 
     struct RNode *nd_head;
     struct RNode *nd_body;
-    VALUE not_used;
 } rb_node_argscat_t;
 
 typedef struct RNode_ARGSPUSH {
@@ -795,15 +779,12 @@ typedef struct RNode_ARGSPUSH {
 
     struct RNode *nd_head;
     struct RNode *nd_body;
-    VALUE not_used;
 } rb_node_argspush_t;
 
 typedef struct RNode_SPLAT {
     NODE node;
 
     struct RNode *nd_head;
-    VALUE not_used;
-    VALUE not_used2;
 } rb_node_splat_t;
 
 typedef struct RNode_BLOCK_PASS {
@@ -811,7 +792,6 @@ typedef struct RNode_BLOCK_PASS {
 
     struct RNode *nd_head;
     struct RNode *nd_body;
-    VALUE not_used;
 } rb_node_block_pass_t;
 
 typedef struct RNode_DEFN {
@@ -863,7 +843,6 @@ typedef struct RNode_MODULE {
 
     struct RNode *nd_cpath;
     struct RNode *nd_body;
-    VALUE not_used;
 } rb_node_module_t;
 
 typedef struct RNode_SCLASS {
@@ -871,7 +850,6 @@ typedef struct RNode_SCLASS {
 
     struct RNode *nd_recv;
     struct RNode *nd_body;
-    VALUE not_used;
 } rb_node_sclass_t;
 
 typedef struct RNode_COLON2 {
@@ -939,26 +917,18 @@ typedef struct RNode_FALSE {
 
 typedef struct RNode_ERRINFO {
     NODE node;
-
-    VALUE not_used;
-    VALUE not_used2;
-    VALUE not_used3;
 } rb_node_errinfo_t;
 
 typedef struct RNode_DEFINED {
     NODE node;
 
     struct RNode *nd_head;
-    VALUE not_used;
-    VALUE not_used2;
 } rb_node_defined_t;
 
 typedef struct RNode_POSTEXE {
     NODE node;
 
-    VALUE not_used;
     struct RNode *nd_body;
-    VALUE not_used2;
 } rb_node_postexe_t;
 
 typedef struct RNode_DSYM {
@@ -980,17 +950,16 @@ typedef struct RNode_ATTRASGN {
 typedef struct RNode_LAMBDA {
     NODE node;
 
-    VALUE not_used;
     struct RNode *nd_body;
-    VALUE not_used2;
 } rb_node_lambda_t;
 
 typedef struct RNode_ARYPTN {
     NODE node;
 
     struct RNode *nd_pconst;
-    VALUE not_used;
-    struct rb_ary_pattern_info *nd_apinfo;
+    NODE *pre_args;
+    NODE *rest_arg;
+    NODE *post_args;
 } rb_node_aryptn_t;
 
 typedef struct RNode_HSHPTN {
@@ -1005,16 +974,13 @@ typedef struct RNode_FNDPTN {
     NODE node;
 
     struct RNode *nd_pconst;
-    VALUE not_used;
-    struct rb_fnd_pattern_info *nd_fpinfo;
+    NODE *pre_rest_arg;
+    NODE *args;
+    NODE *post_rest_arg;
 } rb_node_fndptn_t;
 
 typedef struct RNode_ERROR {
     NODE node;
-
-    VALUE not_used;
-    VALUE not_used2;
-    VALUE not_used3;
 } rb_node_error_t;
 
 #define RNODE(obj)  ((struct RNode *)(obj))
@@ -1181,18 +1147,6 @@ struct rb_args_info {
     unsigned int no_kwarg: 1;
     unsigned int ruby2_keywords: 1;
     unsigned int forwarding: 1;
-};
-
-struct rb_ary_pattern_info {
-    NODE *pre_args;
-    NODE *rest_arg;
-    NODE *post_args;
-};
-
-struct rb_fnd_pattern_info {
-    NODE *pre_rest_arg;
-    NODE *args;
-    NODE *post_rest_arg;
 };
 
 typedef struct node_buffer_struct node_buffer_t;

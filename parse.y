@@ -22,8 +22,6 @@
 #define YYLTYPE rb_code_location_t
 #define YYLTYPE_IS_DECLARED 1
 
-#ifdef UNIVERSAL_PARSER
-
 /* For Ripper */
 #ifdef RUBY_EXTCONF_H
 # include RUBY_EXTCONF_H
@@ -32,6 +30,9 @@
 #include "ruby/internal/config.h"
 
 #include <errno.h>
+
+#ifdef UNIVERSAL_PARSER
+
 #include "internal/ruby_parser.h"
 #include "parser_node.h"
 #include "universal_parser.c"
@@ -44,12 +45,6 @@
 #endif
 
 #else
-
-#include "ruby/internal/config.h"
-
-#include <ctype.h>
-#include <errno.h>
-#include <stdio.h>
 
 #include "internal.h"
 #include "internal/compile.h"
@@ -978,9 +973,9 @@ static rb_node_postexe_t *rb_node_postexe_new(struct parser_params *p, NODE *nd_
 static rb_node_dsym_t *rb_node_dsym_new(struct parser_params *p, VALUE nd_lit, long nd_alen, NODE *nd_next, const YYLTYPE *loc);
 static rb_node_attrasgn_t *rb_node_attrasgn_new(struct parser_params *p, NODE *nd_recv, ID nd_mid, NODE *nd_args, const YYLTYPE *loc);
 static rb_node_lambda_t *rb_node_lambda_new(struct parser_params *p, NODE *nd_args, NODE *nd_body, const YYLTYPE *loc);
-static rb_node_aryptn_t *rb_node_aryptn_new(struct parser_params *p, const YYLTYPE *loc);
+static rb_node_aryptn_t *rb_node_aryptn_new(struct parser_params *p, NODE *pre_args, NODE *rest_arg, NODE *post_args, const YYLTYPE *loc);
 static rb_node_hshptn_t *rb_node_hshptn_new(struct parser_params *p, NODE *nd_pconst, NODE *nd_pkwargs, NODE *nd_pkwrestarg, const YYLTYPE *loc);
-static rb_node_fndptn_t *rb_node_fndptn_new(struct parser_params *p, const YYLTYPE *loc);
+static rb_node_fndptn_t *rb_node_fndptn_new(struct parser_params *p, NODE *pre_rest_arg, NODE *args, NODE *post_rest_arg, const YYLTYPE *loc);
 static rb_node_error_t *rb_node_error_new(struct parser_params *p, const YYLTYPE *loc);
 
 #define NEW_SCOPE(a,b,loc) (NODE *)rb_node_scope_new(p,a,b,loc)
@@ -1079,9 +1074,9 @@ static rb_node_error_t *rb_node_error_new(struct parser_params *p, const YYLTYPE
 #define NEW_DSYM(s,l,n,loc) (NODE *)rb_node_dsym_new(p,s,l,n,loc)
 #define NEW_ATTRASGN(r,m,a,loc) (NODE *)rb_node_attrasgn_new(p,r,m,a,loc)
 #define NEW_LAMBDA(a,b,loc) (NODE *)rb_node_lambda_new(p,a,b,loc)
-#define NEW_ARYPTN(loc) (NODE *)rb_node_aryptn_new(p,loc)
+#define NEW_ARYPTN(pre,r,post,loc) (NODE *)rb_node_aryptn_new(p,pre,r,post,loc)
 #define NEW_HSHPTN(c,kw,kwrest,loc) (NODE *)rb_node_hshptn_new(p,c,kw,kwrest,loc)
-#define NEW_FNDPTN(loc) (NODE *)rb_node_fndptn_new(p,loc)
+#define NEW_FNDPTN(pre,a,post,loc) (NODE *)rb_node_fndptn_new(p,pre,a,post,loc)
 #define NEW_ERROR(loc) (NODE *)rb_node_error_new(p,loc)
 
 #endif
@@ -11098,7 +11093,6 @@ static rb_node_for_t *
 rb_node_for_new(struct parser_params *p, NODE *nd_iter, NODE *nd_body, const YYLTYPE *loc)
 {
     rb_node_for_t *n = NODE_NEWNODE(NODE_FOR, rb_node_for_t, loc);
-    n->not_used = 0;
     n->nd_body = nd_body;
     n->nd_iter = nd_iter;
 
@@ -11177,7 +11171,6 @@ rb_node_and_new(struct parser_params *p, NODE *nd_1st, NODE *nd_2nd, const YYLTY
     rb_node_and_t *n = NODE_NEWNODE(NODE_AND, rb_node_and_t, loc);
     n->nd_1st = nd_1st;
     n->nd_2nd = nd_2nd;
-    n->not_used = 0;
 
     return n;
 }
@@ -11188,7 +11181,6 @@ rb_node_or_new(struct parser_params *p, NODE *nd_1st, NODE *nd_2nd, const YYLTYP
     rb_node_or_t *n = NODE_NEWNODE(NODE_OR, rb_node_or_t, loc);
     n->nd_1st = nd_1st;
     n->nd_2nd = nd_2nd;
-    n->not_used = 0;
 
     return n;
 }
@@ -11258,7 +11250,6 @@ rb_node_sclass_new(struct parser_params *p, NODE *nd_recv, NODE *nd_body, const 
     rb_node_sclass_t *n = NODE_NEWNODE(NODE_SCLASS, rb_node_sclass_t, loc);
     n->nd_recv = nd_recv;
     n->nd_body = scope;
-    n->not_used = 0;
 
     return n;
 }
@@ -11271,7 +11262,6 @@ rb_node_module_new(struct parser_params *p, NODE *nd_cpath, NODE *nd_body, const
     rb_node_module_t *n = NODE_NEWNODE(NODE_MODULE, rb_node_module_t, loc);
     n->nd_cpath = nd_cpath;
     n->nd_body = scope;
-    n->not_used = 0;
 
     return n;
 }
@@ -11282,7 +11272,6 @@ rb_node_iter_new(struct parser_params *p, NODE *nd_args, NODE *nd_body, const YY
     /* Keep the order of node creation */
     NODE *scope = NEW_SCOPE(nd_args, nd_body, loc);
     rb_node_iter_t *n = NODE_NEWNODE(NODE_ITER, rb_node_iter_t, loc);
-    n->not_used = 0;
     n->nd_body = scope;
     n->nd_iter = 0;
 
@@ -11295,9 +11284,7 @@ rb_node_lambda_new(struct parser_params *p, NODE *nd_args, NODE *nd_body, const 
     /* Keep the order of node creation */
     NODE *scope = NEW_SCOPE(nd_args, nd_body, loc);
     rb_node_lambda_t *n = NODE_NEWNODE(NODE_LAMBDA, rb_node_lambda_t, loc);
-    n->not_used = 0;
     n->nd_body = scope;
-    n->not_used2 = 0;
 
     return n;
 }
@@ -11722,9 +11709,7 @@ static rb_node_nth_ref_t *
 rb_node_nth_ref_new(struct parser_params *p, long nd_nth, const YYLTYPE *loc)
 {
     rb_node_nth_ref_t *n = NODE_NEWNODE(NODE_NTH_REF, rb_node_nth_ref_t, loc);
-    n->not_used = 0;
     n->nd_nth = nd_nth;
-    n->not_used2 = 0;
 
     return n;
 }
@@ -11733,9 +11718,7 @@ static rb_node_back_ref_t *
 rb_node_back_ref_new(struct parser_params *p, long nd_nth, const YYLTYPE *loc)
 {
     rb_node_back_ref_t *n = NODE_NEWNODE(NODE_BACK_REF, rb_node_back_ref_t, loc);
-    n->not_used = 0;
     n->nd_nth = nd_nth;
-    n->not_used2 = 0;
 
     return n;
 }
@@ -11883,9 +11866,7 @@ static rb_node_once_t *
 rb_node_once_new(struct parser_params *p, NODE *nd_body, const YYLTYPE *loc)
 {
     rb_node_once_t *n = NODE_NEWNODE(NODE_ONCE, rb_node_once_t, loc);
-    n->not_used = 0;
     n->nd_body = nd_body;
-    n->not_used2 = 0;
 
     return n;
 }
@@ -11894,8 +11875,6 @@ static rb_node_args_t *
 rb_node_args_new(struct parser_params *p, struct rb_args_info *nd_ainfo, const YYLTYPE *loc)
 {
     rb_node_args_t *n = NODE_NEWNODE(NODE_ARGS, rb_node_args_t, loc);
-    n->not_used = 0;
-    n->not_used2 = 0;
     n->nd_ainfo = nd_ainfo;
 
     return n;
@@ -11916,7 +11895,6 @@ static rb_node_opt_arg_t *
 rb_node_opt_arg_new(struct parser_params *p, NODE *nd_body, const YYLTYPE *loc)
 {
     rb_node_opt_arg_t *n = NODE_NEWNODE(NODE_OPT_ARG, rb_node_opt_arg_t, loc);
-    n->not_used = 0;
     n->nd_body = nd_body;
     n->nd_next = 0;
 
@@ -11927,7 +11905,6 @@ static rb_node_kw_arg_t *
 rb_node_kw_arg_new(struct parser_params *p, NODE *nd_body, const YYLTYPE *loc)
 {
     rb_node_kw_arg_t *n = NODE_NEWNODE(NODE_KW_ARG, rb_node_kw_arg_t, loc);
-    n->not_used = 0;
     n->nd_body = nd_body;
     n->nd_next = 0;
 
@@ -11940,7 +11917,6 @@ rb_node_postarg_new(struct parser_params *p, NODE *nd_1st, NODE *nd_2nd, const Y
     rb_node_postarg_t *n = NODE_NEWNODE(NODE_POSTARG, rb_node_postarg_t, loc);
     n->nd_1st = nd_1st;
     n->nd_2nd = nd_2nd;
-    n->not_used = 0;
 
     return n;
 }
@@ -11951,7 +11927,6 @@ rb_node_argscat_new(struct parser_params *p, NODE *nd_head, NODE *nd_body, const
     rb_node_argscat_t *n = NODE_NEWNODE(NODE_ARGSCAT, rb_node_argscat_t, loc);
     n->nd_head = nd_head;
     n->nd_body = nd_body;
-    n->not_used = 0;
 
     return n;
 }
@@ -11962,7 +11937,6 @@ rb_node_argspush_new(struct parser_params *p, NODE *nd_head, NODE *nd_body, cons
     rb_node_argspush_t *n = NODE_NEWNODE(NODE_ARGSPUSH, rb_node_argspush_t, loc);
     n->nd_head = nd_head;
     n->nd_body = nd_body;
-    n->not_used = 0;
 
     return n;
 }
@@ -11972,8 +11946,6 @@ rb_node_splat_new(struct parser_params *p, NODE *nd_head, const YYLTYPE *loc)
 {
     rb_node_splat_t *n = NODE_NEWNODE(NODE_SPLAT, rb_node_splat_t, loc);
     n->nd_head = nd_head;
-    n->not_used = 0;
-    n->not_used2 = 0;
 
     return n;
 }
@@ -11984,7 +11956,6 @@ rb_node_block_pass_new(struct parser_params *p, NODE *nd_body, const YYLTYPE *lo
     rb_node_block_pass_t *n = NODE_NEWNODE(NODE_BLOCK_PASS, rb_node_block_pass_t, loc);
     n->nd_head = 0;
     n->nd_body = nd_body;
-    n->not_used = 0;
 
     return n;
 }
@@ -12022,9 +11993,6 @@ static rb_node_errinfo_t *
 rb_node_errinfo_new(struct parser_params *p, const YYLTYPE *loc)
 {
     rb_node_errinfo_t *n = NODE_NEWNODE(NODE_ERRINFO, rb_node_errinfo_t, loc);
-    n->not_used = 0;
-    n->not_used2 = 0;
-    n->not_used3 = 0;
 
     return n;
 }
@@ -12034,8 +12002,6 @@ rb_node_defined_new(struct parser_params *p, NODE *nd_head, const YYLTYPE *loc)
 {
     rb_node_defined_t *n = NODE_NEWNODE(NODE_DEFINED, rb_node_defined_t, loc);
     n->nd_head = nd_head;
-    n->not_used = 0;
-    n->not_used2 = 0;
 
     return n;
 }
@@ -12044,9 +12010,7 @@ static rb_node_postexe_t *
 rb_node_postexe_new(struct parser_params *p, NODE *nd_body, const YYLTYPE *loc)
 {
     rb_node_postexe_t *n = NODE_NEWNODE(NODE_POSTEXE, rb_node_postexe_t, loc);
-    n->not_used = 0;
     n->nd_body = nd_body;
-    n->not_used2 = 0;
 
     return n;
 }
@@ -12063,12 +12027,13 @@ rb_node_attrasgn_new(struct parser_params *p, NODE *nd_recv, ID nd_mid, NODE *nd
 }
 
 static rb_node_aryptn_t *
-rb_node_aryptn_new(struct parser_params *p, const YYLTYPE *loc)
+rb_node_aryptn_new(struct parser_params *p, NODE *pre_args, NODE *rest_arg, NODE *post_args, const YYLTYPE *loc)
 {
     rb_node_aryptn_t *n = NODE_NEWNODE(NODE_ARYPTN, rb_node_aryptn_t, loc);
     n->nd_pconst = 0;
-    n->not_used = 0;
-    n->nd_apinfo = 0;
+    n->pre_args = pre_args;
+    n->rest_arg = rest_arg;
+    n->post_args = post_args;
 
     return n;
 }
@@ -12085,12 +12050,13 @@ rb_node_hshptn_new(struct parser_params *p, NODE *nd_pconst, NODE *nd_pkwargs, N
 }
 
 static rb_node_fndptn_t *
-rb_node_fndptn_new(struct parser_params *p, const YYLTYPE *loc)
+rb_node_fndptn_new(struct parser_params *p, NODE *pre_rest_arg, NODE *args, NODE *post_rest_arg, const YYLTYPE *loc)
 {
     rb_node_fndptn_t *n = NODE_NEWNODE(NODE_FNDPTN, rb_node_fndptn_t, loc);
     n->nd_pconst = 0;
-    n->not_used = 0;
-    n->nd_fpinfo = 0;
+    n->pre_rest_arg = pre_rest_arg;
+    n->args = args;
+    n->post_rest_arg = post_rest_arg;
 
     return n;
 }
@@ -12121,9 +12087,6 @@ static rb_node_error_t *
 rb_node_error_new(struct parser_params *p, const YYLTYPE *loc)
 {
     rb_node_error_t *n = NODE_NEWNODE(NODE_ERROR, rb_node_error_t, loc);
-    n->not_used = 0;
-    n->not_used2 = 0;
-    n->not_used3 = 0;
 
     return n;
 }
@@ -14369,17 +14332,15 @@ args_with_numbered(struct parser_params *p, NODE *args, int max_numparam)
 static NODE*
 new_array_pattern(struct parser_params *p, NODE *constant, NODE *pre_arg, NODE *aryptn, const YYLTYPE *loc)
 {
-    struct rb_ary_pattern_info *apinfo = RNODE_ARYPTN(aryptn)->nd_apinfo;
-
     RNODE_ARYPTN(aryptn)->nd_pconst = constant;
 
     if (pre_arg) {
         NODE *pre_args = NEW_LIST(pre_arg, loc);
-        if (apinfo->pre_args) {
-            apinfo->pre_args = list_concat(pre_args, apinfo->pre_args);
+        if (RNODE_ARYPTN(aryptn)->pre_args) {
+            RNODE_ARYPTN(aryptn)->pre_args = list_concat(pre_args, RNODE_ARYPTN(aryptn)->pre_args);
         }
         else {
-            apinfo->pre_args = pre_args;
+            RNODE_ARYPTN(aryptn)->pre_args = pre_args;
         }
     }
     return aryptn;
@@ -14389,20 +14350,14 @@ static NODE*
 new_array_pattern_tail(struct parser_params *p, NODE *pre_args, int has_rest, NODE *rest_arg, NODE *post_args, const YYLTYPE *loc)
 {
     int saved_line = p->ruby_sourceline;
-    NODE *node = NEW_ARYPTN(loc);
-    struct rb_ary_pattern_info *apinfo = ZALLOC(struct rb_ary_pattern_info);
-    RNODE_ARYPTN(node)->nd_apinfo = apinfo;
-
-    apinfo->pre_args = pre_args;
 
     if (has_rest) {
-        apinfo->rest_arg = rest_arg ? rest_arg : NODE_SPECIAL_NO_NAME_REST;
+        rest_arg = rest_arg ? rest_arg : NODE_SPECIAL_NO_NAME_REST;
     }
     else {
-        apinfo->rest_arg = NULL;
+        rest_arg = NULL;
     }
-
-    apinfo->post_args = post_args;
+    NODE *node = NEW_ARYPTN(pre_args, rest_arg, post_args, loc);
 
     p->ruby_sourceline = saved_line;
     return node;
@@ -14420,13 +14375,10 @@ static NODE*
 new_find_pattern_tail(struct parser_params *p, NODE *pre_rest_arg, NODE *args, NODE *post_rest_arg, const YYLTYPE *loc)
 {
     int saved_line = p->ruby_sourceline;
-    NODE *node = NEW_FNDPTN(loc);
-    struct rb_fnd_pattern_info *fpinfo = ZALLOC(struct rb_fnd_pattern_info);
-    RNODE_FNDPTN(node)->nd_fpinfo = fpinfo;
 
-    fpinfo->pre_rest_arg = pre_rest_arg ? pre_rest_arg : NODE_SPECIAL_NO_NAME_REST;
-    fpinfo->args = args;
-    fpinfo->post_rest_arg = post_rest_arg ? post_rest_arg : NODE_SPECIAL_NO_NAME_REST;
+    pre_rest_arg = pre_rest_arg ? pre_rest_arg : NODE_SPECIAL_NO_NAME_REST;
+    post_rest_arg = post_rest_arg ? post_rest_arg : NODE_SPECIAL_NO_NAME_REST;
+    NODE *node = NEW_FNDPTN(pre_rest_arg, args, post_rest_arg, loc);
 
     p->ruby_sourceline = saved_line;
     return node;
