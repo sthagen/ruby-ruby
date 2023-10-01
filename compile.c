@@ -754,7 +754,7 @@ rb_iseq_compile_node(rb_iseq_t *iseq, const NODE *node)
     else if (nd_type_p(node, NODE_SCOPE)) {
         /* iseq type of top, method, class, block */
         iseq_set_local_table(iseq, RNODE_SCOPE(node)->nd_tbl);
-        iseq_set_arguments(iseq, ret, RNODE_SCOPE(node)->nd_args);
+        iseq_set_arguments(iseq, ret, (NODE *)RNODE_SCOPE(node)->nd_args);
 
         switch (ISEQ_BODY(iseq)->type) {
           case ISEQ_TYPE_BLOCK:
@@ -1805,7 +1805,7 @@ static int
 iseq_set_arguments_keywords(rb_iseq_t *iseq, LINK_ANCHOR *const optargs,
                             const struct rb_args_info *args, int arg_size)
 {
-    const NODE *node = args->kw_args;
+    const rb_node_kw_arg_t *node = args->kw_args;
     struct rb_iseq_constant_body *const body = ISEQ_BODY(iseq);
     struct rb_iseq_param_keyword *keyword;
     const VALUE default_values = rb_ary_hidden_new(1);
@@ -1817,14 +1817,14 @@ iseq_set_arguments_keywords(rb_iseq_t *iseq, LINK_ANCHOR *const optargs,
 
     while (node) {
         kw++;
-        node = RNODE_KW_ARG(node)->nd_next;
+        node = node->nd_next;
     }
     arg_size += kw;
     keyword->bits_start = arg_size++;
 
     node = args->kw_args;
     while (node) {
-        const NODE *val_node = RNODE_LASGN(RNODE_KW_ARG(node)->nd_body)->nd_value;
+        const NODE *val_node = RNODE_LASGN(node->nd_body)->nd_value;
         VALUE dv;
 
         if (val_node == NODE_SPECIAL_REQUIRED_KEYWORD) {
@@ -1845,7 +1845,7 @@ iseq_set_arguments_keywords(rb_iseq_t *iseq, LINK_ANCHOR *const optargs,
                 dv = Qfalse;
                 break;
               default:
-                NO_CHECK(COMPILE_POPPED(optargs, "kwarg", node)); /* nd_type_p(node, NODE_KW_ARG) */
+                NO_CHECK(COMPILE_POPPED(optargs, "kwarg", RNODE(node))); /* nd_type_p(node, NODE_KW_ARG) */
                 dv = complex_mark;
             }
 
@@ -1853,7 +1853,7 @@ iseq_set_arguments_keywords(rb_iseq_t *iseq, LINK_ANCHOR *const optargs,
             rb_ary_push(default_values, dv);
         }
 
-        node = RNODE_KW_ARG(node)->nd_next;
+        node = node->nd_next;
     }
 
     keyword->num = kw;
@@ -1910,18 +1910,18 @@ iseq_set_arguments(rb_iseq_t *iseq, LINK_ANCHOR *const optargs, const NODE *cons
         block_id = args->block_arg;
 
         if (args->opt_args) {
-            const NODE *node = args->opt_args;
+            const rb_node_opt_arg_t *node = args->opt_args;
             LABEL *label;
             VALUE labels = rb_ary_hidden_new(1);
             VALUE *opt_table;
             int i = 0, j;
 
             while (node) {
-                label = NEW_LABEL(nd_line(node));
+                label = NEW_LABEL(nd_line(RNODE(node)));
                 rb_ary_push(labels, (VALUE)label | 1);
                 ADD_LABEL(optargs, label);
-                NO_CHECK(COMPILE_POPPED(optargs, "optarg", RNODE_OPT_ARG(node)->nd_body));
-                node = RNODE_OPT_ARG(node)->nd_next;
+                NO_CHECK(COMPILE_POPPED(optargs, "optarg", node->nd_body));
+                node = node->nd_next;
                 i += 1;
             }
 
@@ -8294,7 +8294,7 @@ compile_builtin_mandatory_only_method(rb_iseq_t *iseq, const NODE *node, const N
     rb_node_init(RNODE(&scope_node), NODE_SCOPE);
     scope_node.nd_tbl = tbl;
     scope_node.nd_body = mandatory_node(iseq, node);
-    scope_node.nd_args = RNODE(&args_node);
+    scope_node.nd_args = &args_node;
 
     rb_ast_body_t ast = {
         .root = RNODE(&scope_node),
