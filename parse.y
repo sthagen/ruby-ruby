@@ -1013,7 +1013,7 @@ static rb_node_error_t *rb_node_error_new(struct parser_params *p, const YYLTYPE
 #define NEW_OP_CDECL(v,op,val,loc) (NODE *)rb_node_op_cdecl_new(p,v,val,op,loc)
 #define NEW_CALL(r,m,a,loc) (NODE *)rb_node_call_new(p,r,m,a,loc)
 #define NEW_OPCALL(r,m,a,loc) (NODE *)rb_node_opcall_new(p,r,m,a,loc)
-#define NEW_FCALL(m,a,loc) (NODE *)rb_node_fcall_new(p,m,a,loc)
+#define NEW_FCALL(m,a,loc) rb_node_fcall_new(p,m,a,loc)
 #define NEW_VCALL(m,loc) (NODE *)rb_node_vcall_new(p,m,loc)
 #define NEW_QCALL0(r,m,a,loc) (NODE *)rb_node_qcall_new(p,r,m,a,loc)
 #define NEW_SUPER(a,loc) (NODE *)rb_node_super_new(p,a,loc)
@@ -1783,6 +1783,34 @@ clear_block_exit(struct parser_params *p, bool error)
      (void)rb_warning0("`" tok "' at the end of line without an expression") : \
      (void)0)
 static int looking_at_eol_p(struct parser_params *p);
+
+#ifndef RIPPER
+static NODE *
+get_nd_args(struct parser_params *p, NODE *node)
+{
+    switch (nd_type(node)) {
+      case NODE_CALL:
+        return RNODE_CALL(node)->nd_args;
+      case NODE_OPCALL:
+        return RNODE_OPCALL(node)->nd_args;
+      case NODE_FCALL:
+        return RNODE_FCALL(node)->nd_args;
+      case NODE_QCALL:
+        return RNODE_QCALL(node)->nd_args;
+      case NODE_VCALL:
+      case NODE_SUPER:
+      case NODE_ZSUPER:
+      case NODE_YIELD:
+      case NODE_RETURN:
+      case NODE_BREAK:
+      case NODE_NEXT:
+        return 0;
+      default:
+        compile_error(p, "unexpected node: %s", ruby_node_name(nd_type(node)));
+        return 0;
+    }
+}
+#endif
 %}
 
 %expect 0
@@ -1790,15 +1818,15 @@ static int looking_at_eol_p(struct parser_params *p);
 %define parse.error verbose
 %printer {
 #ifndef RIPPER
-    if ($$ == (NODE *)-1) {
+    if ((NODE *)$$ == (NODE *)-1) {
         rb_parser_printf(p, "NODE_SPECIAL");
     }
     else if ($$) {
-        rb_parser_printf(p, "%s", ruby_node_name(nd_type($$)));
+        rb_parser_printf(p, "%s", ruby_node_name(nd_type(RNODE($$))));
     }
 #else
 #endif
-} <node>
+} <node> <node_fcall> <node_args> <node_args_aux> <node_opt_arg> <node_kw_arg> <node_block_pass>
 %printer {
 #ifndef RIPPER
     rb_parser_printf(p, "%"PRIsVALUE, rb_id2str($$));
@@ -1838,6 +1866,7 @@ static int looking_at_eol_p(struct parser_params *p);
 %union {
     VALUE val;
     NODE *node;
+    rb_node_fcall_t *node_fcall;
     rb_node_args_t *node_args;
     rb_node_args_aux_t *node_args_aux;
     rb_node_opt_arg_t *node_opt_arg;
@@ -1926,7 +1955,8 @@ static int looking_at_eol_p(struct parser_params *p);
 %type <node> literal numeric simple_numeric ssym dsym symbol cpath def_name defn_head defs_head
 %type <node> top_compstmt top_stmts top_stmt begin_block endless_arg endless_command
 %type <node> bodystmt compstmt stmts stmt_or_begin stmt expr arg primary command command_call method_call
-%type <node> expr_value expr_value_do arg_value primary_value fcall rel_expr
+%type <node> expr_value expr_value_do arg_value primary_value rel_expr
+%type <node_fcall> fcall
 %type <node> if_tail opt_else case_body case_args cases opt_rescue exc_list exc_var opt_ensure
 %type <node> args call_args opt_call_args
 %type <node> paren_args opt_paren_args
@@ -2659,9 +2689,9 @@ fcall		: operation
 command		: fcall command_args       %prec tLOWEST
                     {
                     /*%%%*/
-                        RNODE_FCALL($1)->nd_args = $2;
+                        $1->nd_args = $2;
                         nd_set_last_loc($1, @2.end_pos);
-                        $$ = $1;
+                        $$ = (NODE *)$1;
                     /*% %*/
                     /*% ripper: command!($1, $2) %*/
                     }
@@ -2669,9 +2699,9 @@ command		: fcall command_args       %prec tLOWEST
                     {
                     /*%%%*/
                         block_dup_check(p, $2, $3);
-                        RNODE_FCALL($1)->nd_args = $2;
-                        $$ = method_add_block(p, $1, $3, &@$);
-                        fixpos($$, $1);
+                        $1->nd_args = $2;
+                        $$ = method_add_block(p, (NODE *)$1, $3, &@$);
+                        fixpos($$, RNODE($1));
                         nd_set_last_loc($1, @2.end_pos);
                     /*% %*/
                     /*% ripper: method_add_block!(command!($1, $2), $3) %*/
@@ -3749,7 +3779,7 @@ primary		: literal
                 | tFID
                     {
                     /*%%%*/
-                        $$ = NEW_FCALL($1, 0, &@$);
+                        $$ = (NODE *)NEW_FCALL($1, 0, &@$);
                     /*% %*/
                     /*% ripper: method_add_arg!(fcall!($1), args_new!) %*/
                     }
@@ -3857,7 +3887,7 @@ primary		: literal
                 | fcall brace_block
                     {
                     /*%%%*/
-                        $$ = method_add_block(p, $1, $2, &@$);
+                        $$ = method_add_block(p, (NODE *)$1, $2, &@$);
                     /*% %*/
                     /*% ripper: method_add_block!(method_add_arg!(fcall!($1), args_new!), $2) %*/
                     }
@@ -3865,7 +3895,7 @@ primary		: literal
                 | method_call brace_block
                     {
                     /*%%%*/
-                        block_dup_check(p, RNODE_FCALL($1)->nd_args, $2);
+                        block_dup_check(p, get_nd_args(p, $1), $2);
                         $$ = method_add_block(p, $1, $2, &@$);
                     /*% %*/
                     /*% ripper: method_add_block!($1, $2) %*/
@@ -4319,7 +4349,7 @@ k_return	: keyword_return
 
 k_yield 	: keyword_yield
                     {
-                        if (!p->ctxt.in_defined && !p->ctxt.in_def && !dyna_in_block(p))
+                        if (!p->ctxt.in_defined && !p->ctxt.in_def && !compile_for_eval)
                             yyerror1(&@1, "Invalid yield");
                     }
                 ;
@@ -4712,7 +4742,7 @@ block_call	: command do_block
                             compile_error(p, "block given to yield");
                         }
                         else {
-                            block_dup_check(p, RNODE_FCALL($1)->nd_args, $2);
+                            block_dup_check(p, get_nd_args(p, $1), $2);
                         }
                         $$ = method_add_block(p, $1, $2, &@$);
                         fixpos($$, $1);
@@ -4745,8 +4775,8 @@ block_call	: command do_block
 method_call	: fcall paren_args
                     {
                     /*%%%*/
-                        $$ = $1;
-                        RNODE_FCALL($$)->nd_args = $2;
+                        $1->nd_args = $2;
+                        $$ = (NODE *)$1;
                         nd_set_last_loc($1, @2.end_pos);
                     /*% %*/
                     /*% ripper: method_add_arg!(fcall!($1), $2) %*/
@@ -11442,8 +11472,6 @@ static rb_node_super_t *
 rb_node_super_new(struct parser_params *p, NODE *nd_args, const YYLTYPE *loc)
 {
     rb_node_super_t *n = NODE_NEWNODE(NODE_SUPER, rb_node_super_t, loc);
-    n->not_used = 0;
-    n->not_used2 = 0;
     n->nd_args = nd_args;
 
     return n;
@@ -11453,9 +11481,6 @@ static rb_node_zsuper_t *
 rb_node_zsuper_new(struct parser_params *p, const YYLTYPE *loc)
 {
     rb_node_zsuper_t *n = NODE_NEWNODE(NODE_ZSUPER, rb_node_zsuper_t, loc);
-    n->not_used = 0;
-    n->not_used2 = 0;
-    n->not_used3 = 0;
 
     return n;
 }
@@ -11830,7 +11855,6 @@ static rb_node_fcall_t *
 rb_node_fcall_new(struct parser_params *p, ID nd_mid, NODE *nd_args, const YYLTYPE *loc)
 {
     rb_node_fcall_t *n = NODE_NEWNODE(NODE_FCALL, rb_node_fcall_t, loc);
-    n->not_used = 0;
     n->nd_mid = nd_mid;
     n->nd_args = nd_args;
 
@@ -11852,9 +11876,7 @@ static rb_node_vcall_t *
 rb_node_vcall_new(struct parser_params *p, ID nd_mid, const YYLTYPE *loc)
 {
     rb_node_vcall_t *n = NODE_NEWNODE(NODE_VCALL, rb_node_vcall_t, loc);
-    n->not_used = 0;
     n->nd_mid = nd_mid;
-    n->not_used2 = 0;
 
     return n;
 }
@@ -15232,7 +15254,7 @@ parser_append_options(struct parser_params *p, NODE *node)
     const YYLTYPE *const LOC = &default_location;
 
     if (p->do_print) {
-        NODE *print = NEW_FCALL(rb_intern("print"),
+        NODE *print = (NODE *)NEW_FCALL(rb_intern("print"),
                                 NEW_LIST(NEW_GVAR(idLASTLINE, LOC), LOC),
                                 LOC);
         node = block_append(p, node, print);
@@ -15257,7 +15279,7 @@ parser_append_options(struct parser_params *p, NODE *node)
             irs = list_append(p, irs, NEW_HASH(chomp, LOC));
         }
 
-        node = NEW_WHILE(NEW_FCALL(idGets, irs, LOC), node, 1, LOC);
+        node = NEW_WHILE((NODE *)NEW_FCALL(idGets, irs, LOC), node, 1, LOC);
     }
 
     return node;
