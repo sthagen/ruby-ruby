@@ -131,7 +131,6 @@ enum node_type {
     NODE_HSHPTN,
     NODE_FNDPTN,
     NODE_ERROR,
-    NODE_DEF_TEMP,
     NODE_RIPPER,
     NODE_RIPPER_VALUES,
     NODE_LAST
@@ -282,33 +281,25 @@ typedef struct RNode_FOR_MASGN {
 typedef struct RNode_BREAK {
     NODE node;
 
+    struct RNode *nd_chain;
     struct RNode *nd_stts;
-    VALUE not_used;
-    VALUE not_used2;
 } rb_node_break_t;
 
 typedef struct RNode_NEXT {
     NODE node;
 
+    struct RNode *nd_chain;
     struct RNode *nd_stts;
-    VALUE not_used;
-    VALUE not_used2;
 } rb_node_next_t;
 
 typedef struct RNode_REDO {
     NODE node;
 
-    VALUE not_used;
-    VALUE not_used2;
-    VALUE not_used3;
+    struct RNode *nd_chain;
 } rb_node_redo_t;
 
 typedef struct RNode_RETRY {
     NODE node;
-
-    VALUE not_used;
-    VALUE not_used2;
-    VALUE not_used3;
 } rb_node_retry_t;
 
 typedef struct RNode_BEGIN {
@@ -550,8 +541,6 @@ typedef struct RNode_RETURN {
     NODE node;
 
     struct RNode *nd_stts;
-    VALUE not_used;
-    VALUE not_used2;
 } rb_node_return_t;
 
 typedef struct RNode_YIELD {
@@ -826,15 +815,12 @@ typedef struct RNode_COLON2 {
 
     struct RNode *nd_head;
     ID nd_mid;
-    VALUE not_used;
 } rb_node_colon2_t;
 
 typedef struct RNode_COLON3 {
     NODE node;
 
-    VALUE not_used;
     ID nd_mid;
-    VALUE not_used2;
 } rb_node_colon3_t;
 
 /* RNode_DOT2, RNode_DOT3, RNode_FLIP2 and RNode_FLIP3 should be same structure */

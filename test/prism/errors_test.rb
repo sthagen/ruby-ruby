@@ -1363,6 +1363,23 @@ module Prism
       ]
     end
 
+    def test_shadow_args_in_lambda
+      source = "->a;b{}"
+      assert_errors expression(source), source, [
+        ["Expected a `do` keyword or a `{` to open the lambda block", 3..3],
+        ["Expected a newline or semicolon after the statement", 7..7],
+        ["Cannot parse the expression", 7..7],
+        ["Expected a lambda block beginning with `do` to end with `end`", 7..7],
+      ]
+    end
+
+    def test_shadow_args_in_block
+      source = "tap{|a;a|}"
+      assert_errors expression(source), source, [
+        ["Repeated parameter name", 7..8],
+      ]
+    end
+
     private
 
     def assert_errors(expected, source, errors, compare_ripper: RUBY_ENGINE == "ruby")
