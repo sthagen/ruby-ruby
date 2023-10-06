@@ -11238,8 +11238,6 @@ rb_node_yield_new(struct parser_params *p, NODE *nd_head, const YYLTYPE *loc)
 {
     rb_node_yield_t *n = NODE_NEWNODE(NODE_YIELD, rb_node_yield_t, loc);
     n->nd_head = nd_head;
-    n->not_used = 0;
-    n->not_used2 = 0;
 
     return n;
 }
@@ -11506,7 +11504,6 @@ rb_node_match3_new(struct parser_params *p, NODE *nd_recv, NODE *nd_value, const
     rb_node_match3_t *n = NODE_NEWNODE(NODE_MATCH3, rb_node_match3_t, loc);
     n->nd_recv = nd_recv;
     n->nd_value = nd_value;
-    n->not_used = 0;
 
     return n;
 }
@@ -11538,9 +11535,6 @@ static rb_node_zlist_t *
 rb_node_zlist_new(struct parser_params *p, const YYLTYPE *loc)
 {
     rb_node_zlist_t *n = NODE_NEWNODE(NODE_ZLIST, rb_node_zlist_t, loc);
-    n->not_used = 0;
-    n->not_used2 = 0;
-    n->not_used3 = 0;
 
     return n;
 }
@@ -14142,13 +14136,8 @@ ret_args(struct parser_params *p, NODE *node)
 {
     if (node) {
         no_blockarg(p, node);
-        if (nd_type_p(node, NODE_LIST)) {
-            if (RNODE_LIST(node)->nd_next == 0) {
-                node = RNODE_LIST(node)->nd_head;
-            }
-            else {
-                nd_set_type(node, NODE_VALUES);
-            }
+        if (nd_type_p(node, NODE_LIST) && !RNODE_LIST(node)->nd_next) {
+            node = RNODE_LIST(node)->nd_head;
         }
     }
     return node;

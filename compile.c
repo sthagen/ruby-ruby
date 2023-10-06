@@ -9216,7 +9216,7 @@ compile_match(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *const node, i
     ADD_SEQ(ret, val);
     ADD_SEND(ret, node, idEqTilde, INT2FIX(1));
 
-    if (RNODE_MATCH2(node)->nd_args) {
+    if (nd_type_p(node, NODE_MATCH2) && RNODE_MATCH2(node)->nd_args) {
         compile_named_capture_assign(iseq, ret, RNODE_MATCH2(node)->nd_args);
     }
 
@@ -9722,18 +9722,6 @@ iseq_compile_each0(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *const no
         if (!popped) {
             ADD_INSN1(ret, node, newarray, INT2FIX(0));
         }
-        break;
-      }
-      case NODE_VALUES:{
-        const NODE *n = node;
-        if (popped) {
-            COMPILE_ERROR(ERROR_ARGS "NODE_VALUES: must not be popped");
-        }
-        while (n) {
-            CHECK(COMPILE(ret, "values item", RNODE_VALUES(n)->nd_head));
-            n = RNODE_VALUES(n)->nd_next;
-        }
-        ADD_INSN1(ret, node, newarray, INT2FIX(RNODE_VALUES(node)->nd_alen));
         break;
       }
       case NODE_HASH:

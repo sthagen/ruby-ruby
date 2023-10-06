@@ -71,7 +71,6 @@ enum node_type {
     NODE_ZSUPER,
     NODE_LIST,
     NODE_ZLIST,
-    NODE_VALUES,
     NODE_HASH,
     NODE_RETURN,
     NODE_YIELD,
@@ -516,10 +515,6 @@ typedef struct RNode_LIST {
 
 typedef struct RNode_ZLIST {
     NODE node;
-
-    VALUE not_used;
-    VALUE not_used2; /* Used by p->exits */
-    VALUE not_used3; /* Used by p->exits */
 } rb_node_zlist_t;
 
 typedef struct RNode_VALUES {
@@ -547,8 +542,6 @@ typedef struct RNode_YIELD {
     NODE node;
 
     struct RNode *nd_head;
-    VALUE not_used;
-    VALUE not_used2;
 } rb_node_yield_t;
 
 typedef struct RNode_LVAR {
@@ -621,7 +614,6 @@ typedef struct RNode_MATCH3 {
 
     struct RNode *nd_recv;
     struct RNode *nd_value;
-    VALUE not_used;
 } rb_node_match3_t;
 
 typedef struct RNode_LIT {
@@ -986,7 +978,6 @@ typedef struct RNode_ERROR {
 #define RNODE_ZSUPER(node) ((struct RNode_ZSUPER *)(node))
 #define RNODE_LIST(node) ((struct RNode_LIST *)(node))
 #define RNODE_ZLIST(node) ((struct RNode_ZLIST *)(node))
-#define RNODE_VALUES(node) ((struct RNode_VALUES *)(node))
 #define RNODE_HASH(node) ((struct RNode_HASH *)(node))
 #define RNODE_RETURN(node) ((struct RNode_RETURN *)(node))
 #define RNODE_YIELD(node) ((struct RNode_YIELD *)(node))
