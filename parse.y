@@ -999,7 +999,7 @@ static rb_node_error_t *rb_node_error_new(struct parser_params *p, const YYLTYPE
 #define NEW_ENSURE(b,en,loc) (NODE *)rb_node_ensure_new(p,b,en,loc)
 #define NEW_AND(f,s,loc) (NODE *)rb_node_and_new(p,f,s,loc)
 #define NEW_OR(f,s,loc) (NODE *)rb_node_or_new(p,f,s,loc)
-#define NEW_MASGN(l,r,loc)   (NODE *)rb_node_masgn_new(p,l,r,loc)
+#define NEW_MASGN(l,r,loc)   rb_node_masgn_new(p,l,r,loc)
 #define NEW_LASGN(v,val,loc) (NODE *)rb_node_lasgn_new(p,v,val,loc)
 #define NEW_DASGN(v,val,loc) (NODE *)rb_node_dasgn_new(p,v,val,loc)
 #define NEW_GASGN(v,val,loc) (NODE *)rb_node_gasgn_new(p,v,val,loc)
@@ -1799,6 +1799,79 @@ static int looking_at_eol_p(struct parser_params *p);
 
 #ifndef RIPPER
 static NODE *
+get_nd_value(struct parser_params *p, NODE *node)
+{
+    switch (nd_type(node)) {
+      case NODE_GASGN:
+        return RNODE_GASGN(node)->nd_value;
+      case NODE_IASGN:
+        return RNODE_IASGN(node)->nd_value;
+      case NODE_LASGN:
+        return RNODE_LASGN(node)->nd_value;
+      case NODE_DASGN:
+        return RNODE_DASGN(node)->nd_value;
+      case NODE_MASGN:
+        return RNODE_MASGN(node)->nd_value;
+      default:
+        compile_error(p, "unexpected node: %s", ruby_node_name(nd_type(node)));
+        return 0;
+    }
+}
+
+static void
+set_nd_value(struct parser_params *p, NODE *node, NODE *rhs)
+{
+    switch (nd_type(node)) {
+      case NODE_CDECL:
+        RNODE_CDECL(node)->nd_value = rhs;
+        break;
+      case NODE_GASGN:
+        RNODE_GASGN(node)->nd_value = rhs;
+        break;
+      case NODE_IASGN:
+        RNODE_IASGN(node)->nd_value = rhs;
+        break;
+      case NODE_LASGN:
+        RNODE_LASGN(node)->nd_value = rhs;
+        break;
+      case NODE_DASGN:
+        RNODE_DASGN(node)->nd_value = rhs;
+        break;
+      case NODE_MASGN:
+        RNODE_MASGN(node)->nd_value = rhs;
+        break;
+      case NODE_CVASGN:
+        RNODE_CVASGN(node)->nd_value = rhs;
+        break;
+      default:
+        compile_error(p, "unexpected node: %s", ruby_node_name(nd_type(node)));
+        break;
+    }
+}
+
+static ID
+get_nd_vid(struct parser_params *p, NODE *node)
+{
+    switch (nd_type(node)) {
+      case NODE_CDECL:
+        return RNODE_CDECL(node)->nd_vid;
+      case NODE_GASGN:
+        return RNODE_GASGN(node)->nd_vid;
+      case NODE_IASGN:
+        return RNODE_IASGN(node)->nd_vid;
+      case NODE_LASGN:
+        return RNODE_LASGN(node)->nd_vid;
+      case NODE_DASGN:
+        return RNODE_DASGN(node)->nd_vid;
+      case NODE_CVASGN:
+        return RNODE_CVASGN(node)->nd_vid;
+      default:
+        compile_error(p, "unexpected node: %s", ruby_node_name(nd_type(node)));
+        return 0;
+    }
+}
+
+static NODE *
 get_nd_args(struct parser_params *p, NODE *node)
 {
     switch (nd_type(node)) {
@@ -1885,6 +1958,7 @@ get_nd_args(struct parser_params *p, NODE *node)
     rb_node_opt_arg_t *node_opt_arg;
     rb_node_kw_arg_t *node_kw_arg;
     rb_node_block_pass_t *node_block_pass;
+    rb_node_masgn_t *node_masgn;
     ID id;
     int num;
     st_table *tbl;
@@ -1983,7 +2057,8 @@ get_nd_args(struct parser_params *p, NODE *node)
 %type <node_args> f_arglist f_opt_paren_args f_paren_args f_args
 %type <node_args_aux> f_arg f_arg_item
 %type <node_opt_arg> f_optarg
-%type <node> f_marg f_marg_list f_margs f_rest_marg
+%type <node> f_marg f_marg_list f_rest_marg
+%type <node_masgn> f_margs
 %type <node> assoc_list assocs assoc undef_list backref string_dvar for_var
 %type <node_args> block_param opt_block_param block_param_def
 %type <node_opt_arg> f_opt
@@ -1992,7 +2067,8 @@ get_nd_args(struct parser_params *p, NODE *node)
 %type <node> lambda lambda_body brace_body do_body
 %type <node_args> f_larglist
 %type <node> brace_block cmd_brace_block do_block lhs none fitem
-%type <node> mlhs mlhs_head mlhs_basic mlhs_item mlhs_node mlhs_post mlhs_inner
+%type <node> mlhs_head mlhs_item mlhs_node mlhs_post
+%type <node_masgn> mlhs mlhs_basic mlhs_inner
 %type <node> p_case_body p_cases p_top_expr p_top_expr_body
 %type <node> p_expr p_as p_alt p_expr_basic p_find
 %type <node> p_args p_args_head p_args_tail p_args_post p_arg p_rest
@@ -2378,7 +2454,7 @@ stmt		: keyword_alias fitem {SET_LEX_STATE(EXPR_FNAME|EXPR_FITEM);} fitem
                     {
                     /*%%%*/
                         value_expr($4);
-                        $$ = node_assign(p, $1, $4, $3, &@$);
+                        $$ = node_assign(p, (NODE *)$1, $4, $3, &@$);
                     /*% %*/
                     /*% ripper: massign!($1, $4) %*/
                     }
@@ -2398,14 +2474,14 @@ stmt		: keyword_alias fitem {SET_LEX_STATE(EXPR_FNAME|EXPR_FITEM);} fitem
                         $resbody = NEW_RESBODY(0, remove_begin($resbody), 0, &loc);
                         loc.beg_pos = @mrhs_arg.beg_pos;
                         $mrhs_arg = NEW_RESCUE($mrhs_arg, $resbody, 0, &loc);
-                        $$ = node_assign(p, $mlhs, $mrhs_arg, $lex_ctxt, &@$);
+                        $$ = node_assign(p, (NODE *)$mlhs, $mrhs_arg, $lex_ctxt, &@$);
                     /*% %*/
                     /*% ripper: massign!($1, rescue_mod!($4, $7)) %*/
                     }
                 | mlhs '=' lex_ctxt mrhs_arg
                     {
                     /*%%%*/
-                        $$ = node_assign(p, $1, $4, $3, &@$);
+                        $$ = node_assign(p, (NODE *)$1, $4, $3, &@$);
                     /*% %*/
                     /*% ripper: massign!($1, $4) %*/
                     }
@@ -2812,7 +2888,7 @@ mlhs_inner	: mlhs_basic
                 | tLPAREN mlhs_inner rparen
                     {
                     /*%%%*/
-                        $$ = NEW_MASGN(NEW_LIST($2, &@$), 0, &@$);
+                        $$ = NEW_MASGN(NEW_LIST((NODE *)$2, &@$), 0, &@$);
                     /*% %*/
                     /*% ripper: mlhs_paren!($2) %*/
                     }
@@ -2894,7 +2970,7 @@ mlhs_item	: mlhs_node
                 | tLPAREN mlhs_inner rparen
                     {
                     /*%%%*/
-                        $$ = $2;
+                        $$ = (NODE *)$2;
                     /*% %*/
                     /*% ripper: mlhs_paren!($2) %*/
                     }
@@ -4023,7 +4099,7 @@ primary		: literal
                         switch (nd_type($2)) {
                           case NODE_LASGN:
                           case NODE_DASGN: /* e.each {|internal_var| a = internal_var; ... } */
-                            RNODE_LASGN($2)->nd_value = internal_var;
+                            set_nd_value(p, $2, internal_var);
                             id = 0;
                             m->nd_plen = 1;
                             m->nd_next = $2;
@@ -4032,7 +4108,7 @@ primary		: literal
                             m->nd_next = node_assign(p, $2, NEW_FOR_MASGN(internal_var, &@2), NO_LEX_CTXT, &@2);
                             break;
                           default: /* e.each {|*internal_var| @a, B, c[1], d.attr = internal_val; ... } */
-                            m->nd_next = node_assign(p, NEW_MASGN(NEW_LIST($2, &@2), 0, &@2), internal_var, NO_LEX_CTXT, &@2);
+                            m->nd_next = node_assign(p, (NODE *)NEW_MASGN(NEW_LIST($2, &@2), 0, &@2), internal_var, NO_LEX_CTXT, &@2);
                         }
                         /* {|*internal_id| <m> = internal_id; ... } */
                         args = new_args(p, m, 0, id, 0, new_args_tail(p, 0, 0, 0, &@2), &@2);
@@ -4414,7 +4490,7 @@ f_marg		: f_norm_arg
                 | tLPAREN f_margs rparen
                     {
                     /*%%%*/
-                        $$ = $2;
+                        $$ = (NODE *)$2;
                     /*% %*/
                     /*% ripper: mlhs_paren!($2) %*/
                     }
@@ -6259,13 +6335,13 @@ f_arg_item	: f_arg_asgn
                         loc.end_pos = @2.beg_pos;
                         arg_var(p, tid);
                         if (dyna_in_block(p)) {
-                            RNODE_MASGN($2)->nd_value = NEW_DVAR(tid, &loc);
+                            $2->nd_value = NEW_DVAR(tid, &loc);
                         }
                         else {
-                            RNODE_MASGN($2)->nd_value = NEW_LVAR(tid, &loc);
+                            $2->nd_value = NEW_LVAR(tid, &loc);
                         }
                         $$ = NEW_ARGS_AUX(tid, 1, &NULL_LOC);
-                        $$->nd_next = $2;
+                        $$->nd_next = (NODE *)$2;
                     /*% %*/
                     /*% ripper: mlhs_paren!($2) %*/
                     }
@@ -11566,7 +11642,6 @@ rb_node_gasgn_new(struct parser_params *p, ID nd_vid, NODE *nd_value, const YYLT
     rb_node_gasgn_t *n = NODE_NEWNODE(NODE_GASGN, rb_node_gasgn_t, loc);
     n->nd_vid = nd_vid;
     n->nd_value = nd_value;
-    n->not_used = 0;
 
     return n;
 }
@@ -11577,7 +11652,6 @@ rb_node_lasgn_new(struct parser_params *p, ID nd_vid, NODE *nd_value, const YYLT
     rb_node_lasgn_t *n = NODE_NEWNODE(NODE_LASGN, rb_node_lasgn_t, loc);
     n->nd_vid = nd_vid;
     n->nd_value = nd_value;
-    n->not_used = 0;
 
     return n;
 }
@@ -11588,7 +11662,6 @@ rb_node_dasgn_new(struct parser_params *p, ID nd_vid, NODE *nd_value, const YYLT
     rb_node_dasgn_t *n = NODE_NEWNODE(NODE_DASGN, rb_node_dasgn_t, loc);
     n->nd_vid = nd_vid;
     n->nd_value = nd_value;
-    n->not_used = 0;
 
     return n;
 }
@@ -11599,7 +11672,6 @@ rb_node_iasgn_new(struct parser_params *p, ID nd_vid, NODE *nd_value, const YYLT
     rb_node_iasgn_t *n = NODE_NEWNODE(NODE_IASGN, rb_node_iasgn_t, loc);
     n->nd_vid = nd_vid;
     n->nd_value = nd_value;
-    n->not_used = 0;
 
     return n;
 }
@@ -11610,7 +11682,6 @@ rb_node_cvasgn_new(struct parser_params *p, ID nd_vid, NODE *nd_value, const YYL
     rb_node_cvasgn_t *n = NODE_NEWNODE(NODE_CVASGN, rb_node_cvasgn_t, loc);
     n->nd_vid = nd_vid;
     n->nd_value = nd_value;
-    n->not_used = 0;
 
     return n;
 }
@@ -13635,7 +13706,7 @@ node_assign(struct parser_params *p, NODE *lhs, NODE *rhs, struct lex_context ct
       case NODE_DASGN:
       case NODE_MASGN:
       case NODE_CVASGN:
-        RNODE_GASGN(lhs)->nd_value = rhs;
+        set_nd_value(p, lhs, rhs);
         nd_set_loc(lhs, loc);
         break;
 
@@ -13957,10 +14028,10 @@ assign_in_cond(struct parser_params *p, NODE *node)
         return 0;
     }
 
-    if (!RNODE_MASGN(node)->nd_value) return 1;
-    if (is_static_content(RNODE_MASGN(node)->nd_value)) {
+    if (!get_nd_value(p, node)) return 1;
+    if (is_static_content(get_nd_value(p, node))) {
         /* reports always */
-        parser_warn(p, RNODE_MASGN(node)->nd_value, "found `= literal' in conditional, should be ==");
+        parser_warn(p, get_nd_value(p, node), "found `= literal' in conditional, should be ==");
     }
     return 1;
 }
@@ -14276,15 +14347,15 @@ new_args_tail(struct parser_params *p, rb_node_kw_arg_t *kw_args, ID kw_rest_arg
         vtable_pop(vtargs, !!block + !!kw_rest_arg);
         required_kw_vars = kw_vars = &vtargs->tbl[vtargs->pos];
         while (kwn) {
-            if (!NODE_REQUIRED_KEYWORD_P(RNODE_LASGN(kwn->nd_body)))
+            if (!NODE_REQUIRED_KEYWORD_P(get_nd_value(p, kwn->nd_body)))
                 --kw_vars;
             --required_kw_vars;
             kwn = kwn->nd_next;
         }
 
         for (kwn = kw_args; kwn; kwn = kwn->nd_next) {
-            ID vid = RNODE_LASGN(kwn->nd_body)->nd_vid;
-            if (NODE_REQUIRED_KEYWORD_P(RNODE_LASGN(kwn->nd_body))) {
+            ID vid = get_nd_vid(p, kwn->nd_body);
+            if (NODE_REQUIRED_KEYWORD_P(get_nd_value(p, kwn->nd_body))) {
                 *required_kw_vars++ = vid;
             }
             else {
@@ -14536,7 +14607,7 @@ new_op_assign(struct parser_params *p, NODE *lhs, ID op, NODE *rhs, struct lex_c
     NODE *asgn;
 
     if (lhs) {
-        ID vid = RNODE_LASGN(lhs)->nd_vid;
+        ID vid = get_nd_vid(p, lhs);
         YYLTYPE lhs_loc = lhs->nd_loc;
         int shareable = ctxt.shareable_constant_value;
         if (shareable) {
@@ -14552,7 +14623,7 @@ new_op_assign(struct parser_params *p, NODE *lhs, ID op, NODE *rhs, struct lex_c
         }
         if (op == tOROP) {
             rhs = shareable_constant_value(p, shareable, lhs, rhs, &rhs->nd_loc);
-            RNODE_LASGN(lhs)->nd_value = rhs;
+            set_nd_value(p, lhs, rhs);
             nd_set_loc(lhs, loc);
             asgn = NEW_OP_ASGN_OR(gettable(p, vid, &lhs_loc), lhs, loc);
         }
@@ -14560,7 +14631,7 @@ new_op_assign(struct parser_params *p, NODE *lhs, ID op, NODE *rhs, struct lex_c
             if (shareable) {
                 rhs = shareable_constant_value(p, shareable, lhs, rhs, &rhs->nd_loc);
             }
-            RNODE_LASGN(lhs)->nd_value = rhs;
+            set_nd_value(p, lhs, rhs);
             nd_set_loc(lhs, loc);
             asgn = NEW_OP_ASGN_AND(gettable(p, vid, &lhs_loc), lhs, loc);
         }
@@ -14570,7 +14641,7 @@ new_op_assign(struct parser_params *p, NODE *lhs, ID op, NODE *rhs, struct lex_c
             if (shareable) {
                 rhs = shareable_constant_value(p, shareable, lhs, rhs, &rhs->nd_loc);
             }
-            RNODE_LASGN(asgn)->nd_value = rhs;
+            set_nd_value(p, asgn, rhs);
             nd_set_loc(asgn, loc);
         }
     }
