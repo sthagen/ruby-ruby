@@ -1202,6 +1202,7 @@ static NODE *rest_arg_append(struct parser_params *p, NODE *args, NODE *rest_arg
 static NODE *literal_concat(struct parser_params*,NODE*,NODE*,const YYLTYPE*);
 static NODE *new_evstr(struct parser_params*,NODE*,const YYLTYPE*);
 static NODE *new_dstr(struct parser_params*,NODE*,const YYLTYPE*);
+static NODE *str2dstr(struct parser_params*,NODE*);
 static NODE *evstr2dstr(struct parser_params*,NODE*);
 static NODE *splat_array(NODE*);
 static void mark_lvar_used(struct parser_params *p, NODE *rhs);
@@ -5898,7 +5899,7 @@ regexp_contents: /* none */
                         else {
                             switch (nd_type(head)) {
                               case NODE_STR:
-                                nd_set_type(head, NODE_DSTR);
+                                head = str2dstr(p, head);
                                 break;
                               case NODE_DSTR:
                                 break;
@@ -8829,7 +8830,7 @@ heredoc_dedent(struct parser_params *p, NODE *root)
         }
 
         str_node = 0;
-        while ((node = RNODE_LIST(prev_node = node)->nd_next) != 0) {
+        while ((nd_type_p(node, NODE_LIST) || nd_type_p(node, NODE_DSTR)) && (node = RNODE_LIST(prev_node = node)->nd_next) != 0) {
           next_str:
             if (!nd_type_p(node, NODE_LIST)) break;
             if ((str_node = RNODE_LIST(node)->nd_head) != 0) {
@@ -11839,8 +11840,6 @@ rb_node_lit_new(struct parser_params *p, VALUE nd_lit, const YYLTYPE *loc)
 {
     rb_node_lit_t *n = NODE_NEWNODE(NODE_LIT, rb_node_lit_t, loc);
     n->nd_lit = nd_lit;
-    n->not_used = 0;
-    n->not_used2 = 0;
 
     return n;
 }
@@ -11850,8 +11849,6 @@ rb_node_str_new(struct parser_params *p, VALUE nd_lit, const YYLTYPE *loc)
 {
     rb_node_str_t *n = NODE_NEWNODE(NODE_STR, rb_node_str_t, loc);
     n->nd_lit = nd_lit;
-    n->not_used = 0;
-    n->not_used2 = 0;
 
     return n;
 }
@@ -11879,8 +11876,6 @@ rb_node_xstr_new(struct parser_params *p, VALUE nd_lit, const YYLTYPE *loc)
 {
     rb_node_xstr_t *n = NODE_NEWNODE(NODE_XSTR, rb_node_xstr_t, loc);
     n->nd_lit = nd_lit;
-    n->not_used = 0;
-    n->not_used2 = 0;
 
     return n;
 }
@@ -12465,7 +12460,7 @@ literal_concat(struct parser_params *p, NODE *head, NODE *tail, const YYLTYPE *l
     if (p->heredoc_indent > 0) {
         switch (htype) {
           case NODE_STR:
-            nd_set_type(head, NODE_DSTR);
+            head = str2dstr(p, head);
           case NODE_DSTR:
             return list_append(p, head, tail);
           default:
@@ -12527,13 +12522,35 @@ literal_concat(struct parser_params *p, NODE *head, NODE *tail, const YYLTYPE *l
 
       case NODE_EVSTR:
         if (htype == NODE_STR) {
-            nd_set_type(head, NODE_DSTR);
+            head = str2dstr(p, head);
             RNODE_DSTR(head)->as.nd_alen = 1;
         }
         list_append(p, head, tail);
         break;
     }
     return head;
+}
+
+static void
+nd_copy_flag(NODE *new_node, NODE *old_node)
+{
+    if (nd_fl_newline(old_node)) nd_set_fl_newline(new_node);
+    nd_set_line(new_node, nd_line(old_node));
+    new_node->nd_loc = old_node->nd_loc;
+    new_node->node_id = old_node->node_id;
+}
+
+static NODE *
+str2dstr(struct parser_params *p, NODE *node)
+{
+    NODE *new_node = (NODE *)NODE_NEW_INTERNAL(NODE_DSTR, rb_node_dstr_t);
+    nd_copy_flag(new_node, node);
+    RNODE_DSTR(new_node)->nd_lit = RNODE_STR(node)->nd_lit;
+    RNODE_DSTR(new_node)->as.nd_alen = 0;
+    RNODE_DSTR(new_node)->nd_next = 0;
+    RNODE_STR(node)->nd_lit = 0;
+
+    return new_node;
 }
 
 static NODE *
@@ -12553,8 +12570,7 @@ new_evstr(struct parser_params *p, NODE *node, const YYLTYPE *loc)
     if (node) {
         switch (nd_type(node)) {
           case NODE_STR:
-            nd_set_type(node, NODE_DSTR);
-            return node;
+            return str2dstr(p, node);
           case NODE_DSTR:
             break;
           case NODE_EVSTR:

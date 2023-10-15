@@ -82,10 +82,10 @@ We can run any of the make scripts [in parallel](building_ruby.md#label-Running+
     We can display the help of the `TESTS` option:
 
     ```
-    $ make test-all TESTS=--help
+    make test-all TESTS=--help
     ```
 
-    If we would like to run both the `test/` and `bootstraptest/` test suites, we can run
+    If we would like to run the `test/`, `bootstraptest/` and `spec/` test suites (the `spec/` is explained in a later section), we can run
 
     ```
     make check
@@ -140,7 +140,7 @@ We can run any of the make scripts [in parallel](building_ruby.md#label-Running+
     To run a specific bundler spec file, we can use `BUNDLER_SPECS` as follows:
 
     ```
-    $ make test-bundler BUNDLER_SPECS=commands/exec_spec.rb
+    make test-bundler BUNDLER_SPECS=commands/exec_spec.rb
     ```
 
 ## Troubleshooting
