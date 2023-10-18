@@ -68,7 +68,8 @@ module Gem::BUNDLED_GEMS
     EXACT[n] or PREFIXED[n = n[%r[\A[^/]+(?=/)]]] && n
   end
 
-  def self.warning?(name)
+  def self.warning?(name, specs: nil)
+    return if specs.to_a.map(&:name).include?(name.sub(LIBEXT, ""))
     name = name.tr("/", "-")
     _t, path = $:.resolve_feature_path(name)
     return unless gem = find_gem(path)
@@ -89,10 +90,10 @@ module Gem::BUNDLED_GEMS
   end
 
   def self.build_message(gem)
-    msg = " which #{RUBY_VERSION < SINCE[gem] ? "will be" : "is"} not part of the default gems since Ruby #{SINCE[gem]}."
+    msg = " which #{RUBY_VERSION < SINCE[gem] ? "will no longer be" : "is not"} part of the default gems since Ruby #{SINCE[gem]}."
 
     if defined?(Bundler)
-      msg += " Add #{gem} to your Gemfile."
+      msg += " Add #{gem} to your Gemfile or gemspec."
       location = caller_locations(2,2)[0]&.path
       if File.file?(location) && !location.start_with?(Gem::BUNDLED_GEMS::LIBDIR)
         caller_gem = nil
