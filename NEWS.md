@@ -60,6 +60,10 @@ Note: We're only listing outstanding class updates.
 
     * Process::Status#& and Process::Status#>> are deprecated. [[Bug #19868]]
 
+* Range
+
+    * Range#reverse_each can now process beginless ranges with an Integer endpoint. [[Feature #18515]]
+
 * Refinement
 
     * Add Refinement#target as an alternative of Refinement#refined_class.
@@ -76,6 +80,20 @@ Note: We're only listing outstanding class updates.
 
 * RubyGems and Bundler warn if users require gem that is scheduled to become the bundled gems
   in the future version of Ruby. [[Feature #19351]] [[Feature #19776]] [[Feature #19843]]
+
+  Targeted libraries are:
+    * abbrev
+    * base64
+    * bigdecimal
+    * csv
+    * drb
+    * getoptlong
+    * mutex_m
+    * nkf
+    * observer
+    * resolv-replace
+    * rinda
+    * syslog
 
 * Socket#recv and Socket#recv_nonblock returns `nil` instead of an empty string on closed
   connections. Socket#recvmsg and Socket#recvmsg_nonblock returns `nil` instead of an empty packet on closed
@@ -97,7 +115,7 @@ The following default gems are updated.
 * nkf 0.1.3
 * openssl 3.2.0
 * optparse 0.4.0.pre.1
-* prism 0.15.0
+* prism 0.15.1
 * psych 5.1.1.1
 * reline 0.3.9
 * stringio 3.0.9
@@ -185,6 +203,7 @@ changelog for details of the default gems or bundled gems.
 
 [Feature #18183]: https://bugs.ruby-lang.org/issues/18183
 [Feature #18498]: https://bugs.ruby-lang.org/issues/18498
+[Feature #18515]: https://bugs.ruby-lang.org/issues/18515
 [Feature #18885]: https://bugs.ruby-lang.org/issues/18885
 [Bug #19012]:     https://bugs.ruby-lang.org/issues/19012
 [Bug #19150]:     https://bugs.ruby-lang.org/issues/19150

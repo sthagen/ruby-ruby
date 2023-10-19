@@ -10,6 +10,8 @@ require_relative '../lib/jit_support'
 
 return unless JITSupport.yjit_supported?
 
+require 'stringio'
+
 # Tests for YJIT with assertions on compilation and side exits
 # insipired by the RJIT tests in test/ruby/test_rjit.rb
 class TestYJIT < Test::Unit::TestCase
@@ -51,27 +53,36 @@ class TestYJIT < Test::Unit::TestCase
     #assert_in_out_err('--yjit-call-threshold=', '', [], /--yjit-call-threshold needs an argument/)
   end
 
-  def test_starting_paused
-    program = <<~RUBY
+  def test_yjit_enable
+    args = []
+    args << "--disable=yjit" if RubyVM::YJIT.enabled?
+    assert_separately(args, <<~RUBY)
+      assert_false RubyVM::YJIT.enabled?
+      assert_false RUBY_DESCRIPTION.include?("+YJIT")
+
+      RubyVM::YJIT.enable
+
+      assert_true RubyVM::YJIT.enabled?
+      assert_true RUBY_DESCRIPTION.include?("+YJIT")
+    RUBY
+  end
+
+  def test_yjit_enable_with_call_threshold
+    assert_separately(%w[--yjit-disable --yjit-call-threshold=1], <<~RUBY)
       def not_compiled = nil
       def will_compile = nil
-      def compiled_counts = RubyVM::YJIT.runtime_stats[:compiled_iseq_count]
-      counts = []
-      not_compiled
-      counts << compiled_counts
+      def compiled_counts = RubyVM::YJIT.runtime_stats&.dig(:compiled_iseq_count)
 
-      RubyVM::YJIT.resume
+      not_compiled
+      assert_nil compiled_counts
+      assert_false RubyVM::YJIT.enabled?
+
+      RubyVM::YJIT.enable
 
       will_compile
-      counts << compiled_counts
-
-      if counts[0] == 0 && counts[1] > 0
-        p :ok
-      end
+      assert compiled_counts > 0
+      assert_true RubyVM::YJIT.enabled?
     RUBY
-    assert_in_out_err(%w[--yjit-pause --yjit-stats --yjit-call-threshold=1], program, success: true) do |stdout, stderr|
-      assert_equal([":ok"], stdout)
-    end
   end
 
   def test_yjit_stats_and_v_no_error
@@ -1461,8 +1472,15 @@ class TestYJIT < Test::Unit::TestCase
       if exits != :any &&
         exits != recorded_exits &&
         (exits.keys != recorded_exits.keys || !exits.all? { |k, v| v === recorded_exits[k] }) # triple-equal checks range membership or integer equality
-        flunk "Expected #{exits.empty? ? "no" : exits.inspect} exits" \
-          ", but got\n#{recorded_exits.inspect}"
+        stats_reasons = StringIO.new
+        ::RubyVM::YJIT.send(:_print_stats_reasons, runtime_stats, stats_reasons)
+        stats_reasons = stats_reasons.string
+        flunk <<~EOM
+          Expected #{exits.empty? ? "no" : exits.inspect} exits, but got:
+          #{recorded_exits.inspect}
+          Reasons:
+          #{stats_reasons}
+        EOM
       end
     end
 
@@ -1492,7 +1510,7 @@ class TestYJIT < Test::Unit::TestCase
     args = [
       "--disable-gems",
       "--yjit-call-threshold=#{call_threshold}",
-      "--yjit-stats"
+      "--yjit-stats=quiet"
     ]
     args << "--yjit-exec-mem-size=#{mem_size}" if mem_size
     args << "-e" << script_shell_encode(script)
