@@ -2552,9 +2552,6 @@ rb_threadptr_root_fiber_setup(rb_thread_t *th)
     fiber->killed = 0;
     fiber_status_set(fiber, FIBER_RESUMED); /* skip CREATED */
     th->ec = &fiber->cont.saved_ec;
-    // This is the first fiber. Hence it's the first jit_cont_new() as well.
-    // Initialize the mutex for jit_cont_new() in cont_init_jit_cont().
-    rb_jit_cont_init();
     cont_init_jit_cont(&fiber->cont);
 }
 

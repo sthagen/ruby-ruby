@@ -102,6 +102,10 @@ Note: We're only listing outstanding class updates.
 * Random::Formatter#alphanumeric is extended to accept optional `chars`
   keyword argument. [[Feature #18183]]
 
+The following default gem is added.
+
+* prism 0.15.1
+
 The following default gems are updated.
 
 * RubyGems 3.5.0.dev
@@ -115,7 +119,6 @@ The following default gems are updated.
 * nkf 0.1.3
 * openssl 3.2.0
 * optparse 0.4.0.pre.1
-* prism 0.15.1
 * psych 5.1.1.1
 * reline 0.3.9
 * stringio 3.0.9
@@ -124,6 +127,10 @@ The following default gems are updated.
 * time 0.2.2
 * timeout 0.4.0
 * uri 0.12.2
+
+The following bundled gem is promoted from default gems.
+
+* racc 1.7.1
 
 The following bundled gems are updated.
 
@@ -137,10 +144,6 @@ The following bundled gems are updated.
 * typeprof 0.21.8
 * debug 1.8.0
 
-The following default gem is now bundled.
-
-* racc 1.7.1
-
 See GitHub releases like [Logger](https://github.com/ruby/logger/releases) or
 changelog for details of the default gems or bundled gems.
 
@@ -150,7 +153,7 @@ changelog for details of the default gems or bundled gems.
 
 ## Stdlib compatibility issues
 
-* `racc` is promoted bundled gems.
+* `racc` is promoted to bundled gems.
   * You need to add `racc` to your `Gemfile` if you use `racc` under bundler environment.
 * `ext/readline` is retired
   * We have `reline` that is pure Ruby implementation compatible with `ext/readline` API. We rely on `reline` in the future. If you need to use `ext/readline`, you can install `ext/readline` via rubygems.org with `gem install readline-ext`.
@@ -170,23 +173,29 @@ changelog for details of the default gems or bundled gems.
   * More calls with optional arguments are compiled.
   * Exception handlers are also compiled.
   * Instance variables no longer exit to the interpreter
-    with megamorphic Object Shapes.
+    with megamorphic object shapes.
   * Unsupported call types no longer exit to the interpreter.
-  * Integer#!=, String#!=, Kernel#block_given?, Kernel#is_a?,
-    Kernel#instance_of?, Module#=== are specially optimized.
+  * `Integer#!=`, `String#!=`, `Kernel#block_given?`, `Kernel#is_a?`,
+    `Kernel#instance_of?`, `Module#===` are specially optimized.
   * Now more than 3x faster than the interpreter on optcarrot!
-* Metadata for compiled code uses a lot less memory.
-* Generate more compact code on ARM64
-* Option to start YJIT in paused mode and then later enable it manually
-  * `--yjit-pause` and RubyVM::YJIT.resume
-  * This can be used to enable YJIT only once your application is done booting
-* `ratio_in_yjit` stat produced by `--yjit-stats` is now available in release builds,
-  a special stats or dev build is no longer required.
+* Significantly improved memory usage over 3.2
+    * Metadata for compiled code uses a lot less memory.
+    * Generate more compact code on ARM64
+* Compilation speed is now slightly faster than 3.2.
+* Add `RubyVM::YJIT.enable` that can enable YJIT later
+  * You can start YJIT without modifying command-line arguments or environment variables.
+  * This can also be used to enable YJIT only once your application is
+    done booting. `--yjit-disable` can be used if you want to use other
+    YJIT options while disabling YJIT at boot.
+* Option to disable code GC and treat `--yjit-exec-mem-size` as a hard limit
+  * Can produce better copy-on-write behavior on servers using unicorn and forking
+* `ratio_in_yjit` stat produced by `--yjit-stats` is now avaiable in release builds,
+  a special stats or dev build is no longer required to access most stats.
 * Exit tracing option now supports sampling
   * `--trace-exits-sample-rate=N`
-* `--yjit-stats=quiet` is added to avoid printing stats on exit.
-* The default value for `--yjit-exec-mem-size` is changed from 64 to 128.
 * More thorough testing and multiple bug fixes
+* `--yjit-stats=quiet` is added to avoid printing stats on exit.
+* `--yjit-perf` is added to facilitate profiling with Linux perf.
 
 ### MJIT
 
