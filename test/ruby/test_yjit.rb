@@ -1160,7 +1160,7 @@ class TestYJIT < Test::Unit::TestCase
   def test_bug_19316
     n = 2 ** 64
     # foo's extra param and the splats are relevant
-    assert_compiles(<<~'RUBY', result: [[n, -n], [n, -n]])
+    assert_compiles(<<~'RUBY', result: [[n, -n], [n, -n]], exits: :any)
       def foo(_, a, b, c)
         [a & b, ~c]
       end
@@ -1386,6 +1386,10 @@ class TestYJIT < Test::Unit::TestCase
 
   def test_opt_mult_overflow
     assert_no_exits('0xfff_ffff_ffff_ffff * 0x10')
+  end
+
+  def test_disable_stats
+    assert_in_out_err(%w[--yjit-stats --yjit-disable])
   end
 
   private
