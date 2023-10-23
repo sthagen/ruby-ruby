@@ -56,8 +56,10 @@ module Prism
     end
 
     def test_SourceLineNode
-      # TODO:
-      # test_prism_eval("__LINE__")
+      ruby_eval = RubyVM::InstructionSequence.compile("__LINE__").eval
+      prism_eval = RubyVM::InstructionSequence.compile_prism("__LINE__").eval
+
+      assert_equal ruby_eval, prism_eval
     end
 
     def test_TrueNode
@@ -69,7 +71,7 @@ module Prism
     ############################################################################
 
     def test_BackReferenceReadNode
-      # TOO
+      test_prism_eval("$+")
     end
 
     def test_ClassVariableReadNode
@@ -423,6 +425,13 @@ module Prism
     def test_IfNode
       test_prism_eval("if true; 1; end")
       test_prism_eval("1 if true")
+      test_prism_eval('a = b = 1; if a..b; end')
+      test_prism_eval('if "a".."b"; end')
+      test_prism_eval('if "a"..; end')
+      test_prism_eval('if .."b"; end')
+      test_prism_eval('if ..1; end')
+      test_prism_eval('if 1..; end')
+      test_prism_eval('if 1..2; end')
     end
 
     def test_OrNode
@@ -431,11 +440,10 @@ module Prism
     end
 
     def test_UnlessNode
-      # TODO:
-      # test_prism_eval("1 unless true")
-      # test_prism_eval("1 unless false")
-      # test_prism_eval("unless true; 1; end")
-      # test_prism_eval("unless false; 1; end")
+      test_prism_eval("1 unless true")
+      test_prism_eval("1 unless false")
+      test_prism_eval("unless true; 1; end")
+      test_prism_eval("unless false; 1; end")
     end
 
     def test_UntilNode
@@ -487,6 +495,12 @@ module Prism
     # Scopes/statements                                                        #
     ############################################################################
 
+    def test_BlockNode
+      test_prism_eval("[1, 2, 3].each { |num| num }")
+
+      test_prism_eval("[].tap { _1 }")
+    end
+
     def test_ClassNode
       test_prism_eval("class PrismClassA; end")
       test_prism_eval("class PrismClassA; end; class PrismClassB < PrismClassA; end")
@@ -526,8 +540,7 @@ module Prism
     end
 
     def test_SingletonClassNode
-      # TODO:
-      # test_prism_eval("class << self; end")
+      test_prism_eval("class << self; end")
     end
 
     def test_StatementsNode
@@ -550,6 +563,23 @@ module Prism
       test_prism_eval("1.then(&:to_s)")
     end
 
+    def test_BlockLocalVariableNode
+      test_prism_eval(<<-CODE
+        pm_var = "outer scope variable"
+
+        1.times { |;pm_var| pm_var = "inner scope variable"; pm_var }
+      CODE
+      )
+
+      test_prism_eval(<<-CODE
+        pm_var = "outer scope variable"
+
+        1.times { |;pm_var| pm_var = "inner scope variable"; pm_var }
+        pm_var
+      CODE
+      )
+    end
+
     def test_CallNode
       test_prism_eval("to_s")
     end
@@ -568,6 +598,12 @@ module Prism
 
     def test_AliasMethodNode
       test_prism_eval("alias :prism_a :to_s")
+    end
+
+    def test_BlockParametersNode
+      test_prism_eval("Object.tap { || }")
+      test_prism_eval("[1].map { |num| num }")
+      test_prism_eval("[1].map { |a; b| b = 2; a + b}")
     end
 
     def test_OptionalParameterNode
