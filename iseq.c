@@ -43,7 +43,7 @@
 #include "builtin.h"
 #include "insns.inc"
 #include "insns_info.inc"
-#include "prism/prism.h"
+#include "prism_compile.h"
 
 VALUE rb_cISeq;
 static VALUE iseqw_new(const rb_iseq_t *iseq);

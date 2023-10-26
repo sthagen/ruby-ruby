@@ -44,7 +44,7 @@
 #include "builtin.h"
 #include "insns.inc"
 #include "insns_info.inc"
-#include "prism/prism.h"
+#include "prism_compile.h"
 
 #undef RUBY_UNTYPED_DATA_WARNING
 #define RUBY_UNTYPED_DATA_WARNING 0
@@ -984,7 +984,7 @@ rb_iseq_compile_prism_node(rb_iseq_t * iseq, pm_scope_node_t *scope_node, pm_par
         constants[index] = rb_intern3((const char *) constant->start, constant->length, encoding);
     }
 
-    scope_node->constants = (void *)constants;
+    scope_node->constants = constants;
 
     CHECK(rb_translate_prism(iseq, scope_node, ret));
     free(constants);
