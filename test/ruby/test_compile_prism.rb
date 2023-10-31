@@ -93,6 +93,7 @@ module Prism
       assert_prism_eval("defined? self")
       assert_prism_eval("defined? true")
       assert_prism_eval("defined? false")
+      assert_prism_eval("defined? [A, B, C]")
       assert_prism_eval("defined? 'str'")
       assert_prism_eval("defined? a && b")
       assert_prism_eval("defined? a || b")
@@ -101,6 +102,9 @@ module Prism
       assert_prism_eval("defined? $a")
       assert_prism_eval("defined? @@a")
       assert_prism_eval("defined? A")
+      assert_prism_eval("defined? ::A")
+      assert_prism_eval("defined? A::B")
+      assert_prism_eval("defined? A::B::C")
       assert_prism_eval("defined? yield")
       assert_prism_eval("defined? super")
 
@@ -636,6 +640,12 @@ module Prism
       assert_equal ruby_eval, prism_eval
     end
 
+    def test_PostExecutionNode
+      assert_prism_eval("END { 1 }")
+      assert_prism_eval("END { @b }; @b = 1")
+      assert_prism_eval("END { @b; 0 }; @b = 1")
+    end
+
     def test_ProgramNode
       assert_prism_eval("")
       assert_prism_eval("1")
@@ -771,8 +781,20 @@ module Prism
       )
     end
 
+    def test_ForwardingSuperNode
+      assert_prism_eval("class Forwarding; def to_s; super; end; end")
+      assert_prism_eval("class Forwarding; def eval(code); super { code }; end; end")
+    end
+
     def test_KeywordHashNode
       assert_prism_eval("[a: [:b, :c]]")
+    end
+
+    def test_SuperNode
+      assert_prism_eval("def to_s; super 1; end")
+      assert_prism_eval("def to_s; super(); end")
+      assert_prism_eval("def to_s; super('a', :b, [1,2,3]); end")
+      assert_prism_eval("def to_s; super(1, 2, 3, &:foo); end")
     end
 
     ############################################################################

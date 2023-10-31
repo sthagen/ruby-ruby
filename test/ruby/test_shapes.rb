@@ -184,6 +184,32 @@ class TestShapes < Test::Unit::TestCase
     assert_empty obj.instance_variables
   end
 
+  def test_too_complex_geniv
+    assert_separately([], "#{<<~"begin;"}\n#{<<~'end;'}")
+    begin;
+      class TooComplex < Hash
+        attr_reader :very_unique
+      end
+
+      obj = Object.new
+      i = 0
+      while RubyVM::Shape.shapes_available > 0
+        obj.instance_variable_set(:"@a#{i}", 1)
+        i += 1
+      end
+
+      (RubyVM::Shape::SHAPE_MAX_VARIATIONS * 2).times do
+        TooComplex.new.instance_variable_set(:"@unique_#{_1}", 1)
+      end
+
+      tc = TooComplex.new
+      tc.instance_variable_set(:@very_unique, 3)
+      tc.instance_variable_set(:@very_unique2, 4)
+      assert_equal 3, tc.instance_variable_get(:@very_unique)
+      assert_equal 4, tc.instance_variable_get(:@very_unique2)
+    end;
+  end
+
   def test_use_all_shapes_then_freeze
     assert_separately([], "#{<<~"begin;"}\n#{<<~'end;'}")
     begin;
@@ -207,7 +233,7 @@ class TestShapes < Test::Unit::TestCase
     end;
   end
 
-  def test_run_out_of_shape
+  def test_run_out_of_shape_for_object
     assert_separately([], "#{<<~"begin;"}\n#{<<~'end;'}")
     begin;
       class A
@@ -223,6 +249,73 @@ class TestShapes < Test::Unit::TestCase
         i += 1
         A.new
       end
+    end;
+  end
+
+  def test_run_out_of_shape_for_class
+    assert_separately([], "#{<<~"begin;"}\n#{<<~'end;'}")
+    begin;
+      i = 0
+      while RubyVM::Shape.shapes_available > 0
+        c = Class.new
+        c.instance_variable_set(:"@i#{i}", 1)
+        i += 1
+      end
+
+      c = Class.new
+      c.instance_variable_set(:@a, 1)
+      assert_equal(1, c.instance_variable_get(:@a))
+      c.remove_instance_variable(:@a)
+      assert_nil(c.instance_variable_get(:@a))
+    end;
+  end
+
+  def test_run_out_of_shape_generic_ivar_set
+    assert_separately([], "#{<<~"begin;"}\n#{<<~'end;'}")
+    begin;
+      class TooComplex < Hash
+      end
+
+      # Try to run out of shapes
+      o = Object.new
+      i = 0
+      while RubyVM::Shape.shapes_available > 0
+        o.instance_variable_set(:"@i#{i}", 1)
+        i += 1
+      end
+
+      tc = TooComplex.new
+      tc.instance_variable_set(:@a, 1)
+      tc.instance_variable_set(:@b, 2)
+
+      tc.remove_instance_variable(:@a)
+      assert_nil(tc.instance_variable_get(:@a))
+    end;
+  end
+
+  def test_run_out_of_shape_rb_obj_copy_ivar
+    assert_separately([], "#{<<~"begin;"}\n#{<<~'end;'}")
+    begin;
+      class A
+        def initialize
+          init # Avoid right sizing
+        end
+
+        def init
+          @a = @b = @c = @d = @e = @f = 1
+        end
+      end
+
+      a = A.new
+
+      o = Object.new
+      i = 0
+      while RubyVM::Shape.shapes_available > 1
+        o.instance_variable_set(:"@i#{i}", 1)
+        i += 1
+      end
+
+      a.dup
     end;
   end
 
