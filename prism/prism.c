@@ -6044,16 +6044,21 @@ static pm_token_type_t
 lex_identifier(pm_parser_t *parser, bool previous_command_start) {
     // Lex as far as we can into the current identifier.
     size_t width;
-    while (parser->current.end < parser->end && (width = char_is_identifier(parser, parser->current.end)) > 0) {
-        parser->current.end += width;
+    const uint8_t *end = parser->end;
+    const uint8_t *current_start = parser->current.start;
+    const uint8_t *current_end = parser->current.end;
+
+    while (current_end < end && (width = char_is_identifier(parser, current_end)) > 0) {
+        current_end += width;
     }
+    parser->current.end = current_end;
 
     // Now cache the length of the identifier so that we can quickly compare it
     // against known keywords.
-    width = (size_t) (parser->current.end - parser->current.start);
+    width = (size_t) (current_end - current_start);
 
-    if (parser->current.end < parser->end) {
-        if (((parser->current.end + 1 >= parser->end) || (parser->current.end[1] != '=')) && (match(parser, '!') || match(parser, '?'))) {
+    if (current_end < end) {
+        if (((current_end + 1 >= end) || (current_end[1] != '=')) && (match(parser, '!') || match(parser, '?'))) {
             // First we'll attempt to extend the identifier by a ! or ?. Then we'll
             // check if we're returning the defined? keyword or just an identifier.
             width++;
@@ -6163,7 +6168,10 @@ lex_identifier(pm_parser_t *parser, bool previous_command_start) {
         }
     }
 
-    return parser->encoding.isupper_char(parser->current.start, parser->end - parser->current.start) ? PM_TOKEN_CONSTANT : PM_TOKEN_IDENTIFIER;
+    if (parser->encoding_changed) {
+        return parser->encoding.isupper_char(current_start, end - current_start) ? PM_TOKEN_CONSTANT : PM_TOKEN_IDENTIFIER;
+    }
+    return pm_encoding_utf_8_isupper_char(current_start, end - current_start) ? PM_TOKEN_CONSTANT : PM_TOKEN_IDENTIFIER;
 }
 
 // Returns true if the current token that the parser is considering is at the
@@ -15723,10 +15731,9 @@ pm_parse_serialize(const uint8_t *source, size_t size, pm_buffer_t *buffer, cons
     pm_parser_free(&parser);
 }
 
-// Parse and serialize the inline comments in the given source to the given
-// buffer.
+// Parse and serialize the comments in the given source to the given buffer.
 PRISM_EXPORTED_FUNCTION void
-pm_parse_serialize_inline_comments(const uint8_t *source, size_t size, pm_buffer_t *buffer, const char *metadata) {
+pm_parse_serialize_comments(const uint8_t *source, size_t size, pm_buffer_t *buffer, const char *metadata) {
     pm_parser_t parser;
     pm_parser_init(&parser, source, size, NULL);
     if (metadata) pm_parser_metadata(&parser, metadata);
