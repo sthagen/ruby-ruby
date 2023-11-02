@@ -746,7 +746,7 @@ module Prism
           [],
           nil,
           [RequiredParameterNode(:a)],
-          [KeywordParameterNode(:b, Location(), nil)],
+          [RequiredKeywordParameterNode(:b, Location())],
           nil,
           nil
         ),
@@ -774,7 +774,7 @@ module Prism
           [],
           nil,
           [],
-          [KeywordParameterNode(:b, Location(), nil)],
+          [RequiredKeywordParameterNode(:b, Location())],
           KeywordRestParameterNode(:rest, Location(), Location()),
           nil
         ),
@@ -824,7 +824,7 @@ module Prism
           [],
           nil,
           [RequiredParameterNode(:a)],
-          [KeywordParameterNode(:b, Location(), nil)],
+          [RequiredKeywordParameterNode(:b, Location())],
           KeywordRestParameterNode(:args, Location(), Location()),
           nil
         ),
@@ -854,7 +854,7 @@ module Prism
           [],
           nil,
           [RequiredParameterNode(:a)],
-          [KeywordParameterNode(:b, Location(), nil)],
+          [RequiredKeywordParameterNode(:b, Location())],
           KeywordRestParameterNode(:args, Location(), Location()),
           nil
         ),
@@ -884,7 +884,7 @@ module Prism
           [],
           nil,
           [RequiredParameterNode(:a)],
-          [KeywordParameterNode(:b, Location(), nil)],
+          [RequiredKeywordParameterNode(:b, Location())],
           KeywordRestParameterNode(:args, Location(), Location()),
           nil
         ),
@@ -1390,17 +1390,21 @@ module Prism
     end
 
     def test_assign_to_numbered_parameter
-      source = "
+      source = <<~RUBY
         a in _1
         a => _1
         1 => a, _1
         1 in a, _1
-      "
+        /(?<_1>)/ =~ a
+      RUBY
+
+      message = "Token reserved for a numbered parameter"
       assert_errors expression(source), source, [
-        ["Token reserved for a numbered parameter", 14..16],
-        ["Token reserved for a numbered parameter", 30..32],
-        ["Token reserved for a numbered parameter", 49..51],
-        ["Token reserved for a numbered parameter", 68..70],
+        [message, 5..7],
+        [message, 13..15],
+        [message, 24..26],
+        [message, 35..37],
+        [message, 42..44]
       ]
     end
 
