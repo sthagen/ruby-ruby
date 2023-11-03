@@ -770,7 +770,7 @@ pm_compile_call_and_or_write_node(bool and_node, pm_node_t *receiver, pm_node_t 
         flag = VM_CALL_FCALL;
     }
 
-    PM_COMPILE(receiver);
+    PM_COMPILE_NOT_POPPED(receiver);
 
     ID write_name_id = pm_constant_id_lookup(scope_node, write_name);
     ID read_name_id = pm_constant_id_lookup(scope_node, read_name);
@@ -790,7 +790,7 @@ pm_compile_call_and_or_write_node(bool and_node, pm_node_t *receiver, pm_node_t 
 
     PM_POP_UNLESS_POPPED;
 
-    PM_COMPILE(value);
+    PM_COMPILE_NOT_POPPED(value);
     if (!popped) {
         PM_SWAP;
         ADD_INSN1(ret, &dummy_line_node, topn, INT2FIX(1));
@@ -1262,7 +1262,9 @@ pm_compile_defined_expr(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *con
     lfinish[0] = NEW_LABEL(lineno);
     lfinish[1] = 0;
 
-    pm_compile_defined_expr0(iseq, node, ret, src, popped, scope_node, dummy_line_node, lineno, in_condition, lfinish);
+    if (!popped) {
+        pm_compile_defined_expr0(iseq, node, ret, src, popped, scope_node, dummy_line_node, lineno, in_condition, lfinish);
+    }
 
     if (lfinish[1]) {
         ELEM_INSERT_NEXT(last, &new_insn_body(iseq, &dummy_line_node, BIN(putnil), 0)->link);
@@ -1401,7 +1403,7 @@ pm_setup_args(pm_arguments_node_t *arguments_node, int *flags, struct rb_callinf
               default: {
                   orig_argc++;
                   post_splat_counter++;
-                  PM_COMPILE(argument);
+                  PM_COMPILE_NOT_POPPED(argument);
 
                   if (has_splat) {
                       // If the next node starts the keyword section of parameters
@@ -1653,7 +1655,7 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
             flag = VM_CALL_FCALL;
         }
 
-        PM_COMPILE(call_operator_write_node->receiver);
+        PM_COMPILE_NOT_POPPED(call_operator_write_node->receiver);
 
         ID write_name_id = pm_constant_id_lookup(scope_node, call_operator_write_node->write_name);
         ID read_name_id = pm_constant_id_lookup(scope_node, call_operator_write_node->read_name);
@@ -1662,7 +1664,7 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
 
         ADD_SEND_WITH_FLAG(ret, &dummy_line_node, read_name_id, INT2FIX(0), INT2FIX(flag));
 
-        PM_COMPILE(call_operator_write_node->value);
+        PM_COMPILE_NOT_POPPED(call_operator_write_node->value);
         ADD_SEND(ret, &dummy_line_node, operator_id, INT2FIX(1));
 
         if (!popped) {
@@ -1731,7 +1733,7 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
 
             pm_while_node_t *condition_node = (pm_while_node_t *)conditions.nodes[i];
             if (condition_node->statements) {
-                PM_COMPILE_NOT_POPPED((pm_node_t *)condition_node->statements);
+                PM_COMPILE((pm_node_t *)condition_node->statements);
             }
             else {
                 PM_PUTNIL_UNLESS_POPPED;
@@ -1899,7 +1901,7 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
         LABEL *lfin = NEW_LABEL(lineno);
 
         pm_constant_path_node_t *target = constant_path_and_write_node->target;
-        PM_COMPILE(target->parent);
+        PM_COMPILE_NOT_POPPED(target->parent);
 
         pm_constant_read_node_t *child = (pm_constant_read_node_t *)target->child;
         VALUE child_name = ID2SYM(pm_constant_id_lookup(scope_node, child->name));
@@ -1912,7 +1914,7 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
         ADD_INSNL(ret, &dummy_line_node, branchunless, lfin);
 
         PM_POP_UNLESS_POPPED;
-        PM_COMPILE(constant_path_and_write_node->value);
+        PM_COMPILE_NOT_POPPED(constant_path_and_write_node->value);
 
         if (popped) {
             ADD_INSN1(ret, &dummy_line_node, topn, INT2FIX(1));
@@ -1937,7 +1939,7 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
         LABEL *lfin = NEW_LABEL(lineno);
 
         pm_constant_path_node_t *target = constant_path_or_write_node->target;
-        PM_COMPILE(target->parent);
+        PM_COMPILE_NOT_POPPED(target->parent);
 
         pm_constant_read_node_t *child = (pm_constant_read_node_t *)target->child;
         VALUE child_name = ID2SYM(pm_constant_id_lookup(scope_node, child->name));
@@ -1955,7 +1957,7 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
 
         PM_POP_UNLESS_POPPED;
         ADD_LABEL(ret, lassign);
-        PM_COMPILE(constant_path_or_write_node->value);
+        PM_COMPILE_NOT_POPPED(constant_path_or_write_node->value);
 
         if (popped) {
             ADD_INSN1(ret, &dummy_line_node, topn, INT2FIX(1));
@@ -1977,7 +1979,7 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
         pm_constant_path_operator_write_node_t *constant_path_operator_write_node = (pm_constant_path_operator_write_node_t*) node;
 
         pm_constant_path_node_t *target = constant_path_operator_write_node->target;
-        PM_COMPILE(target->parent);
+        PM_COMPILE_NOT_POPPED(target->parent);
 
         PM_DUP;
         ADD_INSN1(ret, &dummy_line_node, putobject, Qtrue);
@@ -1986,7 +1988,7 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
         VALUE child_name = ID2SYM(pm_constant_id_lookup(scope_node, child->name));
         ADD_INSN1(ret, &dummy_line_node, getconstant, child_name);
 
-        PM_COMPILE(constant_path_operator_write_node->value);
+        PM_COMPILE_NOT_POPPED(constant_path_operator_write_node->value);
         ID method_id = pm_constant_id_lookup(scope_node, constant_path_operator_write_node->operator);
         ADD_CALL(ret, &dummy_line_node, method_id, INT2FIX(1));
         PM_SWAP;
@@ -2234,7 +2236,8 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
 
         ADD_LABEL(ret, retry_label);
 
-        PM_COMPILE(for_node->collection);
+        PM_COMPILE_NOT_POPPED(for_node->collection);
+
         child_iseq = NEW_CHILD_ISEQ(next_scope_node, make_name_for_block(iseq), ISEQ_TYPE_BLOCK, lineno);
         ISEQ_COMPILE_DATA(iseq)->current_block = child_iseq;
         ADD_SEND_WITH_BLOCK(ret, &dummy_line_node, idEach, INT2FIX(0), child_iseq);
@@ -2248,9 +2251,7 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
         }
         ELEM_INSERT_NEXT(&iobj->link, (LINK_ELEMENT*)retry_end_l);
 
-        if (popped) {
-            ADD_INSN(ret, &dummy_line_node, pop);
-        }
+        PM_POP_IF_POPPED;
 
         ISEQ_COMPILE_DATA(iseq)->current_block = prevblock;
         ADD_CATCH_ENTRY(CATCH_TYPE_BREAK, retry_label, retry_end_l, child_iseq, retry_end_l);
@@ -2398,7 +2399,7 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
             int elements_of_cur_type = 0;
             int allocated_hashes = 0;
 
-            if (!PM_NODE_TYPE_P(cur_node, PM_ASSOC_NODE)) {
+            if (!PM_NODE_TYPE_P(cur_node, PM_ASSOC_NODE) && !popped) {
                 ADD_INSN1(ret, &dummy_line_node, putspecialobject, INT2FIX(VM_SPECIAL_OBJECT_VMCORE));
                 ADD_INSN1(ret, &dummy_line_node, newhash, INT2FIX(0));
                 allocated_hashes++;
@@ -2432,6 +2433,9 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
                         elements_of_cur_type++;
                         PM_COMPILE(elements->nodes[index]);
                     }
+                }
+                else {
+                    PM_COMPILE(elements->nodes[index]);
                 }
             }
 
@@ -2844,7 +2848,7 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
             locals[i] = cast->locals.ids[i];
         }
 
-        PM_COMPILE((pm_node_t *)cast->call);
+        PM_COMPILE_NOT_POPPED((pm_node_t *)cast->call);
         VALUE global_variable_name = rb_id2sym(idBACKREF);
 
         ADD_INSN1(ret, &dummy_line_node, getglobal, global_variable_name);
@@ -2863,6 +2867,7 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
             ADD_INSN1(ret, &dummy_line_node, putobject, rb_id2sym(pm_constant_id_lookup(scope_node, *locals)));
             ADD_SEND(ret, &dummy_line_node, idAREF, INT2FIX(1));
             ADD_SETLOCAL(nom, &dummy_line_node, local_index, 0);
+            PM_POP_IF_POPPED;
 
             ADD_SEQ(ret, nom);
             return;
@@ -2881,7 +2886,7 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
 
         ADD_INSNL(ret, &dummy_line_node, jump, end_label);
         ADD_LABEL(ret, fail_label);
-        PM_POP;
+        PM_POP_UNLESS_POPPED;
 
         for (size_t index = 0; index < capture_count; index++) {
             pm_constant_id_t constant = cast->locals.ids[index];
@@ -2889,6 +2894,7 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
 
             PM_PUTNIL;
             ADD_SETLOCAL(ret, &dummy_line_node, local_index, 0);
+            PM_POP_IF_POPPED;
         }
         ADD_LABEL(ret, end_label);
         return;
@@ -3268,7 +3274,7 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
                     pm_for_node_t *for_node = (pm_for_node_t *)scope_node->ast_node;
 
                     ADD_GETLOCAL(ret, &dummy_line_node, 1, 0);
-                    pm_compile_node(iseq, for_node->index, ret, src, popped, scope_node);
+                    PM_COMPILE(for_node->index);
                     ADD_INSN(ret, &dummy_line_node, nop);
                   }
                   default: {
@@ -3315,7 +3321,7 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
 
         const rb_iseq_t *singleton_class = NEW_ISEQ(next_scope_node, rb_fstring_lit("singleton class"), ISEQ_TYPE_CLASS, lineno);
 
-        PM_COMPILE(singleton_class_node->expression);
+        PM_COMPILE_NOT_POPPED(singleton_class_node->expression);
         PM_PUTNIL;
         ID singletonclass;
         CONST_ID(singletonclass, "singletonclass");
@@ -3323,6 +3329,7 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
         ADD_INSN3(ret, &dummy_line_node, defineclass,
                 ID2SYM(singletonclass), singleton_class,
                 INT2FIX(VM_DEFINECLASS_TYPE_SINGLETON_CLASS));
+        PM_POP_IF_POPPED;
         RB_OBJ_WRITTEN(iseq, Qundef, (VALUE)singleton_class);
 
         return;

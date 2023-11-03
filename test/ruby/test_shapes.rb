@@ -275,6 +275,25 @@ class TestShapes < Test::Unit::TestCase
     end;
   end
 
+  def test_run_out_of_shape_for_module_ivar
+    assert_separately([], "#{<<~"begin;"}\n#{<<~'end;'}")
+    begin;
+      o = Object.new
+      i = 0
+      while RubyVM::Shape.shapes_available > 0
+        o.instance_variable_set(:"@i#{i}", 1)
+        i += 1
+      end
+
+      module Foo
+        @a = 1
+        @b = 2
+        assert_equal 1, @a
+        assert_equal 2, @b
+      end
+    end;
+  end
+
   def test_run_out_of_shape_for_class_cvar
     assert_separately([], "#{<<~"begin;"}\n#{<<~'end;'}")
     begin;
@@ -577,6 +596,36 @@ class TestShapes < Test::Unit::TestCase
     assert_equal [0, 1, nil, 3, 4], ivars
   end
 
+  def test_remove_instance_variable_when_out_of_shapes
+    assert_separately([], "#{<<~"begin;"}\n#{<<~'end;'}")
+    begin;
+      ivars_count = 5
+      object = Object.new
+      ivars_count.times do |i|
+        object.instance_variable_set("@ivar_#{i}", i)
+      end
+
+      ivars = ivars_count.times.map do |i|
+        object.instance_variable_get("@ivar_#{i}")
+      end
+      assert_equal [0, 1, 2, 3, 4], ivars
+
+      o = Object.new
+      i = 0
+      while RubyVM::Shape.shapes_available > 0
+        o.instance_variable_set(:"@i#{i}", 1)
+        i += 1
+      end
+
+      object.remove_instance_variable(:@ivar_2)
+
+      ivars = ivars_count.times.map do |i|
+        object.instance_variable_get("@ivar_#{i}")
+      end
+      assert_equal [0, 1, nil, 3, 4], ivars
+    end;
+  end
+
   def test_freeze_after_complex
     ensure_complex
 
@@ -659,14 +708,6 @@ class TestShapes < Test::Unit::TestCase
 
   def test_array_has_root_shape
     assert_shape_equal(RubyVM::Shape.root_shape, RubyVM::Shape.of([]))
-  end
-
-  def test_hash_has_correct_pool_shape
-    omit "SHAPE_IN_BASIC_FLAGS == 0" unless RbConfig::SIZEOF["uint64_t"] <= RbConfig::SIZEOF["void*"]
-
-    # All hashes are now allocated their own ar_table, so start in a
-    # larger pool, and have already transitioned once.
-    assert_shape_equal(RubyVM::Shape.root_shape, RubyVM::Shape.of({}).parent)
   end
 
   def test_true_has_special_const_shape_id
