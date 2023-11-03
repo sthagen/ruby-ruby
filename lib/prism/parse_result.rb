@@ -8,14 +8,18 @@ module Prism
     # The source code that this source object represents.
     attr_reader :source
 
+    # The line number where this source starts.
+    attr_accessor :start_line
+
     # The list of newline byte offsets in the source code.
     attr_reader :offsets
 
     # Create a new source object with the given source code and newline byte
     # offsets. If no newline byte offsets are given, they will be computed from
     # the source code.
-    def initialize(source, offsets = compute_offsets(source))
+    def initialize(source, start_line = 1, offsets = compute_offsets(source))
       @source = source
+      @start_line = start_line
       @offsets = offsets
     end
 
@@ -28,6 +32,25 @@ module Prism
     # Binary search through the offsets to find the line number for the given
     # byte offset.
     def line(value)
+      start_line + find_line(value)
+    end
+
+    # Return the byte offset of the start of the line corresponding to the given
+    # byte offset.
+    def line_offset(value)
+      offsets[find_line(value)]
+    end
+
+    # Return the column number for the given byte offset.
+    def column(value)
+      value - offsets[find_line(value)]
+    end
+
+    private
+
+    # Binary search through the offsets to find the line number for the given
+    # byte offset.
+    def find_line(value)
       left = 0
       right = offsets.length - 1
 
@@ -44,19 +67,6 @@ module Prism
 
       left - 1
     end
-
-    # Return the byte offset of the start of the line corresponding to the given
-    # byte offset.
-    def line_offset(value)
-      offsets[line(value)]
-    end
-
-    # Return the column number for the given byte offset.
-    def column(value)
-      value - offsets[line(value)]
-    end
-
-    private
 
     # Find all of the newlines in the source code and return their byte offsets
     # from the start of the string an array.
@@ -118,7 +128,7 @@ module Prism
 
     # The line number where this location starts.
     def start_line
-      source.line(start_offset) + 1
+      source.line(start_offset)
     end
 
     # The content of the line where this location starts before this location.
@@ -129,7 +139,7 @@ module Prism
 
     # The line number where this location ends.
     def end_line
-      source.line(end_offset) + 1
+      source.line(end_offset)
     end
 
     # The column number in bytes where this location starts from the start of
@@ -179,45 +189,58 @@ module Prism
     end
   end
 
-  # This represents a comment that was encountered during parsing.
+  # This represents a comment that was encountered during parsing. It is the
+  # base class for all comment types.
   class Comment
-    # These are the three types that comments can be from a source file.
-    #
-    # :inline comments are the most common. They correspond to comments in the
-    # source file like this one that start with #.
-    #
-    # :embdoc comments are comments that are surrounded by =begin and =end.
-    #
-    # :__END__ comments are comments that are after the __END__ keyword in a
-    # source file.
-    TYPES = [:inline, :embdoc, :__END__]
-
-    # The type of comment that this comment is.
-    attr_reader :type
-
     # The location of this comment in the source.
     attr_reader :location
 
-    # Create a new comment object with the given type and location.
-    def initialize(type, location)
-      @type = type
+    # Create a new comment object with the given location.
+    def initialize(location)
       @location = location
     end
 
     # Implement the hash pattern matching interface for Comment.
     def deconstruct_keys(keys)
-      { type: type, location: location }
+      { location: location }
     end
 
-    # Returns true if the comment happens on the same line as other code and
+    # This can only be true for inline comments.
+    def trailing?
+      false
+    end
+  end
+
+  # InlineComment objects are the most common. They correspond to comments in
+  # the source file like this one that start with #.
+  class InlineComment < Comment
+    # Returns true if this comment happens on the same line as other code and
     # false if the comment is by itself.
     def trailing?
-      type == :inline && !location.start_line_slice.strip.empty?
+      !location.start_line_slice.strip.empty?
     end
 
     # Returns a string representation of this comment.
     def inspect
-      "#<Prism::Comment @type=#{@type.inspect} @location=#{@location.inspect}>"
+      "#<Prism::InlineComment @location=#{location.inspect}>"
+    end
+  end
+
+  # EmbDocComment objects correspond to comments that are surrounded by =begin
+  # and =end.
+  class EmbDocComment < Comment
+    # Returns a string representation of this comment.
+    def inspect
+      "#<Prism::EmbDocComment @location=#{location.inspect}>"
+    end
+  end
+
+  # DATAComment objects correspond to comments that are after the __END__
+  # keyword in a source file.
+  class DATAComment < Comment
+    # Returns a string representation of this comment.
+    def inspect
+      "#<Prism::DATAComment @location=#{location.inspect}>"
     end
   end
 
