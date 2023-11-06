@@ -113,6 +113,7 @@ The following default gem is added.
 The following default gems are updated.
 
 * RubyGems 3.5.0.dev
+* benchmark 0.3.0
 * bigdecimal 3.1.5
 * bundler 2.5.0.dev
 * csv 3.2.8
@@ -122,17 +123,23 @@ The following default gems are updated.
 * fileutils 1.7.1
 * io-console 0.6.1.dev
 * irb 1.8.3
+* net-http 0.4.0
 * nkf 0.1.3
 * openssl 3.2.0
 * optparse 0.4.0.pre.1
 * psych 5.1.1.1
+* rdoc 6.6.0
 * reline 0.3.9
+* shellwords 0.2.0
+* singleton 0.2.0
 * stringio 3.0.9
 * strscan 3.0.7
 * syntax_suggest 1.1.0
 * time 0.2.2
 * timeout 0.4.0
-* uri 0.12.2
+* un 0.3.0
+* uri 0.13.0
+* yaml 0.3.0
 
 The following bundled gem is promoted from default gems.
 
@@ -171,6 +178,7 @@ changelog for details of the default gems or bundled gems.
 ## Implementation improvements
 
 * `defined?(@ivar)` is optimized with Object Shapes.
+* Name resolution such as `Socket.getaddrinfo` can now be interrupted. [[Feature #19965]]
 
 ### YJIT
 
@@ -235,3 +243,4 @@ changelog for details of the default gems or bundled gems.
 [Feature #19785]: https://bugs.ruby-lang.org/issues/19785
 [Feature #19843]: https://bugs.ruby-lang.org/issues/19843
 [Bug #19868]:     https://bugs.ruby-lang.org/issues/19868
+[Feature #19965]: https://bugs.ruby-lang.org/issues/19965
