@@ -95,6 +95,7 @@ Note: We're only listing outstanding class updates.
     * mutex_m
     * nkf
     * observer
+    * racc
     * resolv-replace
     * rinda
     * syslog
@@ -113,33 +114,61 @@ The following default gem is added.
 The following default gems are updated.
 
 * RubyGems 3.5.0.dev
+* base64 0.2.0
 * benchmark 0.3.0
 * bigdecimal 3.1.5
 * bundler 2.5.0.dev
+* cgi 0.4.0
 * csv 3.2.8
+* date 3.3.4
+* delegate 0.3.1
+* drb 2.2.0
+* english 0.8.0
 * erb 4.0.3
 * etc 1.4.3.dev.1
+* fcntl 1.1.0
 * fiddle 1.1.2
-* fileutils 1.7.1
+* fileutils 1.7.2
+* find 0.2.0
+* getoptlong 0.2.1
 * io-console 0.6.1.dev
 * irb 1.8.3
+* logger 1.6.0
+* mutex_m 0.2.0
 * net-http 0.4.0
+* net-protocol 0.2.2
 * nkf 0.1.3
+* observer 0.1.2
+* open-uri 0.4.0
+* open3 0.2.0
 * openssl 3.2.0
-* optparse 0.4.0.pre.1
+* optparse 0.4.0
+* ostruct 0.6.0
+* pathname 0.3.0
+* pp 0.5.0
+* prettyprint 0.2.0
+* pstore 0.1.3
 * psych 5.1.1.1
 * rdoc 6.6.0
-* reline 0.3.9
+* reline 0.4.0
+* rinda 0.2.0
+* securerandom 0.3.0
 * shellwords 0.2.0
 * singleton 0.2.0
 * stringio 3.0.9
-* strscan 3.0.7
+* strscan 3.0.8
 * syntax_suggest 1.1.0
-* time 0.2.2
-* timeout 0.4.0
+* tempfile 0.2.0
+* time 0.3.0
+* timeout 0.4.1
+* tmpdir 0.2.0
+* tsort 0.2.0
 * un 0.3.0
 * uri 0.13.0
+* weakref 0.1.3
+* win32ole 1.8.10
 * yaml 0.3.0
+* zlib 3.1.0
 
 The following bundled gem is promoted from default gems.
 
