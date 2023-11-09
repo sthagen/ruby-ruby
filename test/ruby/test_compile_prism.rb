@@ -861,6 +861,22 @@ module Prism
       )
     end
 
+    def test_ForwardingArgumentsNode
+      assert_prism_eval(<<-CODE)
+        def prism_test_forwarding_arguments_node(...); end;
+        def prism_test_forwarding_arguments_node1(...)
+          prism_test_forwarding_arguments_node(...)
+        end
+      CODE
+
+      assert_prism_eval(<<-CODE)
+        def prism_test_forwarding_arguments_node(...); end;
+        def prism_test_forwarding_arguments_node1(a, ...)
+          prism_test_forwarding_arguments_node(1,2, 3, ...)
+        end
+      CODE
+    end
+
     def test_ForwardingSuperNode
       assert_prism_eval("class Forwarding; def to_s; super; end; end")
       assert_prism_eval("class Forwarding; def eval(code); super { code }; end; end")
@@ -889,10 +905,23 @@ module Prism
       assert_prism_eval("alias :prism_a :to_s")
     end
 
+    def test_BlockParameterNode
+      assert_prism_eval("def prism_test_block_parameter_node(&bar) end")
+      assert_prism_eval("->(b, c=1, *d, e, &f){}")
+    end
+
     def test_BlockParametersNode
       assert_prism_eval("Object.tap { || }")
       assert_prism_eval("[1].map { |num| num }")
       assert_prism_eval("[1].map { |a; b| b = 2; a + b}")
+    end
+
+    def test_FowardingParameterNode
+      assert_prism_eval("def prism_test_forwarding_parameter_node(...); end")
+    end
+
+    def test_KeywordRestParameterNode
+      assert_prism_eval("def prism_test_keyword_rest_parameter_node(a, **b); end")
     end
 
     def test_NoKeywordsParameterNode
@@ -904,9 +933,28 @@ module Prism
       assert_prism_eval("def prism_test_optional_param_node(bar = nil); end")
     end
 
+    def test_OptionalKeywordParameterNode
+      assert_prism_eval("def prism_test_optional_keyword_param_node(bar: nil); end")
+    end
+
     def test_ParametersNode
       assert_prism_eval("def prism_test_parameters_node(bar, baz); end")
       assert_prism_eval("def prism_test_parameters_node(a, b = 2); end")
+    end
+
+    def test_RequiredParameterNode
+      assert_prism_eval("def prism_test_required_param_node(bar); end")
+      assert_prism_eval("def prism_test_required_param_node(foo, bar); end")
+    end
+
+    def test_RequiredKeywordParameterNode
+      assert_prism_eval("def prism_test_required_param_node(bar:); end")
+      assert_prism_eval("def prism_test_required_param_node(foo:, bar:); end")
+      assert_prism_eval("-> a, b = 1, c:, d:, &e { a }")
+    end
+
+    def test_RestParameterNode
+      assert_prism_eval("def prism_test_rest_parameter_node(*a); end")
     end
 
     def test_UndefNode
@@ -1038,7 +1086,11 @@ module Prism
       ruby_eval = RubyVM::InstructionSequence.compile(source).eval
       prism_eval = RubyVM::InstructionSequence.compile_prism(source).eval
 
-      assert_equal ruby_eval, prism_eval
+      if ruby_eval.is_a? Proc
+        assert_equal ruby_eval.class, prism_eval.class
+      else
+        assert_equal ruby_eval, prism_eval
+      end
     end
 
     def assert_prism_eval(source)

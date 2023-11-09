@@ -684,6 +684,7 @@ pm_interpolated_node_compile(pm_node_list_t parts, rb_iseq_t *iseq, NODE dummy_l
         PM_PUTNIL;
     }
 }
+
 static int
 pm_lookup_local_index(rb_iseq_t *iseq, pm_scope_node_t *scope_node, pm_constant_id_t constant_id)
 {
@@ -718,7 +719,10 @@ pm_lookup_local_index_with_depth(rb_iseq_t *iseq, pm_scope_node_t *scope_node, p
 static ID
 pm_constant_id_lookup(pm_scope_node_t *scope_node, pm_constant_id_t constant_id)
 {
-    return ((ID *)scope_node->constants)[constant_id - 1];
+    if (constant_id < 1 || constant_id > scope_node->parser->constant_pool.size) {
+        rb_raise(rb_eArgError, "[PRISM] constant_id out of range: %u", (unsigned int)constant_id);
+    }
+    return scope_node->constants[constant_id - 1];
 }
 
 static rb_iseq_t *
@@ -1361,7 +1365,9 @@ pm_setup_args(pm_arguments_node_t *arguments_node, int *flags, struct rb_callinf
 
                                 *flags |= VM_CALL_KW_SPLAT | VM_CALL_KW_SPLAT_MUT;
 
-                                ADD_SEND(ret, &dummy_line_node, id_core_hash_merge_kwd, INT2FIX(2));
+                                if (len > 1) {
+                                    ADD_SEND(ret, &dummy_line_node, id_core_hash_merge_kwd, INT2FIX(2));
+                                }
 
                                 if ((i < len - 1) && !PM_NODE_TYPE_P(keyword_arg->elements.nodes[i + 1], cur_type)) {
                                     ADD_INSN1(ret, &dummy_line_node, putspecialobject, INT2FIX(VM_SPECIAL_OBJECT_VMCORE));
@@ -1405,6 +1411,14 @@ pm_setup_args(pm_arguments_node_t *arguments_node, int *flags, struct rb_callinf
                   has_splat = true;
                   post_splat_counter = 0;
 
+                  break;
+              }
+              case PM_FORWARDING_ARGUMENTS_NODE: {
+                  orig_argc++;
+                  *flags |= VM_CALL_ARGS_BLOCKARG | VM_CALL_ARGS_SPLAT;
+                  ADD_GETLOCAL(ret, &dummy_line_node, 3, 0);
+                  ADD_INSN1(ret, &dummy_line_node, splatarray, RBOOL(arguments_node_list.size > 1));
+                  ADD_INSN2(ret, &dummy_line_node, getblockparamproxy, INT2FIX(4), INT2FIX(0));
                   break;
               }
               default: {
@@ -1581,11 +1595,6 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
             iseq_set_exception_local_table(iseq);
             pm_scope_node_t next_scope_node;
             pm_scope_node_init((pm_node_t *)begin_node->ensure_clause, &next_scope_node, scope_node, parser);
-
-            pm_constant_id_list_t locals;
-            pm_constant_id_list_init(&locals);
-            pm_constant_id_list_append(&locals, idERROR_INFO);
-            next_scope_node.locals = locals;
 
             child_iseq = NEW_CHILD_ISEQ(next_scope_node,
                     rb_str_new2("ensure in"),
@@ -2310,6 +2319,10 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
 
         ISEQ_COMPILE_DATA(iseq)->current_block = prevblock;
         ADD_CATCH_ENTRY(CATCH_TYPE_BREAK, retry_label, retry_end_l, child_iseq, retry_end_l);
+        return;
+      }
+      case PM_FORWARDING_ARGUMENTS_NODE: {
+        rb_bug("Should never hit the forwarding arguments case directly\n");
         return;
       }
       case PM_FORWARDING_SUPER_NODE: {
@@ -3354,9 +3367,11 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
             body->param.keyword = keyword = ZALLOC_N(struct rb_iseq_param_keyword, 1);
             keyword->num = (int) keywords_list->size;
 
-            body->param.flags.has_kw = TRUE;
+            body->param.flags.has_kw = true;
             const VALUE default_values = rb_ary_hidden_new(1);
             const VALUE complex_mark = rb_str_tmp_new(0);
+
+            ID *ids = calloc(keywords_list->size, sizeof(ID));
 
             for (size_t i = 0; i < keywords_list->size; i++) {
                 pm_node_t *keyword_parameter_node = keywords_list->nodes[i];
@@ -3376,6 +3391,8 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
                       break;
                   }
                   case PM_REQUIRED_KEYWORD_PARAMETER_NODE: {
+                      pm_required_keyword_parameter_node_t *cast = (pm_required_keyword_parameter_node_t *)keyword_parameter_node;
+                      ids[keyword->required_num] = pm_constant_id_lookup(scope_node, cast->name);
                       keyword->required_num++;
                       break;
                   }
@@ -3384,6 +3401,20 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
                   }
                 }
             }
+
+            VALUE *dvs = ALLOC_N(VALUE, RARRAY_LEN(default_values));
+
+            for (int i = 0; i < RARRAY_LEN(default_values); i++) {
+                VALUE dv = RARRAY_AREF(default_values, i);
+                if (dv == complex_mark) dv = Qundef;
+                if (!SPECIAL_CONST_P(dv)) {
+                    RB_OBJ_WRITTEN(iseq, Qundef, dv);
+                }
+                dvs[i] = dv;
+            }
+
+            keyword->default_values = dvs;
+            keyword->table = ids;
         }
 
         if (parameters_node) {
@@ -3393,18 +3424,15 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
             }
 
             if (parameters_node->keyword_rest) {
-                switch (PM_NODE_TYPE(parameters_node->keyword_rest)) {
-                  case PM_NO_KEYWORDS_PARAMETER_NODE: {
-                      body->param.flags.accepts_no_kwarg = true;
-                      break;
-                  }
-                  case PM_KEYWORD_REST_PARAMETER_NODE: {
-                      body->param.flags.has_kwrest = true;
-                      break;
-                  }
-                  default: {
-                      rb_bug("Keyword rest is an unexpected type\n");
-                  }
+                if (PM_NODE_TYPE_P(parameters_node->keyword_rest, PM_NO_KEYWORDS_PARAMETER_NODE)) {
+                    body->param.flags.accepts_no_kwarg = true;
+                }
+                else {
+                    if (!body->param.flags.has_kw) {
+                        body->param.keyword = keyword = ZALLOC_N(struct rb_iseq_param_keyword, 1);
+                    }
+                    keyword->rest_start = (int) locals_size;
+                    body->param.flags.has_kwrest = true;
                 }
             }
 
@@ -3475,10 +3503,7 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
             PM_COMPILE((pm_node_t *)scope_node->body);
             PM_POP;
 
-            // this loses precision, but in this case that doesn't matter...
-            pm_constant_id_t id_err_info = (pm_constant_id_t)ISEQ_BODY(iseq)->local_table[0];
-            int local_index = pm_lookup_local_index_with_depth(iseq, scope_node, id_err_info, 0);
-            ADD_GETLOCAL(ret, &dummy_line_node, local_index, 0);
+            ADD_GETLOCAL(ret, &dummy_line_node, 1, 0);
             ADD_INSN1(ret, &dummy_line_node, throw, INT2FIX(0));
 
             return;
@@ -3772,7 +3797,7 @@ rb_translate_prism(pm_parser_t *parser, rb_iseq_t *iseq, pm_scope_node_t *scope_
     for (size_t i = 0; i < locals->size; i++) {
         st_insert(index_lookup_table, locals->ids[i], i);
     }
-    scope_node->constants = (void *)constants;
+    scope_node->constants = constants;
     scope_node->index_lookup_table = index_lookup_table;
 
     pm_compile_node(iseq, (pm_node_t *)scope_node, ret, scope_node->base.location.start, false, (pm_scope_node_t *)scope_node);

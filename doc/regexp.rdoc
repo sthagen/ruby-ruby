@@ -765,7 +765,7 @@ See {Subexpression calls}[https://learnbyexample.github.io/Ruby_Regexp/groupings
 The conditional construct takes the form <tt>(?(_cond_)_yes_|_no_)</tt>, where:
 
 - _cond_ may be a capture number or name.
-- The match to be applied is _yes_ if_cond_ is captured;
+- The match to be applied is _yes_ if _cond_ is captured;
   otherwise the match to be applied is _no_.
 - If not needed, <tt>|_no_</tt> may be omitted.
 
@@ -902,7 +902,7 @@ Punctation:
 - {Pe, Close_Punctuation}[https://www.compart.com/en/unicode/category/Pe].
 - {Pf, Final_Punctuation}[https://www.compart.com/en/unicode/category/Pf].
 - {Pi, Initial_Punctuation}[https://www.compart.com/en/unicode/category/Pi].
-- {Po, Open_Punctuation}[https://www.compart.com/en/unicode/category/Po].
+- {Po, Other_Punctuation}[https://www.compart.com/en/unicode/category/Po].
 - {Ps, Open_Punctuation}[https://www.compart.com/en/unicode/category/Ps].
 
 - +S+, +Symbol+: +Sc+, +Sk+, +Sm+, or +So+.
@@ -1227,6 +1227,33 @@ when regexp.timeout is non-+nil+, that value controls timing out:
   |         nil          |          nil         |       Never times out.      |
   |         nil          |         Float        | Times out in Float seconds. |
   |        Float         |          Any         | Times out in Float seconds. |
+
+== Optimization
+
+For certain values of the pattern and target string,
+matching time can grow polynomially or exponentially in relation to the input size;
+the potential vulnerability arising from this is the {regular expression denial-of-service}[https://en.wikipedia.org/wiki/ReDoS] (ReDoS) attack.
+
+\Regexp matching can apply an optimization to prevent ReDoS attacks.
+When the optimization is applied, matching time increases linearly (not polynomially or exponentially)
+in relation to the input size, and a ReDoS attach is not possible.
+
+This optimization is applied if the pattern meets these criteria:
+
+- No backreferences.
+- No subexpression calls.
+- No nested lookaround anchors or atomic groups.
+- No nested quantifiers with counting (i.e. no nested <tt>{n}</tt>,
+  <tt>{min,}</tt>, <tt>{,max}</tt>, or <tt>{min,max}</tt> style quantifiers)
+
+You can use method Regexp.linear_time? to determine whether a pattern meets these criteria:
+
+  Regexp.linear_time?(/a*/)     # => true
+  Regexp.linear_time?('a*')     # => true
+  Regexp.linear_time?(/(a*)\1/) # => false
+
+However, an untrusted source may not be safe even if the method returns +true+,
+because the optimization uses memoization (which may invoke large memory consumption).
 
 == References
 

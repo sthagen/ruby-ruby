@@ -11065,7 +11065,7 @@ rb_local_defined(ID id, const rb_iseq_t *iseq)
 #define IBF_ISEQ_ENABLE_LOCAL_BUFFER 0
 #endif
 
-typedef unsigned int ibf_offset_t;
+typedef uint32_t ibf_offset_t;
 #define IBF_OFFSET(ptr) ((ibf_offset_t)(VALUE)(ptr))
 
 #define IBF_MAJOR_VERSION ISEQ_MAJOR_VERSION
@@ -11076,17 +11076,27 @@ typedef unsigned int ibf_offset_t;
 #define IBF_MINOR_VERSION ISEQ_MINOR_VERSION
 #endif
 
+static const char IBF_ENDIAN_MARK =
+#ifdef WORDS_BIGENDIAN
+    'b'
+#else
+    'l'
+#endif
+    ;
+
 struct ibf_header {
     char magic[4]; /* YARB */
-    unsigned int major_version;
-    unsigned int minor_version;
-    unsigned int size;
-    unsigned int extra_size;
+    uint32_t major_version;
+    uint32_t minor_version;
+    uint32_t size;
+    uint32_t extra_size;
 
-    unsigned int iseq_list_size;
-    unsigned int global_object_list_size;
+    uint32_t iseq_list_size;
+    uint32_t global_object_list_size;
     ibf_offset_t iseq_list_offset;
     ibf_offset_t global_object_list_offset;
+    uint8_t endian;
+    uint8_t wordsize;           /* assume no 2048-bit CPU */
 };
 
 struct ibf_dump_buffer {
@@ -13211,7 +13221,6 @@ rb_iseq_ibf_dump(const rb_iseq_t *iseq, VALUE opt)
     ibf_dump_setup(dump, dump_obj);
 
     ibf_dump_write(dump, &header, sizeof(header));
-    ibf_dump_write(dump, RUBY_PLATFORM, strlen(RUBY_PLATFORM) + 1);
     ibf_dump_iseq(dump, iseq);
 
     header.magic[0] = 'Y'; /* YARB */
@@ -13220,6 +13229,8 @@ rb_iseq_ibf_dump(const rb_iseq_t *iseq, VALUE opt)
     header.magic[3] = 'B';
     header.major_version = IBF_MAJOR_VERSION;
     header.minor_version = IBF_MINOR_VERSION;
+    header.endian = IBF_ENDIAN_MARK;
+    header.wordsize = (uint8_t)SIZEOF_VALUE;
     ibf_dump_iseq_list(dump, &header);
     ibf_dump_object_list(dump, &header.global_object_list_offset, &header.global_object_list_size);
     header.size = ibf_dump_pos(dump);
@@ -13355,8 +13366,11 @@ ibf_load_setup_bytes(struct ibf_load *load, VALUE loader_obj, const char *bytes,
         rb_raise(rb_eRuntimeError, "unmatched version file (%u.%u for %u.%u)",
                  header->major_version, header->minor_version, IBF_MAJOR_VERSION, IBF_MINOR_VERSION);
     }
-    if (strcmp(load->global_buffer.buff + sizeof(struct ibf_header), RUBY_PLATFORM) != 0) {
-        rb_raise(rb_eRuntimeError, "unmatched platform");
+    if (header->endian != IBF_ENDIAN_MARK) {
+        rb_raise(rb_eRuntimeError, "unmatched endian: %c", header->endian);
+    }
+    if (header->wordsize != SIZEOF_VALUE) {
+        rb_raise(rb_eRuntimeError, "unmatched word size: %d", header->wordsize);
     }
     if (header->iseq_list_offset % RUBY_ALIGNOF(ibf_offset_t)) {
         rb_raise(rb_eArgError, "unaligned iseq list offset: %u",
