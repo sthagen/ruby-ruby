@@ -108,7 +108,7 @@ impl JITState {
         JITState {
             iseq: blockid.iseq,
             starting_insn_idx: blockid.idx,
-            starting_ctx: starting_ctx.clone(),
+            starting_ctx,
             output_ptr,
             insn_idx: 0,
             opcode: 0,
@@ -151,7 +151,7 @@ impl JITState {
     }
 
     pub fn get_starting_ctx(&self) -> Context {
-        self.starting_ctx.clone()
+        self.starting_ctx
     }
 
     pub fn get_arg(&self, arg_idx: isize) -> VALUE {
@@ -410,7 +410,7 @@ fn verify_ctx(jit: &JITState, ctx: &Context) {
                 }
             }
             TempMappingKind::MapToLocal => {
-                let local_idx: u8 = learned_mapping.get_local_idx().into();
+                let local_idx: u8 = learned_mapping.get_local_idx();
                 let local_val = jit.peek_at_local(local_idx.into());
                 if local_val != stack_val {
                     panic!(
@@ -550,7 +550,7 @@ fn gen_exit(exit_pc: *mut VALUE, asm: &mut Assembler) {
 pub fn gen_outlined_exit(exit_pc: *mut VALUE, ctx: &Context, ocb: &mut OutlinedCb) -> Option<CodePtr> {
     let mut cb = ocb.unwrap();
     let mut asm = Assembler::new();
-    asm.ctx = ctx.clone();
+    asm.ctx = *ctx;
     asm.set_reg_temps(ctx.get_reg_temps());
 
     gen_exit(exit_pc, &mut asm);
@@ -599,7 +599,7 @@ pub fn jit_ensure_block_entry_exit(jit: &mut JITState, asm: &mut Assembler, ocb:
     // If we're compiling the first instruction in the block.
     if jit.insn_idx == jit.starting_insn_idx {
         // Generate the exit with the cache in Assembler.
-        let side_exit_context = SideExitContext::new(jit.pc, block_starting_context.clone());
+        let side_exit_context = SideExitContext::new(jit.pc, *block_starting_context);
         let entry_exit = asm.get_side_exit(&side_exit_context, None, ocb);
         jit.block_entry_exit = Some(entry_exit?);
     } else {
@@ -843,7 +843,7 @@ fn jump_to_next_insn(
 ) -> Option<()> {
     // Reset the depth since in current usages we only ever jump to to
     // chain_depth > 0 from the same instruction.
-    let mut reset_depth = asm.ctx.clone();
+    let mut reset_depth = asm.ctx;
     reset_depth.reset_chain_depth();
 
     let jump_block = BlockId {
@@ -897,7 +897,7 @@ pub fn gen_single_block(
     let mut insn_idx: IseqIdx = blockid.idx;
 
     // Initialize a JIT state object
-    let mut jit = JITState::new(blockid, ctx.clone(), cb.get_write_ptr(), ec);
+    let mut jit = JITState::new(blockid, ctx, cb.get_write_ptr(), ec);
     jit.iseq = blockid.iseq;
 
     // Create a backend assembler instance
@@ -2459,7 +2459,7 @@ fn gen_setinstancevariable(
         // If the VM ran out of shapes, or this class generated too many leaf,
         // it may be de-optimized into OBJ_TOO_COMPLEX_SHAPE (hash-table).
         if next_shape_id == OBJ_TOO_COMPLEX_SHAPE_ID {
-            Some((next_shape_id, None, 0 as usize))
+            Some((next_shape_id, None, 0_usize))
         } else {
             let current_capacity = unsafe { (*current_shape).capacity };
 
@@ -2680,7 +2680,7 @@ fn gen_definedivar(
         jit_prepare_routine_call(jit, asm);
 
         // Call rb_ivar_defined(recv, ivar_name)
-        let def_result = asm.ccall(rb_ivar_defined as *const u8, vec![recv.into(), ivar_name.into()]);
+        let def_result = asm.ccall(rb_ivar_defined as *const u8, vec![recv, ivar_name.into()]);
 
         // if (rb_ivar_defined(recv, ivar_name)) {
         //  val = pushval;
@@ -3920,7 +3920,7 @@ fn gen_branchif(
         asm.test(val_opnd, Opnd::Imm(!Qnil.as_i64()));
 
         // Generate the branch instructions
-        let ctx = asm.ctx.clone();
+        let ctx = asm.ctx;
         gen_branch(
             jit,
             asm,
@@ -3976,7 +3976,7 @@ fn gen_branchunless(
         asm.test(val_opnd, not_qnil.into());
 
         // Generate the branch instructions
-        let ctx = asm.ctx.clone();
+        let ctx = asm.ctx;
         gen_branch(
             jit,
             asm,
@@ -4029,7 +4029,7 @@ fn gen_branchnil(
         // Test if the value is Qnil
         asm.cmp(val_opnd, Opnd::UImm(Qnil.into()));
         // Generate the branch instructions
-        let ctx = asm.ctx.clone();
+        let ctx = asm.ctx;
         gen_branch(
             jit,
             asm,
@@ -5028,7 +5028,7 @@ fn jit_obj_respond_to(
         (METHOD_VISI_UNDEF, _) => {
             // No method, we can return false given respond_to_missing? hasn't been overridden.
             // In the future, we might want to jit the call to respond_to_missing?
-            if !assume_method_basic_definition(jit, asm, ocb, recv_class, ID!(respond_to_missing).into()) {
+            if !assume_method_basic_definition(jit, asm, ocb, recv_class, ID!(respond_to_missing)) {
                 return false;
             }
             Qfalse
@@ -6671,7 +6671,7 @@ fn gen_send_iseq(
     // Pop arguments and receiver in return context and
     // mark it as a continuation of gen_leave()
     let mut return_asm = Assembler::new();
-    return_asm.ctx = asm.ctx.clone();
+    return_asm.ctx = asm.ctx;
     return_asm.stack_pop(sp_offset.try_into().unwrap());
     return_asm.ctx.set_sp_offset(0); // We set SP on the caller's frame above
     return_asm.ctx.reset_chain_depth();
