@@ -63,22 +63,6 @@ static void setup_const_entry(rb_const_entry_t *, VALUE, VALUE, rb_const_flag_t)
 static VALUE rb_const_search(VALUE klass, ID id, int exclude, int recurse, int visibility);
 static st_table *generic_iv_tbl_;
 
-static inline st_table *
-RCLASS_IV_HASH(VALUE obj)
-{
-    RUBY_ASSERT(RB_TYPE_P(obj, RUBY_T_CLASS) || RB_TYPE_P(obj, RUBY_T_MODULE));
-    RUBY_ASSERT(rb_shape_obj_too_complex(obj));
-    return (st_table *)RCLASS_IVPTR(obj);
-}
-
-static inline void
-RCLASS_SET_IV_HASH(VALUE obj, const st_table *tbl)
-{
-    RUBY_ASSERT(RB_TYPE_P(obj, RUBY_T_CLASS) || RB_TYPE_P(obj, RUBY_T_MODULE));
-    RUBY_ASSERT(rb_shape_obj_too_complex(obj));
-    RCLASS_IVPTR(obj) = (VALUE *)tbl;
-}
-
 void
 Init_var_tables(void)
 {
@@ -1399,12 +1383,12 @@ rb_obj_convert_to_too_complex(VALUE obj, st_table *table)
 
             struct gen_ivtbl *ivtbl = xmalloc(sizeof(struct gen_ivtbl));
             ivtbl->as.complex.table = table;
+            st_insert(gen_ivs, (st_data_t)obj, (st_data_t)ivtbl);
 #if SHAPE_IN_BASIC_FLAGS
             rb_shape_set_shape_id(obj, OBJ_TOO_COMPLEX_SHAPE_ID);
 #else
             ivtbl->shape_id = OBJ_TOO_COMPLEX_SHAPE_ID;
 #endif
-            st_insert(gen_ivs, (st_data_t)obj, (st_data_t)ivtbl);
         }
         RB_VM_LOCK_LEAVE();
     }
