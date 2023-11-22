@@ -78,7 +78,8 @@
         ├── @ ArrayNode (location: (25,0)-(25,8))
         │   ├── elements: (length: 0)
         │   ├── opening_loc: (25,0)-(25,3) = "%w{"
-        │   └── closing_loc: (25,7)-(25,8) = "}"
+        │   ├── closing_loc: (25,7)-(25,8) = "}"
+        │   └── flags: ∅
         ├── @ StringNode (location: (27,0)-(27,6))
         │   ├── flags: ∅
         │   ├── opening_loc: (27,0)-(27,2) = "%/"
@@ -123,13 +124,13 @@
         │   │   │   │       └── @ CallNode (location: (35,8)-(35,11))
         │   │   │   │           ├── receiver: ∅
         │   │   │   │           ├── call_operator_loc: ∅
+        │   │   │   │           ├── name: :bbb
         │   │   │   │           ├── message_loc: (35,8)-(35,11) = "bbb"
         │   │   │   │           ├── opening_loc: ∅
         │   │   │   │           ├── arguments: ∅
         │   │   │   │           ├── closing_loc: ∅
         │   │   │   │           ├── block: ∅
-        │   │   │   │           ├── flags: variable_call
-        │   │   │   │           └── name: :bbb
+        │   │   │   │           └── flags: variable_call
         │   │   │   └── closing_loc: (35,11)-(35,12) = "}"
         │   │   └── @ StringNode (location: (35,12)-(35,16))
         │   │       ├── flags: ∅
@@ -153,6 +154,7 @@
         │   │   ├── closing_loc: (39,4)-(39,5) = "\""
         │   │   └── unescaped: "foo"
         │   ├── call_operator_loc: ∅
+        │   ├── name: :+
         │   ├── message_loc: (39,6)-(39,7) = "+"
         │   ├── opening_loc: ∅
         │   ├── arguments:
@@ -167,8 +169,7 @@
         │   │   └── flags: ∅
         │   ├── closing_loc: ∅
         │   ├── block: ∅
-        │   ├── flags: ∅
-        │   └── name: :+
+        │   └── flags: ∅
         ├── @ StringNode (location: (43,0)-(43,7))
         │   ├── flags: ∅
         │   ├── opening_loc: (43,0)-(43,3) = "%q{"
@@ -221,13 +222,13 @@
         │   │   │   │       └── @ CallNode (location: (55,7)-(55,10))
         │   │   │   │           ├── receiver: ∅
         │   │   │   │           ├── call_operator_loc: ∅
+        │   │   │   │           ├── name: :bbb
         │   │   │   │           ├── message_loc: (55,7)-(55,10) = "bbb"
         │   │   │   │           ├── opening_loc: ∅
         │   │   │   │           ├── arguments: ∅
         │   │   │   │           ├── closing_loc: ∅
         │   │   │   │           ├── block: ∅
-        │   │   │   │           ├── flags: variable_call
-        │   │   │   │           └── name: :bbb
+        │   │   │   │           └── flags: variable_call
         │   │   │   └── closing_loc: (55,10)-(55,11) = "}"
         │   │   └── @ StringNode (location: (55,11)-(55,15))
         │   │       ├── flags: ∅
@@ -263,7 +264,8 @@
         │   │       ├── closing_loc: ∅
         │   │       └── unescaped: "c"
         │   ├── opening_loc: (59,0)-(59,3) = "%w["
-        │   └── closing_loc: (59,8)-(59,9) = "]"
+        │   ├── closing_loc: (59,8)-(59,9) = "]"
+        │   └── flags: ∅
         ├── @ ArrayNode (location: (61,0)-(61,17))
         │   ├── elements: (length: 3)
         │   │   ├── @ StringNode (location: (61,3)-(61,6))
@@ -285,7 +287,8 @@
         │   │       ├── closing_loc: ∅
         │   │       └── unescaped: "c[]"
         │   ├── opening_loc: (61,0)-(61,3) = "%w["
-        │   └── closing_loc: (61,16)-(61,17) = "]"
+        │   ├── closing_loc: (61,16)-(61,17) = "]"
+        │   └── flags: ∅
         ├── @ ArrayNode (location: (63,0)-(63,18))
         │   ├── elements: (length: 2)
         │   │   ├── @ StringNode (location: (63,3)-(63,11))
@@ -301,7 +304,8 @@
         │   │       ├── closing_loc: ∅
         │   │       └── unescaped: "\\\#{1}"
         │   ├── opening_loc: (63,0)-(63,3) = "%w["
-        │   └── closing_loc: (63,17)-(63,18) = "]"
+        │   ├── closing_loc: (63,17)-(63,18) = "]"
+        │   └── flags: ∅
         ├── @ ArrayNode (location: (65,0)-(65,16))
         │   ├── elements: (length: 2)
         │   │   ├── @ StringNode (location: (65,3)-(65,11))
@@ -317,7 +321,8 @@
         │   │       ├── closing_loc: ∅
         │   │       └── unescaped: "baz"
         │   ├── opening_loc: (65,0)-(65,3) = "%w["
-        │   └── closing_loc: (65,15)-(65,16) = "]"
+        │   ├── closing_loc: (65,15)-(65,16) = "]"
+        │   └── flags: ∅
         ├── @ ArrayNode (location: (67,0)-(67,14))
         │   ├── elements: (length: 3)
         │   │   ├── @ StringNode (location: (67,3)-(67,4))
@@ -343,13 +348,13 @@
         │   │   │   │   │   │       └── @ CallNode (location: (67,8)-(67,9))
         │   │   │   │   │   │           ├── receiver: ∅
         │   │   │   │   │   │           ├── call_operator_loc: ∅
+        │   │   │   │   │   │           ├── name: :c
         │   │   │   │   │   │           ├── message_loc: (67,8)-(67,9) = "c"
         │   │   │   │   │   │           ├── opening_loc: ∅
         │   │   │   │   │   │           ├── arguments: ∅
         │   │   │   │   │   │           ├── closing_loc: ∅
         │   │   │   │   │   │           ├── block: ∅
-        │   │   │   │   │   │           ├── flags: variable_call
-        │   │   │   │   │   │           └── name: :c
+        │   │   │   │   │   │           └── flags: variable_call
         │   │   │   │   │   └── closing_loc: (67,9)-(67,10) = "}"
         │   │   │   │   └── @ StringNode (location: (67,10)-(67,11))
         │   │   │   │       ├── flags: ∅
@@ -365,7 +370,8 @@
         │   │       ├── closing_loc: ∅
         │   │       └── unescaped: "e"
         │   ├── opening_loc: (67,0)-(67,3) = "%W["
-        │   └── closing_loc: (67,13)-(67,14) = "]"
+        │   ├── closing_loc: (67,13)-(67,14) = "]"
+        │   └── flags: ∅
         ├── @ ArrayNode (location: (69,0)-(69,9))
         │   ├── elements: (length: 3)
         │   │   ├── @ StringNode (location: (69,3)-(69,4))
@@ -387,7 +393,8 @@
         │   │       ├── closing_loc: ∅
         │   │       └── unescaped: "c"
         │   ├── opening_loc: (69,0)-(69,3) = "%W["
-        │   └── closing_loc: (69,8)-(69,9) = "]"
+        │   ├── closing_loc: (69,8)-(69,9) = "]"
+        │   └── flags: ∅
         ├── @ ArrayNode (location: (71,0)-(75,1))
         │   ├── elements: (length: 3)
         │   │   ├── @ StringNode (location: (72,2)-(72,3))
@@ -409,7 +416,8 @@
         │   │       ├── closing_loc: ∅
         │   │       └── unescaped: "c"
         │   ├── opening_loc: (71,0)-(71,3) = "%w["
-        │   └── closing_loc: (75,0)-(75,1) = "]"
+        │   ├── closing_loc: (75,0)-(75,1) = "]"
+        │   └── flags: ∅
         ├── @ StringNode (location: (77,0)-(77,15))
         │   ├── flags: ∅
         │   ├── opening_loc: (77,0)-(77,1) = "'"

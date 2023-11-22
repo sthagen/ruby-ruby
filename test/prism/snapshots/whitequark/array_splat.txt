@@ -11,15 +11,16 @@
         │   │           @ CallNode (location: (1,2)-(1,5))
         │   │           ├── receiver: ∅
         │   │           ├── call_operator_loc: ∅
+        │   │           ├── name: :foo
         │   │           ├── message_loc: (1,2)-(1,5) = "foo"
         │   │           ├── opening_loc: ∅
         │   │           ├── arguments: ∅
         │   │           ├── closing_loc: ∅
         │   │           ├── block: ∅
-        │   │           ├── flags: variable_call
-        │   │           └── name: :foo
+        │   │           └── flags: variable_call
         │   ├── opening_loc: (1,0)-(1,1) = "["
-        │   └── closing_loc: (1,5)-(1,6) = "]"
+        │   ├── closing_loc: (1,5)-(1,6) = "]"
+        │   └── flags: contains_splat
         ├── @ ArrayNode (location: (3,0)-(3,12))
         │   ├── elements: (length: 3)
         │   │   ├── @ IntegerNode (location: (3,1)-(3,2))
@@ -30,17 +31,18 @@
         │   │   │       @ CallNode (location: (3,5)-(3,8))
         │   │   │       ├── receiver: ∅
         │   │   │       ├── call_operator_loc: ∅
+        │   │   │       ├── name: :foo
         │   │   │       ├── message_loc: (3,5)-(3,8) = "foo"
         │   │   │       ├── opening_loc: ∅
         │   │   │       ├── arguments: ∅
         │   │   │       ├── closing_loc: ∅
         │   │   │       ├── block: ∅
-        │   │   │       ├── flags: variable_call
-        │   │   │       └── name: :foo
+        │   │   │       └── flags: variable_call
         │   │   └── @ IntegerNode (location: (3,10)-(3,11))
         │   │       └── flags: decimal
         │   ├── opening_loc: (3,0)-(3,1) = "["
-        │   └── closing_loc: (3,11)-(3,12) = "]"
+        │   ├── closing_loc: (3,11)-(3,12) = "]"
+        │   └── flags: contains_splat
         └── @ ArrayNode (location: (5,0)-(5,9))
             ├── elements: (length: 2)
             │   ├── @ IntegerNode (location: (5,1)-(5,2))
@@ -51,12 +53,13 @@
             │           @ CallNode (location: (5,5)-(5,8))
             │           ├── receiver: ∅
             │           ├── call_operator_loc: ∅
+            │           ├── name: :foo
             │           ├── message_loc: (5,5)-(5,8) = "foo"
             │           ├── opening_loc: ∅
             │           ├── arguments: ∅
             │           ├── closing_loc: ∅
             │           ├── block: ∅
-            │           ├── flags: variable_call
-            │           └── name: :foo
+            │           └── flags: variable_call
             ├── opening_loc: (5,0)-(5,1) = "["
-            └── closing_loc: (5,8)-(5,9) = "]"
+            ├── closing_loc: (5,8)-(5,9) = "]"
+            └── flags: contains_splat

@@ -2,7 +2,7 @@
 
 Gem::Specification.new do |spec|
   spec.name = "prism"
-  spec.version = "0.17.1"
+  spec.version = "0.18.0"
   spec.authors = ["Shopify"]
   spec.email = ["ruby@shopify.com"]
 
@@ -29,6 +29,7 @@ Gem::Specification.new do |spec|
     "docs/fuzzing.md",
     "docs/heredocs.md",
     "docs/javascript.md",
+    "docs/local_variable_depth.md",
     "docs/mapping.md",
     "docs/releasing.md",
     "docs/ripper.md",
@@ -86,6 +87,7 @@ Gem::Specification.new do |spec|
     "src/diagnostic.c",
     "src/enc/pm_big5.c",
     "src/enc/pm_cp51932.c",
+    "src/enc/pm_cp949.c",
     "src/enc/pm_euc_jp.c",
     "src/enc/pm_gbk.c",
     "src/enc/pm_shift_jis.c",

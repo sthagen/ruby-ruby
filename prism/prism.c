@@ -1151,6 +1151,10 @@ pm_array_node_elements_append(pm_array_node_t *node, pm_node_t *element) {
     if (PM_NODE_TYPE_P(element, PM_ARRAY_NODE) || PM_NODE_TYPE_P(element, PM_HASH_NODE) || PM_NODE_TYPE_P(element, PM_RANGE_NODE) || (element->flags & PM_NODE_FLAG_STATIC_LITERAL) == 0) {
         node->base.flags &= (pm_node_flags_t) ~PM_NODE_FLAG_STATIC_LITERAL;
     }
+
+    if (PM_NODE_TYPE_P(element, PM_SPLAT_NODE)) {
+        node->base.flags |= PM_ARRAY_NODE_FLAGS_CONTAINS_SPLAT;
+    }
 }
 
 /**
@@ -6161,6 +6165,7 @@ parser_lex_magic_comment_encoding_value(pm_parser_t *parser, const uint8_t *star
                 ENCODING1("CP863", pm_encoding_ibm863);
                 ENCODING2("CP932", "csWindows31J", pm_encoding_windows_31j);
                 ENCODING1("CP936", pm_encoding_gbk);
+                ENCODING1("CP949", pm_encoding_cp949);
                 ENCODING1("CP1250", pm_encoding_windows_1250);
                 ENCODING1("CP1251", pm_encoding_windows_1251);
                 ENCODING1("CP1252", pm_encoding_windows_1252);
@@ -6219,6 +6224,7 @@ parser_lex_magic_comment_encoding_value(pm_parser_t *parser, const uint8_t *star
                 break;
             case 'K': case 'k':
                 ENCODING1("KOI8-R", pm_encoding_koi8_r);
+                ENCODING1("KOI8-U", pm_encoding_koi8_u);
                 break;
             case 'L': case 'l':
                 ENCODING1("locale", pm_encoding_utf_8);
@@ -10196,6 +10202,8 @@ pm_binding_powers_t pm_binding_powers[PM_TOKEN_MAXIMUM] = {
     // .. ...
     [PM_TOKEN_DOT_DOT] = NON_ASSOCIATIVE(PM_BINDING_POWER_RANGE),
     [PM_TOKEN_DOT_DOT_DOT] = NON_ASSOCIATIVE(PM_BINDING_POWER_RANGE),
+    [PM_TOKEN_UDOT_DOT] = RIGHT_ASSOCIATIVE_UNARY(PM_BINDING_POWER_LOGICAL_OR),
+    [PM_TOKEN_UDOT_DOT_DOT] = RIGHT_ASSOCIATIVE_UNARY(PM_BINDING_POWER_LOGICAL_OR),
 
     // ||
     [PM_TOKEN_PIPE_PIPE] = LEFT_ASSOCIATIVE(PM_BINDING_POWER_LOGICAL_OR),
@@ -11144,7 +11152,7 @@ parse_arguments(pm_parser_t *parser, pm_arguments_t *arguments, bool accepts_for
                 parsed_bare_hash = true;
                 parse_arguments_append(parser, arguments, argument);
                 if (contains_keyword_splat) {
-                    arguments->arguments->base.flags |= PM_ARGUMENTS_NODE_FLAGS_KEYWORD_SPLAT;
+                    arguments->arguments->base.flags |= PM_ARGUMENTS_NODE_FLAGS_CONTAINS_KEYWORD_SPLAT;
                 }
                 break;
             }
@@ -11155,8 +11163,14 @@ parse_arguments(pm_parser_t *parser, pm_arguments_t *arguments, bool accepts_for
 
                 if (token_begins_expression_p(parser->current.type)) {
                     expression = parse_value_expression(parser, PM_BINDING_POWER_DEFINED, PM_ERR_EXPECT_ARGUMENT);
-                } else if (pm_parser_local_depth(parser, &operator) == -1) {
-                    pm_parser_err_token(parser, &operator, PM_ERR_ARGUMENT_NO_FORWARDING_AMP);
+                } else {
+                    if (pm_parser_local_depth(parser, &operator) == -1) {
+                        // A block forwarding in a method having `...` parameter (e.g. `def foo(...); bar(&); end`) is available.
+                        pm_constant_id_t ellipsis_id = pm_parser_constant_id_constant(parser, "...", 3);
+                        if (pm_parser_local_depth_constant_id(parser, ellipsis_id) == -1) {
+                            pm_parser_err_token(parser, &operator, PM_ERR_ARGUMENT_NO_FORWARDING_AMP);
+                        }
+                    }
                 }
 
                 argument = (pm_node_t *) pm_block_argument_node_create(parser, &operator, expression);
@@ -11258,7 +11272,7 @@ parse_arguments(pm_parser_t *parser, pm_arguments_t *arguments, bool accepts_for
 
                 parse_arguments_append(parser, arguments, argument);
                 if (contains_keyword_splat) {
-                    arguments->arguments->base.flags |= PM_ARGUMENTS_NODE_FLAGS_KEYWORD_SPLAT;
+                    arguments->arguments->base.flags |= PM_ARGUMENTS_NODE_FLAGS_CONTAINS_KEYWORD_SPLAT;
                 }
                 break;
             }
@@ -13944,7 +13958,7 @@ parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power) {
             pm_token_t operator = parser->current;
             parser_lex(parser);
 
-            pm_node_t *right = parse_expression(parser, binding_power, PM_ERR_EXPECT_EXPRESSION_AFTER_OPERATOR);
+            pm_node_t *right = parse_expression(parser, pm_binding_powers[operator.type].left, PM_ERR_EXPECT_EXPRESSION_AFTER_OPERATOR);
             return (pm_node_t *) pm_range_node_create(parser, NULL, &operator, right);
         }
         case PM_TOKEN_FLOAT:
@@ -14202,6 +14216,10 @@ parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power) {
             parser_lex(parser);
             return (pm_node_t *) pm_source_line_node_create(parser, &parser->previous);
         case PM_TOKEN_KEYWORD_ALIAS: {
+            if (binding_power != PM_BINDING_POWER_STATEMENT) {
+                pm_parser_err_current(parser, PM_ERR_STATEMENT_ALIAS);
+            }
+
             parser_lex(parser);
             pm_token_t keyword = parser->previous;
 
@@ -14439,6 +14457,10 @@ parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power) {
             return (pm_node_t *) begin_node;
         }
         case PM_TOKEN_KEYWORD_BEGIN_UPCASE: {
+            if (binding_power != PM_BINDING_POWER_STATEMENT) {
+                pm_parser_err_current(parser, PM_ERR_STATEMENT_PREEXE_BEGIN);
+            }
+
             parser_lex(parser);
             pm_token_t keyword = parser->previous;
 
@@ -14524,7 +14546,7 @@ parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power) {
 
             if (accept1(parser, PM_TOKEN_LESS_LESS)) {
                 pm_token_t operator = parser->previous;
-                pm_node_t *expression = parse_expression(parser, PM_BINDING_POWER_NOT, PM_ERR_EXPECT_EXPRESSION_AFTER_LESS_LESS);
+                pm_node_t *expression = parse_value_expression(parser, PM_BINDING_POWER_NOT, PM_ERR_EXPECT_EXPRESSION_AFTER_LESS_LESS);
 
                 pm_parser_scope_push(parser, true);
                 accept2(parser, PM_TOKEN_NEWLINE, PM_TOKEN_SEMICOLON);
@@ -14889,6 +14911,10 @@ parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power) {
             );
         }
         case PM_TOKEN_KEYWORD_END_UPCASE: {
+            if (binding_power != PM_BINDING_POWER_STATEMENT) {
+                pm_parser_err_current(parser, PM_ERR_STATEMENT_POSTEXE_END);
+            }
+
             parser_lex(parser);
             pm_token_t keyword = parser->previous;
 
@@ -14971,6 +14997,10 @@ parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power) {
             parser_lex(parser);
             return parse_conditional(parser, PM_CONTEXT_IF);
         case PM_TOKEN_KEYWORD_UNDEF: {
+            if (binding_power != PM_BINDING_POWER_STATEMENT) {
+                pm_parser_err_current(parser, PM_ERR_STATEMENT_UNDEF);
+            }
+
             parser_lex(parser);
             pm_undef_node_t *undef = pm_undef_node_create(parser, &parser->previous);
             pm_node_t *name = parse_undef_argument(parser);
@@ -16740,12 +16770,35 @@ parse_expression(pm_parser_t *parser, pm_binding_power_t binding_power, pm_diagn
     pm_token_t recovery = parser->previous;
     pm_node_t *node = parse_expression_prefix(parser, binding_power);
 
-    // If we found a syntax error, then the type of node returned by
-    // parse_expression_prefix is going to be a missing node. In that case we need
-    // to add the error message to the parser's error list.
-    if (PM_NODE_TYPE_P(node, PM_MISSING_NODE)) {
-        pm_parser_err(parser, recovery.end, recovery.end, diag_id);
-        return node;
+    switch (PM_NODE_TYPE(node)) {
+        case PM_MISSING_NODE:
+            // If we found a syntax error, then the type of node returned by
+            // parse_expression_prefix is going to be a missing node. In that
+            // case we need to add the error message to the parser's error list.
+            pm_parser_err(parser, recovery.end, recovery.end, diag_id);
+            return node;
+        case PM_PRE_EXECUTION_NODE:
+        case PM_POST_EXECUTION_NODE:
+        case PM_ALIAS_GLOBAL_VARIABLE_NODE:
+        case PM_ALIAS_METHOD_NODE:
+        case PM_UNDEF_NODE:
+            // These expressions are statements, and cannot be followed by
+            // operators (except modifiers).
+            if (pm_binding_powers[parser->current.type].left > PM_BINDING_POWER_MODIFIER_RESCUE) {
+                return node;
+            }
+            break;
+        case PM_RANGE_NODE:
+            // Range operators are non-associative, so that it does not
+            // associate with other range operators (i.e. `..1..` should be
+            // rejected.) For this reason, we check such a case for unary ranges
+            // here, and if so, it returns the node immediately,
+            if ((((pm_range_node_t *) node)->left == NULL) && pm_binding_powers[parser->current.type].left >= PM_BINDING_POWER_RANGE) {
+                return node;
+            }
+            break;
+        default:
+            break;
     }
 
     // Otherwise we'll look and see if the next token can be parsed as an infix

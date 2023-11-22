@@ -1,8 +1,8 @@
-@ ProgramNode (location: (1,0)-(17,5))
+@ ProgramNode (location: (1,0)-(19,8))
 ├── locals: []
 └── statements:
-    @ StatementsNode (location: (1,0)-(17,5))
-    └── body: (length: 9)
+    @ StatementsNode (location: (1,0)-(19,8))
+    └── body: (length: 10)
         ├── @ ParenthesesNode (location: (1,0)-(1,6))
         │   ├── body:
         │   │   @ StatementsNode (location: (1,1)-(1,5))
@@ -43,14 +43,15 @@
         │   │   @ CallNode (location: (7,0)-(7,3))
         │   │   ├── receiver: ∅
         │   │   ├── call_operator_loc: ∅
+        │   │   ├── name: :foo
         │   │   ├── message_loc: (7,0)-(7,3) = "foo"
         │   │   ├── opening_loc: ∅
         │   │   ├── arguments: ∅
         │   │   ├── closing_loc: ∅
         │   │   ├── block: ∅
-        │   │   ├── flags: variable_call
-        │   │   └── name: :foo
+        │   │   └── flags: variable_call
         │   ├── call_operator_loc: ∅
+        │   ├── name: :[]
         │   ├── message_loc: (7,3)-(7,9) = "[...2]"
         │   ├── opening_loc: (7,3)-(7,4) = "["
         │   ├── arguments:
@@ -66,8 +67,7 @@
         │   │   └── flags: ∅
         │   ├── closing_loc: (7,8)-(7,9) = "]"
         │   ├── block: ∅
-        │   ├── flags: ∅
-        │   └── name: :[]
+        │   └── flags: ∅
         ├── @ HashNode (location: (9,0)-(9,15))
         │   ├── opening_loc: (9,0)-(9,1) = "{"
         │   ├── elements: (length: 1)
@@ -85,13 +85,13 @@
         │   │       │   │   @ CallNode (location: (9,10)-(9,13))
         │   │       │   │   ├── receiver: ∅
         │   │       │   │   ├── call_operator_loc: ∅
+        │   │       │   │   ├── name: :bar
         │   │       │   │   ├── message_loc: (9,10)-(9,13) = "bar"
         │   │       │   │   ├── opening_loc: ∅
         │   │       │   │   ├── arguments: ∅
         │   │       │   │   ├── closing_loc: ∅
         │   │       │   │   ├── block: ∅
-        │   │       │   │   ├── flags: variable_call
-        │   │       │   │   └── name: :bar
+        │   │       │   │   └── flags: variable_call
         │   │       │   ├── operator_loc: (9,7)-(9,10) = "..."
         │   │       │   └── flags: exclude_end
         │   │       └── operator_loc: ∅
@@ -135,27 +135,41 @@
         │   │       │   │   @ CallNode (location: (15,9)-(15,12))
         │   │       │   │   ├── receiver: ∅
         │   │       │   │   ├── call_operator_loc: ∅
+        │   │       │   │   ├── name: :bar
         │   │       │   │   ├── message_loc: (15,9)-(15,12) = "bar"
         │   │       │   │   ├── opening_loc: ∅
         │   │       │   │   ├── arguments: ∅
         │   │       │   │   ├── closing_loc: ∅
         │   │       │   │   ├── block: ∅
-        │   │       │   │   ├── flags: variable_call
-        │   │       │   │   └── name: :bar
+        │   │       │   │   └── flags: variable_call
         │   │       │   ├── operator_loc: (15,7)-(15,9) = ".."
         │   │       │   └── flags: ∅
         │   │       └── operator_loc: ∅
         │   └── closing_loc: (15,13)-(15,14) = "}"
-        └── @ ParenthesesNode (location: (17,0)-(17,5))
-            ├── body:
-            │   @ StatementsNode (location: (17,1)-(17,4))
-            │   └── body: (length: 1)
-            │       └── @ RangeNode (location: (17,1)-(17,4))
-            │           ├── left:
-            │           │   @ IntegerNode (location: (17,1)-(17,2))
-            │           │   └── flags: decimal
-            │           ├── right: ∅
-            │           ├── operator_loc: (17,2)-(17,4) = ".."
-            │           └── flags: ∅
-            ├── opening_loc: (17,0)-(17,1) = "("
-            └── closing_loc: (17,4)-(17,5) = ")"
+        ├── @ ParenthesesNode (location: (17,0)-(17,5))
+        │   ├── body:
+        │   │   @ StatementsNode (location: (17,1)-(17,4))
+        │   │   └── body: (length: 1)
+        │   │       └── @ RangeNode (location: (17,1)-(17,4))
+        │   │           ├── left:
+        │   │           │   @ IntegerNode (location: (17,1)-(17,2))
+        │   │           │   └── flags: decimal
+        │   │           ├── right: ∅
+        │   │           ├── operator_loc: (17,2)-(17,4) = ".."
+        │   │           └── flags: ∅
+        │   ├── opening_loc: (17,0)-(17,1) = "("
+        │   └── closing_loc: (17,4)-(17,5) = ")"
+        └── @ RangeNode (location: (19,0)-(19,8))
+            ├── left:
+            │   @ IntegerNode (location: (19,0)-(19,1))
+            │   └── flags: decimal
+            ├── right:
+            │   @ RangeNode (location: (19,5)-(19,8))
+            │   ├── left: ∅
+            │   ├── right:
+            │   │   @ IntegerNode (location: (19,7)-(19,8))
+            │   │   └── flags: decimal
+            │   ├── operator_loc: (19,5)-(19,7) = ".."
+            │   └── flags: ∅
+            ├── operator_loc: (19,2)-(19,4) = ".."
+            └── flags: ∅

@@ -6,6 +6,7 @@
         └── @ CallNode (location: (1,0)-(1,9))
             ├── receiver: ∅
             ├── call_operator_loc: ∅
+            ├── name: :m
             ├── message_loc: (1,0)-(1,1) = "m"
             ├── opening_loc: ∅
             ├── arguments:
@@ -22,11 +23,11 @@
             │   │       │       │       └── @ ArrayNode (location: (1,5)-(1,7))
             │   │       │       │           ├── elements: (length: 0)
             │   │       │       │           ├── opening_loc: (1,5)-(1,6) = "["
-            │   │       │       │           └── closing_loc: (1,6)-(1,7) = "]"
+            │   │       │       │           ├── closing_loc: (1,6)-(1,7) = "]"
+            │   │       │       │           └── flags: ∅
             │   │       │       └── closing_loc: (1,7)-(1,8) = "}"
             │   │       └── closing_loc: (1,8)-(1,9) = "\""
             │   └── flags: ∅
             ├── closing_loc: ∅
             ├── block: ∅
-            ├── flags: ∅
-            └── name: :m
+            └── flags: ∅

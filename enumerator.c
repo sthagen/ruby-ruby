@@ -1293,23 +1293,15 @@ yielder_compact(void *p)
     ptr->proc = rb_gc_location(ptr->proc);
 }
 
-#define yielder_free RUBY_TYPED_DEFAULT_FREE
-
-static size_t
-yielder_memsize(const void *p)
-{
-    return sizeof(struct yielder);
-}
-
 static const rb_data_type_t yielder_data_type = {
     "yielder",
     {
         yielder_mark,
-        yielder_free,
-        yielder_memsize,
+        RUBY_TYPED_DEFAULT_FREE,
+        NULL,
         yielder_compact,
     },
-    0, 0, RUBY_TYPED_FREE_IMMEDIATELY
+    0, 0, RUBY_TYPED_FREE_IMMEDIATELY | RUBY_TYPED_EMBEDDABLE
 };
 
 static struct yielder *
@@ -1433,23 +1425,15 @@ generator_compact(void *p)
     ptr->obj = rb_gc_location(ptr->obj);
 }
 
-#define generator_free RUBY_TYPED_DEFAULT_FREE
-
-static size_t
-generator_memsize(const void *p)
-{
-    return sizeof(struct generator);
-}
-
 static const rb_data_type_t generator_data_type = {
     "generator",
     {
         generator_mark,
-        generator_free,
-        generator_memsize,
+        RUBY_TYPED_DEFAULT_FREE,
+        NULL,
         generator_compact,
     },
-    0, 0, RUBY_TYPED_FREE_IMMEDIATELY
+    0, 0, RUBY_TYPED_FREE_IMMEDIATELY | RUBY_TYPED_EMBEDDABLE
 };
 
 static struct generator *
@@ -2958,7 +2942,7 @@ static const rb_data_type_t producer_data_type = {
         producer_memsize,
         producer_compact,
     },
-    0, 0, RUBY_TYPED_FREE_IMMEDIATELY
+    0, 0, RUBY_TYPED_FREE_IMMEDIATELY | RUBY_TYPED_EMBEDDABLE
 };
 
 static struct producer *

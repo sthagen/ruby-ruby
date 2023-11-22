@@ -36,6 +36,7 @@
                     └── @ CallNode (location: (1,15)-(1,23))
                         ├── receiver: ∅
                         ├── call_operator_loc: ∅
+                        ├── name: :p
                         ├── message_loc: (1,15)-(1,16) = "p"
                         ├── opening_loc: ∅
                         ├── arguments:
@@ -50,9 +51,9 @@
                         │   │       │       ├── name: :b
                         │   │       │       └── depth: 0
                         │   │       ├── opening_loc: (1,17)-(1,18) = "["
-                        │   │       └── closing_loc: (1,22)-(1,23) = "]"
+                        │   │       ├── closing_loc: (1,22)-(1,23) = "]"
+                        │   │       └── flags: ∅
                         │   └── flags: ∅
                         ├── closing_loc: ∅
                         ├── block: ∅
-                        ├── flags: ∅
-                        └── name: :p
+                        └── flags: ∅
