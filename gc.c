@@ -1302,7 +1302,7 @@ total_freed_objects(rb_objspace_t *objspace)
 }
 
 #define gc_mode(objspace)                gc_mode_verify((enum gc_mode)(objspace)->flags.mode)
-#define gc_mode_set(objspace, mode)      ((objspace)->flags.mode = (unsigned int)gc_mode_verify(mode))
+#define gc_mode_set(objspace, m)         ((objspace)->flags.mode = (unsigned int)gc_mode_verify(m))
 
 #define is_marking(objspace)             (gc_mode(objspace) == gc_mode_marking)
 #define is_sweeping(objspace)            (gc_mode(objspace) == gc_mode_sweeping)
@@ -4511,6 +4511,36 @@ gc_finalize_deferred_register(rb_objspace_t *objspace)
     }
 }
 
+static int pop_mark_stack(mark_stack_t *stack, VALUE *data);
+
+static void
+gc_abort(rb_objspace_t *objspace)
+{
+    if (is_incremental_marking(objspace)) {
+        /* Remove all objects from the mark stack. */
+        VALUE obj;
+        while (pop_mark_stack(&objspace->mark_stack, &obj));
+
+        objspace->flags.during_incremental_marking = FALSE;
+    }
+
+    if (is_lazy_sweeping(objspace)) {
+        for (int i = 0; i < SIZE_POOL_COUNT; i++) {
+            rb_size_pool_t *size_pool = &size_pools[i];
+            rb_heap_t *heap = SIZE_POOL_EDEN_HEAP(size_pool);
+
+            heap->sweeping_page = NULL;
+            struct heap_page *page = NULL;
+
+            ccan_list_for_each(&heap->pages, page, page_node) {
+                page->flags.before_sweep = false;
+            }
+        }
+    }
+
+    gc_mode_set(objspace, gc_mode_none);
+}
+
 struct force_finalize_list {
     VALUE obj;
     VALUE table;
@@ -4539,15 +4569,12 @@ rb_objspace_call_finalizer(rb_objspace_t *objspace)
 #if RGENGC_CHECK_MODE >= 2
     gc_verify_internal_consistency(objspace);
 #endif
-    gc_rest(objspace);
-
     if (ATOMIC_EXCHANGE(finalizing, 1)) return;
 
     /* run finalizers */
     finalize_deferred(objspace);
     GC_ASSERT(heap_pages_deferred_final == 0);
 
-    gc_rest(objspace);
     /* prohibit incremental GC */
     objspace->flags.dont_incremental = 1;
 
@@ -4564,6 +4591,9 @@ rb_objspace_call_finalizer(rb_objspace_t *objspace)
             xfree(curr);
         }
     }
+
+    /* Abort incremental marking and lazy sweeping to speed up shutdown. */
+    gc_abort(objspace);
 
     /* prohibit GC because force T_DATA finalizers can break an object graph consistency */
     dont_gc_on();
@@ -7269,7 +7299,7 @@ gc_mark_children(rb_objspace_t *objspace, VALUE obj)
         mark_cvc_tbl(objspace, obj);
         cc_table_mark(objspace, obj);
         if (rb_shape_obj_too_complex(obj)) {
-            mark_tbl(objspace, (st_table *)RCLASS_IVPTR(obj));
+            mark_tbl_no_pin(objspace, (st_table *)RCLASS_IVPTR(obj));
         }
         else {
             for (attr_index_t i = 0; i < RCLASS_IV_COUNT(obj); i++) {
@@ -10123,13 +10153,15 @@ gc_ref_update_array(rb_objspace_t * objspace, VALUE v)
     }
 }
 
+static void gc_ref_update_table_values_only(rb_objspace_t *objspace, st_table *tbl);
+
 static void
 gc_ref_update_object(rb_objspace_t *objspace, VALUE v)
 {
     VALUE *ptr = ROBJECT_IVPTR(v);
 
     if (rb_shape_obj_too_complex(v)) {
-        rb_gc_update_tbl_refs(ROBJECT_IV_HASH(v));
+        gc_ref_update_table_values_only(objspace, ROBJECT_IV_HASH(v));
         return;
     }
 
@@ -10207,7 +10239,7 @@ hash_foreach_replace_value(st_data_t key, st_data_t value, st_data_t argp, int e
 }
 
 static void
-gc_update_tbl_refs(rb_objspace_t * objspace, st_table *tbl)
+gc_ref_update_table_values_only(rb_objspace_t *objspace, st_table *tbl)
 {
     if (!tbl || tbl->num_entries == 0) return;
 
@@ -10226,7 +10258,7 @@ gc_update_table_refs(rb_objspace_t * objspace, st_table *tbl)
     }
 }
 
-/* Update MOVED references in an st_table */
+/* Update MOVED references in a VALUE=>VALUE st_table */
 void
 rb_gc_update_tbl_refs(st_table *ptr)
 {
@@ -10608,7 +10640,10 @@ gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
         update_cvc_tbl(objspace, obj);
         update_superclasses(objspace, obj);
 
-        if (!rb_shape_obj_too_complex(obj)) {
+        if (rb_shape_obj_too_complex(obj)) {
+            gc_ref_update_table_values_only(objspace, RCLASS_IV_HASH(obj));
+        }
+        else {
             for (attr_index_t i = 0; i < RCLASS_IV_COUNT(obj); i++) {
                 UPDATE_IF_MOVED(objspace, RCLASS_IVPTR(obj)[i]);
             }
@@ -10846,7 +10881,7 @@ gc_update_references(rb_objspace_t *objspace)
     rb_gc_update_global_tbl();
     global_symbols.ids = rb_gc_location(global_symbols.ids);
     global_symbols.dsymbol_fstr_hash = rb_gc_location(global_symbols.dsymbol_fstr_hash);
-    gc_update_tbl_refs(objspace, objspace->obj_to_id_tbl);
+    gc_ref_update_table_values_only(objspace, objspace->obj_to_id_tbl);
     gc_update_table_refs(objspace, objspace->id_to_obj_tbl);
     gc_update_table_refs(objspace, global_symbols.str_sym);
     gc_update_table_refs(objspace, finalizer_table);
@@ -13737,14 +13772,20 @@ rb_raw_obj_info_buitin_type(char *const buff, const size_t buff_size, const VALU
             }
           case T_OBJECT:
             {
-                uint32_t len = ROBJECT_IV_CAPACITY(obj);
-
-                if (RANY(obj)->as.basic.flags & ROBJECT_EMBED) {
-                    APPEND_F("(embed) len:%d", len);
+                if (rb_shape_obj_too_complex(obj)) {
+                    size_t hash_len = rb_st_table_size(ROBJECT_IV_HASH(obj));
+                    APPEND_F("(too_complex) len:%zu", hash_len);
                 }
                 else {
-                    VALUE *ptr = ROBJECT_IVPTR(obj);
-                    APPEND_F("len:%d ptr:%p", len, (void *)ptr);
+                    uint32_t len = ROBJECT_IV_CAPACITY(obj);
+
+                    if (RANY(obj)->as.basic.flags & ROBJECT_EMBED) {
+                        APPEND_F("(embed) len:%d", len);
+                    }
+                    else {
+                        VALUE *ptr = ROBJECT_IVPTR(obj);
+                        APPEND_F("len:%d ptr:%p", len, (void *)ptr);
+                    }
                 }
             }
             break;
