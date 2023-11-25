@@ -312,6 +312,8 @@ class Resolv
     # String:: Path to a file using /etc/resolv.conf's format.
     # Hash:: Must contain :nameserver, :search and :ndots keys.
     # :nameserver_port can be used to specify port number of nameserver address.
+    # :raise_timeout_errors can be used to raise timeout errors
+    # as exceptions instead of treating the same as an NXDOMAIN response.
     #
     # The value of :nameserver should be an address string or
     # an array of address strings.
@@ -1032,6 +1034,7 @@ class Resolv
             end
             @search = config_hash[:search] if config_hash.include? :search
             @ndots = config_hash[:ndots] if config_hash.include? :ndots
+            @raise_timeout_errors = config_hash[:raise_timeout_errors]
 
             if @nameserver_port.empty?
               @nameserver_port << ['0.0.0.0', Port]
@@ -1118,6 +1121,7 @@ class Resolv
       def resolv(name)
         candidates = generate_candidates(name)
         timeouts = @timeouts || generate_timeouts
+        timeout_error = false
         begin
           candidates.each {|candidate|
             begin
@@ -1129,11 +1133,13 @@ class Resolv
                   end
                 }
               }
+              timeout_error = true
               raise ResolvError.new("DNS resolv timeout: #{name}")
             rescue NXDomain
             end
           }
         rescue ResolvError
+          raise if @raise_timeout_errors && timeout_error
         end
       end
 
@@ -1520,13 +1526,15 @@ class Resolv
           id, flag, qdcount, ancount, nscount, arcount =
             msg.get_unpack('nnnnnn')
           o.id = id
+          o.tc = (flag >> 9) & 1
+          o.rcode = flag & 15
+          return o unless o.tc.zero?
+
           o.qr = (flag >> 15) & 1
           o.opcode = (flag >> 11) & 15
           o.aa = (flag >> 10) & 1
-          o.tc = (flag >> 9) & 1
           o.rd = (flag >> 8) & 1
           o.ra = (flag >> 7) & 1
-          o.rcode = flag & 15
           (1..qdcount).each {
             name, typeclass = msg.get_question
             o.add_question(name, typeclass)

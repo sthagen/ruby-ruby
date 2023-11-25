@@ -7216,12 +7216,13 @@ gc_mark_imemo(rb_objspace_t *objspace, VALUE obj)
          * - On the multi-Ractors, cme will be collected with global GC
          *   so that it is safe if GC is not interleaving while accessing
          *   cc and cme.
-         * - However, cc_type_super is not chained from cc so the cc->cme
-         *   should be marked.
+         * - However, cc_type_super and cc_type_refinement are not chained
+         *   from ccs so cc->cme should be marked; the cme might be
+         *   reachable only through cc in these cases.
          */
         {
             const struct rb_callcache *cc = (const struct rb_callcache *)obj;
-            if (vm_cc_super_p(cc)) {
+            if (vm_cc_super_p(cc) || vm_cc_refinement_p(cc)) {
                 gc_mark(objspace, (VALUE)cc->cme_);
             }
         }
@@ -7254,7 +7255,7 @@ gc_mark_children(rb_objspace_t *objspace, VALUE obj)
     gc_mark_set_parent(objspace, obj);
 
     if (FL_TEST(obj, FL_EXIVAR)) {
-        rb_mark_and_update_generic_ivar(obj);
+        rb_mark_generic_ivar(obj);
     }
 
     switch (BUILTIN_TYPE(obj)) {
@@ -10248,6 +10249,12 @@ gc_ref_update_table_values_only(rb_objspace_t *objspace, st_table *tbl)
     }
 }
 
+void
+rb_gc_ref_update_table_values_only(st_table *tbl)
+{
+    gc_ref_update_table_values_only(&rb_objspace, tbl);
+}
+
 static void
 gc_update_table_refs(rb_objspace_t * objspace, st_table *tbl)
 {
@@ -10622,7 +10629,7 @@ gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
     gc_report(4, objspace, "update-refs: %p ->\n", (void *)obj);
 
     if (FL_TEST(obj, FL_EXIVAR)) {
-        rb_mark_and_update_generic_ivar(obj);
+        rb_ref_update_generic_ivar(obj);
     }
 
     switch (BUILTIN_TYPE(obj)) {
