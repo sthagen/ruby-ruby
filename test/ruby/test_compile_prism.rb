@@ -488,6 +488,13 @@ module Prism
       assert_prism_eval("[1, 2, 3]")
       assert_prism_eval("%i[foo bar baz]")
       assert_prism_eval("%w[foo bar baz]")
+      assert_prism_eval("[*1..2]")
+      assert_prism_eval("[*1..2, 3, 4, *5..6, 7, 8]")
+      assert_prism_eval("[*1..2, 3, 4, *5..6, 7, 8, *9..11]")
+      assert_prism_eval("[0, *1..2, 3, 4, *5..6, 7, 8, *9..11]")
+      assert_prism_eval("[-1, true, 0, *1..2, 3, 4, *5..6, 7, 8, *9..11]")
+      assert_prism_eval("a = [1,2]; [0, *a, 3, 4, *5..6, 7, 8, *9..11]")
+      assert_prism_eval("[[*1..2], 3, *4..5]")
     end
 
     def test_AssocNode
@@ -804,6 +811,15 @@ module Prism
 
       # with arguments and popped
       assert_prism_eval("eval '1'; 1")
+
+      # With different types of calling arguments
+      assert_prism_eval(<<-CODE)
+        def self.prism_test_call_node(**); end
+        prism_test_call_node(b: 1, **{})
+      CODE
+      assert_prism_eval(<<-CODE)
+        prism_test_call_node(:b => 1)
+      CODE
     end
 
     def test_CallAndWriteNode

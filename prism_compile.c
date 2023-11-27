@@ -1354,8 +1354,8 @@ pm_setup_args(pm_arguments_node_t *arguments_node, int *flags, struct rb_callinf
                             case PM_ASSOC_NODE: {
                                 pm_assoc_node_t *assoc = (pm_assoc_node_t *)cur_node;
 
-                                PM_COMPILE(assoc->key);
-                                PM_COMPILE(assoc->value);
+                                PM_COMPILE_NOT_POPPED(assoc->key);
+                                PM_COMPILE_NOT_POPPED(assoc->value);
                                 cur_hash_size++;
 
                                 // If we're at the last keyword arg, or the last assoc node of this "set",
@@ -1386,7 +1386,7 @@ pm_setup_args(pm_arguments_node_t *arguments_node, int *flags, struct rb_callinf
                                 }
 
                                 pm_assoc_splat_node_t *assoc_splat = (pm_assoc_splat_node_t *)cur_node;
-                                PM_COMPILE(assoc_splat->value);
+                                PM_COMPILE_NOT_POPPED(assoc_splat->value);
 
                                 *flags |= VM_CALL_KW_SPLAT | VM_CALL_KW_SPLAT_MUT;
 
@@ -1411,14 +1411,14 @@ pm_setup_args(pm_arguments_node_t *arguments_node, int *flags, struct rb_callinf
                   }
                   else {
                       *kw_arg = rb_xmalloc_mul_add(len, sizeof(VALUE), sizeof(struct rb_callinfo_kwarg));
-                      *flags |= VM_CALL_KWARG;
-                      (*kw_arg)->keyword_len += len;
+                      *flags = VM_CALL_KWARG;
+                      (*kw_arg)->keyword_len = (int) len;
 
                       // TODO: Method callers like `foo(a => b)`
                       for (size_t i = 0; i < len; i++) {
                           pm_assoc_node_t *assoc = (pm_assoc_node_t *)keyword_arg->elements.nodes[i];
                           (*kw_arg)->keywords[i] = pm_static_literal_value(assoc->key, scope_node, parser);
-                          PM_COMPILE(assoc->value);
+                          PM_COMPILE_NOT_POPPED(assoc->value);
                       }
                   }
                   break;
@@ -1575,15 +1575,78 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
             pm_array_node_t *cast = (pm_array_node_t *) node;
             pm_node_list_t *elements = &cast->elements;
 
-            for (size_t index = 0; index < elements->size; index++) {
-                PM_COMPILE(elements->nodes[index]);
-            }
+            // In the case that there is a splat node within the array,
+            // the array gets compiled slightly differently.
+            if (node->flags & PM_ARRAY_NODE_FLAGS_CONTAINS_SPLAT) {
+                if (elements->size == 1) {
+                    // If the only nodes is a SplatNode, we never
+                    // need to emit the newarray or concatarray
+                    // instructions
+                    PM_COMPILE_NOT_POPPED(elements->nodes[0]);
+                }
+                else {
+                    // We treat all sequences of non-splat elements as their
+                    // own arrays, followed by a newarray, and then continually
+                    // concat the arrays with the SplatNodes
+                    int new_array_size = 0;
+                    bool need_to_concat_array = false;
+                    for (size_t index = 0; index < elements->size; index++) {
+                        pm_node_t *array_element = elements->nodes[index];
+                        if (PM_NODE_TYPE_P(array_element, PM_SPLAT_NODE)) {
+                            pm_splat_node_t *splat_element = (pm_splat_node_t *)array_element;
 
-            if (!popped) {
-                ADD_INSN1(ret, &dummy_line_node, newarray, INT2FIX(elements->size));
+                            // If we already have non-splat elements, we need to emit a newarray
+                            // instruction
+                            if (new_array_size) {
+                                ADD_INSN1(ret, &dummy_line_node, newarray, INT2FIX(new_array_size));
+
+                                // We don't want to emit a concat array in the case where
+                                // we're seeing our first splat, and already have elements
+                                if (need_to_concat_array) {
+                                    ADD_INSN(ret, &dummy_line_node, concatarray);
+                                }
+
+                                new_array_size = 0;
+                            }
+
+                            PM_COMPILE_NOT_POPPED(splat_element->expression);
+
+                            if (index > 0) {
+                                ADD_INSN(ret, &dummy_line_node, concatarray);
+                            }
+                            else {
+                                // If this is the first element, we need to splatarray
+                                ADD_INSN1(ret, &dummy_line_node, splatarray, Qtrue);
+                            }
+
+                            need_to_concat_array = true;
+                        }
+                        else {
+                            new_array_size++;
+                            PM_COMPILE_NOT_POPPED(array_element);
+                        }
+                    }
+
+                    if (new_array_size) {
+                        ADD_INSN1(ret, &dummy_line_node, newarray, INT2FIX(new_array_size));
+                        if (need_to_concat_array) {
+                            ADD_INSN(ret, &dummy_line_node, concatarray);
+                        }
+                    }
+                }
+
+                PM_POP_IF_POPPED;
+            }
+            else {
+                for (size_t index = 0; index < elements->size; index++) {
+                    PM_COMPILE(elements->nodes[index]);
+                }
+
+                if (!popped) {
+                    ADD_INSN1(ret, &dummy_line_node, newarray, INT2FIX(elements->size));
+                }
             }
         }
-
         return;
       }
       case PM_ASSOC_NODE: {

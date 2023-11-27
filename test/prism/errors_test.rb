@@ -1256,6 +1256,33 @@ module Prism
       ]
     end
 
+    def test_index_call_with_block_and_write
+      source = "foo[1] {} &&= 1"
+      assert_errors expression(source), source, [
+        ["Unexpected write target", 0..9],
+        ["Unexpected operator after a call with arguments", 10..13],
+        ["Unexpected operator after a call with a block", 10..13]
+      ]
+    end
+
+    def test_index_call_with_block_or_write
+      source = "foo[1] {} ||= 1"
+      assert_errors expression(source), source, [
+        ["Unexpected write target", 0..9],
+        ["Unexpected operator after a call with arguments", 10..13],
+        ["Unexpected operator after a call with a block", 10..13]
+      ]
+    end
+
+    def test_index_call_with_block_operator_write
+      source = "foo[1] {} += 1"
+      assert_errors expression(source), source, [
+        ["Unexpected write target", 0..9],
+        ["Unexpected operator after a call with arguments", 10..12],
+        ["Unexpected operator after a call with a block", 10..12]
+      ]
+    end
+
     def test_writing_numbered_parameter
       assert_errors expression("-> { _1 = 0 }"), "-> { _1 = 0 }", [
         ["_1 is reserved for a numbered parameter", 5..7]
@@ -1627,6 +1654,7 @@ module Prism
         (return).(1)
         (return)[1]
         (return)[1] = 2
+        (return)::foo
       RUBY
       message = 'Unexpected void value expression'
       assert_errors expression(source), source, [
@@ -1634,6 +1662,19 @@ module Prism
         [message, 14..20],
         [message, 27..33],
         [message, 39..45],
+        [message, 55..61],
+      ], compare_ripper: false # Ripper does not check 'void value expression'.
+    end
+
+    def test_void_value_expression_in_constant_path
+      source = <<~RUBY
+        (return)::A
+        class (return)::A; end
+      RUBY
+      message = 'Unexpected void value expression'
+      assert_errors expression(source), source, [
+        [message, 1..7],
+        [message, 19..25],
       ], compare_ripper: false # Ripper does not check 'void value expression'.
     end
 
