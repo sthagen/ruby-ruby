@@ -245,13 +245,13 @@ impl JITState {
     fn perf_symbol_range_start(&self, asm: &mut Assembler, symbol_name: &str) {
         let symbol_name = symbol_name.to_string();
         let syms = self.perf_map.clone();
-        asm.pos_marker(move |start| syms.borrow_mut().push((start, None, symbol_name.clone())));
+        asm.pos_marker(move |start, _| syms.borrow_mut().push((start, None, symbol_name.clone())));
     }
 
     /// Mark the end address of a symbol to be reported to perf
     fn perf_symbol_range_end(&self, asm: &mut Assembler) {
         let syms = self.perf_map.clone();
-        asm.pos_marker(move |end| {
+        asm.pos_marker(move |end, _| {
             if let Some((_, ref mut end_store, _)) = syms.borrow_mut().last_mut() {
                 assert_eq!(None, *end_store);
                 *end_store = Some(end);
@@ -362,9 +362,13 @@ fn jit_prepare_routine_call(
 /// Record the current codeblock write position for rewriting into a jump into
 /// the outlined block later. Used to implement global code invalidation.
 fn record_global_inval_patch(asm: &mut Assembler, outline_block_target_pos: CodePtr) {
+    // We add a padding before pos_marker so that the previous patch will not overlap this.
+    // jump_to_next_insn() puts a patch point at the end of the block in fallthrough cases.
+    // In the fallthrough case, the next block should start with the same Context, so the
+    // patch is fine, but it should not overlap another patch.
     asm.pad_inval_patch();
-    asm.pos_marker(move |code_ptr| {
-        CodegenGlobals::push_global_inval_patch(code_ptr, outline_block_target_pos);
+    asm.pos_marker(move |code_ptr, cb| {
+        CodegenGlobals::push_global_inval_patch(code_ptr, outline_block_target_pos, cb);
     });
 }
 
@@ -5398,6 +5402,7 @@ fn gen_send_cfunc(
         return None;
     }
 
+    // Increment total cfunc send count
     gen_counter_incr(asm, Counter::num_send_cfunc);
 
     // Delegate to codegen for C methods if we have it.
@@ -5414,6 +5419,32 @@ fn gen_send_cfunc(
                 return Some(EndBlock);
             }
         }
+    }
+
+    // Log the name of the method we're calling to,
+    // note that we intentionally don't do this for inlined cfuncs
+    if get_option!(gen_stats) {
+        // TODO: extract code to get method name string into its own function
+
+        // Assemble the method name string
+        let mid = unsafe { vm_ci_mid(ci) };
+        let class_name = if recv_known_klass != ptr::null() {
+            unsafe { cstr_to_rust_string(rb_class2name(*recv_known_klass)) }.unwrap()
+        } else {
+            "Unknown".to_string()
+        };
+        let method_name = if mid != 0 {
+            unsafe { cstr_to_rust_string(rb_id2name(mid)) }.unwrap()
+        } else {
+            "Unknown".to_string()
+        };
+        let name_str = format!("{}#{}", class_name, method_name);
+
+        // Get an index for this cfunc name
+        let cfunc_idx = get_cfunc_idx(&name_str);
+
+        // Increment the counter for this cfunc
+        asm.ccall(incr_cfunc_counter as *const u8, vec![cfunc_idx.into()]);
     }
 
     // Check for interrupts
@@ -8960,10 +8991,18 @@ impl CodegenGlobals {
         CodegenGlobals::get_instance().stub_exit_code
     }
 
-    pub fn push_global_inval_patch(i_pos: CodePtr, o_pos: CodePtr) {
+    pub fn push_global_inval_patch(inline_pos: CodePtr, outlined_pos: CodePtr, cb: &CodeBlock) {
+        if let Some(last_patch) = CodegenGlobals::get_instance().global_inval_patches.last() {
+            let patch_offset = inline_pos.as_offset() - last_patch.inline_patch_pos.as_offset();
+            assert!(
+                patch_offset < 0 || cb.jmp_ptr_bytes() as i64 <= patch_offset,
+                "patches should not overlap (patch_offset: {patch_offset})",
+            );
+        }
+
         let patch = CodepagePatch {
-            inline_patch_pos: i_pos,
-            outlined_target_pos: o_pos,
+            inline_patch_pos: inline_pos,
+            outlined_target_pos: outlined_pos,
         };
         CodegenGlobals::get_instance()
             .global_inval_patches

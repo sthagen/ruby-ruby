@@ -5908,6 +5908,19 @@ char_is_identifier_start(pm_parser_t *parser, const uint8_t *b) {
 }
 
 /**
+ * Similar to char_is_identifier but this function assumes that the encoding
+ * has not been changed.
+ */
+static inline size_t
+char_is_identifier_utf8(const uint8_t *b, const uint8_t *end) {
+    if (*b < 0x80) {
+        return (*b == '_') || (pm_encoding_unicode_table[*b] & PRISM_ENCODING_ALPHANUMERIC_BIT ? 1 : 0);
+    } else {
+        return (size_t) (pm_encoding_utf_8_alnum_char(b, end - b) || 1u);
+    }
+}
+
+/**
  * Like the above, this function is also used extremely frequently to lex all of
  * the identifiers in a source file once the first character has been found. So
  * it's important that it be as fast as possible.
@@ -5925,11 +5938,8 @@ char_is_identifier(pm_parser_t *parser, const uint8_t *b) {
         } else {
             return 0;
         }
-    } else if (*b < 0x80) {
-        return (pm_encoding_unicode_table[*b] & PRISM_ENCODING_ALPHANUMERIC_BIT ? 1 : 0) || (*b == '_');
-    } else {
-        return (size_t) (pm_encoding_utf_8_alnum_char(b, parser->end - b) || 1u);
     }
+    return char_is_identifier_utf8(b, parser->end);
 }
 
 // Here we're defining a perfect hash for the characters that are allowed in
@@ -7003,9 +7013,16 @@ lex_identifier(pm_parser_t *parser, bool previous_command_start) {
     const uint8_t *end = parser->end;
     const uint8_t *current_start = parser->current.start;
     const uint8_t *current_end = parser->current.end;
+    bool encoding_changed = parser->encoding_changed;
 
-    while (current_end < end && (width = char_is_identifier(parser, current_end)) > 0) {
-        current_end += width;
+    if (encoding_changed) {
+        while (current_end < end && (width = char_is_identifier(parser, current_end)) > 0) {
+            current_end += width;
+        }
+    } else {
+        while (current_end < end && (width = char_is_identifier_utf8(current_end, end)) > 0) {
+            current_end += width;
+        }
     }
     parser->current.end = current_end;
 
@@ -7123,7 +7140,7 @@ lex_identifier(pm_parser_t *parser, bool previous_command_start) {
         }
     }
 
-    if (parser->encoding_changed) {
+    if (encoding_changed) {
         return parser->encoding.isupper_char(current_start, end - current_start) ? PM_TOKEN_CONSTANT : PM_TOKEN_IDENTIFIER;
     }
     return pm_encoding_utf_8_isupper_char(current_start, end - current_start) ? PM_TOKEN_CONSTANT : PM_TOKEN_IDENTIFIER;
@@ -9231,8 +9248,8 @@ parser_lex(pm_parser_t *parser) {
                         parser->current.type = PM_TOKEN___END__;
                         parser_lex_callback(parser);
 
-                        pm_comment_t *comment = parser_comment(parser, PM_COMMENT___END__);
-                        pm_list_append(&parser->comment_list, (pm_list_node_t *) comment);
+                        parser->data_loc.start = parser->current.start;
+                        parser->data_loc.end = parser->current.end;
 
                         LEX(PM_TOKEN_EOF);
                     }
@@ -10316,6 +10333,14 @@ match3(const pm_parser_t *parser, pm_token_type_t type1, pm_token_type_t type2, 
 }
 
 /**
+ * Returns true if the current token is any of the four given types.
+ */
+static inline bool
+match4(const pm_parser_t *parser, pm_token_type_t type1, pm_token_type_t type2, pm_token_type_t type3, pm_token_type_t type4) {
+    return match1(parser, type1) || match1(parser, type2) || match1(parser, type3) || match1(parser, type4);
+}
+
+/**
  * Returns true if the current token is any of the five given types.
  */
 static inline bool
@@ -11199,7 +11224,7 @@ parse_arguments(pm_parser_t *parser, pm_arguments_t *arguments, bool accepts_for
                 parser_lex(parser);
                 pm_token_t operator = parser->previous;
 
-                if (match3(parser, PM_TOKEN_PARENTHESIS_RIGHT, PM_TOKEN_COMMA, PM_TOKEN_SEMICOLON)) {
+                if (match4(parser, PM_TOKEN_PARENTHESIS_RIGHT, PM_TOKEN_COMMA, PM_TOKEN_SEMICOLON, PM_TOKEN_BRACKET_RIGHT)) {
                     if (pm_parser_local_depth(parser, &parser->previous) == -1) {
                         pm_parser_err_token(parser, &operator, PM_ERR_ARGUMENT_NO_FORWARDING_STAR);
                     }
