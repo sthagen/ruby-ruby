@@ -69,8 +69,10 @@ module Prism
       Encoding::Big5_HKSCS =>   0x00...0x10000,
       Encoding::Big5_UAO =>     0x00...0x10000,
       Encoding::CP949 =>        0x00...0x10000,
+      Encoding::CP950 =>        0x00...0x10000,
       Encoding::CP51932 =>      0x00...0x10000,
       Encoding::GBK =>          0x00...0x10000,
+      Encoding::MACJAPANESE =>  0x00...0x10000,
       Encoding::Shift_JIS =>    0x00...0x10000,
       Encoding::Windows_31J =>  0x00...0x10000
     }

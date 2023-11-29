@@ -388,24 +388,20 @@ module Prism
     end
 
     def test_ConstantPathTargetNode
-      verbose = $VERBOSE
-      # Create some temporary nested constants
-      Object.send(:const_set, "MyFoo", Object)
-      Object.const_get("MyFoo").send(:const_set, "Bar", Object)
+      assert_separately([], <<~'RUBY')
+        verbose = $VERBOSE
+        # Create some temporary nested constants
+        Object.send(:const_set, "MyFoo", Object)
+        Object.const_get("MyFoo").send(:const_set, "Bar", Object)
 
-      constant_names = ["MyBar", "MyFoo::Bar", "MyFoo::Bar::Baz"]
-      source = "#{constant_names.join(",")} = Object"
-      iseq = RubyVM::InstructionSequence.compile_prism(source)
-      $VERBOSE = nil
-      prism_eval = iseq.eval
-      $VERBOSE = verbose
-      assert_equal prism_eval, Object
-    ensure
-      ## Teardown temp constants
-      Object.const_get("MyFoo").send(:remove_const, "Bar")
-      Object.send(:remove_const, "MyFoo")
-      Object.send(:remove_const, "MyBar")
-      $VERBOSE = verbose
+        constant_names = ["MyBar", "MyFoo::Bar", "MyFoo::Bar::Baz"]
+        source = "#{constant_names.join(",")} = Object"
+        iseq = RubyVM::InstructionSequence.compile_prism(source)
+        $VERBOSE = nil
+        prism_eval = iseq.eval
+        $VERBOSE = verbose
+        assert_equal prism_eval, Object
+      RUBY
     end
 
     def test_GlobalVariableTargetNode
@@ -600,7 +596,17 @@ module Prism
     end
 
     def test_SplatNode
-      assert_prism_eval("*b = []")
+      assert_prism_eval("*b = []; b")
+      assert_prism_eval("*b = [1, 2, 3]; b")
+      assert_prism_eval("a, *b = [1, 2, 3]; a")
+      assert_prism_eval("a, *b = [1, 2, 3]; b")
+      assert_prism_eval("a, *b, c = [1, 2, 3]; a")
+      assert_prism_eval("a, *b, c = [1, 2, 3]; b")
+      assert_prism_eval("a, *b, c = [1, 2, 3]; c")
+      assert_prism_eval("*b, c = [1, 2, 3]; b")
+      assert_prism_eval("*b, c = [1, 2, 3]; c")
+      assert_prism_eval("a, *, c = [1, 2, 3]; a")
+      assert_prism_eval("a, *, c = [1, 2, 3]; c")
     end
 
     ############################################################################
@@ -750,6 +756,7 @@ module Prism
       assert_prism_eval("def self.prism_test_def_node() 1 end; prism_test_def_node()")
       assert_prism_eval("def self.prism_test_def_node(a,b) [a, b] end; prism_test_def_node(1,2)")
       assert_prism_eval("def self.prism_test_def_node(a,x=7,y=1) x end; prism_test_def_node(7,1)")
+      assert_prism_eval("def self.prism_test_def_node(a = 1); x = 2; end; prism_test_def_node")
 
       # rest argument
       assert_prism_eval("def self.prism_test_def_node(*a) a end; prism_test_def_node().inspect")
@@ -845,6 +852,7 @@ module Prism
     def test_YieldNode
       assert_prism_eval("def prism_test_yield_node; yield; end")
       assert_prism_eval("def prism_test_yield_node; yield 1, 2; end")
+      assert_prism_eval("def prism_test_yield_node; yield **kw if condition; end")
 
       # Test case where there's a call directly after the yield call
       assert_prism_eval("def prism_test_yield_node; yield; 1; end")

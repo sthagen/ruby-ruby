@@ -297,6 +297,9 @@ typedef enum {
     /** an ensure statement */
     PM_CONTEXT_ENSURE,
 
+    /** an ensure statement within a method definition */
+    PM_CONTEXT_ENSURE_DEF,
+
     /** a for loop */
     PM_CONTEXT_FOR,
 
@@ -333,8 +336,14 @@ typedef enum {
     /** a rescue else statement */
     PM_CONTEXT_RESCUE_ELSE,
 
+    /** a rescue else statement within a method definition */
+    PM_CONTEXT_RESCUE_ELSE_DEF,
+
     /** a rescue statement */
     PM_CONTEXT_RESCUE,
+
+    /** a rescue statement within a method definition */
+    PM_CONTEXT_RESCUE_DEF,
 
     /** a singleton class definition */
     PM_CONTEXT_SCLASS,
@@ -468,11 +477,12 @@ typedef struct pm_scope {
     bool explicit_params;
 
     /**
-     * A boolean indicating whether or not this scope has numbered parameters.
+     * An integer indicating the number of numbered parameters on this scope.
      * This is necessary to determine if child blocks are allowed to use
-     * numbered parameters.
+     * numbered parameters, and to pass information to consumers of the AST
+     * about how many numbered parameters exist.
      */
-    bool numbered_params;
+    uint32_t numbered_parameters;
 
     /**
      * A transparent scope is a scope that cannot have locals set on itself.
@@ -651,7 +661,7 @@ struct pm_parser {
      * The line number at the start of the parse. This will be used to offset
      * the line numbers of all of the locations.
      */
-    uint32_t start_line;
+    int32_t start_line;
 
     /** Whether or not we're at the beginning of a command. */
     bool command_start;
@@ -674,6 +684,9 @@ struct pm_parser {
 
     /** This flag indicates that we are currently parsing a keyword argument. */
     bool in_keyword_arg;
+
+    /** The current parameter name id on parsing its default value. */
+    pm_constant_id_t current_param_name;
 
     /**
      * Whether or not the parser has seen a token that has semantic meaning

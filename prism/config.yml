@@ -596,6 +596,8 @@ nodes:
         type: location
       - name: closing_loc
         type: location
+      - name: numbered_parameters
+        type: uint32
     comment: |
       Represents a block of ruby code.
 
@@ -1453,6 +1455,21 @@ nodes:
 
           { Foo: }
             ^^^^
+  - name: ImplicitRestNode
+    comment: |
+      Represents using a trailing comma to indicate an implicit rest parameter.
+
+          foo { |bar,| }
+                    ^
+
+          foo in [bar,]
+                     ^
+
+          for foo, in bar do end
+                 ^
+
+          foo, = bar
+             ^
   - name: InNode
     fields:
       - name: pattern
@@ -1758,6 +1775,8 @@ nodes:
         kind: BlockParametersNode
       - name: body
         type: node?
+      - name: numbered_parameters
+        type: uint32
     comment: |
       Represents using a lambda literal (not the lambda method call).
 
@@ -2067,7 +2086,6 @@ nodes:
         type: node[]
       - name: rest
         type: node?
-        kind: RestParameterNode
       - name: posts
         type: node[]
       - name: keywords
