@@ -435,6 +435,7 @@ module Prism
 
     def test_MultiWriteNode
       assert_prism_eval("foo, bar = [1, 2]")
+      assert_prism_eval("foo, = [1, 2]")
       assert_prism_eval("foo, *, bar = [1, 2]")
       assert_prism_eval("foo, bar = 1, 2")
       assert_prism_eval("foo, *, bar = 1, 2")
@@ -679,8 +680,9 @@ module Prism
       assert_prism_eval("for @i in [1,2] do; @i; end")
       assert_prism_eval("for $i in [1,2] do; $i; end")
 
-      # TODO: multiple assignment in ForNode index
-      #assert_prism_eval("for i, j in {a: 'b'} do; i; j; end")
+      assert_prism_eval("for foo, in  [1,2,3] do end")
+
+      assert_prism_eval("for i, j in {a: 'b'} do; i; j; end")
     end
 
     ############################################################################
@@ -700,6 +702,38 @@ module Prism
     def test_EnsureNode
       assert_prism_eval("begin; 1; ensure; 2; end")
       assert_prism_eval("begin; 1; begin; 3; ensure; 4; end; ensure; 2; end")
+      assert_prism_eval(<<-CODE)
+        begin
+          a = 2
+        ensure
+        end
+      CODE
+      assert_prism_eval(<<-CODE)
+        begin
+          a = 2
+        ensure
+          a = 3
+        end
+        a
+      CODE
+      assert_prism_eval(<<-CODE)
+        a = 1
+        begin
+          a = 2
+        ensure
+          a = 3
+        end
+        a
+      CODE
+      assert_prism_eval(<<-CODE)
+        a = 1
+        begin
+          b = 2
+        ensure
+          c = 3
+        end
+        a + b + c
+      CODE
     end
 
     def test_NextNode
@@ -734,6 +768,8 @@ module Prism
       assert_prism_eval("[1, 2, 3].each { |num| num }")
 
       assert_prism_eval("[].tap { _1 }")
+
+      assert_prism_eval("[].each { |a,| }")
     end
 
     def test_ClassNode
@@ -899,12 +935,19 @@ module Prism
 
       # With different types of calling arguments
       assert_prism_eval(<<-CODE)
-        def self.prism_test_call_node(**); end
-        prism_test_call_node(b: 1, **{})
+        def self.prism_test_call_node_double_splat(**); end
+        prism_test_call_node_double_splat(b: 1, **{})
       CODE
       assert_prism_eval(<<-CODE)
-        prism_test_call_node(:b => 1)
+        prism_test_call_node_double_splat(:b => 1)
       CODE
+
+      assert_prism_eval(<<-CODE)
+        def self.prism_test_call_node_splat(*); end
+        prism_test_call_node_splat(*[], 1)
+      CODE
+
+      assert_prism_eval("prism_test_call_node_splat(*[], 1, 2)")
     end
 
     def test_CallAndWriteNode
