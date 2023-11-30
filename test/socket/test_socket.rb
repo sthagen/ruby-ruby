@@ -91,20 +91,20 @@ class TestSocket < Test::Unit::TestCase
 
   def test_getaddrinfo
     # This should not send a DNS query because AF_UNIX.
-    assert_raise(SocketError) { Socket.getaddrinfo("www.kame.net", 80, "AF_UNIX") }
+    assert_raise(Socket::ResolutionError) { Socket.getaddrinfo("www.kame.net", 80, "AF_UNIX") }
   end
 
   def test_getaddrinfo_raises_no_errors_on_port_argument_of_0 # [ruby-core:29427]
     assert_nothing_raised('[ruby-core:29427]'){ Socket.getaddrinfo('localhost', 0, Socket::AF_INET, Socket::SOCK_STREAM, nil, Socket::AI_CANONNAME) }
     assert_nothing_raised('[ruby-core:29427]'){ Socket.getaddrinfo('localhost', '0', Socket::AF_INET, Socket::SOCK_STREAM, nil, Socket::AI_CANONNAME) }
     assert_nothing_raised('[ruby-core:29427]'){ Socket.getaddrinfo('localhost', '00', Socket::AF_INET, Socket::SOCK_STREAM, nil, Socket::AI_CANONNAME) }
-    assert_raise(SocketError, '[ruby-core:29427]'){ Socket.getaddrinfo(nil, nil, Socket::AF_INET, Socket::SOCK_STREAM, nil, Socket::AI_CANONNAME) }
+    assert_raise(Socket::ResolutionError, '[ruby-core:29427]'){ Socket.getaddrinfo(nil, nil, Socket::AF_INET, Socket::SOCK_STREAM, nil, Socket::AI_CANONNAME) }
     assert_nothing_raised('[ruby-core:29427]'){ TCPServer.open('localhost', 0) {} }
   end
 
 
   def test_getnameinfo
-    assert_raise(SocketError) { Socket.getnameinfo(["AF_UNIX", 80, "0.0.0.0"]) }
+    assert_raise(Socket::ResolutionError) { Socket.getnameinfo(["AF_UNIX", 80, "0.0.0.0"]) }
     assert_raise(ArgumentError) {Socket.getnameinfo(["AF_INET", "http\0", "example.net"])}
     assert_raise(ArgumentError) {Socket.getnameinfo(["AF_INET", "http", "example.net\0"])}
   end
@@ -768,6 +768,17 @@ class TestSocket < Test::Unit::TestCase
   ensure
     s1.close
     s2.close
+  end
+
+  def test_resolurion_error_error_code
+    # https://rubyci.s3.amazonaws.com/freebsd12/ruby-master/log/20231130T103002Z.fail.html.gz
+    omit if /freebsd/ =~ RUBY_PLATFORM
+
+    begin
+      Socket.getaddrinfo("www.kame.net", 80, "AF_UNIX")
+    rescue => e
+      assert_equal(Socket::EAI_FAMILY, e.error_code)
+    end
   end
 
 end if defined?(Socket)

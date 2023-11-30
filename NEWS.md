@@ -12,9 +12,10 @@ Note that each entry is kept to a minimum, see links for details.
 * A new `performance` warning category was introduced.
   They are not displayed by default even in verbose mode.
   Turn them on with `-W:performance` or `Warning[:performance] = true`. [[Feature #19538]]
-* The `RUBY_GC_HEAP_INIT_SLOTS` environment variable has been deprecated and
-  removed. Environment variables `RUBY_GC_HEAP_%d_INIT_SLOTS` should be
-  used instead.  [[Feature #19785]]
+
+* A new `RUBY_CRASH_REPORT` environment variable was introduced to allow
+  redirecting Ruby crash reports to a file or sub command. See the `BUG REPORT ENVIRONMENT`
+  section of the ruby manpage for further details. [[Feature #19790]]
 
 ## Core classes updates
 
@@ -49,16 +50,21 @@ Note: We're only listing outstanding class updates.
       The class use equality semantic to lookup keys like a regular hash,
       but it doesn't hold strong references on the keys. [[Feature #18498]]
 
+* ObjectSpace::WeakMap
+
+    * `ObjectSpace::WeakMap#delete` was added to eagerly clear weak map
+      entries. [[Feature #19561]]
+
 * Proc
     * Now Proc#dup and Proc#clone call `#initialize_dup` and `#initialize_clone`
       hooks respectively.  [[Feature #19362]]
 
-* Process.warmup
+* Process
 
-    * Notify the Ruby virtual machine that the boot sequence is finished,
+    * New `Process.warmup` method that notify the Ruby virtual machine that the boot sequence is finished,
       and that now is a good time to optimize the application. This is useful
-      for long running applications. The actual optimizations performed are entirely
-      implementation specific and may change in the future without notice. [[Feature #18885]]
+      for long-running applications. The actual optimizations performed are entirely
+      implementation-specific and may change in the future without notice. [[Feature #18885]]
 
 * Process::Status
 
@@ -188,7 +194,7 @@ The following bundled gems are updated.
 * test-unit 3.6.1
 * rexml 3.2.6
 * rss 0.3.0
-* net-imap 0.4.6
+* net-imap 0.4.7
 * net-smtp 0.4.0
 * rbs 3.3.2
 * typeprof 0.21.8
@@ -200,6 +206,19 @@ changelog for details of the default gems or bundled gems.
 ## Supported platforms
 
 ## Compatibility issues
+
+* Subprocess creation/forking via the following file open methods is deprecated. [[Feature #19630]]
+  * Kernel#open
+  * URI.open
+  * IO.binread
+  * IO.foreach
+  * IO.readlines
+  * IO.read
+  * IO.write
+
+* The `RUBY_GC_HEAP_INIT_SLOTS` environment variable has been deprecated and
+  removed. Environment variables `RUBY_GC_HEAP_%d_INIT_SLOTS` should be
+  used instead.  [[Feature #19785]]
 
 ## Stdlib compatibility issues
 
@@ -215,6 +234,25 @@ changelog for details of the default gems or bundled gems.
 
 * `defined?(@ivar)` is optimized with Object Shapes.
 * Name resolution such as `Socket.getaddrinfo` can now be interrupted. [[Feature #19965]]
+
+### GC
+
+* Major performance improvements over 3.2
+    * Young objects referenced by old objects are no longer immediately
+      promoted to the old generation. This significantly reduces the frequency of
+      major GC collections. [[Feature #19678]]
+    * A new `REMEMBERED_WB_UNPROTECTED_OBJECTS_LIMIT_RATIO` tuning variable was
+      introduced to control the number of unprotected objects cause a major GC
+      collection to trigger. The default is set to `0.01` (1%). This significantly
+      reduces the frequency of major GC collection. [[Feature #19571]]
+    * Write Barriers were implemented for many core types that were missing them,
+      notably `Time`, `Enumerator`, `MatchData`, `Method`, `File::Stat`, `BigDecimal`
+      and several others. This significantly reduces minor GC collection time and major
+      GC collection frequency.
+    * Most core classes are now using Variable Width Allocation, notably `Hash`, `Time`,
+      `Thread::Backtrace`, `Thread::Backtrace::Location`, `File::Stat`, `Method`.
+      This makes these classes faster to allocate and free, use less memory and reduce
+      heap fragmentation.
 
 ### YJIT
 
@@ -305,12 +343,17 @@ changelog for details of the default gems or bundled gems.
 [Feature #19362]: https://bugs.ruby-lang.org/issues/19362
 [Feature #19521]: https://bugs.ruby-lang.org/issues/19521
 [Feature #19538]: https://bugs.ruby-lang.org/issues/19538
+[Feature #19561]: https://bugs.ruby-lang.org/issues/19561
 [Feature #19572]: https://bugs.ruby-lang.org/issues/19572
 [Feature #19591]: https://bugs.ruby-lang.org/issues/19591
+[Feature #19630]: https://bugs.ruby-lang.org/issues/19630
 [Feature #19714]: https://bugs.ruby-lang.org/issues/19714
 [Feature #19776]: https://bugs.ruby-lang.org/issues/19776
 [Feature #19785]: https://bugs.ruby-lang.org/issues/19785
+[Feature #19790]: https://bugs.ruby-lang.org/issues/19790
 [Feature #19842]: https://bugs.ruby-lang.org/issues/19842
 [Feature #19843]: https://bugs.ruby-lang.org/issues/19843
 [Bug #19868]:     https://bugs.ruby-lang.org/issues/19868
 [Feature #19965]: https://bugs.ruby-lang.org/issues/19965
+[Feature #19571]: https://bugs.ruby-lang.org/issues/19571
+[Feature #19678]: https://bugs.ruby-lang.org/issues/19678
