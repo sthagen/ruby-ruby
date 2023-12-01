@@ -149,7 +149,8 @@ EOT
       :ascii_only            => false,
       :buffer_initial_length => 1024,
       :depth                 => 0,
-      :escape_slash          => false,
+      :script_safe           => false,
+      :strict                => false,
       :indent                => "  ",
       :max_nesting           => 100,
       :object_nl             => "\n",
@@ -166,7 +167,8 @@ EOT
       :ascii_only            => false,
       :buffer_initial_length => 1024,
       :depth                 => 0,
-      :escape_slash          => false,
+      :script_safe           => false,
+      :strict                => false,
       :indent                => "",
       :max_nesting           => 100,
       :object_nl             => "",
@@ -183,7 +185,8 @@ EOT
       :ascii_only            => false,
       :buffer_initial_length => 1024,
       :depth                 => 0,
-      :escape_slash          => false,
+      :script_safe           => false,
+      :strict                => false,
       :indent                => "",
       :max_nesting           => 0,
       :object_nl             => "",
@@ -336,7 +339,13 @@ EOT
 
   def test_json_generate
     assert_raise JSON::GeneratorError do
-      assert_equal true, generate(["\xea"])
+      generate(["\xea"])
+    end
+  end
+
+  def test_json_generate_unsupported_types
+    assert_raise JSON::GeneratorError do
+      generate(Object.new, strict: true)
     end
   end
 
@@ -370,6 +379,18 @@ EOT
     #
     data = [ '/' ]
     json = '["\/"]'
+    assert_equal json, generate(data, :script_safe => true)
+    #
+    data = [ "\u2028\u2029" ]
+    json = '["\u2028\u2029"]'
+    assert_equal json, generate(data, :script_safe => true)
+    #
+    data = [ "ABC \u2028 DEF \u2029 GHI" ]
+    json = '["ABC \u2028 DEF \u2029 GHI"]'
+    assert_equal json, generate(data, :script_safe => true)
+    #
+    data = [ "/\u2028\u2029" ]
+    json = '["\/\u2028\u2029"]'
     assert_equal json, generate(data, :escape_slash => true)
     #
     data = ['"']

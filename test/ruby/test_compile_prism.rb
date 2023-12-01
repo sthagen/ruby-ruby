@@ -737,6 +737,16 @@ module Prism
         end
         a + b + c
       CODE
+      assert_prism_eval(<<~CODE)
+        foo = 1
+        begin
+        ensure
+          begin
+          ensure
+            foo.nil?
+          end
+        end
+      CODE
     end
 
     def test_NextNode
@@ -757,6 +767,70 @@ module Prism
       # end
       # CODE
       # )
+    end
+
+    def test_RescueNode
+      assert_prism_eval("begin; 1; rescue; 2; end")
+      assert_prism_eval(<<~CODE)
+        begin
+         1
+        rescue SyntaxError
+        2
+        end
+      CODE
+      assert_prism_eval(<<~CODE)
+        begin
+          1
+          raise 'boom'
+        rescue StandardError
+          2
+        end
+      CODE
+      assert_prism_eval(<<~CODE)
+        begin
+          a = 1
+        rescue StandardError => e
+        end
+      CODE
+      assert_prism_eval(<<~CODE)
+        begin
+          1
+        rescue StandardError => e
+          e
+        rescue SyntaxError => f
+          f
+        else
+          4
+        end
+      CODE
+      assert_prism_eval(<<-CODE)
+        begin
+          a = 2
+        rescue
+          a = 3
+        end
+        a
+      CODE
+      assert_prism_eval(<<-CODE)
+        a = 1
+        begin
+          a = 2
+        rescue
+          a = 3
+        end
+        a
+      CODE
+      assert_prism_eval(<<-CODE)
+        a = 1
+        begin
+          b = 2
+          raise "bang"
+        rescue
+          c = 3
+        end
+        a + b + c
+      CODE
+      assert_prism_eval("begin; rescue; end")
     end
 
     def test_ReturnNode
@@ -873,6 +947,8 @@ module Prism
       assert_prism_eval("END { 1 }")
       assert_prism_eval("END { @b }; @b = 1")
       assert_prism_eval("END { @b; 0 }; @b = 1")
+      assert_prism_eval("foo = 1; END { foo.nil? }")
+      assert_prism_eval("foo = 1; END { END { foo.nil? }}")
     end
 
     def test_ProgramNode

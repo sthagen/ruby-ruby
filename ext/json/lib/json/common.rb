@@ -3,6 +3,9 @@ require 'json/version'
 require 'json/generic_object'
 
 module JSON
+  NOT_SET = Object.new.freeze
+  private_constant :NOT_SET
+
   class << self
     # :call-seq:
     #   JSON[object] -> new_array or new_string
@@ -572,13 +575,13 @@ module JSON
     # Sets or returns the default options for the JSON.dump method.
     # Initially:
     #   opts = JSON.dump_default_options
-    #   opts # => {:max_nesting=>false, :allow_nan=>true, :escape_slash=>false}
+    #   opts # => {:max_nesting=>false, :allow_nan=>true, :script_safe=>false}
     attr_accessor :dump_default_options
   end
   self.dump_default_options = {
     :max_nesting => false,
     :allow_nan   => true,
-    :escape_slash => false,
+    :script_safe => false,
   }
 
   # :call-seq:
@@ -608,7 +611,7 @@ module JSON
   #   puts File.read(path)
   # Output:
   #   {"foo":[0,1],"bar":{"baz":2,"bat":3},"bam":"bad"}
-  def dump(obj, anIO = nil, limit = nil)
+  def dump(obj, anIO = nil, limit = nil, strict: NOT_SET)
     if anIO and limit.nil?
       anIO = anIO.to_io if anIO.respond_to?(:to_io)
       unless anIO.respond_to?(:write)
@@ -618,6 +621,7 @@ module JSON
     end
     opts = JSON.dump_default_options
     opts = opts.merge(:max_nesting => limit) if limit
+    opts[:strict] = strict if NOT_SET != strict
     result = generate(obj, opts)
     if anIO
       anIO.write result
