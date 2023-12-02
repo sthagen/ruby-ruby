@@ -562,6 +562,12 @@ static void numparam_name(struct parser_params *p, ID id);
 #define TOK_INTERN() intern_cstr(tok(p), toklen(p), p->enc)
 #define VALID_SYMNAME_P(s, l, enc, type) (rb_enc_symname_type(s, l, enc, (1U<<(type))) == (int)(type))
 
+static inline bool
+end_with_newline_p(struct parser_params *p, VALUE str)
+{
+    return RSTRING_LEN(str) > 0 && RSTRING_END(str)[-1] == '\n';
+}
+
 static void
 pop_pvtbl(struct parser_params *p, st_table *tbl)
 {
@@ -7625,6 +7631,14 @@ add_delayed_token(struct parser_params *p, const char *tok, const char *end, int
 #endif
 
     if (tok < end) {
+        if (has_delayed_token(p)) {
+            bool next_line = end_with_newline_p(p, p->delayed.token);
+            int end_line = (next_line ? 1 : 0) + p->delayed.end_line;
+            int end_col = (next_line ? 0 : p->delayed.end_col);
+            if (end_line != p->ruby_sourceline || end_col != tok - p->lex.pbeg) {
+                dispatch_delayed_token(p, tSTRING_CONTENT);
+            }
+        }
         if (!has_delayed_token(p)) {
             p->delayed.token = rb_str_buf_new(end - tok);
             rb_enc_associate(p->delayed.token, p->enc);
@@ -8607,7 +8621,7 @@ parse_string(struct parser_params *p, rb_strterm_literal_t *quote)
     }
     newtok(p);
     if ((func & STR_FUNC_EXPAND) && c == '#') {
-        int t = parser_peek_variable_name(p);
+        enum yytokentype t = parser_peek_variable_name(p);
         if (t) return t;
         tokadd(p, '#');
         c = nextc(p);
@@ -9081,7 +9095,7 @@ here_document(struct parser_params *p, rb_strterm_heredoc_t *here)
         /*	int mb = ENC_CODERANGE_7BIT, *mbp = &mb;*/
         newtok(p);
         if (c == '#') {
-            int t = parser_peek_variable_name(p);
+            enum yytokentype t = parser_peek_variable_name(p);
             if (p->heredoc_line_indent != -1) {
                 if (p->heredoc_indent > p->heredoc_line_indent) {
                     p->heredoc_indent = p->heredoc_line_indent;
@@ -10663,7 +10677,7 @@ parser_yylex(struct parser_params *p)
             !IS_lex_state(EXPR_DOT | EXPR_CLASS) &&
             !IS_END() &&
             (!IS_ARG() || IS_lex_state(EXPR_LABELED) || space_seen)) {
-            int token = heredoc_identifier(p);
+            enum  yytokentype token = heredoc_identifier(p);
             if (token) return token < 0 ? 0 : token;
         }
         if (IS_AFTER_OPERATOR()) {
@@ -12891,8 +12905,8 @@ new_regexp(struct parser_params *p, NODE *node, int options, const YYLTYPE *loc)
         }
         if (!RNODE_DREGX(node)->nd_next) {
             VALUE src = RNODE_DREGX(node)->nd_lit;
-            nd_set_type(node, NODE_LIT);
-            RB_OBJ_WRITTEN(p->ast, Qnil, RNODE_LIT(node)->nd_lit = reg_compile(p, src, options));
+            VALUE re = reg_compile(p, src, options);
+            RB_OBJ_WRITTEN(p->ast, Qnil, RNODE_DREGX(node)->nd_lit = re);
         }
         if (options & RE_OPTION_ONCE) {
             node = NEW_ONCE(node, loc);
@@ -15965,7 +15979,7 @@ rb_parser_printf(struct parser_params *p, const char *fmt, ...)
     va_start(ap, fmt);
     rb_str_vcatf(mesg, fmt, ap);
     va_end(ap);
-    if (RSTRING_END(mesg)[-1] == '\n') {
+    if (end_with_newline_p(p, mesg)) {
         rb_io_write(p->debug_output, mesg);
         p->debug_buffer = Qnil;
     }
