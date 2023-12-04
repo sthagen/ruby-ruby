@@ -1443,9 +1443,18 @@ pm_compile_defined_expr0(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *co
     enum defined_type dtype = DEFINED_NOT_DEFINED;
     switch (PM_NODE_TYPE(node)) {
       case PM_NIL_NODE:
-      case PM_PARENTHESES_NODE:
         dtype = DEFINED_NIL;
         break;
+      case PM_PARENTHESES_NODE: {
+          pm_parentheses_node_t *parentheses_node = (pm_parentheses_node_t *) node;
+
+          if (parentheses_node->body == NULL) {
+              dtype = DEFINED_NIL;
+          } else {
+              dtype = DEFINED_EXPR;
+          }
+          break;
+      }
       case PM_SELF_NODE:
         dtype = DEFINED_SELF;
         break;
@@ -1469,12 +1478,15 @@ pm_compile_defined_expr0(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *co
       case PM_FLOAT_NODE:
       case PM_HASH_NODE:
       case PM_INTEGER_NODE:
+      case PM_INTERPOLATED_REGULAR_EXPRESSION_NODE:
+      case PM_INTERPOLATED_STRING_NODE:
       case PM_LAMBDA_NODE:
       case PM_OR_NODE:
       case PM_RANGE_NODE:
       case PM_REGULAR_EXPRESSION_NODE:
       case PM_STRING_NODE:
       case PM_SYMBOL_NODE:
+      case PM_X_STRING_NODE:
         dtype = DEFINED_EXPR;
         break;
       case PM_LOCAL_VARIABLE_READ_NODE:
@@ -1486,6 +1498,27 @@ pm_compile_defined_expr0(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *co
         ID id = pm_constant_id_lookup(scope_node, instance_variable_read_node->name);
         ADD_INSN3(ret, &dummy_line_node, definedivar,
                   ID2SYM(id), get_ivar_ic_value(iseq, id), PUSH_VAL(DEFINED_IVAR));
+        return;
+      }
+      case PM_BACK_REFERENCE_READ_NODE: {
+        char *char_ptr = (char *)(node->location.start) + 1;
+        ID backref_val = INT2FIX(rb_intern2(char_ptr, 1)) << 1 | 1;
+
+        PM_PUTNIL;
+        ADD_INSN3(ret, &dummy_line_node, defined, INT2FIX(DEFINED_REF),
+                  backref_val,
+                  PUSH_VAL(DEFINED_GVAR));
+
+        return;
+      }
+      case PM_NUMBERED_REFERENCE_READ_NODE: {
+        uint32_t reference_number = ((pm_numbered_reference_read_node_t *)node)->number;
+
+        PM_PUTNIL;
+        ADD_INSN3(ret, &dummy_line_node, defined, INT2FIX(DEFINED_REF),
+                  INT2FIX(reference_number << 1),
+                  PUSH_VAL(DEFINED_GVAR));
+
         return;
       }
       case PM_GLOBAL_VARIABLE_READ_NODE: {
@@ -3460,15 +3493,81 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
       }
       case PM_NEXT_NODE: {
         pm_next_node_t *next_node = (pm_next_node_t *) node;
-        if (next_node->arguments) {
-            PM_COMPILE_NOT_POPPED((pm_node_t *)next_node->arguments);
+
+        if (ISEQ_COMPILE_DATA(iseq)->redo_label != 0 && can_add_ensure_iseq(iseq)) {
+            LABEL *splabel = NEW_LABEL(0);
+
+            ADD_LABEL(ret, splabel);
+
+            add_ensure_iseq(ret, iseq, 0);
+
+            ADD_ADJUST(ret, &dummy_line_node, ISEQ_COMPILE_DATA(iseq)->redo_label);
+            ADD_INSNL(ret, &dummy_line_node, jump, ISEQ_COMPILE_DATA(iseq)->start_label);
+
+            ADD_ADJUST_RESTORE(ret, splabel);
+            PM_PUTNIL_UNLESS_POPPED;
+        }
+        else if (ISEQ_COMPILE_DATA(iseq)->end_label && can_add_ensure_iseq(iseq)) {
+            LABEL *splabel = NEW_LABEL(0);
+
+            ADD_LABEL(ret, splabel);
+            ADD_ADJUST(ret, &dummy_line_node, ISEQ_COMPILE_DATA(iseq)->start_label);
+
+            if (next_node->arguments) {
+                PM_COMPILE((pm_node_t *)next_node->arguments);
+            }
+            else {
+                PM_PUTNIL;
+            }
+
+            add_ensure_iseq(ret, iseq, 0);
+            ADD_INSNL(ret, &dummy_line_node, jump, ISEQ_COMPILE_DATA(iseq)->end_label);
+            ADD_ADJUST_RESTORE(ret, splabel);
+            splabel->unremovable = FALSE;
+
+            PM_PUTNIL_UNLESS_POPPED;
         }
         else {
-            PM_PUTNIL;
-        }
+            const rb_iseq_t *ip = iseq;
 
-        PM_POP;
-        ADD_INSNL(ret, &dummy_line_node, jump, ISEQ_COMPILE_DATA(iseq)->start_label);
+            unsigned long throw_flag = 0;
+            while (ip) {
+                if (!ISEQ_COMPILE_DATA(ip)) {
+                    ip = 0;
+                    break;
+                }
+
+                throw_flag = VM_THROW_NO_ESCAPE_FLAG;
+                if (ISEQ_COMPILE_DATA(ip)->redo_label != 0) {
+                    /* while loop */
+                    break;
+                }
+                else if (ISEQ_BODY(ip)->type == ISEQ_TYPE_BLOCK) {
+                    break;
+                }
+                else if (ISEQ_BODY(ip)->type == ISEQ_TYPE_EVAL) {
+                    rb_raise(rb_eArgError, "Can't escape from eval with next");
+                    return;
+                }
+
+                ip = ISEQ_BODY(ip)->parent_iseq;
+            }
+            if (ip != 0) {
+                if (next_node->arguments) {
+                    PM_COMPILE((pm_node_t *)next_node->arguments);
+                }
+                else {
+                    PM_PUTNIL;
+                }
+                ADD_INSN1(ret, &dummy_line_node, throw, INT2FIX(throw_flag | TAG_NEXT));
+
+                PM_POP_IF_POPPED;
+            }
+            else {
+                rb_raise(rb_eArgError, "Invalid next");
+                return;
+            }
+        }
 
         return;
       }
@@ -3623,7 +3722,60 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
         return;
       }
       case PM_REDO_NODE: {
-        ADD_INSNL(ret, &dummy_line_node, jump, ISEQ_COMPILE_DATA(iseq)->redo_label);
+        if (ISEQ_COMPILE_DATA(iseq)->redo_label && can_add_ensure_iseq(iseq)) {
+            LABEL *splabel = NEW_LABEL(0);
+
+            ADD_LABEL(ret, splabel);
+
+            ADD_ADJUST(ret, &dummy_line_node, ISEQ_COMPILE_DATA(iseq)->redo_label);
+
+            add_ensure_iseq(ret, iseq, 0);
+            ADD_INSNL(ret, &dummy_line_node, jump, ISEQ_COMPILE_DATA(iseq)->redo_label);
+            ADD_ADJUST_RESTORE(ret, splabel);
+            PM_PUTNIL_UNLESS_POPPED;
+        }
+        else if (ISEQ_BODY(iseq)->type != ISEQ_TYPE_EVAL && ISEQ_COMPILE_DATA(iseq)->start_label && can_add_ensure_iseq(iseq)) {
+            LABEL *splabel = NEW_LABEL(0);
+
+            ADD_LABEL(ret, splabel);
+            add_ensure_iseq(ret, iseq, 0);
+            ADD_ADJUST(ret, &dummy_line_node, ISEQ_COMPILE_DATA(iseq)->start_label);
+            ADD_INSNL(ret, &dummy_line_node, jump, ISEQ_COMPILE_DATA(iseq)->start_label);
+            ADD_ADJUST_RESTORE(ret, splabel);
+
+            PM_PUTNIL_UNLESS_POPPED;
+        }
+        else {
+            const rb_iseq_t *ip = iseq;
+
+            while (ip) {
+              if (!ISEQ_COMPILE_DATA(ip)) {
+                  ip = 0;
+                  break;
+              }
+
+              if (ISEQ_COMPILE_DATA(ip)->redo_label != 0) {
+                  break;
+              }
+              else if (ISEQ_BODY(ip)->type == ISEQ_TYPE_BLOCK) {
+                  break;
+              }
+              else if (ISEQ_BODY(ip)->type == ISEQ_TYPE_EVAL) {
+                  rb_bug("Invalid redo\n");
+              }
+
+              ip = ISEQ_BODY(ip)->parent_iseq;
+          }
+          if (ip != 0) {
+              PM_PUTNIL;
+              ADD_INSN1(ret, &dummy_line_node, throw, INT2FIX(VM_THROW_NO_ESCAPE_FLAG | TAG_REDO));
+
+              PM_POP_IF_POPPED;
+          }
+          else {
+              rb_bug("Invalid redo\n");
+          }
+        }
         return;
       }
       case PM_REGULAR_EXPRESSION_NODE: {

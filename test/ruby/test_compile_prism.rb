@@ -102,11 +102,24 @@ module Prism
       assert_prism_eval("defined? [1, 2, 3]")
       assert_prism_eval("defined?({ a: 1 })")
       assert_prism_eval("defined? 'str'")
+      assert_prism_eval('defined?("#{expr}")')
       assert_prism_eval("defined? :sym")
       assert_prism_eval("defined? /foo/")
+      assert_prism_eval('defined?(/#{1}/)')
       assert_prism_eval("defined? -> { 1 + 1 }")
       assert_prism_eval("defined? a && b")
       assert_prism_eval("defined? a || b")
+
+      assert_prism_eval("defined? %[1,2,3]")
+      assert_prism_eval("defined? %q[1,2,3]")
+      assert_prism_eval("defined? %Q[1,2,3]")
+      assert_prism_eval("defined? %r[1,2,3]")
+      assert_prism_eval("defined? %i[1,2,3]")
+      assert_prism_eval("defined? %I[1,2,3]")
+      assert_prism_eval("defined? %w[1,2,3]")
+      assert_prism_eval("defined? %W[1,2,3]")
+      assert_prism_eval("defined? %s[1,2,3]")
+      assert_prism_eval("defined? %x[1,2,3]")
 
       assert_prism_eval("defined? @a")
       assert_prism_eval("defined? $a")
@@ -124,6 +137,12 @@ module Prism
       assert_prism_eval("defined? X /= 1")
       assert_prism_eval("defined? X &= 1")
       assert_prism_eval("defined? X ||= 1")
+
+      assert_prism_eval("defined? $1")
+      assert_prism_eval("defined? $2")
+      assert_prism_eval("defined? $`")
+      assert_prism_eval("defined? $'")
+      assert_prism_eval("defined? $+")
 
       assert_prism_eval("defined? $X = 1")
       assert_prism_eval("defined? $X *= 1")
@@ -152,6 +171,7 @@ module Prism
       assert_prism_eval("if defined? A; end")
 
       assert_prism_eval("defined?(())")
+      assert_prism_eval("defined?(('1'))")
     end
 
     def test_GlobalVariableReadNode
@@ -760,23 +780,68 @@ module Prism
     end
 
     def test_NextNode
-      # TODO:
-      # assert_prism_eval("2.times do |i|; next if i == 1; end")
+      assert_prism_eval("2.times do |i|; next if i == 1; end")
+
+      assert_prism_eval(<<-CODE)
+        res = []
+        i = 0
+        while i < 5
+          i += 1
+          next if i == 3
+          res << i
+        end
+        res
+      CODE
+
+      assert_prism_eval(<<-CODE)
+        res = []
+        (1..5).each do |i|
+          next if i.even?
+          res << i
+        end
+        res
+      CODE
+
+      assert_prism_eval(<<-CODE)
+        res = []
+        i = 0
+        begin
+          i += 1
+          next if i == 3
+          res << i
+        end while i < 5
+        res
+      CODE
     end
 
     def test_RedoNode
-      # TODO:
-      # assert_prism_eval(<<-CODE
-      # counter = 0
+      assert_prism_eval(<<-CODE)
+        counter = 0
 
-      # 5.times do |i|
-      #   counter += 1
-      #   if i == 2 && counter < 3
-      #     redo
-      #   end
-      # end
-      # CODE
-      # )
+        5.times do |i|
+          counter += 1
+          if i == 2 && counter < 3
+            redo
+          end
+        end
+      CODE
+
+      assert_prism_eval(<<-CODE)
+        for i in 1..5
+          if i == 3
+            i = 0
+            redo
+          end
+        end
+      CODE
+
+      assert_prism_eval(<<-CODE)
+        i = 0
+        begin
+          i += 1
+          redo if i == 3
+        end while i < 5
+      CODE
     end
 
     def test_RescueNode

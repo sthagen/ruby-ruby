@@ -7704,8 +7704,7 @@ parser_comment(pm_parser_t *parser, pm_comment_type_t type) {
 
     *comment = (pm_comment_t) {
         .type = type,
-        .start = parser->current.start,
-        .end = parser->current.end
+        .location = { parser->current.start, parser->current.end }
     };
 
     return comment;
@@ -7756,7 +7755,7 @@ lex_embdoc(pm_parser_t *parser) {
             parser->current.type = PM_TOKEN_EMBDOC_END;
             parser_lex_callback(parser);
 
-            comment->end = parser->current.end;
+            comment->location.end = parser->current.end;
             pm_list_append(&parser->comment_list, (pm_list_node_t *) comment);
 
             return PM_TOKEN_EMBDOC_END;
@@ -7779,7 +7778,7 @@ lex_embdoc(pm_parser_t *parser) {
 
     pm_parser_err_current(parser, PM_ERR_EMBDOC_TERM);
 
-    comment->end = parser->current.end;
+    comment->location.end = parser->current.end;
     pm_list_append(&parser->comment_list, (pm_list_node_t *) comment);
 
     return PM_TOKEN_EOF;
@@ -13666,7 +13665,7 @@ parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power) {
                             pm_parser_err_token(parser, &operator, PM_ERR_ARGUMENT_NO_FORWARDING_STAR);
                         }
                     } else {
-                        expression = parse_expression(parser, PM_BINDING_POWER_DEFINED, PM_ERR_ARRAY_EXPRESSION_AFTER_STAR);
+                        expression = parse_value_expression(parser, PM_BINDING_POWER_DEFINED, PM_ERR_ARRAY_EXPRESSION_AFTER_STAR);
                     }
 
                     element = (pm_node_t *) pm_splat_node_create(parser, &operator, expression);
@@ -13684,7 +13683,7 @@ parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power) {
 
                     parsed_bare_hash = true;
                 } else {
-                    element = parse_expression(parser, PM_BINDING_POWER_DEFINED, PM_ERR_ARRAY_EXPRESSION);
+                    element = parse_value_expression(parser, PM_BINDING_POWER_DEFINED, PM_ERR_ARRAY_EXPRESSION);
 
                     if (pm_symbol_node_label_p(element) || accept1(parser, PM_TOKEN_EQUAL_GREATER)) {
                         if (parsed_bare_hash) {
@@ -13700,7 +13699,7 @@ parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power) {
                             operator = not_provided(parser);
                         }
 
-                        pm_node_t *value = parse_expression(parser, PM_BINDING_POWER_DEFINED, PM_ERR_HASH_VALUE);
+                        pm_node_t *value = parse_value_expression(parser, PM_BINDING_POWER_DEFINED, PM_ERR_HASH_VALUE);
                         pm_node_t *assoc = (pm_node_t *) pm_assoc_node_create(parser, element, &operator, value);
                         pm_keyword_hash_node_elements_append(hash, assoc);
 
