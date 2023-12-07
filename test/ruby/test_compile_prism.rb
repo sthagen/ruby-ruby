@@ -742,6 +742,7 @@ module Prism
     def test_BreakNode
       assert_prism_eval("while true; break; end")
       assert_prism_eval("while true; break 1; end")
+      assert_prism_eval("[].each { break }")
     end
 
     def test_EnsureNode
@@ -786,6 +787,23 @@ module Prism
           begin
           ensure
             foo.nil?
+          end
+        end
+      CODE
+      assert_prism_eval(<<~CODE)
+        def test
+        ensure
+          {}.each do |key, value|
+            {}[key] = value
+          end
+        end
+      CODE
+      assert_prism_eval(<<~CODE)
+        def test
+          a = 1
+        ensure
+          {}.each do |key, value|
+            {}[key] = a
           end
         end
       CODE
@@ -924,6 +942,23 @@ module Prism
         a + b + c
       CODE
       assert_prism_eval("begin; rescue; end")
+
+      assert_prism_eval(<<~CODE)
+        begin
+        rescue
+          args.each do |key, value|
+            tmp[key] = 1
+          end
+        end
+      CODE
+      assert_prism_eval(<<~CODE)
+        10.times do
+          begin
+          rescue
+            break
+          end
+        end
+      CODE
     end
 
     def test_RescueModiferNode
@@ -967,6 +1002,23 @@ module Prism
 
     def test_ReturnNode
       assert_prism_eval("def return_node; return 1; end")
+      assert_prism_eval(<<-CODE)
+        def self.prism_test_return_node
+          [1].each do |e|
+            return true
+          end
+        end
+        prism_test_return_node
+      CODE
+      assert_prism_eval(<<-CODE)
+        def self.prism_test_return_node
+          [1].map do |i|
+            return i if i == 1
+            2
+          end
+        end
+        prism_test_return_node
+      CODE
     end
 
     ############################################################################

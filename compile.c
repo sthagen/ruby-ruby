@@ -3836,6 +3836,166 @@ iseq_peephole_optimize(rb_iseq_t *iseq, LINK_ELEMENT *list, const int do_tailcal
         }
     }
 
+    if (IS_INSN_ID(iobj, splatarray) && OPERAND_AT(iobj, 0) == Qtrue) {
+        LINK_ELEMENT *niobj = &iobj->link;
+
+        /*
+        * Eliminate array allocation for f(1, *a)
+        *
+        *  splatarray true
+        *  send ARGS_SPLAT and not KW_SPLAT|ARGS_BLOCKARG
+        * =>
+        *  splatarray false
+        *  send
+        */
+        if (IS_NEXT_INSN_ID(niobj, send)) {
+            niobj = niobj->next;
+            unsigned int flag = vm_ci_flag((const struct rb_callinfo *)OPERAND_AT(niobj, 0));
+            if ((flag & VM_CALL_ARGS_SPLAT) && !(flag & (VM_CALL_KW_SPLAT|VM_CALL_ARGS_BLOCKARG))) {
+                OPERAND_AT(iobj, 0) = Qfalse;
+            }
+        } else if (IS_NEXT_INSN_ID(niobj, getlocal) || IS_NEXT_INSN_ID(niobj, getinstancevariable)) {
+            niobj = niobj->next;
+
+            if (IS_NEXT_INSN_ID(niobj, send)) {
+                niobj = niobj->next;
+                unsigned int flag = vm_ci_flag((const struct rb_callinfo *)OPERAND_AT(niobj, 0));
+
+                if ((flag & VM_CALL_ARGS_SPLAT)) {
+                    /*
+                    * Eliminate array allocation for f(1, *a, &lvar) and f(1, *a, &@iv)
+                    *
+                    *  splatarray true
+                    *  getlocal / getinstancevariable
+                    *  send ARGS_SPLAT|ARGS_BLOCKARG and not KW_SPLAT
+                    * =>
+                    *  splatarray false
+                    *  getlocal / getinstancevariable
+                    *  send
+                    */
+                    if ((flag & VM_CALL_ARGS_BLOCKARG) && !(flag & VM_CALL_KW_SPLAT)) {
+                        OPERAND_AT(iobj, 0) = Qfalse;
+                    }
+
+                    /*
+                    * Eliminate array allocation for f(*a, **lvar) and f(*a, **@iv)
+                    *
+                    *  splatarray true
+                    *  getlocal / getinstancevariable
+                    *  send ARGS_SPLAT|KW_SPLAT and not ARGS_BLOCKARG
+                    * =>
+                    *  splatarray false
+                    *  getlocal / getinstancevariable
+                    *  send
+                    */
+                    else if (!(flag & VM_CALL_ARGS_BLOCKARG) && (flag & VM_CALL_KW_SPLAT)) {
+                        OPERAND_AT(iobj, 0) = Qfalse;
+                    }
+                }
+            }
+            else if (IS_NEXT_INSN_ID(niobj, getlocal) || IS_NEXT_INSN_ID(niobj, getinstancevariable) ||
+                   IS_NEXT_INSN_ID(niobj, getblockparamproxy)) {
+                niobj = niobj->next;
+
+                /*
+                * Eliminate array allocation for f(*a, **lvar, &lvar) and f(*a, **@iv, &@iv)
+                *
+                *  splatarray true
+                *  getlocal / getinstancevariable
+                *  getlocal / getinstancevariable / getblockparamproxy
+                *  send ARGS_SPLAT|KW_SPLAT|ARGS_BLOCKARG
+                * =>
+                *  splatarray false
+                *  getlocal / getinstancevariable
+                *  getlocal / getinstancevariable / getblockparamproxy
+                *  send
+                */
+                if (IS_NEXT_INSN_ID(niobj, send)) {
+                    niobj = niobj->next;
+                    unsigned int flag = vm_ci_flag((const struct rb_callinfo *)OPERAND_AT(niobj, 0));
+
+                    if ((flag & VM_CALL_ARGS_SPLAT) && (flag & VM_CALL_KW_SPLAT) && (flag & VM_CALL_ARGS_BLOCKARG)) {
+                        OPERAND_AT(iobj, 0) = Qfalse;
+                    }
+                }
+            }
+        }
+        else if (IS_NEXT_INSN_ID(niobj, getblockparamproxy)) {
+            niobj = niobj->next;
+
+            if (IS_NEXT_INSN_ID(niobj, send)) {
+                niobj = niobj->next;
+                unsigned int flag = vm_ci_flag((const struct rb_callinfo *)OPERAND_AT(niobj, 0));
+
+                /*
+                * Eliminate array allocation for f(1, *a, &arg)
+                *
+                *  splatarray true
+                *  getblockparamproxy
+                *  send ARGS_SPLAT|ARGS_BLOCKARG and not KW_SPLAT
+                * =>
+                *  splatarray false
+                *  getblockparamproxy
+                *  send
+                */
+                if ((flag & VM_CALL_ARGS_BLOCKARG) & (flag & VM_CALL_ARGS_SPLAT) && !(flag & VM_CALL_KW_SPLAT)) {
+                        OPERAND_AT(iobj, 0) = Qfalse;
+                }
+            }
+        }
+        else if (IS_NEXT_INSN_ID(niobj, duphash)) {
+            niobj = niobj->next;
+
+            /*
+            * Eliminate array allocation for f(*a, kw: 1)
+            *
+            *  splatarray true
+            *  duphash
+            *  send ARGS_SPLAT|KW_SPLAT|KW_SPLAT_MUT and not ARGS_BLOCKARG
+            * =>
+            *  splatarray false
+            *  duphash
+            *  send
+            */
+            if (IS_NEXT_INSN_ID(niobj, send)) {
+                niobj = niobj->next;
+                unsigned int flag = vm_ci_flag((const struct rb_callinfo *)OPERAND_AT(niobj, 0));
+
+                if ((flag & VM_CALL_ARGS_SPLAT) && (flag & VM_CALL_KW_SPLAT) &&
+                        (flag & VM_CALL_KW_SPLAT_MUT) && !(flag & VM_CALL_ARGS_BLOCKARG)) {
+                    OPERAND_AT(iobj, 0) = Qfalse;
+                }
+            }
+            else if (IS_NEXT_INSN_ID(niobj, getlocal) || IS_NEXT_INSN_ID(niobj, getinstancevariable) ||
+                   IS_NEXT_INSN_ID(niobj, getblockparamproxy)) {
+                niobj = niobj->next;
+
+                /*
+                * Eliminate array allocation for f(*a, kw: 1, &lvar) and f(*a, kw: 1, &@iv)
+                *
+                *  splatarray true
+                *  duphash
+                *  getlocal / getinstancevariable / getblockparamproxy
+                *  send ARGS_SPLAT|KW_SPLAT|KW_SPLAT_MUT|ARGS_BLOCKARG
+                * =>
+                *  splatarray false
+                *  duphash
+                *  getlocal / getinstancevariable / getblockparamproxy
+                *  send
+                */
+                if (IS_NEXT_INSN_ID(niobj, send)) {
+                    niobj = niobj->next;
+                    unsigned int flag = vm_ci_flag((const struct rb_callinfo *)OPERAND_AT(niobj, 0));
+
+                    if ((flag & VM_CALL_ARGS_SPLAT) && (flag & VM_CALL_KW_SPLAT) &&
+                            (flag & VM_CALL_KW_SPLAT_MUT) && (flag & VM_CALL_ARGS_BLOCKARG)) {
+                        OPERAND_AT(iobj, 0) = Qfalse;
+                    }
+                }
+            }
+        }
+    }
+
     return COMPILE_OK;
 }
 
