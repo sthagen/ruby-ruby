@@ -361,12 +361,11 @@ module Gem
     end
 
     def lock_name
-      @lock_name ||=
-        if platform == Gem::Platform::RUBY
-          "#{name} (#{version})"
-        else
-          "#{name} (#{version}-#{platform})"
-        end
+      if platform == Gem::Platform::RUBY
+        "#{name} (#{version})"
+      else
+        "#{name} (#{version}-#{platform})"
+      end
     end
   end
 
@@ -376,7 +375,7 @@ module Gem
     remove_method :glob_files_in_dir
 
     def glob_files_in_dir(glob, base_path)
-      Dir.glob(glob, :base => base_path).map! {|f| File.expand_path(f, base_path) }
+      Dir.glob(glob, base: base_path).map! {|f| File.expand_path(f, base_path) }
     end
   end
 end

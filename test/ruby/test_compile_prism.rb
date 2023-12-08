@@ -181,6 +181,33 @@ module Prism
 
       assert_prism_eval("defined?(())")
       assert_prism_eval("defined?(('1'))")
+
+      # method chain starting with self that's truthy
+      assert_prism_eval("defined?(self.itself.itself.itself)")
+
+      # method chain starting with self that's false (exception swallowed)
+      assert_prism_eval("defined?(self.itself.itself.neat)")
+
+      # single self with method, truthy
+      assert_prism_eval("defined?(self.itself)")
+
+      # single self with method, false
+      assert_prism_eval("defined?(self.neat!)")
+
+      # method chain implicit self that's truthy
+      assert_prism_eval("defined?(itself.itself.itself)")
+
+      # method chain implicit self that's false
+      assert_prism_eval("defined?(itself.neat.itself)")
+
+      ## single method implicit self that's truthy
+      assert_prism_eval("defined?(itself)")
+
+      ## single method implicit self that's false
+      assert_prism_eval("defined?(neatneat)")
+
+      assert_prism_eval("defined?(a(itself))")
+      assert_prism_eval("defined?(itself(itself))")
     end
 
     def test_GlobalVariableReadNode
@@ -742,6 +769,8 @@ module Prism
     def test_BreakNode
       assert_prism_eval("while true; break; end")
       assert_prism_eval("while true; break 1; end")
+      assert_prism_eval("while true; break 1, 2; end")
+
       assert_prism_eval("[].each { break }")
     end
 
@@ -830,6 +859,13 @@ module Prism
           res << i
         end
         res
+      CODE
+
+      assert_prism_eval(<<-CODE)
+        (1..5).map do |i|
+          next i, :even if i.even?
+          i
+        end
       CODE
 
       assert_prism_eval(<<-CODE)
@@ -1001,7 +1037,20 @@ module Prism
     end
 
     def test_ReturnNode
-      assert_prism_eval("def return_node; return 1; end")
+      assert_prism_eval(<<-CODE)
+        def self.prism_test_return_node
+          return 1
+        end
+        prism_test_return_node
+      CODE
+
+      assert_prism_eval(<<-CODE)
+        def self.prism_test_return_node
+          return 1, 2
+        end
+        prism_test_return_node
+      CODE
+
       assert_prism_eval(<<-CODE)
         def self.prism_test_return_node
           [1].each do |e|
@@ -1010,6 +1059,7 @@ module Prism
         end
         prism_test_return_node
       CODE
+
       assert_prism_eval(<<-CODE)
         def self.prism_test_return_node
           [1].map do |i|

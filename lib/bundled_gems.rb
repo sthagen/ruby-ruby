@@ -89,10 +89,10 @@ module Gem::BUNDLED_GEMS
   end
 
   def self.warning?(name, specs: nil)
-    name = File.path(name) # name can be a feature name or a file path with String or Pathname
-    return if specs.to_a.map(&:name).include?(name.sub(LIBEXT, ""))
-    name = name.tr("/", "-")
-    _t, path = $:.resolve_feature_path(name)
+    feature = File.path(name) # name can be a feature name or a file path with String or Pathname
+    return if specs.to_a.map(&:name).include?(feature.sub(LIBEXT, ""))
+    _t, path = $:.resolve_feature_path(feature)
+    name = feature.tr("/", "-")
     if gem = find_gem(path)
       caller = caller_locations(3, 3).find {|c| c&.absolute_path}
       return if find_gem(caller&.absolute_path)
@@ -103,20 +103,24 @@ module Gem::BUNDLED_GEMS
       return
     end
     return if WARNED[name]
+    # Ignore to warn like "bigdecimal/util" feature.
+    # It should be better to warn it, but it is difficult to cover all of target features.
+    return unless SINCE[name]
     WARNED[name] = true
     if gem == true
       gem = name
+      "#{feature} was loaded from the standard library, but"
     elsif gem
       return if WARNED[gem]
       WARNED[gem] = true
-      "#{name} is found in #{gem}"
+      "#{feature} is found in #{gem}, which"
     else
       return
     end + build_message(gem)
   end
 
   def self.build_message(gem)
-    msg = " which #{RUBY_VERSION < SINCE[gem] ? "will no longer be" : "is not"} part of the default gems since Ruby #{SINCE[gem]}."
+    msg = " #{RUBY_VERSION < SINCE[gem] ? "will no longer be" : "is not"} part of the default gems since Ruby #{SINCE[gem]}."
 
     if defined?(Bundler)
       msg += " Add #{gem} to your Gemfile or gemspec."
@@ -150,8 +154,11 @@ end
 # If loading library is not part of the default gems and the bundled gems, warn it.
 class LoadError
   def message
-    if !defined?(Bundler) && Gem::BUNDLED_GEMS::SINCE[path] && !Gem::BUNDLED_GEMS::WARNED[path]
-      warn path + Gem::BUNDLED_GEMS.build_message(path)
+    return super unless path
+
+    name = path.tr("/", "-")
+    if !defined?(Bundler) && Gem::BUNDLED_GEMS::SINCE[name] && !Gem::BUNDLED_GEMS::WARNED[name]
+      warn name + Gem::BUNDLED_GEMS.build_message(name)
     end
     super
   end
