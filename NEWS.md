@@ -40,7 +40,7 @@ Note: We're only listing outstanding class updates.
 
 * Fiber
 
-    * Introduce Fiber#kill, similar to Thread#kill. [[Bug #595]]
+    * Introduce Fiber#kill. [[Bug #595]]
       ```ruby
       fiber = Fiber.new do
         while true
@@ -201,6 +201,7 @@ The following default gems are updated.
 * reline 0.4.0
 * rinda 0.2.0
 * securerandom 0.3.0
+* set 1.0.4
 * shellwords 0.2.0
 * singleton 0.2.0
 * stringio 3.1.1
