@@ -3921,7 +3921,8 @@ pm_keyword_hash_node_create(pm_parser_t *parser) {
     *node = (pm_keyword_hash_node_t) {
         .base = {
             .type = PM_KEYWORD_HASH_NODE,
-            .location = PM_OPTIONAL_LOCATION_NOT_PROVIDED_VALUE
+            .location = PM_OPTIONAL_LOCATION_NOT_PROVIDED_VALUE,
+            .flags = PM_KEYWORD_HASH_NODE_FLAGS_STATIC_KEYS
         },
         .elements = { 0 }
     };
@@ -3934,6 +3935,12 @@ pm_keyword_hash_node_create(pm_parser_t *parser) {
  */
 static void
 pm_keyword_hash_node_elements_append(pm_keyword_hash_node_t *hash, pm_node_t *element) {
+    // If the element being added is not an AssocNode or does not have a static literal key, then
+    // we want to turn the STATIC_KEYS flag off.
+    if (!PM_NODE_TYPE_P(element, PM_ASSOC_NODE) || (((pm_assoc_node_t *) element)->key->flags & PM_NODE_FLAG_STATIC_LITERAL) == 0) {
+        hash->base.flags &= (pm_node_flags_t) ~PM_KEYWORD_HASH_NODE_FLAGS_STATIC_KEYS;
+    }
+
     pm_node_list_append(&hash->elements, element);
     if (hash->base.location.start == NULL) {
         hash->base.location.start = element->location.start;
@@ -10849,6 +10856,7 @@ parse_write(pm_parser_t *parser, pm_node_t *target, pm_token_t *operator, pm_nod
                     call->base.location.end = arguments->base.location.end;
 
                     parse_write_name(parser, &call->name);
+                    call->base.flags |= PM_CALL_NODE_FLAGS_ATTRIBUTE_WRITE;
                     return (pm_node_t *) call;
                 }
             }
@@ -10866,6 +10874,7 @@ parse_write(pm_parser_t *parser, pm_node_t *target, pm_token_t *operator, pm_nod
 
                 // Replace the name with "[]=".
                 call->name = pm_parser_constant_id_constant(parser, "[]=", 3);
+                call->base.flags |= PM_CALL_NODE_FLAGS_ATTRIBUTE_WRITE;
                 return target;
             }
 
