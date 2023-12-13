@@ -34,6 +34,7 @@ module Prism
       assert_prism_eval("0b10")
       assert_prism_eval("0o10")
       assert_prism_eval("010")
+      assert_prism_eval("(0o00)")
     end
 
     def test_NilNode
@@ -545,7 +546,7 @@ module Prism
     end
 
     def test_InterpolatedMatchLastLineNode
-      assert_prism_eval("$pit = '.oo'; if /\#$pit/mix; end")
+      assert_prism_eval('$pit = ".oo"; if /"#{$pit}"/mix; end')
     end
 
     def test_InterpolatedRegularExpressionNode
@@ -601,6 +602,7 @@ module Prism
       assert_prism_eval('/pit/ne')
 
       assert_prism_eval('2.times.map { /#{1}/o }')
+      assert_prism_eval('2.times.map { foo = 1; /#{foo}/o }')
     end
 
     def test_StringNode
@@ -657,6 +659,7 @@ module Prism
       assert_prism_eval("{ to_s: }")
       assert_prism_eval("{ Prism: }")
       assert_prism_eval("[ Prism: [:b, :c]]")
+      assert_prism_eval("{ [] => 1}")
     end
 
     def test_ImplicitNode
@@ -787,6 +790,7 @@ module Prism
       assert_prism_eval("while true; break 1, 2; end")
 
       assert_prism_eval("[].each { break }")
+      assert_prism_eval("[true].map { break }")
     end
 
     def test_EnsureNode
@@ -901,6 +905,15 @@ module Prism
           res << i
         end while i < 5
         res
+      CODE
+
+      assert_prism_eval(<<-CODE)
+        while false
+          begin
+          ensure
+          end
+          next
+        end
       CODE
     end
 
@@ -1401,6 +1414,12 @@ module Prism
       CODE
 
       assert_prism_eval(<<-CODE)
+        foo = Object.new
+        def foo.[]=(k,v); 42; end
+        foo.[]=(1,2)
+      CODE
+
+      assert_prism_eval(<<-CODE)
         def self.prism_opt_var_trail_hash(a = nil, *b, c, **d); end
         prism_opt_var_trail_hash("a")
         prism_opt_var_trail_hash("a", c: 1)
@@ -1408,6 +1427,18 @@ module Prism
         prism_opt_var_trail_hash("a", "b", "c")
         prism_opt_var_trail_hash("a", "b", "c", c: 1)
         prism_opt_var_trail_hash("a", "b", "c", "c" => 0, c: 1)
+      CODE
+
+      assert_prism_eval(<<-CODE)
+        class PrivateMethod
+          def initialize
+            self.instance_var
+          end
+          private
+          attr_accessor :instance_var
+        end
+        pm = PrivateMethod.new
+        pm.send(:instance_var)
       CODE
     end
 
@@ -1543,6 +1574,22 @@ module Prism
     def test_ForwardingSuperNode
       assert_prism_eval("class Forwarding; def to_s; super; end; end")
       assert_prism_eval("class Forwarding; def eval(code); super { code }; end; end")
+      assert_prism_eval(<<-CODE)
+        class A
+          def initialize(a, b)
+          end
+        end
+
+        class B < A
+          attr_reader :res
+          def initialize(a, b, *)
+            super
+            @res = [a, b]
+          end
+        end
+
+        B.new(1, 2).res
+      CODE
     end
 
     def test_KeywordHashNode
