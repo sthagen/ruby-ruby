@@ -156,7 +156,7 @@ Note: We're only listing outstanding class updates.
 
 The following default gem is added.
 
-* prism 0.18.0
+* prism 0.19.0
 
 The following default gems are updated.
 
@@ -234,7 +234,7 @@ The following bundled gems are updated.
 * test-unit 3.6.1
 * rexml 3.2.6
 * rss 0.3.0
-* net-ftp 0.3.0
+* net-ftp 0.3.2
 * net-imap 0.4.8
 * net-smtp 0.4.0
 * rbs 3.3.2
