@@ -201,7 +201,7 @@ The following default gems are updated.
 * pp 0.5.0
 * prettyprint 0.2.0
 * pstore 0.1.3
-* psych 5.1.1.1
+* psych 5.1.2
 * rdoc 6.6.2
 * readline 0.0.4
 * reline 0.4.1
@@ -247,6 +247,20 @@ The following bundled gems are updated.
 
 See GitHub releases like [Logger](https://github.com/ruby/logger/releases) or
 changelog for details of the default gems or bundled gems.
+
+### Prism
+
+* Introduced [the Prism parser](https://github.com/ruby/prism) as a default gem
+    * Prism is a portable, error tolerant, and maintainable recursive descent parser for the Ruby language
+* Prism is production ready and actively maintained, you can use it in place of Ripper
+    * There is [extensive documentation](https://ruby.github.io/prism/) on how to use Prism
+    * Prism is both a C library that will be used internally by CRuby and a Ruby gem that can be used by any tooling which needs to parse Ruby code
+    * Notable methods in the Prism API are:
+        * `Prism.parse(source)` which returns the AST as part of a parse result object
+        * `Prism.parse_comments(source)` which returns the comments
+        * `Prism.parse_success?(source)` which returns true if there are no errors
+* You can make pull requests or issues directly on [the Prism repository](https://github.com/ruby/prism) if you are interested in contributing
+* You can now use `ruby --parser=prism` or `RUBYOPT="--parser=prism"` to experiment with the Prism compiler. Please note that this flag is for debugging only.
 
 ## Supported platforms
 
@@ -332,7 +346,7 @@ changelog for details of the default gems or bundled gems.
 
 ### GC / Memory management
 
-* Major performance improvements over 3.2
+* Major performance improvements over Ruby 3.2
     * Young objects referenced by old objects are no longer immediately
       promoted to the old generation. This significantly reduces the frequency of
       major GC collections. [[Feature #19678]]
@@ -352,7 +366,7 @@ changelog for details of the default gems or bundled gems.
 
 ### YJIT
 
-* Major performance improvements over 3.2
+* Major performance improvements over Ruby 3.2
   * Support for splat and rest arguments has been improved.
   * Registers are allocated for stack operations of the virtual machine.
   * More calls with optional arguments are compiled. Exception handlers are also compiled.
@@ -362,9 +376,9 @@ changelog for details of the default gems or bundled gems.
   * `Integer#*`, `Integer#!=`, `String#!=`, `String#getbyte`,
     `Kernel#block_given?`, `Kernel#is_a?`, `Kernel#instance_of?`, and `Module#===`
     are specially optimized.
-  * Compilation speed is now slightly faster than 3.2.
+  * Compilation speed is now slightly faster than Ruby 3.2.
   * Now more than 3x faster than the interpreter on Optcarrot!
-* Significantly improved memory usage over 3.2
+* Significantly improved memory usage over Ruby 3.2
     * Metadata for compiled code uses a lot less memory.
     * `--yjit-call-threshold` is automatically raised from 30 to 120
       when the application has more than 40,000 ISEQs.
@@ -383,9 +397,11 @@ changelog for details of the default gems or bundled gems.
   * This can also be used to enable YJIT only once your application is
     done booting. `--yjit-disable` can be used if you want to use other
     YJIT options while disabling YJIT at boot.
-* Add more profiling capabilities
+* More YJIT stats are available by default
+  * `yjit_alloc_size` and several more metadata-related stats are now available by default.
   * `ratio_in_yjit` stat produced by `--yjit-stats` is now available in release builds,
     a special stats or dev build is no longer required to access most stats.
+* Add more profiling capabilities
   * `--yjit-perf` is added to facilitate profiling with Linux perf.
   * `--yjit-trace-exits` now supports sampling with `--yjit-trace-exits-sample-rate=N`
 * More thorough testing and multiple bug fixes
