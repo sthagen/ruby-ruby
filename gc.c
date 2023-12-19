@@ -4426,16 +4426,20 @@ run_finalizer(rb_objspace_t *objspace, VALUE obj, VALUE table)
         VALUE objid;
         VALUE final;
         rb_control_frame_t *cfp;
+        VALUE *sp;
         long finished;
     } saved;
+
     rb_execution_context_t * volatile ec = GET_EC();
 #define RESTORE_FINALIZER() (\
         ec->cfp = saved.cfp, \
+        ec->cfp->sp = saved.sp, \
         ec->errinfo = saved.errinfo)
 
     saved.errinfo = ec->errinfo;
     saved.objid = rb_obj_id(obj);
     saved.cfp = ec->cfp;
+    saved.sp = ec->cfp->sp;
     saved.finished = 0;
     saved.final = Qundef;
 
@@ -10748,8 +10752,7 @@ gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
         break;
 
       case T_ICLASS:
-        if (FL_TEST(obj, RICLASS_IS_ORIGIN) &&
-                !FL_TEST(obj, RICLASS_ORIGIN_SHARED_MTBL)) {
+        if (RICLASS_OWNS_M_TBL_P(obj)) {
             update_m_tbl(objspace, RCLASS_M_TBL(obj));
         }
         if (RCLASS_SUPER((VALUE)obj)) {

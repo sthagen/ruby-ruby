@@ -5567,6 +5567,7 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
         int table_size = (int) locals_size;
 
         if (PM_NODE_TYPE_P(scope_node->ast_node, PM_FOR_NODE)) {
+            body->param.lead_num = 1;
             table_size++;
         }
 
@@ -6152,11 +6153,16 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
                   }
                   case PM_FOR_NODE: {
                     pm_for_node_t *for_node = (pm_for_node_t *)scope_node->ast_node;
+                    LABEL *target = NEW_LABEL(lineno);
+                    LABEL *old_start = ISEQ_COMPILE_DATA(iseq)->start_label;
 
                     ADD_GETLOCAL(ret, &dummy_line_node, 1, 0);
                     PM_COMPILE(for_node->index);
                     PM_NOP;
+                    ADD_LABEL(ret, target);
+                    ISEQ_COMPILE_DATA(iseq)->start_label = target;
                     pm_compile_node(iseq, (pm_node_t *)(scope_node->body), ret, src, popped, scope_node);
+                    ISEQ_COMPILE_DATA(iseq)->start_label = old_start;
                     break;
                   }
                   case PM_INTERPOLATED_REGULAR_EXPRESSION_NODE: {
