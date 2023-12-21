@@ -128,7 +128,9 @@ Note: We're only listing outstanding class updates.
 ## Stdlib updates
 
 * RubyGems and Bundler warn if users do `require` the following gems without adding them to Gemfile or gemspec.
-  This is because they will become the bundled gems in the future version of Ruby.
+  This is because they will become the bundled gems in the future version of Ruby. This warning is suppressed
+  if you use bootsnap gem. We recoomend to run your application with `DISABLE_BOOTSNAP=1` environmental variable
+  at least once. This is limitation of this version.
   [[Feature #19351]] [[Feature #19776]] [[Feature #19843]]
     * abbrev
     * base64
@@ -241,8 +243,8 @@ The following bundled gems are updated.
 * net-ftp 0.3.3
 * net-imap 0.4.8
 * net-smtp 0.4.0
-* rbs 3.3.2
-* typeprof 0.21.8
+* rbs 3.4.0
+* typeprof 0.21.9
 * debug 1.9.0
 
 See GitHub releases like [Logger](https://github.com/ruby/logger/releases) or
