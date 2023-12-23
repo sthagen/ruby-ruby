@@ -2994,7 +2994,6 @@ ruby_vm_destruct(rb_vm_t *vm)
         rb_thread_t *th = vm->ractor.main_thread;
         VALUE *stack = th->ec->vm_stack;
         if (rb_free_at_exit) {
-            rb_free_default_rand_key();
             rb_free_encoded_insn_data();
             rb_free_global_enc_table();
             rb_free_loaded_builtin_table();
@@ -3056,7 +3055,9 @@ ruby_vm_destruct(rb_vm_t *vm)
             if (rb_free_at_exit) {
                 rb_objspace_free_objects(objspace);
                 rb_free_generic_iv_tbl_();
-                if (th) {
+                rb_free_default_rand_key();
+                if (th && vm->fork_gen == 0) {
+                    /* If we have forked, main_thread may not be the initial thread */
                     xfree(stack);
                     ruby_mimfree(th);
                 }

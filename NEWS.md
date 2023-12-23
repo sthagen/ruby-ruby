@@ -178,12 +178,12 @@ The following default gem is added.
 
 The following default gems are updated.
 
-* RubyGems 3.5.2
+* RubyGems 3.5.3
 * abbrev 0.1.2
 * base64 0.2.0
 * benchmark 0.3.0
 * bigdecimal 3.1.5
-* bundler 2.5.2
+* bundler 2.5.3
 * cgi 0.4.1
 * csv 3.2.8
 * date 3.3.4
@@ -226,7 +226,7 @@ The following default gems are updated.
 * resolv 0.3.0
 * rinda 0.2.0
 * securerandom 0.3.1
-* set 1.0.4
+* set 1.1.0
 * shellwords 0.2.0
 * singleton 0.2.0
 * stringio 3.1.0
