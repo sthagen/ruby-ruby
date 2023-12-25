@@ -901,7 +901,7 @@ pst_bitand(VALUE st1, VALUE st2)
         rb_raise(rb_eArgError, "negative mask value: %d", mask);
     }
 #define WARN_SUGGEST(suggest) \
-    rb_warn_deprecated_to_remove_at(3.4, "Process::Status#&", suggest)
+    rb_warn_deprecated_to_remove_at(3.5, "Process::Status#&", suggest)
 
     switch (mask) {
       case 0x80:
@@ -956,7 +956,7 @@ pst_rshift(VALUE st1, VALUE st2)
         rb_raise(rb_eArgError, "negative shift value: %d", places);
     }
 #define WARN_SUGGEST(suggest) \
-    rb_warn_deprecated_to_remove_at(3.4, "Process::Status#>>", suggest)
+    rb_warn_deprecated_to_remove_at(3.5, "Process::Status#>>", suggest)
 
     switch (places) {
       case 7:

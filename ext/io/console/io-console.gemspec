@@ -1,5 +1,5 @@
 # -*- ruby -*-
-_VERSION = "0.7.1"
+_VERSION = "0.7.2.dev.1"
 
 Gem::Specification.new do |s|
   s.name = "io-console"
@@ -10,6 +10,7 @@ Gem::Specification.new do |s|
   s.required_ruby_version = ">= 2.6.0"
   s.homepage = "https://github.com/ruby/io-console"
   s.metadata["source_code_url"] = s.homepage
+  s.metadata["changelog_uri"] = s.homepage + "/releases"
   s.authors = ["Nobu Nakada"]
   s.require_path = %[lib]
   s.files = %w[
