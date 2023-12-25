@@ -469,6 +469,12 @@ class TestRegexp < Test::Unit::TestCase
     assert_equal('/\/\xF1\xF2\xF3/i', /\/#{s}/i.inspect)
   end
 
+  def test_inspect_under_gc_compact_stress
+    EnvUtil.under_gc_compact_stress do
+      assert_equal('/(?-mix:\\/)|/', Regexp.union(/\//, "").inspect)
+    end
+  end
+
   def test_char_to_option
     assert_equal("BAR", "FOOBARBAZ"[/b../i])
     assert_equal("bar", "foobarbaz"[/  b  .  .  /x])
@@ -870,6 +876,13 @@ class TestRegexp < Test::Unit::TestCase
     $_ = "abc"; assert_equal(1, ~/bc/)
     $_ = "abc"; assert_nil(~/d/)
     $_ = nil; assert_nil(~/./)
+  end
+
+  def test_match_under_gc_compact_stress
+    EnvUtil.under_gc_compact_stress do
+      m = /(?<foo>.)(?<n>[^aeiou])?(?<bar>.+)/.match("hoge\u3042")
+      assert_equal("h", m.match(:foo))
+    end
   end
 
   def test_match_p

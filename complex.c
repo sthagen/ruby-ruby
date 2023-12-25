@@ -789,8 +789,6 @@ rb_complex_real(VALUE self)
  *
  *   Complex.polar(1, Math::PI/4).imag # => 0.7071067811865476 # Square root of 2.
  *
- * \Complex#imaginary is an alias for \Complex#imag.
- *
  */
 VALUE
 rb_complex_imag(VALUE self)
@@ -1001,7 +999,6 @@ f_divide(VALUE self, VALUE other,
  *   Complex(9, 8)  / 4              # => ((9/4)+(2/1)*i)
  *   Complex(20, 9) / 9.8            # => (2.0408163265306123+0.9183673469387754i)
  *
- * Complex#quo is an alias for Complex#/.
  */
 VALUE
 rb_complex_div(VALUE self, VALUE other)
@@ -1327,7 +1324,6 @@ nucomp_coerce(VALUE self, VALUE other)
  *
  *   Complex.rectangular(1, 1).abs # => 1.4142135623730951 # The square root of 2.
  *
- * Complex#magnitude is an alias for Complex#abs.
  */
 VALUE
 rb_complex_abs(VALUE self)
@@ -1388,7 +1384,6 @@ nucomp_abs2(VALUE self)
  *
  *   Complex.polar(1, 1.0/3).arg # => 0.33333333333333326
  *
- * Complex#angle and Complex#phase are aliases for Complex#arg.
  */
 VALUE
 rb_complex_arg(VALUE self)
@@ -1454,7 +1449,6 @@ nucomp_polar(VALUE self)
  *
  *   Complex.rect(1, 2).conj # => (1-2i)
  *
- * Complex#conjugate is an alias for Complex#conj.
  */
 VALUE
 rb_complex_conjugate(VALUE self)
@@ -1547,6 +1541,18 @@ rb_complex_hash(VALUE self)
     return v;
 }
 
+/*
+ * :call-seq:
+ *   hash -> integer
+ *
+ * Returns the integer hash value for +self+.
+ *
+ * Two \Complex objects created from the same values will have the same hash value
+ * (and will compare using #eql?):
+ *
+ *   Complex(1, 2).hash == Complex(1, 2).hash # => true
+ *
+ */
 static VALUE
 nucomp_hash(VALUE self)
 {
@@ -1926,9 +1932,9 @@ nilclass_to_c(VALUE self)
 
 /*
  * call-seq:
- *    num.to_c  ->  complex
+ *   to_c -> complex
  *
- * Returns the value as a complex.
+ * Returns +self+ as a Complex object.
  */
 static VALUE
 numeric_to_c(VALUE self)
@@ -2226,32 +2232,30 @@ string_to_c_strict(VALUE self, int raise)
 
 /*
  * call-seq:
- *    str.to_c  ->  complex
+ *   to_c -> complex
  *
- * Returns a complex which denotes the string form.  The parser
- * ignores leading whitespaces and trailing garbage.  Any digit
- * sequences can be separated by an underscore.  Returns zero for null
- * or garbage string.
+ * Returns +self+ interpreted as a Complex object;
+ * leading whitespace and trailing garbage are ignored:
  *
- *    '9'.to_c           #=> (9+0i)
- *    '2.5'.to_c         #=> (2.5+0i)
- *    '2.5/1'.to_c       #=> ((5/2)+0i)
- *    '-3/2'.to_c        #=> ((-3/2)+0i)
- *    '-i'.to_c          #=> (0-1i)
- *    '45i'.to_c         #=> (0+45i)
- *    '3-4i'.to_c        #=> (3-4i)
- *    '-4e2-4e-2i'.to_c  #=> (-400.0-0.04i)
- *    '-0.0-0.0i'.to_c   #=> (-0.0-0.0i)
- *    '1/2+3/4i'.to_c    #=> ((1/2)+(3/4)*i)
- *    'ruby'.to_c        #=> (0+0i)
+ *   '9'.to_c                 # => (9+0i)
+ *   '2.5'.to_c               # => (2.5+0i)
+ *   '2.5/1'.to_c             # => ((5/2)+0i)
+ *   '-3/2'.to_c              # => ((-3/2)+0i)
+ *   '-i'.to_c                # => (0-1i)
+ *   '45i'.to_c               # => (0+45i)
+ *   '3-4i'.to_c              # => (3-4i)
+ *   '-4e2-4e-2i'.to_c        # => (-400.0-0.04i)
+ *   '-0.0-0.0i'.to_c         # => (-0.0-0.0i)
+ *   '1/2+3/4i'.to_c          # => ((1/2)+(3/4)*i)
+ *   '1.0@0'.to_c             # => (1+0.0i)
+ *   "1.0@#{Math::PI/2}".to_c # => (0.0+1i)
+ *   "1.0@#{Math::PI}".to_c   # => (-1+0.0i)
  *
- * Polar form:
- *    include Math
- *    "1.0@0".to_c        #=> (1+0.0i)
- *    "1.0@#{PI/2}".to_c  #=> (0.0+1i)
- *    "1.0@#{PI}".to_c    #=> (-1+0.0i)
+ * Returns \Complex zero if the string cannot be converted:
  *
- * See Kernel.Complex.
+ *   'ruby'.to_c        # => (0+0i)
+ *
+ * See Kernel#Complex.
  */
 static VALUE
 string_to_c(VALUE self)
@@ -2362,9 +2366,9 @@ nucomp_s_convert(int argc, VALUE *argv, VALUE klass)
 
 /*
  * call-seq:
- *    num.abs2  ->  real
+ *   abs2 -> real
  *
- * Returns square of self.
+ * Returns the square of +self+.
  */
 static VALUE
 numeric_abs2(VALUE self)
@@ -2374,11 +2378,9 @@ numeric_abs2(VALUE self)
 
 /*
  * call-seq:
- *    num.arg    ->  0 or float
- *    num.angle  ->  0 or float
- *    num.phase  ->  0 or float
+ *   arg -> 0 or Math::PI
  *
- * Returns 0 if the value is positive, pi otherwise.
+ * Returns zero if +self+ is positive, Math::PI otherwise.
  */
 static VALUE
 numeric_arg(VALUE self)
@@ -2390,10 +2392,9 @@ numeric_arg(VALUE self)
 
 /*
  * call-seq:
- *    num.rect  ->  array
- *    num.rectangular  ->  array
+ *   rect -> array
  *
- * Returns an array; [num, 0].
+ * Returns array <tt>[self, 0]</tt>.
  */
 static VALUE
 numeric_rect(VALUE self)
@@ -2403,9 +2404,9 @@ numeric_rect(VALUE self)
 
 /*
  * call-seq:
- *    num.polar  ->  array
+ *   polar -> array
  *
- * Returns an array; [num.abs, num.arg].
+ * Returns array <tt>[self.abs, self.arg]</tt>.
  */
 static VALUE
 numeric_polar(VALUE self)
@@ -2433,11 +2434,9 @@ numeric_polar(VALUE self)
 
 /*
  * call-seq:
- *    flo.arg    ->  0 or float
- *    flo.angle  ->  0 or float
- *    flo.phase  ->  0 or float
+ *   arg -> 0 or Math::PI
  *
- * Returns 0 if the value is positive, pi otherwise.
+ * Returns 0 if +self+ is positive, Math::PI otherwise.
  */
 static VALUE
 float_arg(VALUE self)
