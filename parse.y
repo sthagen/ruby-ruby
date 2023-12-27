@@ -1188,7 +1188,6 @@ static void fixpos(NODE*,NODE*);
 static int value_expr_gen(struct parser_params*,NODE*);
 static void void_expr(struct parser_params*,NODE*);
 static NODE *remove_begin(NODE*);
-static NODE *remove_begin_all(NODE*);
 #define value_expr(node) value_expr_gen(p, (node))
 static NODE *void_stmts(struct parser_params*,NODE*);
 static void reduce_nodes(struct parser_params*,NODE**);
@@ -2391,7 +2390,7 @@ stmt		: keyword_alias fitem {SET_LEX_STATE(EXPR_FNAME|EXPR_FITEM);} fitem
                         static const char mesg[] = "can't make alias for the number variables";
                     /*%%%*/
                         yyerror1(&@3, mesg);
-                        $$ = NEW_BEGIN(0, &@$);
+                        $$ = NEW_ERROR(&@$);
                     /*% %*/
                     /*% ripper[error]: alias_error!(ERR_MESG(), $3) %*/
                     }
@@ -2597,7 +2596,7 @@ command_asgn	: lhs '=' lex_ctxt command_rhs
                     {
                     /*%%%*/
                         rb_backref_error(p, $1);
-                        $$ = NEW_BEGIN(0, &@$);
+                        $$ = NEW_ERROR(&@$);
                     /*% %*/
                     /*% ripper[error]: backref_error(p, RNODE($1), assign!(var_field(p, $1), $4)) %*/
                     }
@@ -3076,7 +3075,7 @@ mlhs_node	: user_variable
                     {
                     /*%%%*/
                         rb_backref_error(p, $1);
-                        $$ = NEW_BEGIN(0, &@$);
+                        $$ = NEW_ERROR(&@$);
                     /*% %*/
                     /*% ripper[error]: backref_error(p, RNODE($1), var_field(p, $1)) %*/
                     }
@@ -3142,7 +3141,7 @@ lhs		: user_variable
                     {
                     /*%%%*/
                         rb_backref_error(p, $1);
-                        $$ = NEW_BEGIN(0, &@$);
+                        $$ = NEW_ERROR(&@$);
                     /*% %*/
                     /*% ripper[error]: backref_error(p, RNODE($1), var_field(p, $1)) %*/
                     }
@@ -3328,7 +3327,7 @@ arg		: lhs '=' lex_ctxt arg_rhs
                     {
                     /*%%%*/
                         rb_backref_error(p, $1);
-                        $$ = NEW_BEGIN(0, &@$);
+                        $$ = NEW_ERROR(&@$);
                     /*% %*/
                     /*% ripper[error]: backref_error(p, RNODE($1), opassign!(var_field(p, $1), $2, $4)) %*/
                     }
@@ -3898,7 +3897,7 @@ primary		: literal
                     {
                     /*%%%*/
                         if (nd_type_p($2, NODE_SELF)) RNODE_SELF($2)->nd_state = 0;
-                        $$ = NEW_BEGIN($2, &@$);
+                        $$ = NEW_BLOCK($2, &@$);
                     /*% %*/
                     /*% ripper: paren!($2) %*/
                     }
@@ -5521,7 +5520,7 @@ p_primitive	: literal
                 | keyword_variable
                     {
                     /*%%%*/
-                        if (!($$ = gettable(p, $1, &@$))) $$ = NEW_BEGIN(0, &@$);
+                        if (!($$ = gettable(p, $1, &@$))) $$ = NEW_ERROR(&@$);
                     /*% %*/
                     /*% ripper: var_ref!($1) %*/
                     }
@@ -5552,7 +5551,7 @@ p_var_ref	: '^' tIDENTIFIER
                 | '^' nonlocal_var
                     {
                     /*%%%*/
-                        if (!($$ = gettable(p, $2, &@$))) $$ = NEW_BEGIN(0, &@$);
+                        if (!($$ = gettable(p, $2, &@$))) $$ = NEW_ERROR(&@$);
                     /*% %*/
                     /*% ripper: var_ref!($2) %*/
                     }
@@ -5561,7 +5560,7 @@ p_var_ref	: '^' tIDENTIFIER
 p_expr_ref	: '^' tLPAREN expr_value rparen
                     {
                     /*%%%*/
-                        $$ = NEW_BEGIN($3, &@$);
+                        $$ = NEW_BLOCK($3, &@$);
                     /*% %*/
                     /*% ripper: begin!($3) %*/
                     }
@@ -5981,7 +5980,7 @@ string_dend	: tSTRING_DEND
 string_dvar	: nonlocal_var
                     {
                     /*%%%*/
-                        if (!($$ = gettable(p, $1, &@$))) $$ = NEW_BEGIN(0, &@$);
+                        if (!($$ = gettable(p, $1, &@$))) $$ = NEW_ERROR(&@$);
                     /*% %*/
                     /*% ripper: var_ref!($1) %*/
                     }
@@ -6055,7 +6054,7 @@ keyword_variable: keyword_nil {$$ = KWD2EID(nil, $1);}
 var_ref		: user_variable
                     {
                     /*%%%*/
-                        if (!($$ = gettable(p, $1, &@$))) $$ = NEW_BEGIN(0, &@$);
+                        if (!($$ = gettable(p, $1, &@$))) $$ = NEW_ERROR(&@$);
                     /*%
                         if (id_is_var(p, get_id($1))) {
                             $$ = dispatch1(var_ref, $1);
@@ -6068,7 +6067,7 @@ var_ref		: user_variable
                 | keyword_variable
                     {
                     /*%%%*/
-                        if (!($$ = gettable(p, $1, &@$))) $$ = NEW_BEGIN(0, &@$);
+                        if (!($$ = gettable(p, $1, &@$))) $$ = NEW_ERROR(&@$);
                     /*% %*/
                     /*% ripper: var_ref!($1) %*/
                     }
@@ -6669,7 +6668,7 @@ assoc		: arg_value tASSOC arg_value
                     {
                     /*%%%*/
                         NODE *val = gettable(p, $1, &@$);
-                        if (!val) val = NEW_BEGIN(0, &@$);
+                        if (!val) val = NEW_ERROR(&@$);
                         $$ = list_append(p, NEW_LIST(NEW_LIT(ID2SYM($1), &@1), &@$), val);
                     /*% %*/
                     /*% ripper: assoc_new!($1, Qnil) %*/
@@ -11252,7 +11251,7 @@ rb_node_block_new(struct parser_params *p, NODE *nd_head, const YYLTYPE *loc)
 {
     rb_node_block_t *n = NODE_NEWNODE(NODE_BLOCK, rb_node_block_t, loc);
     n->nd_head = nd_head;
-    n->nd_end = 0;
+    n->nd_end = (NODE *)n;
     n->nd_next = 0;
 
     return n;
@@ -12343,7 +12342,6 @@ block_append(struct parser_params *p, NODE *head, NODE *tail)
     switch (nd_type(h)) {
       default:
         h = end = NEW_BLOCK(head, &head->nd_loc);
-        RNODE_BLOCK(end)->nd_end = end;
         head = end;
         break;
       case NODE_BLOCK:
@@ -12369,7 +12367,6 @@ block_append(struct parser_params *p, NODE *head, NODE *tail)
 
     if (!nd_type_p(tail, NODE_BLOCK)) {
         tail = NEW_BLOCK(tail, &tail->nd_loc);
-        RNODE_BLOCK(tail)->nd_end = tail;
     }
     RNODE_BLOCK(end)->nd_next = tail;
     RNODE_BLOCK(h)->nd_end = RNODE_BLOCK(tail)->nd_end;
@@ -12883,7 +12880,19 @@ kwd_append(rb_node_kw_arg_t *kwlist, rb_node_kw_arg_t *kw)
 static NODE *
 new_defined(struct parser_params *p, NODE *expr, const YYLTYPE *loc)
 {
-    return NEW_DEFINED(remove_begin_all(expr), loc);
+    NODE *n = expr;
+    while (n) {
+        if (nd_type_p(n, NODE_BEGIN)) {
+            n = RNODE_BEGIN(n)->nd_body;
+        }
+        else if (nd_type_p(n, NODE_BLOCK) && RNODE_BLOCK(n)->nd_end == n) {
+            n = RNODE_BLOCK(n)->nd_head;
+        }
+        else {
+            break;
+        }
+    }
+    return NEW_DEFINED(n, loc);
 }
 
 static NODE*
@@ -13335,7 +13344,7 @@ assignable(struct parser_params *p, ID id, NODE *val, const YYLTYPE *loc)
       case NODE_CVASGN: return NEW_CVASGN(id, val, loc);
     }
     if (err) yyerror1(loc, err);
-    return NEW_BEGIN(0, loc);
+    return NEW_ERROR(loc);
 }
 #else
 static VALUE
@@ -14023,16 +14032,6 @@ remove_begin(NODE *node)
     return node;
 }
 
-static NODE *
-remove_begin_all(NODE *node)
-{
-    NODE **n = &node, *n1 = node;
-    while (n1 && nd_type_p(n1, NODE_BEGIN)) {
-        *n = n1 = RNODE_BEGIN(n1)->nd_body;
-    }
-    return node;
-}
-
 static void
 reduce_nodes(struct parser_params *p, NODE **body)
 {
@@ -14202,7 +14201,12 @@ cond0(struct parser_params *p, NODE *node, enum cond_type type, const YYLTYPE *l
         return NEW_MATCH2(node, NEW_GVAR(idLASTLINE, loc), loc);
 
       case NODE_BLOCK:
-        RNODE_BLOCK(RNODE_BLOCK(node)->nd_end)->nd_head = cond0(p, RNODE_BLOCK(RNODE_BLOCK(node)->nd_end)->nd_head, type, loc, false);
+        {
+            NODE *end = RNODE_BLOCK(node)->nd_end;
+            NODE **expr = &RNODE_BLOCK(end)->nd_head;
+            if (top) top = node == end;
+            *expr = cond0(p, *expr, type, loc, top);
+        }
         break;
 
       case NODE_AND:
@@ -14763,7 +14767,7 @@ new_op_assign(struct parser_params *p, NODE *lhs, ID op, NODE *rhs, struct lex_c
         }
     }
     else {
-        asgn = NEW_BEGIN(0, loc);
+        asgn = NEW_ERROR(loc);
     }
     return asgn;
 }
@@ -14801,7 +14805,7 @@ new_const_op_assign(struct parser_params *p, NODE *lhs, ID op, NODE *rhs, struct
         asgn = NEW_OP_CDECL(lhs, op, rhs, loc);
     }
     else {
-        asgn = NEW_BEGIN(0, loc);
+        asgn = NEW_ERROR(loc);
     }
     fixpos(asgn, lhs);
     return asgn;
@@ -15380,7 +15384,7 @@ rb_reg_named_capture_assign_iter_impl(struct parser_params *p, const char *s, lo
     }
     node = node_assign(p, assignable(p, var, 0, loc), NEW_LIT(ID2SYM(var), loc), NO_LEX_CTXT, loc);
     succ = *succ_block;
-    if (!succ) succ = NEW_BEGIN(0, loc);
+    if (!succ) succ = NEW_ERROR(loc);
     succ = block_append(p, succ, node);
     *succ_block = succ;
     return ST_CONTINUE;
