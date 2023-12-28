@@ -450,6 +450,12 @@ ruby_verbose2(void)
     return ruby_verbose;
 }
 
+static int *
+rb_errno_ptr2(void)
+{
+    return rb_errno_ptr();
+}
+
 static int
 type_p(VALUE obj, int t)
 {
@@ -566,6 +572,7 @@ rb_parser_config_initialize(rb_parser_config_t *config)
     config->ary_join          = rb_ary_join;
     config->ary_reverse       = rb_ary_reverse;
     config->ary_clear         = rb_ary_clear;
+    config->ary_modify        = rb_ary_modify;
     config->array_len         = rb_array_len;
     config->array_aref        = RARRAY_AREF;
 
@@ -723,6 +730,7 @@ rb_parser_config_initialize(rb_parser_config_t *config)
     config->bug             = rb_bug;
     config->fatal           = rb_fatal;
     config->verbose         = ruby_verbose2;
+    config->errno_ptr       = rb_errno_ptr2;
 
     config->make_backtrace = rb_make_backtrace;
 
