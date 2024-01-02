@@ -578,6 +578,17 @@ class TestRubyOptions < Test::Unit::TestCase
       feature4299 = '[ruby-dev:43083]'
       assert_in_out_err(["-w", t.path], "", [], err, feature4299)
       assert_in_out_err(["-wr", t.path, "-e", ""], "", [], err, feature4299)
+
+      t.rewind
+      t.truncate(0)
+      t.puts "if a = __LINE__; end"
+      t.puts "if a = __FILE__; end"
+      t.flush
+      err = ["#{t.path}:1:#{warning}",
+             "#{t.path}:2:#{warning}",
+            ]
+      assert_in_out_err(["-w", t.path], "", [], err)
+      assert_in_out_err(["-wr", t.path, "-e", ""], "", [], err)
     }
   end
 
