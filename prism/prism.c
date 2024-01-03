@@ -813,6 +813,9 @@ typedef struct {
 
     /** The optional block attached to the call. */
     pm_node_t *block;
+
+    /** The flag indicating whether this arguments list has forwarding argument. */
+    bool has_forwarding;
 } pm_arguments_t;
 
 /**
@@ -1650,12 +1653,13 @@ pm_break_node_create(pm_parser_t *parser, const pm_token_t *keyword, pm_argument
  * in the various specializations of this function.
  */
 static pm_call_node_t *
-pm_call_node_create(pm_parser_t *parser) {
+pm_call_node_create(pm_parser_t *parser, pm_node_flags_t flags) {
     pm_call_node_t *node = PM_ALLOC_NODE(parser, pm_call_node_t);
 
     *node = (pm_call_node_t) {
         {
             .type = PM_CALL_NODE,
+            .flags = flags,
             .location = PM_LOCATION_NULL_VALUE(parser),
         },
         .receiver = NULL,
@@ -1672,6 +1676,15 @@ pm_call_node_create(pm_parser_t *parser) {
 }
 
 /**
+ * Returns the value that the ignore visibility flag should be set to for the
+ * given receiver.
+ */
+static inline pm_node_flags_t
+pm_call_node_ignore_visibility_flag(const pm_node_t *receiver) {
+    return PM_NODE_TYPE_P(receiver, PM_SELF_NODE) ? PM_CALL_NODE_FLAGS_IGNORE_VISIBILITY : 0;
+}
+
+/**
  * Allocate and initialize a new CallNode node from an aref or an aset
  * expression.
  */
@@ -1679,7 +1692,7 @@ static pm_call_node_t *
 pm_call_node_aref_create(pm_parser_t *parser, pm_node_t *receiver, pm_arguments_t *arguments) {
     pm_assert_value_expression(parser, receiver);
 
-    pm_call_node_t *node = pm_call_node_create(parser);
+    pm_call_node_t *node = pm_call_node_create(parser, pm_call_node_ignore_visibility_flag(receiver));
 
     node->base.location.start = receiver->location.start;
     node->base.location.end = pm_arguments_end(arguments);
@@ -1705,7 +1718,7 @@ pm_call_node_binary_create(pm_parser_t *parser, pm_node_t *receiver, pm_token_t 
     pm_assert_value_expression(parser, receiver);
     pm_assert_value_expression(parser, argument);
 
-    pm_call_node_t *node = pm_call_node_create(parser);
+    pm_call_node_t *node = pm_call_node_create(parser, pm_call_node_ignore_visibility_flag(receiver));
 
     node->base.location.start = MIN(receiver->location.start, argument->location.start);
     node->base.location.end = MAX(receiver->location.end, argument->location.end);
@@ -1728,7 +1741,7 @@ static pm_call_node_t *
 pm_call_node_call_create(pm_parser_t *parser, pm_node_t *receiver, pm_token_t *operator, pm_token_t *message, pm_arguments_t *arguments) {
     pm_assert_value_expression(parser, receiver);
 
-    pm_call_node_t *node = pm_call_node_create(parser);
+    pm_call_node_t *node = pm_call_node_create(parser, pm_call_node_ignore_visibility_flag(receiver));
 
     node->base.location.start = receiver->location.start;
     const uint8_t *end = pm_arguments_end(arguments);
@@ -1759,7 +1772,7 @@ pm_call_node_call_create(pm_parser_t *parser, pm_node_t *receiver, pm_token_t *o
  */
 static pm_call_node_t *
 pm_call_node_fcall_create(pm_parser_t *parser, pm_token_t *message, pm_arguments_t *arguments) {
-    pm_call_node_t *node = pm_call_node_create(parser);
+    pm_call_node_t *node = pm_call_node_create(parser, PM_CALL_NODE_FLAGS_IGNORE_VISIBILITY);
 
     node->base.location.start = message->start;
     node->base.location.end = pm_arguments_end(arguments);
@@ -1781,7 +1794,7 @@ static pm_call_node_t *
 pm_call_node_not_create(pm_parser_t *parser, pm_node_t *receiver, pm_token_t *message, pm_arguments_t *arguments) {
     pm_assert_value_expression(parser, receiver);
 
-    pm_call_node_t *node = pm_call_node_create(parser);
+    pm_call_node_t *node = pm_call_node_create(parser, receiver == NULL ? 0 : pm_call_node_ignore_visibility_flag(receiver));
 
     node->base.location.start = message->start;
     if (arguments->closing_loc.start != NULL) {
@@ -1807,7 +1820,7 @@ static pm_call_node_t *
 pm_call_node_shorthand_create(pm_parser_t *parser, pm_node_t *receiver, pm_token_t *operator, pm_arguments_t *arguments) {
     pm_assert_value_expression(parser, receiver);
 
-    pm_call_node_t *node = pm_call_node_create(parser);
+    pm_call_node_t *node = pm_call_node_create(parser, pm_call_node_ignore_visibility_flag(receiver));
 
     node->base.location.start = receiver->location.start;
     node->base.location.end = pm_arguments_end(arguments);
@@ -1834,7 +1847,7 @@ static pm_call_node_t *
 pm_call_node_unary_create(pm_parser_t *parser, pm_token_t *operator, pm_node_t *receiver, const char *name) {
     pm_assert_value_expression(parser, receiver);
 
-    pm_call_node_t *node = pm_call_node_create(parser);
+    pm_call_node_t *node = pm_call_node_create(parser, pm_call_node_ignore_visibility_flag(receiver));
 
     node->base.location.start = operator->start;
     node->base.location.end = receiver->location.end;
@@ -1852,7 +1865,7 @@ pm_call_node_unary_create(pm_parser_t *parser, pm_token_t *operator, pm_node_t *
  */
 static pm_call_node_t *
 pm_call_node_variable_call_create(pm_parser_t *parser, pm_token_t *message) {
-    pm_call_node_t *node = pm_call_node_create(parser);
+    pm_call_node_t *node = pm_call_node_create(parser, PM_CALL_NODE_FLAGS_IGNORE_VISIBILITY);
 
     node->base.location = PM_LOCATION_TOKEN_VALUE(message);
     node->message_loc = PM_OPTIONAL_LOCATION_TOKEN_VALUE(message);
@@ -2172,11 +2185,16 @@ pm_call_target_node_create(pm_parser_t *parser, pm_call_node_t *target) {
 static pm_index_target_node_t *
 pm_index_target_node_create(pm_parser_t *parser, pm_call_node_t *target) {
     pm_index_target_node_t *node = PM_ALLOC_NODE(parser, pm_index_target_node_t);
+    pm_node_flags_t flags = target->base.flags;
+
+    if (parser->version != PM_OPTIONS_VERSION_CRUBY_3_3_0) {
+        flags |= PM_CALL_NODE_FLAGS_ATTRIBUTE_WRITE;
+    }
 
     *node = (pm_index_target_node_t) {
         {
             .type = PM_INDEX_TARGET_NODE,
-            .flags = target->base.flags,
+            .flags = flags,
             .location = target->base.location
         },
         .receiver = target->receiver,
@@ -11301,6 +11319,7 @@ parse_arguments(pm_parser_t *parser, pm_arguments_t *arguments, bool accepts_for
 
                         argument = (pm_node_t *) pm_forwarding_arguments_node_create(parser, &parser->previous);
                         parse_arguments_append(parser, arguments, argument);
+                        arguments->has_forwarding = true;
                         parsed_forwarding_arguments = true;
                         break;
                     }
@@ -12165,14 +12184,22 @@ parse_arguments_list(pm_parser_t *parser, pm_arguments_t *arguments, bool accept
         }
 
         if (block != NULL) {
-            if (arguments->block == NULL) {
+            if (arguments->block == NULL && !arguments->has_forwarding) {
                 arguments->block = (pm_node_t *) block;
             } else {
-                pm_parser_err_node(parser, (pm_node_t *) block, PM_ERR_ARGUMENT_BLOCK_MULTI);
-                if (arguments->arguments == NULL) {
-                    arguments->arguments = pm_arguments_node_create(parser);
+                if (arguments->has_forwarding) {
+                    if (parser->version != PM_OPTIONS_VERSION_CRUBY_3_3_0) {
+                        pm_parser_err_node(parser, (pm_node_t *) block, PM_ERR_ARGUMENT_BLOCK_FORWARDING);
+                    }
+                } else {
+                    pm_parser_err_node(parser, (pm_node_t *) block, PM_ERR_ARGUMENT_BLOCK_MULTI);
                 }
-                pm_arguments_node_arguments_append(arguments->arguments, arguments->block);
+                if (arguments->block != NULL) {
+                    if (arguments->arguments == NULL) {
+                        arguments->arguments = pm_arguments_node_create(parser);
+                    }
+                    pm_arguments_node_arguments_append(arguments->arguments, arguments->block);
+                }
                 arguments->block = (pm_node_t *) block;
             }
         }
@@ -17319,6 +17346,9 @@ pm_parser_init(pm_parser_t *parser, const uint8_t *source, size_t size, const pm
         if (options->suppress_warnings) {
             parser->suppress_warnings = true;
         }
+
+        // version option
+        parser->version = options->version;
 
         // scopes option
         for (size_t scope_index = 0; scope_index < options->scopes_count; scope_index++) {

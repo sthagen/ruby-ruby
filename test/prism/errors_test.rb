@@ -360,7 +360,7 @@ module Prism
 
     def test_double_splat_followed_by_splat_argument
       expected = CallNode(
-        0,
+        CallNodeFlags::IGNORE_VISIBILITY,
         nil,
         nil,
         :a,
@@ -381,7 +381,7 @@ module Prism
 
     def test_arguments_after_block
       expected = CallNode(
-        0,
+        CallNodeFlags::IGNORE_VISIBILITY,
         nil,
         nil,
         :a,
@@ -407,7 +407,7 @@ module Prism
 
     def test_splat_argument_after_keyword_argument
       expected = CallNode(
-        0,
+        CallNodeFlags::IGNORE_VISIBILITY,
         nil,
         nil,
         :a,
@@ -462,7 +462,7 @@ module Prism
         nil,
         StatementsNode(
           [CallNode(
-            0,
+            CallNodeFlags::IGNORE_VISIBILITY,
             nil,
             nil,
             :bar,
@@ -1070,7 +1070,7 @@ module Prism
 
     def test_do_not_allow_forward_arguments_in_blocks
       expected = CallNode(
-        0,
+        CallNodeFlags::IGNORE_VISIBILITY,
         nil,
         nil,
         :a,
@@ -2044,6 +2044,20 @@ module Prism
         [message1, 69..69],
         [message2, 69..69],
       ]
+    end
+
+    def test_block_arg_and_block
+      source = 'foo(&1) { }'
+      assert_errors expression(source), source, [
+        ['multiple block arguments; only one block is allowed', 8..11]
+      ], compare_ripper: false # Ripper does not check 'both block arg and actual block given'.
+    end
+
+    def test_forwarding_arg_and_block
+      source = 'def foo(...) = foo(...) { }'
+      assert_errors expression(source), source, [
+        ['both a block argument and a forwarding argument; only one block is allowed', 24..27]
+      ], compare_ripper: false # Ripper does not check 'both block arg and actual block given'.
     end
 
     private
