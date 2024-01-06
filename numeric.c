@@ -963,7 +963,10 @@ num_negative_p(VALUE num)
  *
  *  First, what's elsewhere. \Class \Float:
  *
- *  - Inherits from {class Numeric}[rdoc-ref:Numeric@What-27s+Here].
+ *  - Inherits from
+ *    {class Numeric}[rdoc-ref:Numeric@What-27s+Here]
+ *    and {class Object}[rdoc-ref:Object@What-27s+Here].
+ *  - Includes {module Comparable}[rdoc-ref:Comparable@What-27s+Here].
  *
  *  Here, class \Float provides methods for:
  *
@@ -2449,7 +2452,7 @@ rb_int_truncate(VALUE num, int ndigits)
 
 /*
  *  call-seq:
- *    round(ndigits = 0, half: :up]) -> integer or float
+ *    round(ndigits = 0, half: :up) -> integer or float
  *
  *  Returns +self+ rounded to the nearest value with
  *  a precision of +ndigits+ decimal digits.
@@ -2966,8 +2969,8 @@ num_step_size(VALUE from, VALUE args, VALUE eobj)
  *   greater than or equal to +to+ if +by+ is negative.
  *   If +to+ is +nil+, the sequence is of infinite length.
  *
- *  If a block is given, calls the block with each number in the sequence;
- *  returns +self+.  If no block is given, returns an Enumerator::ArithmeticSequence.
+ * If a block is given, calls the block with each number in the sequence;
+ * returns +self+. If no block is given, returns an Enumerator::ArithmeticSequence.
  *
  * <b>Keyword Arguments</b>
  *
@@ -3488,7 +3491,10 @@ rb_num2ull(VALUE val)
  *
  * First, what's elsewhere. \Class \Integer:
  *
- * - Inherits from {class Numeric}[rdoc-ref:Numeric@What-27s+Here].
+ * - Inherits from
+ *   {class Numeric}[rdoc-ref:Numeric@What-27s+Here]
+ *   and {class Object}[rdoc-ref:Object@What-27s+Here].
+ * - Includes {module Comparable}[rdoc-ref:Comparable@What-27s+Here].
  *
  * Here, class \Integer provides methods for:
  *
