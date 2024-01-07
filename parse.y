@@ -76,56 +76,176 @@
 #include "symbol.h"
 
 #ifndef RIPPER
-static void
-bignum_negate(VALUE b)
-{
-    BIGNUM_NEGATE(b);
-}
-
-static void
-rational_set_num(VALUE r, VALUE n)
-{
-    RATIONAL_SET_NUM(r, n);
-}
-
-static VALUE
-rational_get_num(VALUE obj)
-{
-    return RRATIONAL(obj)->num;
-}
-
-static void
-rcomplex_set_real(VALUE cmp, VALUE r)
-{
-    RCOMPLEX_SET_REAL(cmp, r);
-}
-
-static VALUE
-rcomplex_get_real(VALUE obj)
-{
-    return RCOMPLEX(obj)->real;
-}
-
-static void
-rcomplex_set_imag(VALUE cmp, VALUE i)
-{
-    RCOMPLEX_SET_IMAG(cmp, i);
-}
-
-static VALUE
-rcomplex_get_imag(VALUE obj)
-{
-    return RCOMPLEX(obj)->imag;
-}
-
 static bool
 hash_literal_key_p(VALUE k)
 {
     switch (OBJ_BUILTIN_TYPE(k)) {
       case T_NODE:
-        return false;
+        switch (nd_type(RNODE(k))) {
+          case NODE_INTEGER:
+          case NODE_FLOAT:
+          case NODE_RATIONAL:
+          case NODE_IMAGINARY:
+          case NODE_LINE:
+          case NODE_FILE:
+            return true;
+          default:
+            return false;
+        }
       default:
         return true;
+    }
+}
+
+static int rb_parser_string_hash_cmp(rb_parser_string_t *str1, rb_parser_string_t *str2);
+
+static int
+node_numeric_str_cmp(char *str1, char *str2)
+{
+    size_t len1 = strlen(str1);
+    size_t len2 = strlen(str2);
+
+    return (len1 != len2 ||
+            memcmp(str1, str2, len1) != 0);
+}
+
+static int
+node_integer_cmp(rb_node_integer_t *n1, rb_node_integer_t *n2)
+{
+    return (n1->minus != n2->minus ||
+            n1->base != n2->base ||
+            node_numeric_str_cmp(n1->val, n2->val));
+}
+
+static int
+node_float_cmp(rb_node_float_t *n1, rb_node_float_t *n2)
+{
+    return (n1->minus != n2->minus ||
+            node_numeric_str_cmp(n1->val, n2->val));
+}
+
+static int
+node_rational_cmp(rb_node_rational_t *n1, rb_node_rational_t *n2)
+{
+    return (n1->minus != n2->minus ||
+            n1->base != n2->base ||
+            n1->seen_point != n2->seen_point ||
+            node_numeric_str_cmp(n1->val, n2->val));
+}
+
+static int
+node_imaginary_cmp(rb_node_imaginary_t *n1, rb_node_imaginary_t *n2)
+{
+    return (n1->minus != n2->minus ||
+            n1->base != n2->base ||
+            n1->seen_point != n2->seen_point ||
+            n1->type != n2->type ||
+            node_numeric_str_cmp(n1->val, n2->val));
+}
+
+static int
+node_integer_line_cmp(rb_node_integer_t *i, rb_node_line_t *line)
+{
+    VALUE num = rb_node_integer_literal_val(i);
+
+    return !(FIXNUM_P(num) && RNODE(line)->nd_loc.beg_pos.lineno == FIX2INT(num));
+}
+
+static int
+node_cdhash_cmp(VALUE val, VALUE lit)
+{
+    if (val == lit) {
+        return 0;
+    }
+
+    /* Special case for __FILE__ and String */
+    if (OBJ_BUILTIN_TYPE(val) == T_NODE && nd_type(RNODE(val)) == NODE_FILE && RB_TYPE_P(lit, T_STRING)) {
+        return rb_str_hash_cmp(rb_node_file_path_val(RNODE(val)), lit);
+    }
+    if (OBJ_BUILTIN_TYPE(lit) == T_NODE && nd_type(RNODE(lit)) == NODE_FILE && RB_TYPE_P(val, T_STRING)) {
+        return rb_str_hash_cmp(rb_node_file_path_val(RNODE(lit)), val);
+    }
+
+    if ((OBJ_BUILTIN_TYPE(val) == T_NODE) && (OBJ_BUILTIN_TYPE(lit) == T_NODE)) {
+        NODE *node_val = RNODE(val);
+        NODE *node_lit = RNODE(lit);
+        enum node_type type_val = nd_type(node_val);
+        enum node_type type_lit = nd_type(node_lit);
+
+        /* Special case for Integer and __LINE__ */
+        if (type_val == NODE_INTEGER && type_lit == NODE_LINE) {
+            return node_integer_line_cmp(RNODE_INTEGER(node_val), RNODE_LINE(node_lit));
+        }
+        if (type_lit == NODE_INTEGER && type_val == NODE_LINE) {
+            return node_integer_line_cmp(RNODE_INTEGER(node_lit), RNODE_LINE(node_val));
+        }
+
+        if (type_val != type_lit) {
+            return -1;
+        }
+        else if (type_lit == NODE_INTEGER) {
+            return node_integer_cmp(RNODE_INTEGER(node_val), RNODE_INTEGER(node_lit));
+        }
+        else if (type_lit == NODE_FLOAT) {
+            return node_float_cmp(RNODE_FLOAT(node_val), RNODE_FLOAT(node_lit));
+        }
+        else if (type_lit == NODE_RATIONAL) {
+            return node_rational_cmp(RNODE_RATIONAL(node_val), RNODE_RATIONAL(node_lit));
+        }
+        else if (type_lit == NODE_IMAGINARY) {
+            return node_imaginary_cmp(RNODE_IMAGINARY(node_val), RNODE_IMAGINARY(node_lit));
+        }
+        else if (type_lit == NODE_LINE) {
+            return node_val->nd_loc.beg_pos.lineno != node_lit->nd_loc.beg_pos.lineno;
+        }
+        else if (type_lit == NODE_FILE) {
+            return rb_parser_string_hash_cmp(RNODE_FILE(node_val)->path, RNODE_FILE(node_lit)->path);
+        }
+        else {
+            rb_bug("unexpected node: %s, %s", ruby_node_name(type_val), ruby_node_name(type_lit));
+        }
+    }
+    else if ((OBJ_BUILTIN_TYPE(val) == T_NODE) || (OBJ_BUILTIN_TYPE(lit) == T_NODE)) {
+        return -1;
+    }
+    else {
+        return rb_iseq_cdhash_cmp(val, lit);
+    }
+}
+
+static st_index_t
+node_cdhash_hash(VALUE a)
+{
+    switch (OBJ_BUILTIN_TYPE(a)) {
+      case T_NODE:{
+        VALUE val;
+        NODE *node = RNODE(a);
+        enum node_type type = nd_type(node);
+        switch (type) {
+          case NODE_INTEGER:
+            val = rb_node_integer_literal_val(RNODE_INTEGER(node));
+            return (FIXNUM_P(val) ? val : FIX2LONG(rb_big_hash(val)));
+          case NODE_FLOAT:
+            val = rb_node_float_literal_val(RNODE_FLOAT(node));
+            return rb_dbl_long_hash(RFLOAT_VALUE(val));
+          case NODE_RATIONAL:
+            val = rb_node_rational_literal_val(RNODE_RATIONAL(node));
+            return rb_rational_hash(val);
+          case NODE_IMAGINARY:
+            val = rb_node_imaginary_literal_val(RNODE_IMAGINARY(node));
+            return rb_complex_hash(val);
+          case NODE_LINE:
+            /* Same with NODE_INTEGER FIXNUM case */
+            return INT2FIX(node->nd_loc.beg_pos.lineno);
+          case NODE_FILE:
+            /* Same with String in rb_iseq_cdhash_hash */
+            return rb_str_hash(rb_node_file_path_val(node));
+          default:
+            rb_bug("unexpected node: %s", ruby_node_name(type));
+        }
+      }
+      default:
+        return rb_iseq_cdhash_hash(a);
     }
 }
 
@@ -134,14 +254,14 @@ literal_cmp(VALUE val, VALUE lit)
 {
     if (val == lit) return 0;
     if (!hash_literal_key_p(val) || !hash_literal_key_p(lit)) return -1;
-    return rb_iseq_cdhash_cmp(val, lit);
+    return node_cdhash_cmp(val, lit);
 }
 
 static st_index_t
 literal_hash(VALUE a)
 {
     if (!hash_literal_key_p(a)) return (st_index_t)a;
-    return rb_iseq_cdhash_hash(a);
+    return node_cdhash_hash(a);
 }
 
 static VALUE
@@ -912,6 +1032,10 @@ static rb_node_back_ref_t *rb_node_back_ref_new(struct parser_params *p, long nd
 static rb_node_match2_t *rb_node_match2_new(struct parser_params *p, NODE *nd_recv, NODE *nd_value, const YYLTYPE *loc);
 static rb_node_match3_t *rb_node_match3_new(struct parser_params *p, NODE *nd_recv, NODE *nd_value, const YYLTYPE *loc);
 static rb_node_lit_t *rb_node_lit_new(struct parser_params *p, VALUE nd_lit, const YYLTYPE *loc);
+static rb_node_integer_t * rb_node_integer_new(struct parser_params *p, char* val, int base, const YYLTYPE *loc);
+static rb_node_float_t * rb_node_float_new(struct parser_params *p, char* val, const YYLTYPE *loc);
+static rb_node_rational_t * rb_node_rational_new(struct parser_params *p, char* val, int base, int seen_point, const YYLTYPE *loc);
+static rb_node_imaginary_t * rb_node_imaginary_new(struct parser_params *p, char* val, int base, int seen_point, enum rb_numeric_type, const YYLTYPE *loc);
 static rb_node_str_t *rb_node_str_new(struct parser_params *p, VALUE nd_lit, const YYLTYPE *loc);
 static rb_node_dstr_t *rb_node_dstr_new0(struct parser_params *p, VALUE nd_lit, long nd_alen, NODE *nd_next, const YYLTYPE *loc);
 static rb_node_dstr_t *rb_node_dstr_new(struct parser_params *p, VALUE nd_lit, const YYLTYPE *loc);
@@ -1015,6 +1139,10 @@ static rb_node_error_t *rb_node_error_new(struct parser_params *p, const YYLTYPE
 #define NEW_MATCH2(n1,n2,loc) (NODE *)rb_node_match2_new(p,n1,n2,loc)
 #define NEW_MATCH3(r,n2,loc) (NODE *)rb_node_match3_new(p,r,n2,loc)
 #define NEW_LIT(l,loc) (NODE *)rb_node_lit_new(p,l,loc)
+#define NEW_INTEGER(val, base,loc) (NODE *)rb_node_integer_new(p,val,base,loc)
+#define NEW_FLOAT(val,loc) (NODE *)rb_node_float_new(p,val,loc)
+#define NEW_RATIONAL(val,base,seen_point,loc) (NODE *)rb_node_rational_new(p,val,base,seen_point,loc)
+#define NEW_IMAGINARY(val,base,seen_point,numeric_type,loc) (NODE *)rb_node_imaginary_new(p,val,base,seen_point,numeric_type,loc)
 #define NEW_STR(s,loc) (NODE *)rb_node_str_new(p,s,loc)
 #define NEW_DSTR0(s,l,n,loc) (NODE *)rb_node_dstr_new0(p,s,l,n,loc)
 #define NEW_DSTR(s,loc) (NODE *)rb_node_dstr_new(p,s,loc)
@@ -1230,7 +1358,7 @@ static NODE *new_hash_pattern_tail(struct parser_params *p, NODE *kw_args, ID kw
 static rb_node_kw_arg_t *new_kw_arg(struct parser_params *p, NODE *k, const YYLTYPE *loc);
 static rb_node_args_t *args_with_numbered(struct parser_params*,rb_node_args_t*,int,ID);
 
-static VALUE negate_lit(struct parser_params*, VALUE);
+static NODE* negate_lit(struct parser_params*, NODE*);
 static NODE *ret_args(struct parser_params*,NODE*);
 static NODE *arg_blk_pass(NODE*,rb_node_block_pass_t*);
 static NODE *new_yield(struct parser_params*,NODE*,const YYLTYPE*);
@@ -1955,6 +2083,28 @@ rb_parser_string_pointer(rb_parser_string_t *str)
 {
     return str->ptr;
 }
+
+#ifndef UNIVERSAL_PARSER
+# define PARSER_STRING_GETMEM(str, ptrvar, lenvar, encvar) \
+    ((ptrvar) = str->ptr,                            \
+     (lenvar) = str->len,                            \
+     (encvar) = str->enc)
+
+static int
+rb_parser_string_hash_cmp(rb_parser_string_t *str1, rb_parser_string_t *str2)
+{
+    long len1, len2;
+    const char *ptr1, *ptr2;
+    rb_encoding *enc1, *enc2;
+
+    PARSER_STRING_GETMEM(str1, ptr1, len1, enc1);
+    PARSER_STRING_GETMEM(str2, ptr2, len2, enc2);
+
+    return (len1 != len2 ||
+            enc1 != enc2 ||
+            memcmp(ptr1, ptr2, len1) != 0);
+}
+#endif
 
 static rb_parser_string_t *
 rb_str_to_parser_encoding_string(rb_parser_t *p, VALUE str)
@@ -6074,7 +6224,7 @@ numeric 	: simple_numeric
                     {
                     /*%%%*/
                         $$ = $2;
-                        RB_OBJ_WRITE(p->ast, &RNODE_LIT($$)->nd_lit, negate_lit(p, RNODE_LIT($$)->nd_lit));
+                        negate_lit(p, $$);
                     /*% %*/
                     /*% ripper: unary!(ID2VAL(idUMinus), $2) %*/
                     }
@@ -6652,6 +6802,10 @@ singleton	: var_ref
                           case NODE_LIT:
                           case NODE_LINE:
                           case NODE_FILE:
+                          case NODE_INTEGER:
+                          case NODE_FLOAT:
+                          case NODE_RATIONAL:
+                          case NODE_IMAGINARY:
                           case NODE_DSYM:
                           case NODE_LIST:
                           case NODE_ZLIST:
@@ -8990,27 +9144,40 @@ number_literal_suffix(struct parser_params *p, int mask)
 }
 
 static enum yytokentype
-set_number_literal(struct parser_params *p, VALUE v,
-                   enum yytokentype type, int suffix)
+set_number_literal(struct parser_params *p, enum yytokentype type, int suffix, int base, int seen_point)
 {
+    enum rb_numeric_type numeric_type = integer_literal;
+
+    if (type == tFLOAT) {
+        numeric_type = float_literal;
+    }
+
+    if (suffix & NUM_SUFFIX_R) {
+        type = tRATIONAL;
+        numeric_type = rational_literal;
+    }
     if (suffix & NUM_SUFFIX_I) {
-        v = rb_complex_raw(INT2FIX(0), v);
         type = tIMAGINARY;
     }
-    set_yylval_literal(v);
+
+    switch (type) {
+        case tINTEGER:
+            set_yylval_node(NEW_INTEGER(strdup(tok(p)), base, &_cur_loc));
+            break;
+        case tFLOAT:
+            set_yylval_node(NEW_FLOAT(strdup(tok(p)), &_cur_loc));
+            break;
+        case tRATIONAL:
+            set_yylval_node(NEW_RATIONAL(strdup(tok(p)), base, seen_point, &_cur_loc));
+            break;
+        case tIMAGINARY:
+            set_yylval_node(NEW_IMAGINARY(strdup(tok(p)), base, seen_point, numeric_type, &_cur_loc));
+            break;
+        default:
+            rb_bug("unexpected token: %d", type);
+    }
     SET_LEX_STATE(EXPR_END);
     return type;
-}
-
-static enum yytokentype
-set_integer_literal(struct parser_params *p, VALUE v, int suffix)
-{
-    enum yytokentype type = tINTEGER;
-    if (suffix & NUM_SUFFIX_R) {
-        v = rb_rational_raw1(v);
-        type = tRATIONAL;
-    }
-    return set_number_literal(p, v, type, suffix);
 }
 
 #ifdef RIPPER
@@ -9690,24 +9857,13 @@ parser_prepare(struct parser_params *p)
      (ambiguous_operator(tok, op, syn), 0)), \
      (enum yytokentype)(tok))
 
-static VALUE
-parse_rational(struct parser_params *p, char *str, int len, int seen_point)
-{
-    VALUE v;
-    char *point = &str[seen_point];
-    size_t fraclen = len-seen_point-1;
-    memmove(point, point+1, fraclen+1);
-    v = rb_cstr_to_inum(str, 10, FALSE);
-    return rb_rational_new(v, rb_int_positive_pow(10, fraclen));
-}
-
 static enum yytokentype
 no_digits(struct parser_params *p)
 {
     yyerror0("numeric literal without digits");
     if (peek(p, '_')) nextc(p);
     /* dummy 0, for tUMINUS_NUM at numeric */
-    return set_integer_literal(p, INT2FIX(0), 0);
+    return set_number_literal(p, tINTEGER, 0, 10, 0);
 }
 
 static enum yytokentype
@@ -9748,7 +9904,7 @@ parse_numeric(struct parser_params *p, int c)
             }
             else if (nondigit) goto trailing_uc;
             suffix = number_literal_suffix(p, NUM_SUFFIX_ALL);
-            return set_integer_literal(p, rb_cstr_to_inum(tok(p), 16, FALSE), suffix);
+            return set_number_literal(p, tINTEGER, suffix, 16, 0);
         }
         if (c == 'b' || c == 'B') {
             /* binary */
@@ -9772,7 +9928,7 @@ parse_numeric(struct parser_params *p, int c)
             }
             else if (nondigit) goto trailing_uc;
             suffix = number_literal_suffix(p, NUM_SUFFIX_ALL);
-            return set_integer_literal(p, rb_cstr_to_inum(tok(p), 2, FALSE), suffix);
+            return set_number_literal(p, tINTEGER, suffix, 2, 0);
         }
         if (c == 'd' || c == 'D') {
             /* decimal */
@@ -9796,7 +9952,7 @@ parse_numeric(struct parser_params *p, int c)
             }
             else if (nondigit) goto trailing_uc;
             suffix = number_literal_suffix(p, NUM_SUFFIX_ALL);
-            return set_integer_literal(p, rb_cstr_to_inum(tok(p), 10, FALSE), suffix);
+            return set_number_literal(p, tINTEGER, suffix, 10, 0);
         }
         if (c == '_') {
             /* 0_0 */
@@ -9828,7 +9984,7 @@ parse_numeric(struct parser_params *p, int c)
                 tokfix(p);
                 if (nondigit) goto trailing_uc;
                 suffix = number_literal_suffix(p, NUM_SUFFIX_ALL);
-                return set_integer_literal(p, rb_cstr_to_inum(tok(p), 8, FALSE), suffix);
+                return set_number_literal(p, tINTEGER, suffix, 8, 0);
             }
             if (nondigit) {
                 pushback(p, c);
@@ -9844,8 +10000,9 @@ parse_numeric(struct parser_params *p, int c)
         }
         else {
             pushback(p, c);
+            tokfix(p);
             suffix = number_literal_suffix(p, NUM_SUFFIX_ALL);
-            return set_integer_literal(p, INT2FIX(0), suffix);
+            return set_number_literal(p, tINTEGER, suffix, 10, 0);
         }
     }
 
@@ -9925,25 +10082,22 @@ parse_numeric(struct parser_params *p, int c)
     tokfix(p);
     if (is_float) {
         enum yytokentype type = tFLOAT;
-        VALUE v;
 
         suffix = number_literal_suffix(p, seen_e ? NUM_SUFFIX_I : NUM_SUFFIX_ALL);
         if (suffix & NUM_SUFFIX_R) {
             type = tRATIONAL;
-            v = parse_rational(p, tok(p), toklen(p), seen_point);
         }
         else {
-            double d = strtod(tok(p), 0);
+            strtod(tok(p), 0);
             if (errno == ERANGE) {
                 rb_warning1("Float %s out of range", WARN_S(tok(p)));
                 errno = 0;
             }
-            v = DBL2NUM(d);
         }
-        return set_number_literal(p, v, type, suffix);
+        return set_number_literal(p, type, suffix, 0, seen_point);
     }
     suffix = number_literal_suffix(p, NUM_SUFFIX_ALL);
-    return set_integer_literal(p, rb_cstr_to_inum(tok(p), 10, FALSE), suffix);
+    return set_number_literal(p, tINTEGER, suffix, 10, 0);
 }
 
 static enum yytokentype
@@ -11913,6 +12067,48 @@ rb_node_lit_new(struct parser_params *p, VALUE nd_lit, const YYLTYPE *loc)
     return n;
 }
 
+static rb_node_integer_t *
+rb_node_integer_new(struct parser_params *p, char* val, int base, const YYLTYPE *loc) {
+    rb_node_integer_t *n = NODE_NEWNODE(NODE_INTEGER, rb_node_integer_t, loc);
+    n->val = val;
+    n->minus = FALSE;
+    n->base = base;
+
+    return n;
+}
+
+static rb_node_float_t *
+rb_node_float_new(struct parser_params *p, char* val, const YYLTYPE *loc) {
+    rb_node_float_t *n = NODE_NEWNODE(NODE_FLOAT, rb_node_float_t, loc);
+    n->val = val;
+    n->minus = FALSE;
+
+    return n;
+}
+
+static rb_node_rational_t *
+rb_node_rational_new(struct parser_params *p, char* val, int base, int seen_point, const YYLTYPE *loc) {
+    rb_node_rational_t *n = NODE_NEWNODE(NODE_RATIONAL, rb_node_rational_t, loc);
+    n->val = val;
+    n->minus = FALSE;
+    n->base = base;
+    n->seen_point = seen_point;
+
+    return n;
+}
+
+static rb_node_imaginary_t *
+rb_node_imaginary_new(struct parser_params *p, char* val, int base, int seen_point, enum rb_numeric_type numeric_type, const YYLTYPE *loc) {
+    rb_node_imaginary_t *n = NODE_NEWNODE(NODE_IMAGINARY, rb_node_imaginary_t, loc);
+    n->val = val;
+    n->minus = FALSE;
+    n->base = base;
+    n->seen_point = seen_point;
+    n->type = numeric_type;
+
+    return n;
+}
+
 static rb_node_str_t *
 rb_node_str_new(struct parser_params *p, VALUE nd_lit, const YYLTYPE *loc)
 {
@@ -13709,6 +13905,14 @@ shareable_literal_value(struct parser_params *p, NODE *node)
         return Qnil;
       case NODE_LINE:
         return rb_node_line_lineno_val(node);
+      case NODE_INTEGER:
+        return rb_node_integer_literal_val(RNODE_INTEGER(node));
+      case NODE_FLOAT:
+        return rb_node_float_literal_val(RNODE_FLOAT(node));
+      case NODE_RATIONAL:
+        return rb_node_rational_literal_val(RNODE_RATIONAL(node));
+      case NODE_IMAGINARY:
+        return rb_node_imaginary_literal_val(RNODE_IMAGINARY(node));
       case NODE_LIT:
         return RNODE_LIT(node)->nd_lit;
       default:
@@ -13736,6 +13940,10 @@ shareable_literal_constant(struct parser_params *p, enum shareability shareable,
       case NODE_NIL:
       case NODE_LIT:
       case NODE_LINE:
+      case NODE_INTEGER:
+      case NODE_FLOAT:
+      case NODE_RATIONAL:
+      case NODE_IMAGINARY:
         return value;
 
       case NODE_DSTR:
@@ -14051,6 +14259,10 @@ void_expr(struct parser_params *p, NODE *node)
       case NODE_LIT:
       case NODE_LINE:
       case NODE_FILE:
+      case NODE_INTEGER:
+      case NODE_FLOAT:
+      case NODE_RATIONAL:
+      case NODE_IMAGINARY:
       case NODE_STR:
       case NODE_DSTR:
       case NODE_DREGX:
@@ -14190,6 +14402,10 @@ is_static_content(NODE *node)
       case NODE_LIT:
       case NODE_LINE:
       case NODE_FILE:
+      case NODE_INTEGER:
+      case NODE_FLOAT:
+      case NODE_RATIONAL:
+      case NODE_IMAGINARY:
       case NODE_STR:
       case NODE_NIL:
       case NODE_TRUE:
@@ -14252,7 +14468,7 @@ range_op(struct parser_params *p, NODE *node, const YYLTYPE *loc)
 
     type = nd_type(node);
     value_expr(node);
-    if (type == NODE_LIT && FIXNUM_P(RNODE_LIT(node)->nd_lit)) {
+    if (type == NODE_INTEGER) {
         if (!e_option_supplied(p)) parser_warn(p, node, "integer literal in flip-flop");
         ID lineno = rb_intern("$.");
         return NEW_CALL(node, tEQ, NEW_LIST(NEW_GVAR(lineno, loc), loc), loc);
@@ -14331,6 +14547,13 @@ cond0(struct parser_params *p, NODE *node, enum cond_type type, const YYLTYPE *l
         break;
 
       case NODE_LINE:
+        SWITCH_BY_COND_TYPE(type, warning, "");
+        break;
+
+      case NODE_INTEGER:
+      case NODE_FLOAT:
+      case NODE_RATIONAL:
+      case NODE_IMAGINARY:
         SWITCH_BY_COND_TYPE(type, warning, "");
         break;
 
@@ -14431,42 +14654,24 @@ new_yield(struct parser_params *p, NODE *node, const YYLTYPE *loc)
     return NEW_YIELD(node, loc);
 }
 
-static VALUE
-negate_lit(struct parser_params *p, VALUE lit)
+static NODE*
+negate_lit(struct parser_params *p, NODE* node)
 {
-    if (FIXNUM_P(lit)) {
-        return LONG2FIX(-FIX2LONG(lit));
-    }
-    if (SPECIAL_CONST_P(lit)) {
-#if USE_FLONUM
-        if (FLONUM_P(lit)) {
-            return DBL2NUM(-RFLOAT_VALUE(lit));
-        }
-#endif
-        goto unknown;
-    }
-    switch (BUILTIN_TYPE(lit)) {
-      case T_BIGNUM:
-        bignum_negate(lit);
-        lit = rb_big_norm(lit);
+    switch (nd_type(node)) {
+      case NODE_INTEGER:
+        RNODE_INTEGER(node)->minus = TRUE;
         break;
-      case T_RATIONAL:
-        rational_set_num(lit, negate_lit(p, rational_get_num(lit)));
+      case NODE_FLOAT:
+        RNODE_FLOAT(node)->minus = TRUE;
         break;
-      case T_COMPLEX:
-        rcomplex_set_real(lit, negate_lit(p, rcomplex_get_real(lit)));
-        rcomplex_set_imag(lit, negate_lit(p, rcomplex_get_imag(lit)));
+      case NODE_RATIONAL:
+        RNODE_RATIONAL(node)->minus = TRUE;
         break;
-      case T_FLOAT:
-        lit = DBL2NUM(-RFLOAT_VALUE(lit));
-        break;
-      unknown:
-      default:
-        rb_parser_fatal(p, "unknown literal type (%s) passed to negate_lit",
-                        rb_builtin_class_name(lit));
+      case NODE_IMAGINARY:
+        RNODE_IMAGINARY(node)->minus = TRUE;
         break;
     }
-    return lit;
+    return node;
 }
 
 static NODE *
@@ -14705,22 +14910,67 @@ dsym_node(struct parser_params *p, NODE *node, const YYLTYPE *loc)
 }
 
 static int
-append_literal_keys(st_data_t k, st_data_t v, st_data_t h)
+nd_type_st_key_enable_p(NODE *node)
 {
-    NODE *node = (NODE *)v;
-    NODE **result = (NODE **)h;
-    RNODE_LIST(node)->as.nd_alen = 2;
-    RNODE_LIST(RNODE_LIST(node)->nd_next)->as.nd_end = RNODE_LIST(node)->nd_next;
-    RNODE_LIST(RNODE_LIST(node)->nd_next)->nd_next = 0;
-    if (*result)
-        list_concat(*result, node);
-    else
-        *result = node;
-    return ST_CONTINUE;
+    switch (nd_type(node)) {
+      case NODE_LIT:
+      case NODE_INTEGER:
+      case NODE_FLOAT:
+      case NODE_RATIONAL:
+      case NODE_IMAGINARY:
+      case NODE_LINE:
+      case NODE_FILE:
+        return true;
+      default:
+        return false;
+    }
 }
 
-static NODE *
-remove_duplicate_keys(struct parser_params *p, NODE *hash)
+static VALUE
+nd_st_key(struct parser_params *p, NODE *node)
+{
+    switch (nd_type(node)) {
+      case NODE_LIT:
+        return RNODE_LIT(node)->nd_lit;
+      case NODE_INTEGER:
+      case NODE_FLOAT:
+      case NODE_RATIONAL:
+      case NODE_IMAGINARY:
+      case NODE_LINE:
+      case NODE_FILE:
+        return (VALUE)node;
+      default:
+        rb_bug("unexpected node: %s", ruby_node_name(nd_type(node)));
+        UNREACHABLE_RETURN(0);
+    }
+}
+
+static VALUE
+nd_st_key_val(struct parser_params *p, NODE *node)
+{
+    switch (nd_type(node)) {
+      case NODE_LIT:
+        return RNODE_LIT(node)->nd_lit;
+      case NODE_INTEGER:
+        return rb_node_integer_literal_val(RNODE_INTEGER(node));
+      case NODE_FLOAT:
+        return rb_node_float_literal_val(RNODE_FLOAT(node));
+      case NODE_RATIONAL:
+        return rb_node_rational_literal_val(RNODE_RATIONAL(node));
+      case NODE_IMAGINARY:
+        return rb_node_imaginary_literal_val(RNODE_IMAGINARY(node));
+      case NODE_LINE:
+        return rb_node_line_lineno_val(node);
+      case NODE_FILE:
+        return rb_node_file_path_val(node);
+      default:
+        rb_bug("unexpected node: %s", ruby_node_name(nd_type(node)));
+        UNREACHABLE_RETURN(0);
+    }
+}
+
+static void
+warn_duplicate_keys(struct parser_params *p, NODE *hash)
 {
     struct st_hash_type literal_type = {
         literal_cmp,
@@ -14728,50 +14978,31 @@ remove_duplicate_keys(struct parser_params *p, NODE *hash)
     };
 
     st_table *literal_keys = st_init_table_with_size(&literal_type, RNODE_LIST(hash)->as.nd_alen / 2);
-    NODE *result = 0;
-    NODE *last_expr = 0;
-    rb_code_location_t loc = hash->nd_loc;
     while (hash && RNODE_LIST(hash)->nd_next) {
         NODE *head = RNODE_LIST(hash)->nd_head;
         NODE *value = RNODE_LIST(hash)->nd_next;
         NODE *next = RNODE_LIST(value)->nd_next;
         st_data_t key = (st_data_t)head;
         st_data_t data;
-        RNODE_LIST(value)->nd_next = 0;
         if (!head) {
             key = (st_data_t)value;
         }
-        else if (nd_type_p(head, NODE_LIT) &&
-                 st_delete(literal_keys, (key = (st_data_t)RNODE_LIT(head)->nd_lit, &key), &data)) {
-            NODE *dup_value = (RNODE_LIST((NODE *)data))->nd_next;
+        else if (nd_type_st_key_enable_p(head) &&
+                 st_delete(literal_keys, (key = (st_data_t)nd_st_key(p, head), &key), &data)) {
             rb_compile_warn(p->ruby_sourcefile, nd_line((NODE *)data),
                             "key %+"PRIsVALUE" is duplicated and overwritten on line %d",
-                            RNODE_LIT(head)->nd_lit, nd_line(head));
-            if (dup_value == last_expr) {
-                RNODE_LIST(value)->nd_head = block_append(p, RNODE_LIST(dup_value)->nd_head, RNODE_LIST(value)->nd_head);
-            }
-            else {
-                RNODE_LIST(last_expr)->nd_head = block_append(p, RNODE_LIST(dup_value)->nd_head, RNODE_LIST(last_expr)->nd_head);
-            }
+                            nd_st_key_val(p, head), nd_line(head));
         }
         st_insert(literal_keys, (st_data_t)key, (st_data_t)hash);
-        last_expr = !head || nd_type_p(head, NODE_LIT) ? value : head;
         hash = next;
     }
-    st_foreach(literal_keys, append_literal_keys, (st_data_t)&result);
     st_free_table(literal_keys);
-    if (hash) {
-        if (!result) result = hash;
-        else list_concat(result, hash);
-    }
-    result->nd_loc = loc;
-    return result;
 }
 
 static NODE *
 new_hash(struct parser_params *p, NODE *hash, const YYLTYPE *loc)
 {
-    if (hash) hash = remove_duplicate_keys(p, hash);
+    if (hash) warn_duplicate_keys(p, hash);
     return NEW_HASH(hash, loc);
 }
 #endif
