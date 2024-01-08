@@ -1945,16 +1945,16 @@ iseq_set_arguments_keywords(rb_iseq_t *iseq, LINK_ANCHOR *const optargs,
               case NODE_LINE:
                 dv = rb_node_line_lineno_val(val_node);;
               case NODE_INTEGER:
-                dv = rb_node_integer_literal_val(RNODE_INTEGER(val_node));
+                dv = rb_node_integer_literal_val(val_node);
                 break;
               case NODE_FLOAT:
-                dv = rb_node_float_literal_val(RNODE_FLOAT(val_node));
+                dv = rb_node_float_literal_val(val_node);
                 break;
               case NODE_RATIONAL:
-                dv = rb_node_rational_literal_val(RNODE_RATIONAL(val_node));
+                dv = rb_node_rational_literal_val(val_node);
                 break;
               case NODE_IMAGINARY:
-                dv = rb_node_imaginary_literal_val(RNODE_IMAGINARY(val_node));
+                dv = rb_node_imaginary_literal_val(val_node);
                 break;
               case NODE_NIL:
                 dv = Qnil;
@@ -4706,7 +4706,7 @@ compile_args(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *node, NODE **k
 }
 
 static inline int
-static_literal_node_p(const NODE *node, const rb_iseq_t *iseq)
+static_literal_node_p(const NODE *node, const rb_iseq_t *iseq, bool hash_key)
 {
     switch (nd_type(node)) {
       case NODE_LIT:
@@ -4721,7 +4721,7 @@ static_literal_node_p(const NODE *node, const rb_iseq_t *iseq)
         return TRUE;
       case NODE_STR:
       case NODE_FILE:
-        return ISEQ_COMPILE_DATA(iseq)->option->frozen_string_literal;
+        return hash_key || ISEQ_COMPILE_DATA(iseq)->option->frozen_string_literal;
       default:
         return FALSE;
     }
@@ -4732,13 +4732,13 @@ static_literal_value(const NODE *node, rb_iseq_t *iseq)
 {
     switch (nd_type(node)) {
       case NODE_INTEGER:
-        return rb_node_integer_literal_val(RNODE_INTEGER(node));
+        return rb_node_integer_literal_val(node);
       case NODE_FLOAT:
-        return rb_node_float_literal_val(RNODE_FLOAT(node));
+        return rb_node_float_literal_val(node);
       case NODE_RATIONAL:
-        return rb_node_rational_literal_val(RNODE_RATIONAL(node));
+        return rb_node_rational_literal_val(node);
       case NODE_IMAGINARY:
-        return rb_node_imaginary_literal_val(RNODE_IMAGINARY(node));
+        return rb_node_imaginary_literal_val(node);
       case NODE_NIL:
         return Qnil;
       case NODE_TRUE:
@@ -4841,10 +4841,10 @@ compile_array(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *node, int pop
         int count = 1;
 
         /* pre-allocation check (this branch can be omittable) */
-        if (static_literal_node_p(RNODE_LIST(node)->nd_head, iseq)) {
+        if (static_literal_node_p(RNODE_LIST(node)->nd_head, iseq, false)) {
             /* count the elements that are optimizable */
             const NODE *node_tmp = RNODE_LIST(node)->nd_next;
-            for (; node_tmp && static_literal_node_p(RNODE_LIST(node_tmp)->nd_head, iseq); node_tmp = RNODE_LIST(node_tmp)->nd_next)
+            for (; node_tmp && static_literal_node_p(RNODE_LIST(node_tmp)->nd_head, iseq, false); node_tmp = RNODE_LIST(node_tmp)->nd_next)
                 count++;
 
             if ((first_chunk && stack_len == 0 && !node_tmp) || count >= min_tmp_ary_len) {
@@ -4899,7 +4899,7 @@ compile_array(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *node, int pop
 static int
 compile_array_1(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *node)
 {
-    if (static_literal_node_p(node, iseq)) {
+    if (static_literal_node_p(node, iseq, false)) {
         VALUE ary = rb_ary_hidden_new(1);
         rb_ary_push(ary, static_literal_value(node, iseq));
         OBJ_FREEZE(ary);
@@ -4917,7 +4917,7 @@ compile_array_1(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *node)
 static inline int
 static_literal_node_pair_p(const NODE *node, const rb_iseq_t *iseq)
 {
-    return RNODE_LIST(node)->nd_head && static_literal_node_p(RNODE_LIST(node)->nd_head, iseq) && static_literal_node_p(RNODE_LIST(RNODE_LIST(node)->nd_next)->nd_head, iseq);
+    return RNODE_LIST(node)->nd_head && static_literal_node_p(RNODE_LIST(node)->nd_head, iseq, true) && static_literal_node_p(RNODE_LIST(RNODE_LIST(node)->nd_next)->nd_head, iseq, true);
 }
 
 static int
@@ -5122,9 +5122,9 @@ rb_node_case_when_optimizable_literal(const NODE *const node)
         break;
       }
       case NODE_INTEGER:
-        return rb_node_integer_literal_val(RNODE_INTEGER(node));
+        return rb_node_integer_literal_val(node);
       case NODE_FLOAT: {
-        VALUE v = rb_node_float_literal_val(RNODE_FLOAT(node));
+        VALUE v = rb_node_float_literal_val(node);
         double ival;
 
         if (modf(RFLOAT_VALUE(v), &ival) == 0.0) {
@@ -6371,13 +6371,13 @@ optimized_range_item(const NODE *n)
       case NODE_LINE:
         return rb_node_line_lineno_val(n);
       case NODE_INTEGER:
-        return rb_node_integer_literal_val(RNODE_INTEGER(n));
+        return rb_node_integer_literal_val(n);
       case NODE_FLOAT:
-        return rb_node_float_literal_val(RNODE_FLOAT(n));
+        return rb_node_float_literal_val(n);
       case NODE_RATIONAL:
-        return rb_node_rational_literal_val(RNODE_RATIONAL(n));
+        return rb_node_rational_literal_val(n);
       case NODE_IMAGINARY:
-        return rb_node_imaginary_literal_val(RNODE_IMAGINARY(n));
+        return rb_node_imaginary_literal_val(n);
       case NODE_NIL:
         return Qnil;
       default:
@@ -10240,7 +10240,7 @@ iseq_compile_each0(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *const no
         break;
       }
       case NODE_INTEGER:{
-        VALUE lit = rb_node_integer_literal_val(RNODE_INTEGER(node));
+        VALUE lit = rb_node_integer_literal_val(node);
         debugp_param("integer", lit);
         if (!popped) {
             ADD_INSN1(ret, node, putobject, lit);
@@ -10249,7 +10249,7 @@ iseq_compile_each0(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *const no
         break;
       }
       case NODE_FLOAT:{
-        VALUE lit = rb_node_float_literal_val(RNODE_FLOAT(node));
+        VALUE lit = rb_node_float_literal_val(node);
         debugp_param("float", lit);
         if (!popped) {
             ADD_INSN1(ret, node, putobject, lit);
@@ -10258,7 +10258,7 @@ iseq_compile_each0(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *const no
         break;
       }
       case NODE_RATIONAL:{
-        VALUE lit = rb_node_rational_literal_val(RNODE_RATIONAL(node));
+        VALUE lit = rb_node_rational_literal_val(node);
         debugp_param("rational", lit);
         if (!popped) {
             ADD_INSN1(ret, node, putobject, lit);
@@ -10267,7 +10267,7 @@ iseq_compile_each0(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *const no
         break;
       }
       case NODE_IMAGINARY:{
-        VALUE lit = rb_node_imaginary_literal_val(RNODE_IMAGINARY(node));
+        VALUE lit = rb_node_imaginary_literal_val(node);
         debugp_param("imaginary", lit);
         if (!popped) {
             ADD_INSN1(ret, node, putobject, lit);

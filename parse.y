@@ -144,11 +144,11 @@ node_imaginary_cmp(rb_node_imaginary_t *n1, rb_node_imaginary_t *n2)
 }
 
 static int
-node_integer_line_cmp(rb_node_integer_t *i, rb_node_line_t *line)
+node_integer_line_cmp(const NODE *node_i, const NODE *line)
 {
-    VALUE num = rb_node_integer_literal_val(i);
+    VALUE num = rb_node_integer_literal_val(node_i);
 
-    return !(FIXNUM_P(num) && RNODE(line)->nd_loc.beg_pos.lineno == FIX2INT(num));
+    return !(FIXNUM_P(num) && line->nd_loc.beg_pos.lineno == FIX2INT(num));
 }
 
 static int
@@ -174,10 +174,10 @@ node_cdhash_cmp(VALUE val, VALUE lit)
 
         /* Special case for Integer and __LINE__ */
         if (type_val == NODE_INTEGER && type_lit == NODE_LINE) {
-            return node_integer_line_cmp(RNODE_INTEGER(node_val), RNODE_LINE(node_lit));
+            return node_integer_line_cmp(node_val, node_lit);
         }
         if (type_lit == NODE_INTEGER && type_val == NODE_LINE) {
-            return node_integer_line_cmp(RNODE_INTEGER(node_lit), RNODE_LINE(node_val));
+            return node_integer_line_cmp(node_lit, node_val);
         }
 
         if (type_val != type_lit) {
@@ -223,16 +223,16 @@ node_cdhash_hash(VALUE a)
         enum node_type type = nd_type(node);
         switch (type) {
           case NODE_INTEGER:
-            val = rb_node_integer_literal_val(RNODE_INTEGER(node));
+            val = rb_node_integer_literal_val(node);
             return (FIXNUM_P(val) ? val : FIX2LONG(rb_big_hash(val)));
           case NODE_FLOAT:
-            val = rb_node_float_literal_val(RNODE_FLOAT(node));
+            val = rb_node_float_literal_val(node);
             return rb_dbl_long_hash(RFLOAT_VALUE(val));
           case NODE_RATIONAL:
-            val = rb_node_rational_literal_val(RNODE_RATIONAL(node));
+            val = rb_node_rational_literal_val(node);
             return rb_rational_hash(val);
           case NODE_IMAGINARY:
-            val = rb_node_imaginary_literal_val(RNODE_IMAGINARY(node));
+            val = rb_node_imaginary_literal_val(node);
             return rb_complex_hash(val);
           case NODE_LINE:
             /* Same with NODE_INTEGER FIXNUM case */
@@ -2139,7 +2139,25 @@ rb_str_to_parser_encoding_string(rb_parser_t *p, VALUE str)
 } tIDENTIFIER tFID tGVAR tIVAR tCONSTANT tCVAR tLABEL tOP_ASGN
 %printer {
 #ifndef RIPPER
-    rb_parser_printf(p, "%+"PRIsVALUE, RNODE_LIT($$)->nd_lit);
+    switch (nd_type(RNODE($$))) {
+      case NODE_INTEGER:
+        rb_parser_printf(p, "%+"PRIsVALUE, rb_node_integer_literal_val($$));
+        break;
+      case NODE_FLOAT:
+        rb_parser_printf(p, "%+"PRIsVALUE, rb_node_float_literal_val($$));
+        break;
+      case NODE_RATIONAL:
+        rb_parser_printf(p, "%+"PRIsVALUE, rb_node_rational_literal_val($$));
+        break;
+      case NODE_IMAGINARY:
+        rb_parser_printf(p, "%+"PRIsVALUE, rb_node_imaginary_literal_val($$));
+        break;
+      case NODE_LIT:
+        rb_parser_printf(p, "%+"PRIsVALUE, RNODE_LIT($$)->nd_lit);
+        break;
+      default:
+        break;
+    }
 #else
     rb_parser_printf(p, "%+"PRIsVALUE, get_value($$));
 #endif
@@ -6859,10 +6877,6 @@ assocs		: assoc
 assoc		: arg_value tASSOC arg_value
                     {
                     /*%%%*/
-                        if (nd_type_p($1, NODE_STR)) {
-                            nd_set_type($1, NODE_LIT);
-                            RB_OBJ_WRITE(p->ast, &RNODE_LIT($1)->nd_lit, rb_fstring(RNODE_LIT($1)->nd_lit));
-                        }
                         $$ = list_append(p, NEW_LIST($1, &@$), $3);
                     /*% %*/
                     /*% ripper: assoc_new!($1, $3) %*/
@@ -13911,13 +13925,13 @@ shareable_literal_value(struct parser_params *p, NODE *node)
       case NODE_LINE:
         return rb_node_line_lineno_val(node);
       case NODE_INTEGER:
-        return rb_node_integer_literal_val(RNODE_INTEGER(node));
+        return rb_node_integer_literal_val(node);
       case NODE_FLOAT:
-        return rb_node_float_literal_val(RNODE_FLOAT(node));
+        return rb_node_float_literal_val(node);
       case NODE_RATIONAL:
-        return rb_node_rational_literal_val(RNODE_RATIONAL(node));
+        return rb_node_rational_literal_val(node);
       case NODE_IMAGINARY:
-        return rb_node_imaginary_literal_val(RNODE_IMAGINARY(node));
+        return rb_node_imaginary_literal_val(node);
       case NODE_LIT:
         return RNODE_LIT(node)->nd_lit;
       default:
@@ -14923,6 +14937,7 @@ nd_type_st_key_enable_p(NODE *node)
       case NODE_FLOAT:
       case NODE_RATIONAL:
       case NODE_IMAGINARY:
+      case NODE_STR:
       case NODE_LINE:
       case NODE_FILE:
         return true;
@@ -14937,6 +14952,8 @@ nd_st_key(struct parser_params *p, NODE *node)
     switch (nd_type(node)) {
       case NODE_LIT:
         return RNODE_LIT(node)->nd_lit;
+      case NODE_STR:
+        return RNODE_STR(node)->nd_lit;
       case NODE_INTEGER:
       case NODE_FLOAT:
       case NODE_RATIONAL:
@@ -14956,14 +14973,16 @@ nd_st_key_val(struct parser_params *p, NODE *node)
     switch (nd_type(node)) {
       case NODE_LIT:
         return RNODE_LIT(node)->nd_lit;
+      case NODE_STR:
+        return RNODE_STR(node)->nd_lit;
       case NODE_INTEGER:
-        return rb_node_integer_literal_val(RNODE_INTEGER(node));
+        return rb_node_integer_literal_val(node);
       case NODE_FLOAT:
-        return rb_node_float_literal_val(RNODE_FLOAT(node));
+        return rb_node_float_literal_val(node);
       case NODE_RATIONAL:
-        return rb_node_rational_literal_val(RNODE_RATIONAL(node));
+        return rb_node_rational_literal_val(node);
       case NODE_IMAGINARY:
-        return rb_node_imaginary_literal_val(RNODE_IMAGINARY(node));
+        return rb_node_imaginary_literal_val(node);
       case NODE_LINE:
         return rb_node_line_lineno_val(node);
       case NODE_FILE:
