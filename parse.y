@@ -9477,11 +9477,20 @@ parser_encode_length(struct parser_params *p, const char *name, long len)
 static void
 parser_set_encode(struct parser_params *p, const char *name)
 {
-    int idx = rb_enc_find_index(name);
     rb_encoding *enc;
     VALUE excargs[3];
 
+    const char *wrong = 0;
+    switch (*name) {
+      case 'e': case 'E': wrong = "external"; break;
+      case 'i': case 'I': wrong = "internal"; break;
+      case 'f': case 'F': wrong = "filesystem"; break;
+      case 'l': case 'L': wrong = "locale"; break;
+    }
+    if (wrong && STRCASECMP(name, wrong) == 0) goto unknown;
+    int idx = rb_enc_find_index(name);
     if (idx < 0) {
+      unknown:
         excargs[1] = rb_sprintf("unknown encoding name: %s", name);
       error:
         excargs[0] = rb_eArgError;
@@ -14966,28 +14975,6 @@ nd_st_key(struct parser_params *p, NODE *node)
       case NODE_STR:
         return RNODE_STR(node)->nd_lit;
       case NODE_INTEGER:
-      case NODE_FLOAT:
-      case NODE_RATIONAL:
-      case NODE_IMAGINARY:
-      case NODE_SYM:
-      case NODE_LINE:
-      case NODE_FILE:
-        return (VALUE)node;
-      default:
-        rb_bug("unexpected node: %s", ruby_node_name(nd_type(node)));
-        UNREACHABLE_RETURN(0);
-    }
-}
-
-static VALUE
-nd_st_key_val(struct parser_params *p, NODE *node)
-{
-    switch (nd_type(node)) {
-      case NODE_LIT:
-        return RNODE_LIT(node)->nd_lit;
-      case NODE_STR:
-        return RNODE_STR(node)->nd_lit;
-      case NODE_INTEGER:
         return rb_node_integer_literal_val(node);
       case NODE_FLOAT:
         return rb_node_float_literal_val(node);
@@ -15029,7 +15016,7 @@ warn_duplicate_keys(struct parser_params *p, NODE *hash)
                  st_delete(literal_keys, (key = (st_data_t)nd_st_key(p, head), &key), &data)) {
             rb_compile_warn(p->ruby_sourcefile, nd_line((NODE *)data),
                             "key %+"PRIsVALUE" is duplicated and overwritten on line %d",
-                            nd_st_key_val(p, head), nd_line(head));
+                            nd_st_key(p, head), nd_line(head));
         }
         st_insert(literal_keys, (st_data_t)key, (st_data_t)hash);
         hash = next;
