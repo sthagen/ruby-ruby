@@ -2645,9 +2645,17 @@ pm_compile_call(rb_iseq_t *iseq, const pm_call_node_t *call_node, LINK_ANCHOR *c
     }
 
     if (pm_node->flags & PM_CALL_NODE_FLAGS_ATTRIBUTE_WRITE) {
-        if (!popped) {
+        if (flags & VM_CALL_ARGS_SPLAT) {
+            ADD_INSN(ret, &dummy_line_node, dup);
+            ADD_INSN1(ret, &dummy_line_node, putobject, INT2FIX(-1));
+            ADD_SEND_WITH_FLAG(ret, &dummy_line_node, idAREF, INT2FIX(1), INT2FIX(0));
+            ADD_INSN1(ret, &dummy_line_node, setn, INT2FIX(orig_argc + 2));
+            ADD_INSN (ret, &dummy_line_node, pop);
+        }
+        else if (!popped) {
             ADD_INSN1(ret, &dummy_line_node, setn, INT2FIX(orig_argc + 1));
         }
+
         ADD_SEND_R(ret, &dummy_line_node, method_id, INT2FIX(orig_argc), block_iseq, INT2FIX(flags), kw_arg);
         PM_POP_UNLESS_POPPED;
     }
@@ -5582,7 +5590,6 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
         }
 
         if (requireds_list) {
-            int number_of_anonymous_locals = 0;
             for (size_t i = 0; i < requireds_list->size; i++) {
                 // For each MultiTargetNode, we're going to have one
                 // additional anonymous local not represented in the locals table
@@ -5592,18 +5599,10 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
                     table_size++;
                 }
                 else if (PM_NODE_TYPE_P(required, PM_REQUIRED_PARAMETER_NODE)) {
-                    if (pm_constant_id_lookup(scope_node, ((pm_required_parameter_node_t *)required)->name) == rb_intern("_")) {
-                        number_of_anonymous_locals++;
+                    if (PM_NODE_FLAG_P(required, PM_PARAMETER_FLAGS_REPEATED_PARAMETER)) {
+                        table_size++;
                     }
                 }
-            }
-
-            // For each anonymous local we also want to increase the size
-            // of the locals table. Prism's locals table accounts for all
-            // anonymous locals as 1, so we need to increase the table size
-            // by the number of anonymous locals - 1
-            if (number_of_anonymous_locals > 1) {
-                table_size += (number_of_anonymous_locals - 1);
             }
         }
 
@@ -5686,7 +5685,9 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
                   case PM_REQUIRED_PARAMETER_NODE: {
                       pm_required_parameter_node_t * param = (pm_required_parameter_node_t *)required;
 
-                      pm_insert_local_index(param->name, local_index, index_lookup_table, local_table_for_iseq, scope_node);
+                      if (!PM_NODE_FLAG_P(required, PM_PARAMETER_FLAGS_REPEATED_PARAMETER)) {
+                          pm_insert_local_index(param->name, local_index, index_lookup_table, local_table_for_iseq, scope_node);
+                      }
                       break;
                   }
                   default: {
