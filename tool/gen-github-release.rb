@@ -57,8 +57,9 @@ note << "## Full Changelog\n\n"
 note << "https://github.com/ruby/ruby/compare/#{ARGV[0]}...#{ARGV[1]}\n\n"
 
 if ARGV[2] == "--no-dry-run"
-  name = ARGV[1].gsub(/v/, "").gsub(/_/, ".")
-  client.create_release("ruby/ruby", ARGV[1], name: name, body: note, make_latest: "false")
+  name = ARGV[1].gsub(/^v/, "").gsub(/_/, ".")
+  prerelease = ARGV[1].match?(/rc|preview/) ? true : false
+  client.create_release("ruby/ruby", ARGV[1], name: name, body: note, make_latest: "false", prerelease: prerelease)
   puts "Created a release: https://github.com/ruby/ruby/releases/tag/#{ARGV[1]}"
 else
   puts note

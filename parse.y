@@ -7017,11 +7017,6 @@ do { \
   set_yylval_node(NEW_STR(x, &_cur_loc)); \
   RB_OBJ_WRITTEN(p->ast, Qnil, x); \
 } while(0)
-# define set_yylval_literal(x) \
-do { \
-  set_yylval_node(NEW_LIT(x, &_cur_loc)); \
-  RB_OBJ_WRITTEN(p->ast, Qnil, x); \
-} while(0)
 # define set_yylval_num(x) (yylval.num = (x))
 # define set_yylval_id(x)  (yylval.id = (x))
 # define set_yylval_name(x)  (yylval.id = (x))
@@ -7036,7 +7031,6 @@ ripper_yylval_id(struct parser_params *p, ID x)
 # define set_yylval_num(x) (yylval.val = ripper_new_yylval(p, (x), 0, 0))
 # define set_yylval_id(x)  (void)(x)
 # define set_yylval_name(x) (void)(yylval.val = ripper_yylval_id(p, x))
-# define set_yylval_literal(x) add_mark_object(p, (x))
 # define set_yylval_node(x) (yylval.val = ripper_new_yylval(p, 0, 0, STR_NEW(p->lex.ptok, p->lex.pcur-p->lex.ptok)))
 # define yylval_id() yylval.id
 # define _cur_loc NULL_LOC /* dummy */
@@ -9479,6 +9473,7 @@ parser_set_encode(struct parser_params *p, const char *name)
 {
     rb_encoding *enc;
     VALUE excargs[3];
+    int idx = 0;
 
     const char *wrong = 0;
     switch (*name) {
@@ -9488,7 +9483,7 @@ parser_set_encode(struct parser_params *p, const char *name)
       case 'l': case 'L': wrong = "locale"; break;
     }
     if (wrong && STRCASECMP(name, wrong) == 0) goto unknown;
-    int idx = rb_enc_find_index(name);
+    idx = rb_enc_find_index(name);
     if (idx < 0) {
       unknown:
         excargs[1] = rb_sprintf("unknown encoding name: %s", name);
@@ -15911,9 +15906,6 @@ rb_ruby_parser_free(void *ptr)
 {
     struct parser_params *p = (struct parser_params*)ptr;
     struct local_vars *local, *prev;
-#ifdef UNIVERSAL_PARSER
-    rb_parser_config_t *config = p->config;
-#endif
 
     if (p->tokenbuf) {
         ruby_sized_xfree(p->tokenbuf, p->toksiz);
@@ -15932,13 +15924,6 @@ rb_ruby_parser_free(void *ptr)
         }
     }
     xfree(ptr);
-
-#ifdef UNIVERSAL_PARSER
-    config->counter--;
-    if (config->counter <= 0) {
-        rb_ruby_parser_config_free(config);
-    }
-#endif
 }
 
 size_t
@@ -15955,20 +15940,6 @@ rb_ruby_parser_memsize(const void *ptr)
     }
     return size;
 }
-
-#ifdef UNIVERSAL_PARSER
-rb_parser_config_t *
-rb_ruby_parser_config_new(void *(*malloc)(size_t size))
-{
-    return (rb_parser_config_t *)malloc(sizeof(rb_parser_config_t));
-}
-
-void
-rb_ruby_parser_config_free(rb_parser_config_t *config)
-{
-    config->free(config);
-}
-#endif
 
 #ifndef UNIVERSAL_PARSER
 #ifndef RIPPER
@@ -16000,7 +15971,6 @@ rb_ruby_parser_allocate(rb_parser_config_t *config)
     /* parser_initialize expects fields to be set to 0 */
     rb_parser_t *p = (rb_parser_t *)config->calloc(1, sizeof(rb_parser_t));
     p->config = config;
-    p->config->counter++;
     return p;
 }
 
