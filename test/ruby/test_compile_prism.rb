@@ -589,6 +589,22 @@ module Prism
       assert_prism_eval('$pit = 1; "1 #$pit 1"')
       assert_prism_eval('"1 #{1 + 2} 1"')
       assert_prism_eval('"Prism" "::" "TestCompilePrism"')
+      assert_prism_eval('("a""b").frozen?')
+      assert_prism_eval(<<-CODE)
+        # frozen_string_literal: true
+
+        ("a""b").frozen?
+      CODE
+      assert_prism_eval(<<-CODE)
+        # frozen_string_literal: true
+
+        ("a""b""#{1}").frozen?
+      CODE
+      assert_prism_eval(<<-CODE)
+        # frozen_string_literal: true
+
+        ("a""#{1}""b").frozen?
+      CODE
     end
 
     def test_InterpolatedSymbolNode
@@ -767,6 +783,17 @@ module Prism
         end
         prism_test_case_node
       CODE
+
+      # Test splat in when
+      assert_prism_eval(<<~RUBY)
+        ary = [1, 2]
+        case 1
+        when *ary
+          :ok
+        else
+          :ng
+        end
+      RUBY
     end
 
     def test_ElseNode
@@ -1301,6 +1328,10 @@ module Prism
 
     def test_repeated_method_params
       assert_prism_eval("def self.foo(_a, _a); _a; end; foo(1, 2)")
+    end
+
+    def test_splat_params_with_no_lefties
+      assert_prism_eval("def self.foo(v, (*)); v; end; foo(1, [2, 3, 4])")
     end
 
     def test_method_parameters
