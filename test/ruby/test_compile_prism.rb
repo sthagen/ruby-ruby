@@ -209,6 +209,15 @@ module Prism
 
       assert_prism_eval("defined?(a(itself))")
       assert_prism_eval("defined?(itself(itself))")
+
+      # Method chain on a constant
+      assert_prism_eval(<<~RUBY)
+        class PrismDefinedNode
+          def m1; end
+        end
+
+        defined?(PrismDefinedNode.new.m1)
+      RUBY
     end
 
     def test_GlobalVariableReadNode
@@ -529,6 +538,7 @@ module Prism
       assert_prism_eval("(a, b, c), *, (d, e) = [1, 3], 4, 5, [6, 7]; b")
       assert_prism_eval("(a, b, c), *, (d, e) = [1, 3], 4, 5, [6, 7]; d")
       assert_prism_eval("((a, *, b), *, (c, *, (d, *, e, f, g))), *, ((h, i, *, j), *, (k, l, m, *, n, o, p), q, r) = 1; a")
+      assert_prism_eval("*a = 1; a")
       assert_prism_eval("_, {}[:foo] = 1")
       assert_prism_eval("_, {}[:foo], _ = 1")
       assert_prism_eval("_, {}[:foo], _ = 1")
@@ -702,6 +712,9 @@ module Prism
       assert_prism_eval("[-1, true, 0, *1..2, 3, 4, *5..6, 7, 8, *9..11]")
       assert_prism_eval("a = [1,2]; [0, *a, 3, 4, *5..6, 7, 8, *9..11]")
       assert_prism_eval("[[*1..2], 3, *4..5]")
+
+      # Test keyword splat inside of array
+      assert_prism_eval("[**{x: 'hello'}]")
     end
 
     def test_AssocNode
