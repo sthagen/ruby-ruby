@@ -795,23 +795,18 @@ static pm_local_index_t
 pm_lookup_local_index(rb_iseq_t *iseq, pm_scope_node_t *scope_node, pm_constant_id_t constant_id, int start_depth)
 {
     pm_local_index_t lindex = {0};
-    int level = 0;
-    if (start_depth) {
-        level = start_depth;
-    }
-
-    if (!scope_node) {
-        // We have recursed up all scope nodes
-        // and have not found the local yet
-        rb_bug("Local with constant_id %u does not exist", (unsigned int)constant_id);
-    }
-
+    int level = (start_depth) ? start_depth : 0;
     st_data_t local_index;
 
-    if (!st_lookup(scope_node->index_lookup_table, constant_id, &local_index)) {
-        // Local does not exist at this level, continue recursing up
+    while(!st_lookup(scope_node->index_lookup_table, constant_id, &local_index)) {
         level++;
-        return pm_lookup_local_index((rb_iseq_t *)ISEQ_BODY(iseq)->parent_iseq, scope_node->previous, constant_id, level);
+        if (scope_node->previous) {
+            scope_node = scope_node->previous;
+        } else {
+            // We have recursed up all scope nodes
+            // and have not found the local yet
+            rb_bug("Local with constant_id %u does not exist", (unsigned int)constant_id);
+        }
     }
 
     lindex.level = level;
@@ -3201,12 +3196,11 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
       case PM_BEGIN_NODE: {
         pm_begin_node_t *begin_node = (pm_begin_node_t *) node;
         rb_iseq_t *child_iseq;
-        LABEL *lstart = NEW_LABEL(lineno);
-        LABEL *lend = NEW_LABEL(lineno);
-        LABEL *lcont = NEW_LABEL(lineno);
-
 
         if (begin_node->rescue_clause) {
+            LABEL *lstart = NEW_LABEL(lineno);
+            LABEL *lend = NEW_LABEL(lineno);
+            LABEL *lcont = NEW_LABEL(lineno);
             pm_scope_node_t rescue_scope_node;
             pm_scope_node_init((pm_node_t *)begin_node->rescue_clause, &rescue_scope_node, scope_node, parser);
 
@@ -3253,14 +3247,16 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
                     PM_PUTNIL_UNLESS_POPPED;
                 }
             }
+
             ADD_LABEL(ret, eend);
+            ADD_LABEL(ret, econt);
+
             if (!popped) {
                 PM_NOP;
             }
             pm_statements_node_t *statements = begin_node->ensure_clause->statements;
             if (statements) {
                 PM_COMPILE((pm_node_t *)statements);
-                ADD_LABEL(ret, econt);
                 PM_POP_UNLESS_POPPED;
             }
 
@@ -3292,14 +3288,12 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
         }
 
         if (!begin_node->rescue_clause && !begin_node->ensure_clause) {
-            ADD_LABEL(ret, lstart);
             if (begin_node->statements) {
                 PM_COMPILE((pm_node_t *)begin_node->statements);
             }
             else {
                 PM_PUTNIL_UNLESS_POPPED;
             }
-            ADD_LABEL(ret, lend);
         }
         return;
       }
