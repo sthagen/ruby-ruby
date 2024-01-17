@@ -5605,7 +5605,7 @@ fn gen_send_cfunc(
             // Nothing to do
         }
         _ => {
-            gen_counter_incr(asm, Counter::send_block_arg);
+            gen_counter_incr(asm, Counter::send_cfunc_block_arg);
             return None;
         }
     }
@@ -6294,13 +6294,10 @@ fn gen_send_iseq(
             asm_comment!(asm, "inlined leaf builtin");
             gen_counter_incr(asm, Counter::num_send_leaf_builtin);
 
-            // Skip this if it doesn't trigger GC
-            if builtin_attrs & BUILTIN_ATTR_NO_GC == 0 {
-                // The callee may allocate, e.g. Integer#abs on a Bignum.
-                // Save SP for GC, save PC for allocation tracing, and prepare
-                // for global invalidation after GC's VM lock contention.
-                jit_prepare_routine_call(jit, asm);
-            }
+            // The callee may allocate, e.g. Integer#abs on a Bignum.
+            // Save SP for GC, save PC for allocation tracing, and prepare
+            // for global invalidation after GC's VM lock contention.
+            jit_prepare_routine_call(jit, asm);
 
             // Call the builtin func (ec, recv, arg1, arg2, ...)
             let mut args = vec![EC];
@@ -7009,7 +7006,7 @@ fn exit_if_unsupported_block_arg_type(
             Some(Some(Type::TProc))
         }
         _ => {
-            gen_counter_incr(asm, Counter::send_block_arg);
+            gen_counter_incr(asm, Counter::send_iseq_block_arg_type);
             None
         }
     }
@@ -7341,7 +7338,7 @@ fn gen_send_general(
                 let ivar_name = unsafe { get_cme_def_body_attr_id(cme) };
 
                 if flags & VM_CALL_ARGS_BLOCKARG != 0 {
-                    gen_counter_incr(asm, Counter::send_block_arg);
+                    gen_counter_incr(asm, Counter::send_getter_block_arg);
                     return None;
                 }
 
@@ -7373,7 +7370,7 @@ fn gen_send_general(
                     gen_counter_incr(asm, Counter::send_cfunc_tracing);
                     return None;
                 } else if flags & VM_CALL_ARGS_BLOCKARG != 0 {
-                    gen_counter_incr(asm, Counter::send_block_arg);
+                    gen_counter_incr(asm, Counter::send_attrset_block_arg);
                     return None;
                 } else {
                     let ivar_name = unsafe { get_cme_def_body_attr_id(cme) };
@@ -7396,7 +7393,7 @@ fn gen_send_general(
             // Send family of methods, e.g. call/apply
             VM_METHOD_TYPE_OPTIMIZED => {
                 if flags & VM_CALL_ARGS_BLOCKARG != 0 {
-                    gen_counter_incr(asm, Counter::send_block_arg);
+                    gen_counter_incr(asm, Counter::send_optimized_block_arg);
                     return None;
                 }
 
