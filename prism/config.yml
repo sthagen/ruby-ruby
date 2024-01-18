@@ -475,10 +475,33 @@ nodes:
     fields:
       - name: left
         type: node
+        comment: |
+          Represents the left side of the expression. It can be any kind of node
+          that represents a non-void expression.
+
+              left and right
+              ^^^^
+
+              1 && 2
+              ^
       - name: right
         type: node
+        comment: |
+          Represents the right side of the expression. It can be any kind of
+          node that represents a non-void expression.
+
+              left && right
+                      ^^^^^
+
+              1 and 2
+                    ^
       - name: operator_loc
         type: location
+        comment: |
+          The location of the `and` keyword or the `&&` operator.
+
+              left and right
+                   ^^^
     comment: |
       Represents the use of the `&&` operator or the `and` keyword.
 
@@ -549,7 +572,8 @@ nodes:
       - name: key
         type: node
         comment: |
-          The key of the association. This can be any node that represents a non-void expression.
+          The key of the association. This can be any node that represents a
+          non-void expression.
 
               { a: b }
                 ^
@@ -680,8 +704,8 @@ nodes:
     comment: |
       Represents a block of ruby code.
 
-      [1, 2, 3].each { |i| puts x }
-                     ^^^^^^^^^^^^^^
+          [1, 2, 3].each { |i| puts x }
+                         ^^^^^^^^^^^^^^
   - name: BlockParameterNode
     fields:
       - name: flags
@@ -1193,7 +1217,8 @@ nodes:
       - name: name
         type: constant
     comment: |
-      Represents writing to a constant in a context that doesn't have an explicit value.
+      Represents writing to a constant in a context that doesn't have an
+      explicit value.
 
           Foo, Bar = baz
           ^^^  ^^^
@@ -1824,19 +1849,6 @@ nodes:
       - name: flags
         type: flags
         kind: IntegerBaseFlags
-        comment: |
-          Represents flag indicating the base of the integer
-
-              10    base decimal, value 10
-              0d10  base decimal, value 10
-              0b10  base binary, value 2
-              0o10  base octal, value 8
-              010   base octal, value 8
-              0x10  base hexidecimal, value 16
-
-          A 0 prefix indicates the number has a different base.
-          The d, b, o, and x prefixes indicate the base. If one of those
-          four letters is omitted, the base is assumed to be octal.
     comment: |
       Represents an integer number literal.
 
@@ -2032,7 +2044,8 @@ nodes:
     comment: |
       Represents reading a local variable. Note that this requires that a local
       variable of the same name has already been written to in the same scope,
-      otherwise it is parsed as a method call.
+      otherwise it is parsed as a method call. Note that `it` default parameter
+      has `0it` as the name of this node.
 
           foo
           ^^^
@@ -2273,10 +2286,33 @@ nodes:
     fields:
       - name: left
         type: node
+        comment: |
+          Represents the left side of the expression. It can be any kind of node
+          that represents a non-void expression.
+
+              left or right
+              ^^^^
+
+              1 || 2
+              ^
       - name: right
         type: node
+        comment: |
+          Represents the right side of the expression. It can be any kind of
+          node that represents a non-void expression.
+
+              left || right
+                      ^^^^^
+
+              1 or 2
+                   ^
       - name: operator_loc
         type: location
+        comment: |
+          The location of the `or` keyword or the `||` operator.
+
+              left or right
+                   ^^
     comment: |
       Represents the use of the `||` operator or the `or` keyword.
 
@@ -2392,12 +2428,6 @@ nodes:
       - name: flags
         type: flags
         kind: RangeFlags
-        comment: |
-          A flag indicating whether the range excludes the end value.
-
-              1..3  # includes 3
-
-              1...3 # excludes 3
       - name: left
         type: node?
         comment: |

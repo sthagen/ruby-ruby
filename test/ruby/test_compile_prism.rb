@@ -218,6 +218,51 @@ module Prism
 
         defined?(PrismDefinedNode.new.m1)
       RUBY
+
+      assert_prism_eval("defined?(next)")
+      assert_prism_eval("defined?(break)")
+      assert_prism_eval("defined?(redo)")
+      assert_prism_eval("defined?(retry)")
+
+      assert_prism_eval(<<~RUBY)
+        class PrismDefinedReturnNode
+          def self.m1; defined?(return) end
+        end
+
+        PrismDefinedReturnNode.m1
+      RUBY
+
+      assert_prism_eval("defined?(begin; 1; end)")
+
+      assert_prism_eval("defined?(defined?(a))")
+      assert_prism_eval('defined?(:"#{1}")')
+      assert_prism_eval("defined?(`echo #{1}`)")
+
+      assert_prism_eval("defined?(PrismTestSubclass.test_call_and_write_node &&= 1)")
+      assert_prism_eval("defined?(PrismTestSubclass.test_call_operator_write_node += 1)")
+      assert_prism_eval("defined?(PrismTestSubclass.test_call_or_write_node ||= 1)")
+      assert_prism_eval("defined?(Prism::CPAWN &&= 1)")
+      assert_prism_eval("defined?(Prism::CPOWN += 1)")
+      assert_prism_eval("defined?(Prism::CPOrWN ||= 1)")
+      assert_prism_eval("defined?(Prism::CPWN = 1)")
+      assert_prism_eval("defined?([0][0] &&= 1)")
+      assert_prism_eval("defined?([0][0] += 1)")
+      assert_prism_eval("defined?([0][0] ||= 1)")
+
+      assert_prism_eval("defined?(case :a; when :a; 1; else; 2; end)")
+      assert_prism_eval("defined?(case [1, 2, 3]; in [1, 2, 3]; 4; end)")
+      assert_prism_eval("defined?(class PrismClassA; end)")
+      assert_prism_eval("defined?(def prism_test_def_node; end)")
+      assert_prism_eval("defined?(for i in [1,2] do; i; end)")
+      assert_prism_eval("defined?(if true; 1; end)")
+      assert_prism_eval("defined?(/(?<foo>bar)/ =~ 'barbar')")
+      assert_prism_eval("defined?(1 => 1)")
+      assert_prism_eval("defined?(module M; end)")
+      assert_prism_eval("defined?(1.2r)")
+      assert_prism_eval("defined?(class << self; end)")
+      assert_prism_eval("defined?(while a != 1; end)")
+      assert_prism_eval("defined?(until a == 1; end)")
+      assert_prism_eval("defined?(unless true; 1; end)")
     end
 
     def test_GlobalVariableReadNode
@@ -543,6 +588,10 @@ module Prism
       assert_prism_eval("_, {}[:foo], _ = 1")
       assert_prism_eval("_, {}[:foo], _ = 1")
       assert_prism_eval("_,{}[:foo], _, {}[:bar] = 1")
+      assert_prism_eval("* = :foo")
+      assert_prism_eval("* = *[]")
+      assert_prism_eval("a, * = :foo")
+
 
       assert_prism_eval(<<~CODE)
         class Foo
@@ -908,6 +957,21 @@ module Prism
         end
         a
       CODE
+
+      # Test that ensure block only evaluated once
+      assert_prism_eval(<<~RUBY)
+        res = []
+        begin
+          begin
+            raise
+          ensure
+            res << $!.to_s
+          end
+        rescue
+          res
+        end
+      RUBY
+
       assert_prism_eval(<<-CODE)
         a = 1
         begin
@@ -1148,7 +1212,7 @@ module Prism
       CODE
     end
 
-    def test_RescueModiferNode
+    def test_RescueModifierNode
       assert_prism_eval("1.nil? rescue false")
       assert_prism_eval("1.nil? rescue 1")
       assert_prism_eval("raise 'bang' rescue nil")
@@ -1363,6 +1427,46 @@ module Prism
           m2: "m2"
         )
       CODE
+    end
+
+    def test_trailing_keyword_method_params
+      # foo(1, b: 2, c: 3) # argc -> 3
+      assert_prism_eval("def self.foo(a, b:, c:); [a, b, c]; end; foo(1, b: 2, c: 3)")
+    end
+
+    def test_keyword_method_params_only
+      # foo(a: 1, b: 2) # argc -> 2
+      assert_prism_eval("def self.foo(a:, b:); [a, b]; end; foo(a: 1, b: 2)")
+    end
+
+    def test_keyword_method_params_with_splat
+      # foo(a: 1, **b) # argc -> 1
+      assert_prism_eval("def self.foo(a:, b:); [a, b]; end; b = { b: 2 }; foo(a: 1, **b)")
+    end
+
+    def test_positional_and_splat_keyword_method_params
+      # foo(a, **b) # argc -> 2
+      assert_prism_eval("def self.foo(a, b); [a, b]; end; b = { b: 2 }; foo(1, **b)")
+    end
+
+    def test_positional_and_splat_method_params
+      # foo(a, *b, c, *d, e) # argc -> 2
+      assert_prism_eval("def self.foo(a, b, c, d, e); [a, b, c, d, e]; end; b = [2]; d = [4]; foo(1, *b, 3, *d, 5)")
+    end
+
+    def test_positional_with_splat_and_splat_keyword_method_params
+      # foo(a, *b, c, *d, **e) # argc -> 3
+      assert_prism_eval("def self.foo(a, b, c, d, e); [a, b, c, d, e]; end; b = [2]; d = [4]; e = { e: 5 }; foo(1, *b, 3, *d, **e)")
+    end
+
+    def test_positional_with_splat_and_keyword_method_params
+      # foo(a, *b, c, *d, e:) # argc -> 3
+      assert_prism_eval("def self.foo(a, b, c, d, e:); [a, b, c, d, e]; end; b = [2]; d = [4]; foo(1, *b, 3, *d, e: 5)")
+    end
+
+    def test_leading_splat_and_keyword_method_params
+      # foo(*a, b:) # argc -> 2
+      assert_prism_eval("def self.foo(a, b:); [a, b]; end; a = [1]; foo(*a, b: 2)")
     end
 
     def test_repeated_method_params

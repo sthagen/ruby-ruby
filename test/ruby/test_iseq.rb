@@ -805,11 +805,14 @@ class TestISeq < Test::Unit::TestCase
       f.close
 
       assert_nothing_raised(TypeError) do
-        begin
-          RubyVM::InstructionSequence.compile_prism(f.path)
-        rescue SyntaxError
-        end
+        RubyVM::InstructionSequence.compile_prism(f)
       end
+    end
+  end
+
+  def test_compile_prism_with_invalid_object_type
+    assert_raise(TypeError) do
+      RubyVM::InstructionSequence.compile_prism(Object.new)
     end
   end
 end
