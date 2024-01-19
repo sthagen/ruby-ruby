@@ -72,10 +72,6 @@ have commit right, others don't.
 
 ## Default gems Maintainers
 ### Libraries
-#### lib/abbrev.rb
-* Akinori MUSHA (knu)
-* https://github.com/ruby/abbrev
-* https://rubygems.org/gems/abbrev
 
 #### lib/benchmark.rb
 * *unmaintained*
@@ -181,11 +177,6 @@ have commit right, others don't.
 * https://github.com/ruby/net-protocol
 * https://rubygems.org/gems/net-protocol
 
-#### lib/observer.rb
-* *unmaintained*
-* https://github.com/ruby/observer
-* https://rubygems.org/gems/observer
-
 #### lib/open3.rb
 * *unmaintained*
 * https://github.com/ruby/open3
@@ -231,11 +222,6 @@ have commit right, others don't.
 * https://github.com/ruby/resolv
 * https://rubygems.org/gems/resolv
 
-#### lib/resolv-replace.rb
-* Tanaka Akira (akr)
-* https://github.com/ruby/resolv-replace
-* https://rubygems.org/gems/resolv-replace
-
 #### lib/rdoc.rb, lib/rdoc/*
 * Eric Hodel (drbrain)
 * Hiroshi SHIBATA (hsbt)
@@ -249,11 +235,6 @@ have commit right, others don't.
 * Hitoshi Hasumi (hasumikin)
 * https://github.com/ruby/reline
 * https://rubygems.org/gems/reline
-
-#### lib/rinda/*
-* Masatoshi SEKI (seki)
-* https://github.com/ruby/rinda
-* https://rubygems.org/gems/rinda
 
 #### lib/securerandom.rb
 * Tanaka Akira (akr)
@@ -422,7 +403,7 @@ have commit right, others don't.
 
 ## Bundled gems upstream repositories
 ### minitest
-* https://github.com/seattlerb/minitest
+* https://github.com/minitest/minitest
 
 ### power_assert
 * https://github.com/ruby/power_assert
@@ -472,14 +453,26 @@ have commit right, others don't.
 #### mutex_m
 * https://github.com/ruby/mutex_m
 
-#### lib/getoptlong.rb
+#### getoptlong
 * https://github.com/ruby/getoptlong
 
-#### lib/base64.rb
+#### base64
 * https://github.com/ruby/base64
 
-#### ext/bigdecimal
-* https://rubygems.org/gems/bigdecimal
+#### bigdecimal
+* https://github.com/ruby/bigdecimal
+
+#### observer
+* https://github.com/ruby/observer
+
+#### abbrev
+* https://github.com/ruby/abbrev
+
+#### lib/resolv-replace.rb
+* https://github.com/ruby/resolv-replace
+
+#### rinda
+* https://github.com/ruby/rinda
 
 ## Platform Maintainers
 ### mswin64 (Microsoft Windows)

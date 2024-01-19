@@ -94,6 +94,7 @@ extern int ruby_assert_critical_section_entered;
 #include "internal.h"
 #include "internal/array.h"
 #include "internal/basic_operators.h"
+#include "internal/sanitizers.h"
 #include "internal/serial.h"
 #include "internal/vm.h"
 #include "method.h"
@@ -1153,6 +1154,11 @@ typedef struct rb_thread_struct {
     void **specific_storage;
 
     struct rb_ext_config ext_config;
+
+#ifdef RUBY_ASAN_ENABLED
+    void *asan_fake_stack_handle;
+#endif
+
 } rb_thread_t;
 
 static inline unsigned int
@@ -1840,7 +1846,7 @@ rb_control_frame_t *rb_vm_get_binding_creatable_next_cfp(const rb_execution_cont
 VALUE *rb_vm_svar_lep(const rb_execution_context_t *ec, const rb_control_frame_t *cfp);
 int rb_vm_get_sourceline(const rb_control_frame_t *);
 void rb_vm_stack_to_heap(rb_execution_context_t *ec);
-void ruby_thread_init_stack(rb_thread_t *th);
+void ruby_thread_init_stack(rb_thread_t *th, void *local_in_parent_frame);
 rb_thread_t * ruby_thread_from_native(void);
 int ruby_thread_set_native(rb_thread_t *th);
 int rb_vm_control_frame_id_and_class(const rb_control_frame_t *cfp, ID *idp, ID *called_idp, VALUE *klassp);

@@ -33,7 +33,6 @@ Socket:: Access underlying OS socket implementations
 
 == Libraries
 
-Abbrev:: Calculates a set of unique abbreviations for a given set of strings
 Benchmark:: Provides methods to measure and report the time used to execute code
 Bundler:: Manage your Ruby application's gem dependencies
 CGI:: Support for the Common Gateway Interface protocol
@@ -52,7 +51,6 @@ IRB:: Interactive Ruby command-line tool for REPL (Read Eval Print Loop)
 OptionParser:: Ruby-oriented class for command-line option analysis
 Logger:: Provides a simple logging utility for outputting messages
 Net::HTTP:: HTTP client api for Ruby
-Observable:: Provides a mechanism for publish/subscribe pattern in Ruby
 Open3:: Provides access to stdin, stdout and stderr when running other programs
 OpenStruct:: Class to build custom data structures, similar to a Hash
 OpenURI:: An easy-to-use wrapper for Net::HTTP, Net::HTTPS and Net::FTP
@@ -63,9 +61,7 @@ PStore:: Implements a file based persistence mechanism based on a Hash
 Readline:: Wrapper for Readline extencion and Reline
 Reline:: GNU Readline and Editline by pure Ruby implementation.
 Resolv::  Thread-aware DNS resolver library in Ruby
-resolv-replace.rb:: Replace Socket DNS with Resolv
 RDoc:: Produces HTML and command-line documentation for Ruby
-Rinda:: The Linda distributed computing paradigm in Ruby
 SecureRandom:: Interface for secure random number generator
 Set:: Provides a class to deal with collections of unordered, unique values
 Shellwords:: Manipulates strings with word parsing rules of UNIX Bourne shell
@@ -130,3 +126,7 @@ Mutex_m:: Mixin to extend objects to be handled like a Mutex
 GetoptLong:: Parse command line options similar to the GNU C getopt_long()
 Base64:: Support for encoding and decoding binary data using a Base64 representation
 BigDecimal:: Provides arbitrary-precision floating point decimal arithmetic
+Observable:: Provides a mechanism for publish/subscribe pattern in Ruby
+Abbrev:: Calculates a set of unique abbreviations for a given set of strings
+resolv-replace.rb:: Replace Socket DNS with Resolv
+Rinda:: The Linda distributed computing paradigm in Ruby
