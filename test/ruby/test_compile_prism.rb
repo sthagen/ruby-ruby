@@ -961,6 +961,32 @@ module Prism
       assert_prism_eval("[true].map { break }")
     end
 
+    def test_ensure_in_methods
+      assert_prism_eval(<<-CODE)
+def self.m
+  a = []
+ensure
+  a << 5
+  return a
+end
+m
+      CODE
+    end
+
+    def test_break_runs_ensure
+      assert_prism_eval(<<-CODE)
+a = []
+while true
+  begin
+    break
+  ensure
+    a << 1
+  end
+end
+a
+      CODE
+    end
+
     def test_EnsureNode
       assert_prism_eval("begin; 1; ensure; 2; end")
       assert_prism_eval("begin; 1; begin; 3; ensure; 4; end; ensure; 2; end")
@@ -1448,6 +1474,10 @@ module Prism
           m2: "m2"
         )
       CODE
+    end
+
+    def test_required_kwarg_ordering
+      assert_prism_eval("def self.foo(a: 1, b:); [a, b]; end; foo(b: 2)")
     end
 
     def test_trailing_keyword_method_params
