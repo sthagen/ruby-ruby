@@ -114,11 +114,6 @@ have commit right, others don't.
 * https://github.com/ruby/digest
 * https://rubygems.org/gems/digest
 
-#### lib/drb.rb, lib/drb/*
-* Masatoshi SEKI (seki)
-* https://github.com/ruby/drb
-* https://rubygems.org/gems/drb
-
 #### lib/erb.rb
 * Masatoshi SEKI (seki)
 * Takashi Kokubun (k0kubun)
@@ -355,11 +350,6 @@ have commit right, others don't.
 * https://github.com/flori/json
 * https://rubygems.org/gems/json
 
-#### ext/nkf
-* NARUSE, Yui (naruse)
-* https://github.com/ruby/nkf
-* https://rubygems.org/gems/nkf
-
 #### ext/openssl
 * Kazuki Yamaguchi (rhe)
 * https://github.com/ruby/openssl
@@ -385,11 +375,6 @@ have commit right, others don't.
 * Kouhei Sutou (kou)
 * https://github.com/ruby/strscan
 * https://rubygems.org/gems/strscan
-
-#### ext/syslog
-* Akinori MUSHA (knu)
-* https://github.com/ruby/syslog
-* https://rubygems.org/gems/syslog
 
 #### ext/win32ole
 * Masaki Suketa (suke)
@@ -468,11 +453,20 @@ have commit right, others don't.
 #### abbrev
 * https://github.com/ruby/abbrev
 
-#### lib/resolv-replace.rb
+#### resolv-replace
 * https://github.com/ruby/resolv-replace
 
 #### rinda
 * https://github.com/ruby/rinda
+
+#### drb
+* https://github.com/ruby/drb
+
+#### nkf
+* https://github.com/ruby/nkf
+
+#### syslog
+* https://github.com/ruby/syslog
 
 ## Platform Maintainers
 ### mswin64 (Microsoft Windows)
