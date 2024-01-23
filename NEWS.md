@@ -24,7 +24,6 @@ The following default gems are updated.
 
 * RubyGems 3.6.0.dev
 * bundler 2.6.0.dev
-* csv 3.2.9
 * erb 4.0.4
 * fiddle 1.1.3
 * io-console 0.7.2
@@ -57,6 +56,7 @@ The following bundled gems are promoted from default gems.
 * drb 2.2.0
 * nkf 0.2.0
 * syslog 0.1.2
+* csv 3.2.8
 
 See GitHub releases like [GitHub Releases of Logger](https://github.com/ruby/logger/releases) or changelog for details of the default gems or bundled gems.
 
