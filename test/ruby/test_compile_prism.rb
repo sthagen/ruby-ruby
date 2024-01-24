@@ -653,6 +653,21 @@ module Prism
         foo = Foo.new
         _, foo.bar, _, foo.baz = 1
       CODE
+
+      # Test nested writes with method calls
+      assert_prism_eval(<<~RUBY)
+        class Foo
+          attr_accessor :bar
+        end
+
+        a = Foo.new
+
+        (a.bar, a.bar), b = [1], 2
+      RUBY
+      assert_prism_eval(<<~RUBY)
+        h = {}
+        (h[:foo], h[:bar]), a = [1], 2
+      RUBY
     end
 
     ############################################################################
@@ -849,6 +864,13 @@ module Prism
       assert_prism_eval("*b, c = [1, 2, 3]; c")
       assert_prism_eval("a, *, c = [1, 2, 3]; a")
       assert_prism_eval("a, *, c = [1, 2, 3]; c")
+
+      # Test anonymous splat node
+      assert_prism_eval(<<~RUBY)
+        def self.bar(*) = Array(*)
+
+        bar([1, 2, 3])
+      RUBY
     end
 
     ############################################################################
@@ -1690,6 +1712,15 @@ end
 
     def test_BlockArgumentNode
       assert_prism_eval("1.then(&:to_s)")
+
+      # Test forwarding with no name
+      assert_prism_eval(<<~RUBY)
+        o = Object.new
+        def o.foo(&) = yield
+        def o.bar(&) = foo(&)
+
+        o.bar { :ok }
+      RUBY
     end
 
     def test_BlockLocalVariableNode
@@ -2055,6 +2086,10 @@ end
     def test_BlockParameterNode
       assert_prism_eval("def prism_test_block_parameter_node(&bar) end")
       assert_prism_eval("->(b, c=1, *d, e, &f){}")
+
+      # Test BlockParameterNode with no name
+      assert_prism_eval("->(&){}")
+      assert_prism_eval("def prism_test_block_parameter_node(&); end")
     end
 
     def test_BlockParametersNode

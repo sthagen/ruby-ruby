@@ -449,6 +449,7 @@ pub struct iseq_inline_cvar_cache_entry {
 }
 pub const BUILTIN_ATTR_LEAF: rb_builtin_attr = 1;
 pub const BUILTIN_ATTR_SINGLE_NOARG_LEAF: rb_builtin_attr = 2;
+pub const BUILTIN_ATTR_INLINE_BLOCK: rb_builtin_attr = 4;
 pub type rb_builtin_attr = u32;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -1139,6 +1140,7 @@ extern "C" {
     pub fn rb_yjit_rb_ary_subseq_length(ary: VALUE, beg: ::std::os::raw::c_long) -> VALUE;
     pub fn rb_yjit_fix_div_fix(recv: VALUE, obj: VALUE) -> VALUE;
     pub fn rb_yjit_fix_mod_fix(recv: VALUE, obj: VALUE) -> VALUE;
+    pub fn rb_yjit_ruby2_keywords_splat_p(obj: VALUE) -> usize;
     pub fn rb_yjit_dump_iseq_loc(iseq: *const rb_iseq_t, insn_idx: u32);
     pub fn rb_FL_TEST(obj: VALUE, flags: VALUE) -> VALUE;
     pub fn rb_FL_TEST_RAW(obj: VALUE, flags: VALUE) -> VALUE;

@@ -1810,7 +1810,7 @@ fn gen_get_ep(asm: &mut Assembler, level: u32) -> Opnd {
 
 // Gets the EP of the ISeq of the containing method, or "local level".
 // Equivalent of GET_LEP() macro.
-fn gen_get_lep(jit: &mut JITState, asm: &mut Assembler) -> Opnd {
+fn gen_get_lep(jit: &JITState, asm: &mut Assembler) -> Opnd {
     // Equivalent of get_lvar_level() in compile.c
     fn get_lvar_level(iseq: IseqPtr) -> u32 {
         if iseq == unsafe { rb_get_iseq_body_local_iseq(iseq) } {
@@ -5555,18 +5555,6 @@ fn gen_send_cfunc(
         return None;
     }
 
-    // In order to handle backwards compatibility between ruby 3 and 2
-    // ruby2_keywords was introduced. It is called only on methods
-    // with splat and changes they way they handle them.
-    // We are just going to not compile these.
-    // https://docs.ruby-lang.org/en/3.2/Module.html#method-i-ruby2_keywords
-    if unsafe {
-        get_iseq_flags_ruby2_keywords(jit.iseq) && flags & VM_CALL_ARGS_SPLAT != 0
-    } {
-        gen_counter_incr(asm, Counter::send_args_splat_cfunc_ruby2_keywords);
-        return None;
-    }
-
     let kw_arg = unsafe { vm_ci_kwarg(ci) };
     let kw_arg_num = if kw_arg.is_null() {
         0
@@ -5893,12 +5881,6 @@ fn get_array_ptr(asm: &mut Assembler, array_reg: Opnd) -> Opnd {
 fn copy_splat_args_for_rest_callee(array: Opnd, num_args: u32, asm: &mut Assembler) {
     asm_comment!(asm, "copy_splat_args_for_rest_callee");
 
-    let array_len_opnd = get_array_len(asm, array);
-
-    asm_comment!(asm, "guard splat array large enough");
-    asm.cmp(array_len_opnd, num_args.into());
-    asm.jl(Target::side_exit(Counter::guard_send_iseq_has_rest_and_splat_too_few));
-
     // Unused operands cause the backend to panic
     if num_args == 0 {
         return;
@@ -5906,24 +5888,8 @@ fn copy_splat_args_for_rest_callee(array: Opnd, num_args: u32, asm: &mut Assembl
 
     asm_comment!(asm, "Push arguments from array");
 
-    // Load the address of the embedded array
-    // (struct RArray *)(obj)->as.ary
     let array_reg = asm.load(array);
-
-    // Conditionally load the address of the heap array
-    // (struct RArray *)(obj)->as.heap.ptr
-    let flags_opnd = Opnd::mem(VALUE_BITS, array_reg, RUBY_OFFSET_RBASIC_FLAGS);
-    asm.test(flags_opnd, Opnd::UImm(RARRAY_EMBED_FLAG as u64));
-    let heap_ptr_opnd = Opnd::mem(
-        usize::BITS as u8,
-        array_reg,
-        RUBY_OFFSET_RARRAY_AS_HEAP_PTR,
-    );
-    // Load the address of the embedded array
-    // (struct RArray *)(obj)->as.ary
-    let ary_opnd = asm.lea(Opnd::mem(VALUE_BITS, array_reg, RUBY_OFFSET_RARRAY_AS_ARY));
-    let ary_opnd = asm.csel_nz(ary_opnd, heap_ptr_opnd);
-
+    let ary_opnd = get_array_ptr(asm, array_reg);
     for i in 0..num_args {
         let top = asm.stack_push(Type::Unknown);
         asm.mov(top, Opnd::mem(64, ary_opnd, i as i32 * SIZEOF_VALUE_I32));
@@ -5937,38 +5903,14 @@ fn push_splat_args(required_args: u32, asm: &mut Assembler) {
     asm_comment!(asm, "push_splat_args");
 
     let array_opnd = asm.stack_opnd(0);
-    let array_reg = asm.load(array_opnd);
-
     guard_object_is_array(
         asm,
-        array_reg,
+        array_opnd,
         array_opnd.into(),
         Counter::guard_send_splat_not_array,
     );
 
-    asm_comment!(asm, "Get array length for embedded or heap");
-
-    // Pull out the embed flag to check if it's an embedded array.
-    let flags_opnd = Opnd::mem(VALUE_BITS, array_reg, RUBY_OFFSET_RBASIC_FLAGS);
-
-    // Get the length of the array
-    let emb_len_opnd = asm.and(flags_opnd, (RARRAY_EMBED_LEN_MASK as u64).into());
-    let emb_len_opnd = asm.rshift(emb_len_opnd, (RARRAY_EMBED_LEN_SHIFT as u64).into());
-
-    // Conditionally move the length of the heap array
-    let flags_opnd = Opnd::mem(VALUE_BITS, array_reg, RUBY_OFFSET_RBASIC_FLAGS);
-    asm.test(flags_opnd, (RARRAY_EMBED_FLAG as u64).into());
-
-    // Need to repeat this here to deal with register allocation
-    let array_opnd = asm.stack_opnd(0);
-    let array_reg = asm.load(array_opnd);
-
-    let array_len_opnd = Opnd::mem(
-        std::os::raw::c_long::BITS as u8,
-        array_reg,
-        RUBY_OFFSET_RARRAY_AS_HEAP_LEN,
-    );
-    let array_len_opnd = asm.csel_nz(emb_len_opnd, array_len_opnd);
+    let array_len_opnd = get_array_len(asm, array_opnd);
 
     asm_comment!(asm, "Guard for expected splat length");
     asm.cmp(array_len_opnd, required_args.into());
@@ -5993,23 +5935,8 @@ fn push_splat_args(required_args: u32, asm: &mut Assembler) {
     let array_opnd = asm.stack_pop(1);
 
     if required_args > 0 {
-        // Load the address of the embedded array
-        // (struct RArray *)(obj)->as.ary
         let array_reg = asm.load(array_opnd);
-
-        // Conditionally load the address of the heap array
-        // (struct RArray *)(obj)->as.heap.ptr
-        let flags_opnd = Opnd::mem(VALUE_BITS, array_reg, RUBY_OFFSET_RBASIC_FLAGS);
-        asm.test(flags_opnd, Opnd::UImm(RARRAY_EMBED_FLAG as u64));
-        let heap_ptr_opnd = Opnd::mem(
-            usize::BITS as u8,
-            array_reg,
-            RUBY_OFFSET_RARRAY_AS_HEAP_PTR,
-        );
-        // Load the address of the embedded array
-        // (struct RArray *)(obj)->as.ary
-        let ary_opnd = asm.lea(Opnd::mem(VALUE_BITS, array_reg, RUBY_OFFSET_RARRAY_AS_ARY));
-        let ary_opnd = asm.csel_nz(ary_opnd, heap_ptr_opnd);
+        let ary_opnd = get_array_ptr(asm, array_reg);
 
         for i in 0..required_args {
             let top = asm.stack_push(Type::Unknown);
@@ -6153,7 +6080,6 @@ fn gen_send_iseq(
     exit_if_has_post(asm, iseq)?;
     exit_if_has_kwrest(asm, iseq)?;
     exit_if_kw_splat(asm, flags)?;
-    exit_if_splat_and_ruby2_keywords(asm, jit, flags)?;
     exit_if_has_rest_and_captured(asm, iseq_has_rest, captured_opnd)?;
     exit_if_has_rest_and_supplying_kws(asm, iseq_has_rest, iseq, supplying_kws)?;
     exit_if_supplying_kw_and_has_no_kw(asm, supplying_kws, iseq)?;
@@ -6431,6 +6357,37 @@ fn gen_send_iseq(
     asm.cmp(CFP, stack_limit);
     asm.jbe(Target::side_exit(Counter::guard_send_se_cf_overflow));
 
+    if iseq_has_rest && flags & VM_CALL_ARGS_SPLAT != 0 {
+        let splat_pos = i32::from(block_arg) + kw_arg_num;
+
+        // Insert length guard for a call to copy_splat_args_for_rest_callee()
+        // that will come later. We will have made changes to
+        // the stack by spilling or handling __send__ shifting
+        // by the time we get to that code, so we need the
+        // guard here where we can still side exit.
+        let non_rest_arg_count = argc - 1;
+        if non_rest_arg_count < required_num + opt_num {
+            let take_count: u32 = (required_num - non_rest_arg_count + opts_filled)
+                .try_into().unwrap();
+
+            if take_count > 0 {
+                asm_comment!(asm, "guard splat_array_length >= {take_count}");
+
+                let splat_array = asm.stack_opnd(splat_pos);
+                let array_len_opnd = get_array_len(asm, splat_array);
+                asm.cmp(array_len_opnd, take_count.into());
+                asm.jl(Target::side_exit(Counter::guard_send_iseq_has_rest_and_splat_too_few));
+            }
+        }
+
+        // All splats need to guard for ruby2_keywords hash. Check with a function call when
+        // splatting into a rest param since the index for the last item in the array is dynamic.
+        asm_comment!(asm, "guard no ruby2_keywords hash in splat");
+        let bad_splat = asm.ccall(rb_yjit_ruby2_keywords_splat_p as _, vec![asm.stack_opnd(splat_pos)]);
+        asm.cmp(bad_splat, 0.into());
+        asm.jnz(Target::side_exit(Counter::guard_send_splatarray_last_ruby_2_keywords));
+    }
+
     match block_arg_type {
         Some(Type::Nil) => {
             // We have a nil block arg, so let's pop it off the args
@@ -6541,14 +6498,14 @@ fn gen_send_iseq(
                 // from the array and move them to the stack.
                 asm_comment!(asm, "take items from splat array");
 
-                let diff: u32 = (required_num - non_rest_arg_count + opts_filled)
+                let take_count: u32 = (required_num - non_rest_arg_count + opts_filled)
                     .try_into().unwrap();
 
                 // Copy required arguments to the stack without modifying the array
-                copy_splat_args_for_rest_callee(array, diff, asm);
+                copy_splat_args_for_rest_callee(array, take_count, asm);
 
                 // We will now slice the array to give us a new array of the correct size
-                let sliced = asm.ccall(rb_yjit_rb_ary_subseq_length as *const u8, vec![array, Opnd::UImm(diff as u64)]);
+                let sliced = asm.ccall(rb_yjit_rb_ary_subseq_length as *const u8, vec![array, Opnd::UImm(take_count.into())]);
 
                 sliced
             } else {
@@ -6894,6 +6851,12 @@ fn gen_send_iseq(
     // Create a context for the callee
     let mut callee_ctx = Context::default();
 
+    // If the callee has :inline_block annotation and the callsite has a block ISEQ,
+    // duplicate a callee block for each block ISEQ to make its `yield` monomorphic.
+    if let (Some(BlockHandler::BlockISeq(iseq)), true) = (block, builtin_attrs & BUILTIN_ATTR_INLINE_BLOCK != 0) {
+        callee_ctx.set_inline_block(iseq);
+    }
+
     // Set the argument types in the callee's context
     for arg_idx in 0..argc {
         let stack_offs: u8 = (argc - arg_idx - 1).try_into().unwrap();
@@ -6984,20 +6947,6 @@ fn exit_if_has_kwrest(asm: &mut Assembler, iseq: *const rb_iseq_t) -> Option<()>
 #[must_use]
 fn exit_if_kw_splat(asm: &mut Assembler, flags: u32) -> Option<()> {
     exit_if(asm, flags & VM_CALL_KW_SPLAT != 0, Counter::send_iseq_kw_splat)
-}
-
-#[must_use]
-fn exit_if_splat_and_ruby2_keywords(asm: &mut Assembler, jit: &mut JITState, flags: u32) -> Option<()> {
-    // In order to handle backwards compatibility between ruby 3 and 2
-    // ruby2_keywords was introduced. It is called only on methods
-    // with splat and changes they way they handle them.
-    // We are just going to not compile these.
-    // https://www.rubydoc.info/stdlib/core/Proc:ruby2_keywords
-    exit_if(
-        asm,
-        unsafe { get_iseq_flags_ruby2_keywords(jit.iseq) } && flags & VM_CALL_ARGS_SPLAT != 0,
-        Counter::send_iseq_ruby2_keywords,
-    )
 }
 
 #[must_use]
@@ -7887,6 +7836,13 @@ fn gen_invokeblock_specialized(
             SEND_MAX_DEPTH,
             Counter::guard_invokeblock_tag_changed,
         );
+
+        // If the current ISEQ is annotated to be inlined but it's not being inlined here,
+        // generate a dynamic dispatch to avoid making this yield megamorphic.
+        if unsafe { rb_yjit_iseq_builtin_attrs(jit.iseq) } & BUILTIN_ATTR_INLINE_BLOCK != 0 && !asm.ctx.inline() {
+            gen_counter_incr(asm, Counter::invokeblock_iseq_not_inlined);
+            return None;
+        }
 
         let comptime_captured = unsafe { ((comptime_handler.0 & !0x3) as *const rb_captured_block).as_ref().unwrap() };
         let comptime_iseq = unsafe { *comptime_captured.code.iseq.as_ref() };

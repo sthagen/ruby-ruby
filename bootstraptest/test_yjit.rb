@@ -1,3 +1,38 @@
+# regression test for popping before side exit
+assert_equal "ok", %q{
+  def foo(a, *) = a
+
+  def call(args, &)
+    foo(1) # spill at where the block arg will be
+    foo(*args, &)
+  end
+
+  call([1, 2])
+
+  begin
+    call([])
+  rescue ArgumentError
+    :ok
+  end
+}
+
+# regression test for send processing before side exit
+assert_equal "ok", %q{
+  def foo(a, *) = :foo
+
+  def call(args)
+    send(:foo, *args)
+  end
+
+  call([1, 2])
+
+  begin
+    call([])
+  rescue ArgumentError
+    :ok
+  end
+}
+
 # test discarding extra yield arguments
 assert_equal "2210150001501015", %q{
   def splat_kw(ary) = yield *ary, a: 1
@@ -4407,4 +4442,20 @@ assert_equal '[0, 1, -4]', %q{
 assert_equal '[nil, "yield"]', %q{
   def defined_yield = defined?(yield)
   [defined_yield, defined_yield {}]
+}
+
+# splat with ruby2_keywords into rest parameter
+assert_equal '[[{:a=>1}], {}]', %q{
+  ruby2_keywords def foo(*args) = args
+
+  def bar(*args, **kw) = [args, kw]
+
+  def pass_bar(*args) = bar(*args)
+
+  def body
+    args = foo(a: 1)
+    pass_bar(*args)
+  end
+
+  body
 }
