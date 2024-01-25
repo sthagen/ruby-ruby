@@ -724,7 +724,7 @@ module Prism
 
     def test_InterpolatedXStringNode
       assert_prism_eval('`echo #{1}`')
-      assert_prism_eval('`printf #{"100"}`')
+      assert_prism_eval('`echo #{"100"}`')
     end
 
     def test_MatchLastLineNode
@@ -825,6 +825,14 @@ module Prism
       assert_prism_eval("foo = { a: 1 }; { **foo }")
       assert_prism_eval("foo = { a: 1 }; bar = foo; { **foo, b: 2, **bar, c: 3 }")
       assert_prism_eval("foo = { a: 1 }; { b: 2, **foo, c: 3}")
+
+      # Test anonymous AssocSplatNode
+      assert_prism_eval(<<~RUBY)
+        o = Object.new
+        def o.bar(**) = Hash(**)
+
+        o.bar(hello: "world")
+      RUBY
     end
 
     def test_HashNode
@@ -1537,6 +1545,39 @@ a
       CODE
     end
 
+    def test_repeated_block_underscore
+      assert_prism_eval("def self.m(_, **_, &_); _; end; method(:m).parameters")
+    end
+
+    def test_repeated_kw_rest_underscore
+      assert_prism_eval("def self.m(_, **_); _; end; method(:m).parameters")
+    end
+
+    def test_repeated_required_keyword_underscore
+      assert_prism_eval("def self.m(_, _, *_, _, _:); _; end; method(:m).parameters")
+      assert_prism_eval("def self.m(_, _, *_, _, _:, _: 2); _; end; method(:m).parameters")
+    end
+
+    def test_repeated_required_post_underscore
+      assert_prism_eval("def self.m(_, _, *_, _); _; end; method(:m).parameters")
+    end
+
+    def test_repeated_splat_underscore
+      assert_prism_eval("def self.m(_, _, _ = 1, _ = 2, *_); end; method(:m).parameters")
+    end
+
+    def test_repeated_optional_underscore
+      assert_prism_eval("def self.m(a, _, _, _ = 1, _ = 2, b); end; method(:m).parameters")
+    end
+
+    def test_repeated_required_underscore
+      assert_prism_eval("def self.m(a, _, _, b); end; method(:m).parameters")
+    end
+
+    def test_locals_in_parameters
+      assert_prism_eval("def self.m(a = b = c = 1); [a, b, c]; end; self.m")
+    end
+
     def test_trailing_comma_on_block
       assert_prism_eval("def self.m; yield [:ok]; end; m {|v0,| v0 }")
     end
@@ -1713,11 +1754,20 @@ end
     def test_BlockArgumentNode
       assert_prism_eval("1.then(&:to_s)")
 
-      # Test forwarding with no name
+      # Test anonymous block forwarding
       assert_prism_eval(<<~RUBY)
         o = Object.new
         def o.foo(&) = yield
         def o.bar(&) = foo(&)
+
+        o.bar { :ok }
+      RUBY
+
+      # Test anonymous block forwarding from argument forwarding
+      assert_prism_eval(<<~RUBY)
+        o = Object.new
+        def o.foo = yield
+        def o.bar(...) = foo(&)
 
         o.bar { :ok }
       RUBY
@@ -1999,31 +2049,6 @@ end
     end
 
     def test_ForwardingArgumentsNode
-      # http://ci.rvm.jp/results/trunk-iseq_binary@ruby-sp2-docker/4779277
-      #
-      # expected:
-      # == disasm: #<ISeq:prism_test_forwarding_arguments_node1@<compiled>:2 (2,8)-(4,11)>
-      # local table (size: 1, argc: 0 [opts: 0, rest: -1, post: 0, block: -1, kw: -1@-1, kwrest: 1])
-      # [ 1] "..."@0
-      # 0000 putself                                                          (   3)
-      # 0001 getlocal_WC_0                          ?@-2
-      # 0003 splatarray                             false
-      # 0005 getblockparamproxy                     ?@-1, 0
-      # 0008 send                                   <calldata!mid:prism_test_forwarding_arguments_node, argc:1, ARGS_SPLAT|ARGS_BLOCKARG|FCALL>, nil
-      # 0011 leave                                                            (   2)
-      # actual:
-      # == disasm: #<ISeq:prism_test_forwarding_arguments_node1@<compiled>:2 (2,8)-(4,11)>
-      # local table (size: 1, argc: 0 [opts: 0, rest: -1, post: 0, block: -1, kw: -1@-1, kwrest: 1])
-      # [ 1] "..."@0
-      # 0000 putself                                                          (   3)
-      # 0001 getlocal_WC_0                          ?@-2
-      # 0003 splatarray                             false
-      # 0005 getblockparamproxy                     "!"@-1, 0
-      # 0008 send                                   <calldata!mid:prism_test_forwarding_arguments_node, argc:1, ARGS_SPLAT|ARGS_BLOCKARG|FCALL>, nil
-      # 0011 leave                                                            (   2)
-
-      omit "fails on trunk-iseq_binary"
-
       assert_prism_eval(<<-CODE)
         def prism_test_forwarding_arguments_node(...); end;
         def prism_test_forwarding_arguments_node1(...)
@@ -2037,6 +2062,14 @@ end
           prism_test_forwarding_arguments_node(1,2, 3, ...)
         end
       CODE
+
+      assert_prism_eval(<<~RUBY)
+        o = Object.new
+        def o.bar(a, b, c) = [a, b, c]
+        def o.foo(...) = 1.times { bar(...) }
+
+        o.foo(1, 2, 3)
+      RUBY
     end
 
     def test_ForwardingSuperNode
@@ -2118,6 +2151,14 @@ end
 
     def test_OptionalKeywordParameterNode
       assert_prism_eval("def prism_test_optional_keyword_param_node(bar: nil); end")
+
+      # Test with optional argument and method call in OptionalKeywordParameterNode
+      assert_prism_eval(<<~RUBY)
+        o = Object.new
+        def o.foo = 1
+        def o.bar(a = nil, b: foo) = b
+        o.bar
+      RUBY
     end
 
     def test_ParametersNode

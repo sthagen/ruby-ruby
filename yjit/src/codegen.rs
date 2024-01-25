@@ -4712,6 +4712,8 @@ fn jit_rb_int_lshift(
     }
 
     // Fallback to a C call if the shift amount varies
+    // This check is needed because the chain guard will side-exit
+    // if its max depth is reached
     if asm.ctx.get_chain_depth() > 0 {
         return false;
     }
@@ -4771,7 +4773,9 @@ fn jit_rb_int_rshift(
     }
 
     // Fallback to a C call if the shift amount varies
-    if asm.ctx.get_chain_depth() > 1 {
+    // This check is needed because the chain guard will side-exit
+    // if its max depth is reached
+    if asm.ctx.get_chain_depth() > 0 {
         return false;
     }
 
@@ -7254,6 +7258,17 @@ fn gen_send_general(
     assert_eq!(RUBY_T_CLASS, comptime_recv_klass.builtin_type(),
         "objects visible to ruby code should have a T_CLASS in their klass field");
 
+    // Don't compile calls through singleton classes to avoid retaining the receiver.
+    // Make an exception for class methods since classes tend to be retained anyways.
+    // Also compile calls on top_self to help tests.
+    if VALUE(0) != unsafe { FL_TEST(comptime_recv_klass, VALUE(RUBY_FL_SINGLETON as usize)) }
+        && comptime_recv != unsafe { rb_vm_top_self() }
+        && !unsafe { RB_TYPE_P(comptime_recv, RUBY_T_CLASS) }
+        && !unsafe { RB_TYPE_P(comptime_recv, RUBY_T_MODULE) } {
+        gen_counter_incr(asm, Counter::send_singleton_class);
+        return None;
+    }
+
     // Points to the receiver operand on the stack
     let recv = asm.stack_opnd(recv_idx);
     let recv_opnd: YARVOpnd = recv.into();
@@ -8031,6 +8046,12 @@ fn gen_invokesuper_specialized(
     let comptime_recv = jit.peek_at_stack(&asm.ctx, argc as isize);
     if unsafe { rb_obj_is_kind_of(comptime_recv, current_defined_class) } == VALUE(0) {
         gen_counter_incr(asm, Counter::invokesuper_defined_class_mismatch);
+        return None;
+    }
+
+    // Don't compile `super` on objects with singleton class to avoid retaining the receiver.
+    if VALUE(0) != unsafe { FL_TEST(comptime_recv.class_of(), VALUE(RUBY_FL_SINGLETON as usize)) } {
+        gen_counter_incr(asm, Counter::invokesuper_singleton_class);
         return None;
     }
 
