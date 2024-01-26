@@ -1153,6 +1153,7 @@ pm_setup_args(pm_arguments_node_t *arguments_node, int *flags, struct rb_callinf
                     //        ^^
                     if (index + 1 < arguments_node_list.size) {
                         ADD_INSN1(ret, &dummy_line_node, splatarray, Qtrue);
+                        *flags |= VM_CALL_ARGS_SPLAT_MUT;
                     }
                     // If this is the first spalt array seen and it's the last
                     // parameter, we don't want splatarray to dup it.
@@ -6131,7 +6132,18 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
         // If we have statements to execute, we'll compile them here. Otherwise
         // we'll push nil onto the stack.
         if (cast->statements) {
+
+            // We'll temporarily remove the end_label location from the iseq
+            // when compiling the statements so that next/redo statements
+            // inside the body will throw to the correct place instead of
+            // jumping straight to the end of this iseq
+            LABEL *prev_end = ISEQ_COMPILE_DATA(iseq)->end_label;
+            ISEQ_COMPILE_DATA(iseq)->end_label = NULL;
+
             PM_COMPILE((pm_node_t *) cast->statements);
+
+            // Now restore the end_label
+            ISEQ_COMPILE_DATA(iseq)->end_label = prev_end;
         } else {
             PM_PUTNIL;
         }
