@@ -987,10 +987,38 @@ module Prism
 
     def test_UntilNode
       assert_prism_eval("a = 0; until a == 1; a = a + 1; end")
+
+      # Test UntilNode in rescue
+      assert_prism_eval(<<~RUBY)
+        o = Object.new
+        o.instance_variable_set(:@ret, [])
+        def o.foo = @ret << @ret.length
+        def o.bar = @ret.length > 3
+        begin
+          raise
+        rescue
+          o.foo until o.bar
+        end
+        o.instance_variable_get(:@ret)
+      RUBY
     end
 
     def test_WhileNode
       assert_prism_eval("a = 0; while a != 1; a = a + 1; end")
+
+      # Test WhileNode in rescue
+      assert_prism_eval(<<~RUBY)
+        o = Object.new
+        o.instance_variable_set(:@ret, [])
+        def o.foo = @ret << @ret.length
+        def o.bar = @ret.length < 3
+        begin
+          raise
+        rescue
+          o.foo while o.bar
+        end
+        o.instance_variable_get(:@ret)
+      RUBY
     end
 
     def test_ForNode
@@ -2134,6 +2162,16 @@ end
     def test_KeywordRestParameterNode
       assert_prism_eval("def prism_test_keyword_rest_parameter_node(a, **b); end")
       assert_prism_eval("Object.tap { |**| }")
+
+      # Test that KeywordRestParameterNode creates a copy
+      assert_prism_eval(<<~RUBY)
+        hash = {}
+        o = Object.new
+        def o.foo(**a) = a[:foo] = 1
+
+        o.foo(**hash)
+        hash
+      RUBY
     end
 
     def test_NoKeywordsParameterNode
