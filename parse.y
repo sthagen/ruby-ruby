@@ -1078,7 +1078,7 @@ static rb_node_for_masgn_t *rb_node_for_masgn_new(struct parser_params *p, NODE 
 static rb_node_retry_t *rb_node_retry_new(struct parser_params *p, const YYLTYPE *loc);
 static rb_node_begin_t *rb_node_begin_new(struct parser_params *p, NODE *nd_body, const YYLTYPE *loc);
 static rb_node_rescue_t *rb_node_rescue_new(struct parser_params *p, NODE *nd_head, NODE *nd_resq, NODE *nd_else, const YYLTYPE *loc);
-static rb_node_resbody_t *rb_node_resbody_new(struct parser_params *p, NODE *nd_args, NODE *nd_body, NODE *nd_head, const YYLTYPE *loc);
+static rb_node_resbody_t *rb_node_resbody_new(struct parser_params *p, NODE *nd_args, NODE *nd_body, NODE *nd_next, const YYLTYPE *loc);
 static rb_node_ensure_t *rb_node_ensure_new(struct parser_params *p, NODE *nd_head, NODE *nd_ensr, const YYLTYPE *loc);
 static rb_node_and_t *rb_node_and_new(struct parser_params *p, NODE *nd_1st, NODE *nd_2nd, const YYLTYPE *loc);
 static rb_node_or_t *rb_node_or_new(struct parser_params *p, NODE *nd_1st, NODE *nd_2nd, const YYLTYPE *loc);
@@ -5879,7 +5879,10 @@ p_var_ref	: '^' tIDENTIFIER
                     {
                     /*%%%*/
                         NODE *n = gettable(p, $2, &@$);
-                        if (!(nd_type_p(n, NODE_LVAR) || nd_type_p(n, NODE_DVAR))) {
+                        if (!n) {
+                            n = NEW_ERROR(&@$);
+                        }
+                        else if (!(nd_type_p(n, NODE_LVAR) || nd_type_p(n, NODE_DVAR))) {
                             compile_error(p, "%"PRIsVALUE": no such local variable", rb_id2str($2));
                         }
                         $$ = n;
@@ -11651,12 +11654,12 @@ rb_node_rescue_new(struct parser_params *p, NODE *nd_head, NODE *nd_resq, NODE *
 }
 
 static rb_node_resbody_t *
-rb_node_resbody_new(struct parser_params *p, NODE *nd_args, NODE *nd_body, NODE *nd_head, const YYLTYPE *loc)
+rb_node_resbody_new(struct parser_params *p, NODE *nd_args, NODE *nd_body, NODE *nd_next, const YYLTYPE *loc)
 {
     rb_node_resbody_t *n = NODE_NEWNODE(NODE_RESBODY, rb_node_resbody_t, loc);
-    n->nd_head = nd_head;
-    n->nd_body = nd_body;
     n->nd_args = nd_args;
+    n->nd_body = nd_body;
+    n->nd_next = nd_next;
 
     return n;
 }
@@ -11666,7 +11669,6 @@ rb_node_ensure_new(struct parser_params *p, NODE *nd_head, NODE *nd_ensr, const 
 {
     rb_node_ensure_t *n = NODE_NEWNODE(NODE_ENSURE, rb_node_ensure_t, loc);
     n->nd_head = nd_head;
-    n->nd_resq = 0;
     n->nd_ensr = nd_ensr;
 
     return n;
@@ -14297,12 +14299,41 @@ value_expr_check(struct parser_params *p, NODE *node)
     }
     while (node) {
         switch (nd_type(node)) {
+          case NODE_ENSURE:
+            vn = RNODE_ENSURE(node)->nd_head;
+            node = RNODE_ENSURE(node)->nd_ensr;
+            /* nd_ensr should not be NULL, check it out next */
+            if (vn && (vn = value_expr_check(p, vn))) {
+                goto found;
+            }
+            break;
+
+          case NODE_RESCUE:
+            /* void only if all children are void */
+            vn = RNODE_RESCUE(node)->nd_head;
+            if (!vn || !(vn = value_expr_check(p, vn))) return NULL;
+            if (!void_node) void_node = vn;
+            for (NODE *r = RNODE_RESCUE(node)->nd_resq; r; r = RNODE_RESBODY(r)->nd_next) {
+                if (!nd_type_p(r, NODE_RESBODY)) {
+                    compile_error(p, "unexpected node");
+                    return NULL;
+                }
+                if (!(vn = value_expr_check(p, RNODE_RESBODY(r)->nd_body))) {
+                    void_node = 0;
+                    break;
+                }
+                if (!void_node) void_node = vn;
+            }
+            node = RNODE_RESCUE(node)->nd_else;
+            if (!node) return void_node;
+            break;
+
           case NODE_RETURN:
           case NODE_BREAK:
           case NODE_NEXT:
           case NODE_REDO:
           case NODE_RETRY:
-            return void_node ? void_node : node;
+            goto found;
 
           case NODE_CASE3:
             if (!RNODE_CASE3(node)->nd_body || !nd_type_p(RNODE_CASE3(node)->nd_body, NODE_IN)) {
@@ -14313,7 +14344,7 @@ value_expr_check(struct parser_params *p, NODE *node)
                 return NULL;
             }
             /* single line pattern matching with "=>" operator */
-            return void_node ? void_node : node;
+            goto found;
 
           case NODE_BLOCK:
             while (RNODE_BLOCK(node)->nd_next) {
@@ -14357,6 +14388,10 @@ value_expr_check(struct parser_params *p, NODE *node)
     }
 
     return NULL;
+
+  found:
+    /* return the first found node */
+    return void_node ? void_node : node;
 }
 
 static int
@@ -14531,7 +14566,7 @@ reduce_nodes(struct parser_params *p, NODE **body)
             if (!subnodes(RNODE_WHEN, nd_body, nd_next)) goto end;
             break;
           case NODE_ENSURE:
-            if (!subnodes(RNODE_ENSURE, nd_head, nd_resq)) goto end;
+            body = &RNODE_ENSURE(node)->nd_head;
             break;
           case NODE_RESCUE:
             newline = 0; // RESBODY should not be a NEWLINE
