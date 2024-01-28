@@ -3377,15 +3377,15 @@ iseq_peephole_optimize(rb_iseq_t *iseq, LINK_ELEMENT *list, const int do_tailcal
     /*
      *  ...
      *  duparray [...]
-     *  concatarray
+     *  concatarray | concattoarray
      * =>
      *  ...
      *  putobject [...]
-     *  concatarray
+     *  concatarray | concattoarray
      */
     if (IS_INSN_ID(iobj, duparray)) {
         LINK_ELEMENT *next = iobj->link.next;
-        if (IS_INSN(next) && IS_INSN_ID(next, concatarray)) {
+        if (IS_INSN(next) && (IS_INSN_ID(next, concatarray) || IS_INSN_ID(next, concattoarray))) {
             iobj->insn_id = BIN(putobject);
         }
     }
@@ -3582,7 +3582,6 @@ iseq_peephole_optimize(rb_iseq_t *iseq, LINK_ELEMENT *list, const int do_tailcal
 
     if (IS_INSN_ID(iobj, newarray) ||
         IS_INSN_ID(iobj, duparray) ||
-        IS_INSN_ID(iobj, expandarray) ||
         IS_INSN_ID(iobj, concatarray) ||
         IS_INSN_ID(iobj, splatarray) ||
         0) {
@@ -4822,8 +4821,8 @@ compile_array(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *node, int pop
      *
      *   [x1,x2,...,x10000] =>
      *     push x1  ; push x2  ; ...; push x256; newarray 256;
-     *     push x257; push x258; ...; push x512; newarray 256; concatarray;
-     *     push x513; push x514; ...; push x768; newarray 256; concatarray;
+     *     push x257; push x258; ...; push x512; pushtoarray 256;
+     *     push x513; push x514; ...; push x768; pushtoarray 256;
      *     ...
      *
      * - Long subarray can be optimized by pre-allocating a hidden array.
@@ -4833,8 +4832,8 @@ compile_array(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *node, int pop
      *
      *   [x, 1,2,3,...,100, z] =>
      *     push x; newarray 1;
-     *     putobject [1,2,3,...,100] (<- hidden array); concatarray;
-     *     push z; newarray 1; concatarray
+     *     putobject [1,2,3,...,100] (<- hidden array); concattoarray;
+     *     push z; pushtoarray 1;
      *
      * - If the last element is a keyword, newarraykwsplat should be emitted
      *   to check and remove empty keyword arguments hash from array.
@@ -4849,11 +4848,11 @@ compile_array(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *node, int pop
     int stack_len = 0;
     int first_chunk = 1;
 
-    /* Convert pushed elements to an array, and concatarray if needed */
-#define FLUSH_CHUNK(newarrayinsn)                               \
+    /* Either create a new array, or push to the existing array */
+#define FLUSH_CHUNK \
     if (stack_len) {                                            \
-        ADD_INSN1(ret, line_node, newarrayinsn, INT2FIX(stack_len)); \
-        if (!first_chunk) ADD_INSN(ret, line_node, concatarray);     \
+        if (first_chunk) ADD_INSN1(ret, line_node, newarray, INT2FIX(stack_len)); \
+        else ADD_INSN1(ret, line_node, pushtoarray, INT2FIX(stack_len));     \
         first_chunk = stack_len = 0;                            \
     }
 
@@ -4877,14 +4876,14 @@ compile_array(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *node, int pop
                 OBJ_FREEZE(ary);
 
                 /* Emit optimized code */
-                FLUSH_CHUNK(newarray);
+                FLUSH_CHUNK;
                 if (first_chunk) {
                     ADD_INSN1(ret, line_node, duparray, ary);
                     first_chunk = 0;
                 }
                 else {
                     ADD_INSN1(ret, line_node, putobject, ary);
-                    ADD_INSN(ret, line_node, concatarray);
+                    ADD_INSN(ret, line_node, concattoarray);
                 }
                 RB_OBJ_WRITTEN(iseq, Qundef, ary);
             }
@@ -4901,36 +4900,18 @@ compile_array(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *node, int pop
 
             if (!RNODE_LIST(node)->nd_next && keyword_node_p(RNODE_LIST(node)->nd_head)) {
                 /* Reached the end, and the last element is a keyword */
-                FLUSH_CHUNK(newarraykwsplat);
+                ADD_INSN1(ret, line_node, newarraykwsplat, INT2FIX(stack_len));
+                if (!first_chunk) ADD_INSN(ret, line_node, concattoarray);
                 return 1;
             }
 
             /* If there are many pushed elements, flush them to avoid stack overflow */
-            if (stack_len >= max_stack_len) FLUSH_CHUNK(newarray);
+            if (stack_len >= max_stack_len) FLUSH_CHUNK;
         }
     }
 
-    FLUSH_CHUNK(newarray);
+    FLUSH_CHUNK;
 #undef FLUSH_CHUNK
-    return 1;
-}
-
-/* Compile an array containing the single element represented by node */
-static int
-compile_array_1(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *node)
-{
-    if (static_literal_node_p(node, iseq, false)) {
-        VALUE ary = rb_ary_hidden_new(1);
-        rb_ary_push(ary, static_literal_value(node, iseq));
-        OBJ_FREEZE(ary);
-
-        ADD_INSN1(ret, node, duparray, ary);
-    }
-    else {
-        CHECK(COMPILE_(ret, "array element", node, FALSE));
-        ADD_INSN1(ret, node, newarray, INT2FIX(1));
-    }
-
     return 1;
 }
 
@@ -5419,11 +5400,31 @@ compile_massign_lhs(rb_iseq_t *iseq, LINK_ANCHOR *const pre, LINK_ANCHOR *const 
         ADD_ELEM(lhs, (LINK_ELEMENT *)iobj);
         if (vm_ci_flag(ci) & VM_CALL_ARGS_SPLAT) {
             int argc = vm_ci_argc(ci);
+            bool dupsplat = false;
             ci = ci_argc_set(iseq, ci, argc - 1);
+            if (!(vm_ci_flag(ci) & VM_CALL_ARGS_SPLAT_MUT)) {
+                /* Given h[*a], _ = ary
+                 * setup_args sets VM_CALL_ARGS_SPLAT and not VM_CALL_ARGS_SPLAT_MUT
+                 * `a` must be dupped, because it will be appended with ary[0]
+                 * Since you are dupping `a`, you can set VM_CALL_ARGS_SPLAT_MUT
+                 */
+                dupsplat = true;
+                ci = ci_flag_set(iseq, ci, VM_CALL_ARGS_SPLAT_MUT);
+            }
             OPERAND_AT(iobj, 0) = (VALUE)ci;
             RB_OBJ_WRITTEN(iseq, Qundef, iobj);
-            INSERT_BEFORE_INSN1(iobj, line_node, newarray, INT2FIX(1));
-            INSERT_BEFORE_INSN(iobj, line_node, concatarray);
+            /* Given: h[*a], h[*b, 1] = ary
+             *  h[*a] uses splatarray false and does not set VM_CALL_ARGS_SPLAT_MUT,
+             *    so this uses splatarray true on a to dup it before using pushtoarray
+             *  h[*b, 1] uses splatarray true and sets VM_CALL_ARGS_SPLAT_MUT,
+             *    so you can use pushtoarray directly
+             */
+            if (dupsplat) {
+                INSERT_BEFORE_INSN(iobj, line_node, swap);
+                INSERT_BEFORE_INSN1(iobj, line_node, splatarray, Qtrue);
+                INSERT_BEFORE_INSN(iobj, line_node, swap);
+            }
+            INSERT_BEFORE_INSN1(iobj, line_node, pushtoarray, INT2FIX(1));
         }
         ADD_INSN(lhs, line_node, pop);
         if (argc != 1) {
@@ -9109,20 +9110,28 @@ compile_op_asgn1(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *const node
         if (flag & VM_CALL_ARGS_SPLAT) {
             if (flag & VM_CALL_KW_SPLAT) {
                 ADD_INSN1(ret, node, topn, INT2FIX(2 + boff));
+                if (!(flag & VM_CALL_ARGS_SPLAT_MUT)) {
+                    ADD_INSN1(ret, node, splatarray, Qtrue);
+                    flag |= VM_CALL_ARGS_SPLAT_MUT;
+                }
                 ADD_INSN(ret, node, swap);
-                ADD_INSN1(ret, node, newarray, INT2FIX(1));
-                ADD_INSN(ret, node, concatarray);
+                ADD_INSN1(ret, node, pushtoarray, INT2FIX(1));
                 ADD_INSN1(ret, node, setn, INT2FIX(2 + boff));
                 ADD_INSN(ret, node, pop);
             }
             else {
-                ADD_INSN1(ret, node, newarray, INT2FIX(1));
                 if (boff > 0) {
                     ADD_INSN1(ret, node, dupn, INT2FIX(3));
                     ADD_INSN(ret, node, swap);
                     ADD_INSN(ret, node, pop);
                 }
-                ADD_INSN(ret, node, concatarray);
+                if (!(flag & VM_CALL_ARGS_SPLAT_MUT)) {
+                    ADD_INSN(ret, node, swap);
+                    ADD_INSN1(ret, node, splatarray, Qtrue);
+                    ADD_INSN(ret, node, swap);
+                    flag |= VM_CALL_ARGS_SPLAT_MUT;
+                }
+                ADD_INSN1(ret, node, pushtoarray, INT2FIX(1));
                 if (boff > 0) {
                     ADD_INSN1(ret, node, setn, INT2FIX(3));
                     ADD_INSN(ret, node, pop);
@@ -9169,20 +9178,28 @@ compile_op_asgn1(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *const node
         if (flag & VM_CALL_ARGS_SPLAT) {
             if (flag & VM_CALL_KW_SPLAT) {
                 ADD_INSN1(ret, node, topn, INT2FIX(2 + boff));
+                if (!(flag & VM_CALL_ARGS_SPLAT_MUT)) {
+                    ADD_INSN1(ret, node, splatarray, Qtrue);
+                    flag |= VM_CALL_ARGS_SPLAT_MUT;
+                }
                 ADD_INSN(ret, node, swap);
-                ADD_INSN1(ret, node, newarray, INT2FIX(1));
-                ADD_INSN(ret, node, concatarray);
+                ADD_INSN1(ret, node, pushtoarray, INT2FIX(1));
                 ADD_INSN1(ret, node, setn, INT2FIX(2 + boff));
                 ADD_INSN(ret, node, pop);
             }
             else {
-                ADD_INSN1(ret, node, newarray, INT2FIX(1));
                 if (boff > 0) {
                     ADD_INSN1(ret, node, dupn, INT2FIX(3));
                     ADD_INSN(ret, node, swap);
                     ADD_INSN(ret, node, pop);
                 }
-                ADD_INSN(ret, node, concatarray);
+                if (!(flag & VM_CALL_ARGS_SPLAT_MUT)) {
+                    ADD_INSN(ret, node, swap);
+                    ADD_INSN1(ret, node, splatarray, Qtrue);
+                    ADD_INSN(ret, node, swap);
+                    flag |= VM_CALL_ARGS_SPLAT_MUT;
+                }
+                ADD_INSN1(ret, node, pushtoarray, INT2FIX(1));
                 if (boff > 0) {
                     ADD_INSN1(ret, node, setn, INT2FIX(3));
                     ADD_INSN(ret, node, pop);
@@ -10411,7 +10428,7 @@ iseq_compile_each0(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *const no
         else {
             CHECK(COMPILE(ret, "argscat head", RNODE_ARGSCAT(node)->nd_head));
             CHECK(COMPILE(ret, "argscat body", RNODE_ARGSCAT(node)->nd_body));
-            ADD_INSN(ret, node, concatarray);
+            ADD_INSN(ret, node, concattoarray);
         }
         break;
       }
@@ -10424,8 +10441,14 @@ iseq_compile_each0(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *const no
         }
         else {
             CHECK(COMPILE(ret, "argspush head", RNODE_ARGSPUSH(node)->nd_head));
-            CHECK(compile_array_1(iseq, ret, RNODE_ARGSPUSH(node)->nd_body));
-            ADD_INSN(ret, node, concatarray);
+            const NODE *body_node = RNODE_ARGSPUSH(node)->nd_body;
+            if (static_literal_node_p(body_node, iseq, false)) {
+                ADD_INSN1(ret, body_node, putobject, static_literal_value(body_node, iseq));
+            }
+            else {
+                CHECK(COMPILE_(ret, "array element", body_node, FALSE));
+            }
+            ADD_INSN1(ret, node, pushtoarray, INT2FIX(1));
         }
         break;
       }

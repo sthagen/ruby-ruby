@@ -312,7 +312,7 @@ module Prism
     # A Location object representing the location of this error in the source.
     attr_reader :location
 
-    # The level of this error
+    # The level of this error.
     attr_reader :level
 
     # Create a new error object with the given message and location.
@@ -324,12 +324,12 @@ module Prism
 
     # Implement the hash pattern matching interface for ParseError.
     def deconstruct_keys(keys)
-      { message: message, location: location }
+      { message: message, location: location, level: level }
     end
 
     # Returns a string representation of this error.
     def inspect
-      "#<Prism::ParseError @message=#{@message.inspect} @location=#{@location.inspect} @level=#{@level}>"
+      "#<Prism::ParseError @message=#{@message.inspect} @location=#{@location.inspect} @level=#{@level.inspect}>"
     end
   end
 
@@ -341,7 +341,7 @@ module Prism
     # A Location object representing the location of this warning in the source.
     attr_reader :location
 
-    # The level of this warning
+    # The level of this warning.
     attr_reader :level
 
     # Create a new warning object with the given message and location.
@@ -353,12 +353,12 @@ module Prism
 
     # Implement the hash pattern matching interface for ParseWarning.
     def deconstruct_keys(keys)
-      { message: message, location: location, verbose_only: verbose_only }
+      { message: message, location: location, level: level }
     end
 
     # Returns a string representation of this warning.
     def inspect
-      "#<Prism::ParseWarning @message=#{@message.inspect} @location=#{@location.inspect} @level=#{@level}>"
+      "#<Prism::ParseWarning @message=#{@message.inspect} @location=#{@location.inspect} @level=#{@level.inspect}>"
     end
   end
 
