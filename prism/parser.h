@@ -259,6 +259,9 @@ typedef struct pm_parser pm_parser_t;
  * token that is understood by a parent context but not by the current context.
  */
 typedef enum {
+    /** a null context, used for returning a value from a function */
+    PM_CONTEXT_NONE = 0,
+
     /** a begin statement */
     PM_CONTEXT_BEGIN,
 
@@ -467,6 +470,19 @@ typedef struct pm_scope {
     bool explicit_params;
 
     /**
+     * Booleans indicating whether the parameters for this scope have declared
+     * forwarding parameters.
+     *
+     * For example, some combinations of:
+     *   def foo(*); end
+     *   def foo(**); end
+     *   def foo(&); end
+     *   def foo(...); end
+     */
+
+    uint8_t forwarding_params;
+
+    /**
      * An integer indicating the number of numbered parameters on this scope.
      * This is necessary to determine if child blocks are allowed to use
      * numbered parameters, and to pass information to consumers of the AST
@@ -474,6 +490,11 @@ typedef struct pm_scope {
      */
     uint8_t numbered_parameters;
 } pm_scope_t;
+
+static const uint8_t PM_FORWARDING_POSITIONALS = 0x1;
+static const uint8_t PM_FORWARDING_KEYWORDS = 0x2;
+static const uint8_t PM_FORWARDING_BLOCK = 0x4;
+static const uint8_t PM_FORWARDING_ALL = 0x8;
 
 /**
  * This struct represents the overall parser. It contains a reference to the
