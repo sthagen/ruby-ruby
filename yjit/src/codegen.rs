@@ -1404,7 +1404,7 @@ fn gen_duphash(
     // call rb_hash_resurrect(VALUE hash);
     let hash = asm.ccall(rb_hash_resurrect as *const u8, vec![hash.into()]);
 
-    let stack_ret = asm.stack_push(Type::Hash);
+    let stack_ret = asm.stack_push(Type::THash);
     asm.mov(stack_ret, hash);
 
     Some(KeepCompiling)
@@ -1440,24 +1440,39 @@ fn gen_splatarray(
 fn gen_splatkw(
     jit: &mut JITState,
     asm: &mut Assembler,
-    _ocb: &mut OutlinedCb,
+    ocb: &mut OutlinedCb,
 ) -> Option<CodegenStatus> {
-    // Save the PC and SP because the callee may allocate
-    jit_prepare_routine_call(jit, asm);
+    // Defer compilation so we can specialize on a runtime hash operand
+    if !jit.at_current_insn() {
+        defer_compilation(jit, asm, ocb);
+        return Some(EndBlock);
+    }
 
-    // Get the operands from the stack
-    let block_opnd = asm.stack_opnd(0);
-    let block_type = asm.ctx.get_opnd_type(block_opnd.into());
-    let hash_opnd = asm.stack_opnd(1);
+    let comptime_hash = jit.peek_at_stack(&asm.ctx, 1);
+    if comptime_hash.hash_p() {
+        // If a compile-time hash operand is T_HASH, just guard that it's T_HASH.
+        let hash_opnd = asm.stack_opnd(1);
+        guard_object_is_hash(asm, hash_opnd, hash_opnd.into(), Counter::splatkw_not_hash);
+    } else {
+        // Otherwise, call #to_hash operand to get T_HASH.
 
-    let hash = asm.ccall(rb_to_hash_type as *const u8, vec![hash_opnd]);
-    asm.stack_pop(2); // Keep it on stack during ccall for GC
+        // Save the PC and SP because the callee may allocate
+        jit_prepare_routine_call(jit, asm);
 
-    let stack_ret = asm.stack_push(Type::Hash);
-    asm.mov(stack_ret, hash);
-    asm.stack_push(block_type);
-    // Leave block_opnd spilled by ccall as is
-    asm.ctx.dealloc_temp_reg(asm.ctx.get_stack_size() - 1);
+        // Get the operands from the stack
+        let block_opnd = asm.stack_opnd(0);
+        let block_type = asm.ctx.get_opnd_type(block_opnd.into());
+        let hash_opnd = asm.stack_opnd(1);
+
+        let hash = asm.ccall(rb_to_hash_type as *const u8, vec![hash_opnd]);
+        asm.stack_pop(2); // Keep it on stack during ccall for GC
+
+        let stack_ret = asm.stack_push(Type::THash);
+        asm.mov(stack_ret, hash);
+        asm.stack_push(block_type);
+        // Leave block_opnd spilled by ccall as is
+        asm.ctx.dealloc_temp_reg(asm.ctx.get_stack_size() - 1);
+    }
 
     Some(KeepCompiling)
 }
@@ -1617,6 +1632,38 @@ fn guard_object_is_array(
 
     if Type::UnknownHeap.diff(object_type) != TypeDiff::Incompatible {
         asm.ctx.upgrade_opnd_type(object_opnd, Type::TArray);
+    }
+}
+
+fn guard_object_is_hash(
+    asm: &mut Assembler,
+    object: Opnd,
+    object_opnd: YARVOpnd,
+    counter: Counter,
+) {
+    let object_type = asm.ctx.get_opnd_type(object_opnd);
+    if object_type.is_hash() {
+        return;
+    }
+
+    let object_reg = match object {
+        Opnd::InsnOut { .. } => object,
+        _ => asm.load(object),
+    };
+    guard_object_is_heap(asm, object_reg, object_opnd, counter);
+
+    asm_comment!(asm, "guard object is hash");
+
+    // Pull out the type mask
+    let flags_opnd = Opnd::mem(VALUE_BITS, object_reg, RUBY_OFFSET_RBASIC_FLAGS);
+    let flags_opnd = asm.and(flags_opnd, (RUBY_T_MASK as u64).into());
+
+    // Compare the result with T_HASH
+    asm.cmp(flags_opnd, (RUBY_T_HASH as u64).into());
+    asm.jne(Target::side_exit(counter));
+
+    if Type::UnknownHeap.diff(object_type) != TypeDiff::Incompatible {
+        asm.ctx.upgrade_opnd_type(object_opnd, Type::THash);
     }
 }
 
@@ -2096,12 +2143,12 @@ fn gen_newhash(
         asm.cpop_into(new_hash); // x86 alignment
 
         asm.stack_pop(num.try_into().unwrap());
-        let stack_ret = asm.stack_push(Type::Hash);
+        let stack_ret = asm.stack_push(Type::THash);
         asm.mov(stack_ret, new_hash);
     } else {
         // val = rb_hash_new();
         let new_hash = asm.ccall(rb_hash_new as *const u8, vec![]);
-        let stack_ret = asm.stack_push(Type::Hash);
+        let stack_ret = asm.stack_push(Type::THash);
         asm.mov(stack_ret, new_hash);
     }
 
@@ -4870,6 +4917,33 @@ fn jit_rb_int_rshift(
 
     let shift_opnd = Opnd::UImm(shift_amt as u64);
     let out_val = asm.rshift(lhs, shift_opnd);
+    let out_val = asm.or(out_val, 1.into());
+
+    let ret_opnd = asm.stack_push(Type::Fixnum);
+    asm.mov(ret_opnd, out_val);
+    true
+}
+
+fn jit_rb_int_xor(
+    jit: &mut JITState,
+    asm: &mut Assembler,
+    ocb: &mut OutlinedCb,
+    _ci: *const rb_callinfo,
+    _cme: *const rb_callable_method_entry_t,
+    _block: Option<BlockHandler>,
+    _argc: i32,
+    _known_recv_class: *const VALUE,
+) -> bool {
+    if asm.ctx.two_fixnums_on_stack(jit) != Some(true) {
+        return false;
+    }
+    guard_two_fixnums(jit, asm, ocb);
+
+    let rhs = asm.stack_pop(1);
+    let lhs = asm.stack_pop(1);
+
+    // XOR and then re-tag the resulting fixnum
+    let out_val = asm.xor(lhs, rhs);
     let out_val = asm.or(out_val, 1.into());
 
     let ret_opnd = asm.stack_push(Type::Fixnum);
@@ -9090,6 +9164,7 @@ pub fn yjit_reg_method_codegen_fns() {
         yjit_reg_method(rb_cInteger, "/", jit_rb_int_div);
         yjit_reg_method(rb_cInteger, "<<", jit_rb_int_lshift);
         yjit_reg_method(rb_cInteger, ">>", jit_rb_int_rshift);
+        yjit_reg_method(rb_cInteger, "^", jit_rb_int_xor);
         yjit_reg_method(rb_cInteger, "[]", jit_rb_int_aref);
 
         yjit_reg_method(rb_cString, "empty?", jit_rb_str_empty_p);
