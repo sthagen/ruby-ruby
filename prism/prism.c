@@ -553,9 +553,7 @@ pm_parser_err_token(pm_parser_t *parser, const pm_token_t *token, pm_diagnostic_
  */
 static inline void
 pm_parser_warn(pm_parser_t *parser, const uint8_t *start, const uint8_t *end, pm_diagnostic_id_t diag_id) {
-    if (!parser->suppress_warnings) {
-        pm_diagnostic_list_append(&parser->warning_list, start, end, diag_id);
-    }
+    pm_diagnostic_list_append(&parser->warning_list, start, end, diag_id);
 }
 
 /**
@@ -870,6 +868,105 @@ pm_arguments_validate_block(pm_parser_t *parser, pm_arguments_t *arguments, pm_b
     // If we didn't hit a case before this check, then at this point we need to
     // add a syntax error.
     pm_parser_err_node(parser, (pm_node_t *) block, PM_ERR_ARGUMENT_UNEXPECTED_BLOCK);
+}
+
+/******************************************************************************/
+/* Basic character checks                                                     */
+/******************************************************************************/
+
+/**
+ * This function is used extremely frequently to lex all of the identifiers in a
+ * source file, so it's important that it be as fast as possible. For this
+ * reason we have the encoding_changed boolean to check if we need to go through
+ * the function pointer or can just directly use the UTF-8 functions.
+ */
+static inline size_t
+char_is_identifier_start(const pm_parser_t *parser, const uint8_t *b) {
+    if (parser->encoding_changed) {
+        size_t width;
+        if ((width = parser->encoding->alpha_char(b, parser->end - b)) != 0) {
+            return width;
+        } else if (*b == '_') {
+            return 1;
+        } else if (*b >= 0x80) {
+            return parser->encoding->char_width(b, parser->end - b);
+        } else {
+            return 0;
+        }
+    } else if (*b < 0x80) {
+        return (pm_encoding_unicode_table[*b] & PRISM_ENCODING_ALPHABETIC_BIT ? 1 : 0) || (*b == '_');
+    } else {
+        return pm_encoding_utf_8_char_width(b, parser->end - b);
+    }
+}
+
+/**
+ * Similar to char_is_identifier but this function assumes that the encoding
+ * has not been changed.
+ */
+static inline size_t
+char_is_identifier_utf8(const uint8_t *b, const uint8_t *end) {
+    if (*b < 0x80) {
+        return (*b == '_') || (pm_encoding_unicode_table[*b] & PRISM_ENCODING_ALPHANUMERIC_BIT ? 1 : 0);
+    } else {
+        return pm_encoding_utf_8_char_width(b, end - b);
+    }
+}
+
+/**
+ * Like the above, this function is also used extremely frequently to lex all of
+ * the identifiers in a source file once the first character has been found. So
+ * it's important that it be as fast as possible.
+ */
+static inline size_t
+char_is_identifier(pm_parser_t *parser, const uint8_t *b) {
+    if (parser->encoding_changed) {
+        size_t width;
+        if ((width = parser->encoding->alnum_char(b, parser->end - b)) != 0) {
+            return width;
+        } else if (*b == '_') {
+            return 1;
+        } else if (*b >= 0x80) {
+            return parser->encoding->char_width(b, parser->end - b);
+        } else {
+            return 0;
+        }
+    }
+    return char_is_identifier_utf8(b, parser->end);
+}
+
+// Here we're defining a perfect hash for the characters that are allowed in
+// global names. This is used to quickly check the next character after a $ to
+// see if it's a valid character for a global name.
+#define BIT(c, idx) (((c) / 32 - 1 == idx) ? (1U << ((c) % 32)) : 0)
+#define PUNCT(idx) ( \
+                BIT('~', idx) | BIT('*', idx) | BIT('$', idx) | BIT('?', idx) | \
+                BIT('!', idx) | BIT('@', idx) | BIT('/', idx) | BIT('\\', idx) | \
+                BIT(';', idx) | BIT(',', idx) | BIT('.', idx) | BIT('=', idx) | \
+                BIT(':', idx) | BIT('<', idx) | BIT('>', idx) | BIT('\"', idx) | \
+                BIT('&', idx) | BIT('`', idx) | BIT('\'', idx) | BIT('+', idx) | \
+                BIT('0', idx))
+
+const unsigned int pm_global_name_punctuation_hash[(0x7e - 0x20 + 31) / 32] = { PUNCT(0), PUNCT(1), PUNCT(2) };
+
+#undef BIT
+#undef PUNCT
+
+static inline bool
+char_is_global_name_punctuation(const uint8_t b) {
+    const unsigned int i = (const unsigned int) b;
+    if (i <= 0x20 || 0x7e < i) return false;
+
+    return (pm_global_name_punctuation_hash[(i - 0x20) / 32] >> (i % 32)) & 1;
+}
+
+static inline bool
+token_is_setter_name(pm_token_t *token) {
+    return (
+        (token->type == PM_TOKEN_IDENTIFIER) &&
+        (token->end - token->start >= 2) &&
+        (token->end[-1] == '=')
+    );
 }
 
 /******************************************************************************/
@@ -1521,7 +1618,7 @@ pm_block_argument_node_create(pm_parser_t *parser, const pm_token_t *operator, p
  * Allocate and initialize a new BlockNode node.
  */
 static pm_block_node_t *
-pm_block_node_create(pm_parser_t *parser, pm_constant_id_list_t *locals, uint32_t locals_body_index, const pm_token_t *opening, pm_node_t *parameters, pm_node_t *body, const pm_token_t *closing) {
+pm_block_node_create(pm_parser_t *parser, pm_constant_id_list_t *locals, const pm_token_t *opening, pm_node_t *parameters, pm_node_t *body, const pm_token_t *closing) {
     pm_block_node_t *node = PM_ALLOC_NODE(parser, pm_block_node_t);
 
     *node = (pm_block_node_t) {
@@ -1530,7 +1627,6 @@ pm_block_node_create(pm_parser_t *parser, pm_constant_id_list_t *locals, uint32_
             .location = { .start = opening->start, .end = closing->end },
         },
         .locals = *locals,
-        .locals_body_index = locals_body_index,
         .parameters = parameters,
         .body = body,
         .opening_loc = PM_LOCATION_TOKEN_VALUE(opening),
@@ -1926,11 +2022,12 @@ pm_call_node_index_p(pm_call_node_t *node) {
  * operator assignment.
  */
 static inline bool
-pm_call_node_writable_p(pm_call_node_t *node) {
+pm_call_node_writable_p(const pm_parser_t *parser, const pm_call_node_t *node) {
     return (
         (node->message_loc.start != NULL) &&
         (node->message_loc.end[-1] != '!') &&
         (node->message_loc.end[-1] != '?') &&
+        char_is_identifier_start(parser, node->message_loc.start) &&
         (node->opening_loc.start == NULL) &&
         (node->arguments == NULL) &&
         (node->block == NULL)
@@ -2744,6 +2841,45 @@ pm_constant_write_node_create(pm_parser_t *parser, pm_constant_read_node_t *targ
 }
 
 /**
+ * Check if the receiver of a `def` node is allowed.
+ */
+static void
+pm_check_def_receiver(pm_parser_t *parser, pm_node_t *receiver) {
+    switch (receiver->type) {
+        case PM_BEGIN_NODE: {
+            pm_begin_node_t *begin_node = (pm_begin_node_t *)receiver;
+            pm_check_def_receiver(parser, (pm_node_t *) begin_node->statements);
+            break;
+        }
+        case PM_PARENTHESES_NODE:
+            pm_check_def_receiver(parser, ((pm_parentheses_node_t *) receiver)->body);
+            break;
+        case PM_STATEMENTS_NODE: {
+            pm_statements_node_t *statements_node = (pm_statements_node_t *)receiver;
+            pm_check_def_receiver(parser, statements_node->body.nodes[statements_node->body.size - 1]);
+            break;
+        }
+        case PM_ARRAY_NODE:
+        case PM_FLOAT_NODE:
+        case PM_IMAGINARY_NODE:
+        case PM_INTEGER_NODE:
+        case PM_INTERPOLATED_REGULAR_EXPRESSION_NODE:
+        case PM_INTERPOLATED_STRING_NODE:
+        case PM_INTERPOLATED_SYMBOL_NODE:
+        case PM_INTERPOLATED_X_STRING_NODE:
+        case PM_RATIONAL_NODE:
+        case PM_REGULAR_EXPRESSION_NODE:
+        case PM_SOURCE_ENCODING_NODE:
+        case PM_SOURCE_FILE_NODE:
+        case PM_SOURCE_LINE_NODE:
+        case PM_STRING_NODE:
+        case PM_SYMBOL_NODE:
+        case PM_X_STRING_NODE:
+            pm_parser_err_node(parser, receiver, PM_ERR_SINGLETON_FOR_LITERALS);
+    }
+}
+
+/**
  * Allocate and initialize a new DefNode node.
  */
 static pm_def_node_t *
@@ -2754,7 +2890,6 @@ pm_def_node_create(
     pm_parameters_node_t *parameters,
     pm_node_t *body,
     pm_constant_id_list_t *locals,
-    uint32_t locals_body_index,
     const pm_token_t *def_keyword,
     const pm_token_t *operator,
     const pm_token_t *lparen,
@@ -2771,6 +2906,10 @@ pm_def_node_create(
         end = end_keyword->end;
     }
 
+    if ((receiver != NULL) && PM_NODE_TYPE_P(receiver, PM_PARENTHESES_NODE)) {
+        pm_check_def_receiver(parser, receiver);
+    }
+
     *node = (pm_def_node_t) {
         {
             .type = PM_DEF_NODE,
@@ -2782,7 +2921,6 @@ pm_def_node_create(
         .parameters = parameters,
         .body = body,
         .locals = *locals,
-        .locals_body_index = locals_body_index,
         .def_keyword_loc = PM_LOCATION_TOKEN_VALUE(def_keyword),
         .operator_loc = PM_OPTIONAL_LOCATION_TOKEN_VALUE(operator),
         .lparen_loc = PM_OPTIONAL_LOCATION_TOKEN_VALUE(lparen),
@@ -4092,7 +4230,6 @@ static pm_lambda_node_t *
 pm_lambda_node_create(
     pm_parser_t *parser,
     pm_constant_id_list_t *locals,
-    uint32_t locals_body_index,
     const pm_token_t *operator,
     const pm_token_t *opening,
     const pm_token_t *closing,
@@ -4110,7 +4247,6 @@ pm_lambda_node_create(
             },
         },
         .locals = *locals,
-        .locals_body_index = locals_body_index,
         .operator_loc = PM_LOCATION_TOKEN_VALUE(operator),
         .opening_loc = PM_LOCATION_TOKEN_VALUE(opening),
         .closing_loc = PM_LOCATION_TOKEN_VALUE(closing),
@@ -5294,7 +5430,7 @@ pm_source_file_node_create(pm_parser_t *parser, const pm_token_t *file_keyword) 
             .flags = PM_NODE_FLAG_STATIC_LITERAL,
             .location = PM_LOCATION_TOKEN_VALUE(file_keyword),
         },
-        .filepath = parser->filepath_string,
+        .filepath = parser->filepath,
     };
 
     return node;
@@ -6221,105 +6357,6 @@ pm_parser_scope_pop(pm_parser_t *parser) {
     pm_scope_t *scope = parser->current_scope;
     parser->current_scope = scope->previous;
     free(scope);
-}
-
-/******************************************************************************/
-/* Basic character checks                                                     */
-/******************************************************************************/
-
-/**
- * This function is used extremely frequently to lex all of the identifiers in a
- * source file, so it's important that it be as fast as possible. For this
- * reason we have the encoding_changed boolean to check if we need to go through
- * the function pointer or can just directly use the UTF-8 functions.
- */
-static inline size_t
-char_is_identifier_start(pm_parser_t *parser, const uint8_t *b) {
-    if (parser->encoding_changed) {
-        size_t width;
-        if ((width = parser->encoding->alpha_char(b, parser->end - b)) != 0) {
-            return width;
-        } else if (*b == '_') {
-            return 1;
-        } else if (*b >= 0x80) {
-            return parser->encoding->char_width(b, parser->end - b);
-        } else {
-            return 0;
-        }
-    } else if (*b < 0x80) {
-        return (pm_encoding_unicode_table[*b] & PRISM_ENCODING_ALPHABETIC_BIT ? 1 : 0) || (*b == '_');
-    } else {
-        return pm_encoding_utf_8_char_width(b, parser->end - b);
-    }
-}
-
-/**
- * Similar to char_is_identifier but this function assumes that the encoding
- * has not been changed.
- */
-static inline size_t
-char_is_identifier_utf8(const uint8_t *b, const uint8_t *end) {
-    if (*b < 0x80) {
-        return (*b == '_') || (pm_encoding_unicode_table[*b] & PRISM_ENCODING_ALPHANUMERIC_BIT ? 1 : 0);
-    } else {
-        return pm_encoding_utf_8_char_width(b, end - b);
-    }
-}
-
-/**
- * Like the above, this function is also used extremely frequently to lex all of
- * the identifiers in a source file once the first character has been found. So
- * it's important that it be as fast as possible.
- */
-static inline size_t
-char_is_identifier(pm_parser_t *parser, const uint8_t *b) {
-    if (parser->encoding_changed) {
-        size_t width;
-        if ((width = parser->encoding->alnum_char(b, parser->end - b)) != 0) {
-            return width;
-        } else if (*b == '_') {
-            return 1;
-        } else if (*b >= 0x80) {
-            return parser->encoding->char_width(b, parser->end - b);
-        } else {
-            return 0;
-        }
-    }
-    return char_is_identifier_utf8(b, parser->end);
-}
-
-// Here we're defining a perfect hash for the characters that are allowed in
-// global names. This is used to quickly check the next character after a $ to
-// see if it's a valid character for a global name.
-#define BIT(c, idx) (((c) / 32 - 1 == idx) ? (1U << ((c) % 32)) : 0)
-#define PUNCT(idx) ( \
-                BIT('~', idx) | BIT('*', idx) | BIT('$', idx) | BIT('?', idx) | \
-                BIT('!', idx) | BIT('@', idx) | BIT('/', idx) | BIT('\\', idx) | \
-                BIT(';', idx) | BIT(',', idx) | BIT('.', idx) | BIT('=', idx) | \
-                BIT(':', idx) | BIT('<', idx) | BIT('>', idx) | BIT('\"', idx) | \
-                BIT('&', idx) | BIT('`', idx) | BIT('\'', idx) | BIT('+', idx) | \
-                BIT('0', idx))
-
-const unsigned int pm_global_name_punctuation_hash[(0x7e - 0x20 + 31) / 32] = { PUNCT(0), PUNCT(1), PUNCT(2) };
-
-#undef BIT
-#undef PUNCT
-
-static inline bool
-char_is_global_name_punctuation(const uint8_t b) {
-    const unsigned int i = (const unsigned int) b;
-    if (i <= 0x20 || 0x7e < i) return false;
-
-    return (pm_global_name_punctuation_hash[(i - 0x20) / 32] >> (i % 32)) & 1;
-}
-
-static inline bool
-token_is_setter_name(pm_token_t *token) {
-    return (
-        (token->type == PM_TOKEN_IDENTIFIER) &&
-        (token->end - token->start >= 2) &&
-        (token->end[-1] == '=')
-    );
 }
 
 /******************************************************************************/
@@ -9128,12 +9165,10 @@ parser_lex(pm_parser_t *parser) {
                         LEX(PM_TOKEN_PLUS_EQUAL);
                     }
 
-                    bool spcarg = lex_state_spcarg_p(parser, space_seen);
-                    if (spcarg) {
-                        pm_parser_warn_token(parser, &parser->current, PM_WARN_AMBIGUOUS_FIRST_ARGUMENT_PLUS);
-                    }
-
-                    if (lex_state_beg_p(parser) || spcarg) {
+                    if (
+                        lex_state_beg_p(parser) ||
+                        (lex_state_spcarg_p(parser, space_seen) ? (pm_parser_warn_token(parser, &parser->current, PM_WARN_AMBIGUOUS_FIRST_ARGUMENT_PLUS), true) : false)
+                    ) {
                         lex_state_set(parser, PM_LEX_STATE_BEG);
 
                         if (pm_char_is_decimal_digit(peek(parser))) {
@@ -12381,12 +12416,6 @@ parse_block(pm_parser_t *parser) {
         pm_block_parameters_node_closing_set(block_parameters, &parser->previous);
     }
 
-    uint32_t locals_body_index = 0;
-
-    if (block_parameters) {
-        locals_body_index = (uint32_t) parser->current_scope->locals.size;
-    }
-
     accept1(parser, PM_TOKEN_NEWLINE);
     pm_node_t *statements = NULL;
 
@@ -12418,7 +12447,6 @@ parse_block(pm_parser_t *parser) {
 
     if (parameters == NULL && (maximum > 0)) {
         parameters = (pm_node_t *) pm_numbered_parameters_node_create(parser, &(pm_location_t) { .start = opening.start, .end = parser->previous.end }, maximum);
-        locals_body_index = maximum;
     }
 
     pm_constant_id_list_t locals = parser->current_scope->locals;
@@ -12426,7 +12454,7 @@ parse_block(pm_parser_t *parser) {
     pm_accepts_block_stack_pop(parser);
     pm_parser_current_param_name_restore(parser, saved_param_name);
 
-    return pm_block_node_create(parser, &locals, locals_body_index, &opening, parameters, statements, &parser->previous);
+    return pm_block_node_create(parser, &locals, &opening, parameters, statements, &parser->previous);
 }
 
 /**
@@ -15480,8 +15508,6 @@ parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power, b
                 }
             }
 
-            uint32_t locals_body_index = (uint32_t) parser->current_scope->locals.size;
-
             context_pop(parser);
             pm_node_t *statements = NULL;
             pm_token_t equal;
@@ -15560,7 +15586,6 @@ parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power, b
                 params,
                 statements,
                 &locals,
-                locals_body_index,
                 &def_keyword,
                 &operator,
                 &lparen,
@@ -16503,12 +16528,6 @@ parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power, b
                 }
             }
 
-            uint32_t locals_body_index = 0;
-
-            if (block_parameters) {
-                locals_body_index = (uint32_t) parser->current_scope->locals.size;
-            }
-
             pm_token_t opening;
             pm_node_t *body = NULL;
             parser->lambda_enclosure_nesting = previous_lambda_enclosure_nesting;
@@ -16543,7 +16562,6 @@ parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power, b
 
             if (parameters == NULL && (maximum > 0)) {
                 parameters = (pm_node_t *) pm_numbered_parameters_node_create(parser, &(pm_location_t) { .start = operator.start, .end = parser->previous.end }, maximum);
-                locals_body_index = maximum;
             }
 
             pm_constant_id_list_t locals = parser->current_scope->locals;
@@ -16552,7 +16570,7 @@ parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power, b
             pm_accepts_block_stack_pop(parser);
             pm_parser_current_param_name_restore(parser, saved_param_name);
 
-            return (pm_node_t *) pm_lambda_node_create(parser, &locals, locals_body_index, &operator, &opening, &parser->previous, parameters, body);
+            return (pm_node_t *) pm_lambda_node_create(parser, &locals, &operator, &opening, &parser->previous, parameters, body);
         }
         case PM_TOKEN_UPLUS: {
             parser_lex(parser);
@@ -16910,7 +16928,7 @@ parse_expression_infix(pm_parser_t *parser, pm_node_t *node, pm_binding_power_t 
                     }
 
                     // If this node cannot be writable, then we have an error.
-                    if (pm_call_node_writable_p(cast)) {
+                    if (pm_call_node_writable_p(parser, cast)) {
                         parse_write_name(parser, &cast->name);
                     } else {
                         pm_parser_err_node(parser, node, PM_ERR_WRITE_TARGET_UNEXPECTED);
@@ -17021,7 +17039,7 @@ parse_expression_infix(pm_parser_t *parser, pm_node_t *node, pm_binding_power_t 
                     }
 
                     // If this node cannot be writable, then we have an error.
-                    if (pm_call_node_writable_p(cast)) {
+                    if (pm_call_node_writable_p(parser, cast)) {
                         parse_write_name(parser, &cast->name);
                     } else {
                         pm_parser_err_node(parser, node, PM_ERR_WRITE_TARGET_UNEXPECTED);
@@ -17142,7 +17160,7 @@ parse_expression_infix(pm_parser_t *parser, pm_node_t *node, pm_binding_power_t 
                     }
 
                     // If this node cannot be writable, then we have an error.
-                    if (pm_call_node_writable_p(cast)) {
+                    if (pm_call_node_writable_p(parser, cast)) {
                         parse_write_name(parser, &cast->name);
                     } else {
                         pm_parser_err_node(parser, node, PM_ERR_WRITE_TARGET_UNEXPECTED);
@@ -17734,7 +17752,7 @@ pm_parser_init(pm_parser_t *parser, const uint8_t *source, size_t size, const pm
         .encoding_changed_callback = NULL,
         .encoding_comment_start = source,
         .lex_callback = NULL,
-        .filepath_string = { 0 },
+        .filepath = { 0 },
         .constant_pool = { 0 },
         .newline_list = { 0 },
         .integer_base = 0,
@@ -17748,8 +17766,7 @@ pm_parser_init(pm_parser_t *parser, const uint8_t *source, size_t size, const pm
         .in_keyword_arg = false,
         .current_param_name = 0,
         .semantic_token_seen = false,
-        .frozen_string_literal = false,
-        .suppress_warnings = false
+        .frozen_string_literal = false
     };
 
     // Initialize the constant pool. We're going to completely guess as to the
@@ -17778,7 +17795,7 @@ pm_parser_init(pm_parser_t *parser, const uint8_t *source, size_t size, const pm
     // If options were provided to this parse, establish them here.
     if (options != NULL) {
         // filepath option
-        parser->filepath_string = options->filepath;
+        parser->filepath = options->filepath;
 
         // line option
         parser->start_line = options->line;
@@ -17793,11 +17810,6 @@ pm_parser_init(pm_parser_t *parser, const uint8_t *source, size_t size, const pm
         // frozen_string_literal option
         if (options->frozen_string_literal) {
             parser->frozen_string_literal = true;
-        }
-
-        // suppress_warnings option
-        if (options->suppress_warnings) {
-            parser->suppress_warnings = true;
         }
 
         // version option
@@ -17885,7 +17897,7 @@ pm_magic_comment_list_free(pm_list_t *list) {
  */
 PRISM_EXPORTED_FUNCTION void
 pm_parser_free(pm_parser_t *parser) {
-    pm_string_free(&parser->filepath_string);
+    pm_string_free(&parser->filepath);
     pm_diagnostic_list_free(&parser->error_list);
     pm_diagnostic_list_free(&parser->warning_list);
     pm_comment_list_free(&parser->comment_list);

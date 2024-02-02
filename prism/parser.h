@@ -626,7 +626,7 @@ struct pm_parser {
      * This is the path of the file being parsed. We use the filepath when
      * constructing SourceFileNodes.
      */
-    pm_string_t filepath_string;
+    pm_string_t filepath;
 
     /**
      * This constant pool keeps all of the constants defined throughout the file
@@ -727,13 +727,6 @@ struct pm_parser {
      * a true value.
      */
     bool frozen_string_literal;
-
-    /**
-     * Whether or not we should emit warnings. This will be set to false if the
-     * consumer of the library specified it, usually because they are parsing
-     * when $VERBOSE is nil.
-     */
-    bool suppress_warnings;
 };
 
 #endif

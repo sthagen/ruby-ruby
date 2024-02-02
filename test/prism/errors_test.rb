@@ -443,7 +443,6 @@ module Prism
         nil,
         StatementsNode([ModuleNode([], Location(), ConstantReadNode(:A), nil, Location(), :A)]),
         [],
-        0,
         Location(),
         nil,
         nil,
@@ -475,7 +474,6 @@ module Prism
             nil,
             BlockNode(
               [],
-              0,
               nil,
               StatementsNode([ModuleNode([], Location(), ConstantReadNode(:Foo), nil, Location(), :Foo)]),
               Location(),
@@ -484,7 +482,6 @@ module Prism
           )]
         ),
         [],
-        0,
         Location(),
         nil,
         nil,
@@ -535,7 +532,6 @@ module Prism
           )]
         ),
         [],
-        0,
         Location(),
         nil,
         nil,
@@ -576,7 +572,6 @@ module Prism
         ], [], nil, [], [], nil, nil),
         nil,
         [:A, :@a, :$A, :@@a],
-        4,
         Location(),
         nil,
         Location(),
@@ -648,7 +643,6 @@ module Prism
         ),
         nil,
         [:a, :b, :c],
-        3,
         Location(),
         nil,
         Location(),
@@ -665,7 +659,6 @@ module Prism
     def test_do_not_allow_trailing_commas_in_lambda_parameters
       expected = LambdaNode(
         [:a, :b],
-        2,
         Location(),
         Location(),
         Location(),
@@ -734,7 +727,6 @@ module Prism
         ),
         nil,
         [:block, :a],
-        2,
         Location(),
         nil,
         Location(),
@@ -755,7 +747,6 @@ module Prism
         ParametersNode([], [], nil, [RequiredParameterNode(0, :a)], [], nil, BlockParameterNode(0, nil, nil, Location())),
         nil,
         [:a],
-        1,
         Location(),
         nil,
         Location(),
@@ -785,7 +776,6 @@ module Prism
         ),
         nil,
         [:a],
-        1,
         Location(),
         nil,
         Location(),
@@ -814,7 +804,6 @@ module Prism
         ),
         nil,
         [:b, :a],
-        2,
         Location(),
         nil,
         Location(),
@@ -843,7 +832,6 @@ module Prism
         ),
         nil,
         [:rest, :b],
-        2,
         Location(),
         nil,
         Location(),
@@ -865,7 +853,6 @@ module Prism
         ParametersNode([], [], nil, [], [], ForwardingParameterNode(), nil),
         nil,
         [],
-        0,
         Location(),
         nil,
         Location(),
@@ -895,7 +882,6 @@ module Prism
         ),
         nil,
         [:args, :a, :b],
-        3,
         Location(),
         nil,
         Location(),
@@ -926,7 +912,6 @@ module Prism
         ),
         nil,
         [:args, :a, :b],
-        3,
         Location(),
         nil,
         Location(),
@@ -957,7 +942,6 @@ module Prism
         ),
         nil,
         [:args, :a, :b],
-        3,
         Location(),
         nil,
         Location(),
@@ -991,7 +975,6 @@ module Prism
         ),
         nil,
         [:a, :b, :c, :d, :e],
-        5,
         Location(),
         nil,
         Location(),
@@ -1041,7 +1024,6 @@ module Prism
         nil,
         StatementsNode([IntegerNode(IntegerBaseFlags::DECIMAL)]),
         [],
-        0,
         Location(),
         nil,
         Location(),
@@ -1058,7 +1040,6 @@ module Prism
     def test_do_not_allow_forward_arguments_in_lambda_literals
       expected = LambdaNode(
         [],
-        0,
         Location(),
         Location(),
         Location(),
@@ -1083,7 +1064,6 @@ module Prism
         nil,
         BlockNode(
           [],
-          0,
           BlockParametersNode(ParametersNode([], [], nil, [], [], ForwardingParameterNode(), nil), [], Location(), Location()),
           nil,
           Location(),
@@ -1158,7 +1138,6 @@ module Prism
           ParametersNode([RequiredParameterNode(0, :a), RequiredParameterNode(0, :b), RequiredParameterNode(ParameterFlags::REPEATED_PARAMETER, :a)], [], nil, [], [], nil, nil),
           nil,
           [:a, :b],
-          2,
           Location(),
           nil,
           Location(),
@@ -1179,7 +1158,6 @@ module Prism
         ParametersNode([RequiredParameterNode(0, :a), RequiredParameterNode(0, :b)], [], RestParameterNode(ParameterFlags::REPEATED_PARAMETER, :a, Location(), Location()), [], [], nil, nil),
         nil,
         [:a, :b],
-        2,
         Location(),
         nil,
         Location(),
@@ -1199,7 +1177,6 @@ module Prism
         ParametersNode([RequiredParameterNode(0, :a), RequiredParameterNode(0, :b)], [], nil, [], [], KeywordRestParameterNode(ParameterFlags::REPEATED_PARAMETER, :a, Location(), Location()), nil),
         nil,
         [:a, :b],
-        2,
         Location(),
         nil,
         Location(),
@@ -1219,7 +1196,6 @@ module Prism
         ParametersNode([RequiredParameterNode(0, :a), RequiredParameterNode(0, :b)], [], nil, [], [], nil, BlockParameterNode(ParameterFlags::REPEATED_PARAMETER, :a, Location(), Location())),
         nil,
         [:a, :b],
-        2,
         Location(),
         nil,
         Location(),
@@ -1239,7 +1215,6 @@ module Prism
         ParametersNode([], [OptionalParameterNode(0, :a, Location(), Location(), IntegerNode(IntegerBaseFlags::DECIMAL))], RestParameterNode(0, :c, Location(), Location()), [RequiredParameterNode(0, :b)], [], nil, nil),
         nil,
         [:a, :b, :c],
-        3,
         Location(),
         nil,
         Location(),
@@ -2084,6 +2059,52 @@ module Prism
       source = "proc { || it }"
       errors = [["`it` is not allowed when an ordinary parameter is defined", 10..12]]
 
+      assert_errors expression(source), source, errors, compare_ripper: false
+    end
+
+    def test_singleton_method_for_literals
+      source = <<~'RUBY'
+        def (1).g; end
+        def ((a; 1)).foo; end
+        def ((return; 1)).bar; end
+        def (((1))).foo; end
+        def (__FILE__).foo; end
+        def (__ENCODING__).foo; end
+        def (__LINE__).foo; end
+        def ("foo").foo; end
+        def (3.14).foo; end
+        def (3.14i).foo; end
+        def (:foo).foo; end
+        def (:'foo').foo; end
+        def (:'f{o}').foo; end
+        def ('foo').foo; end
+        def ("foo").foo; end
+        def ("#{fo}o").foo; end
+        def (/foo/).foo; end
+        def (/f#{oo}/).foo; end
+        def ([1]).foo; end
+      RUBY
+      errors = [
+        ["cannot define singleton method for literals", 5..6],
+        ["cannot define singleton method for literals", 24..25],
+        ["cannot define singleton method for literals", 51..52],
+        ["cannot define singleton method for literals", 71..72],
+        ["cannot define singleton method for literals", 90..98],
+        ["cannot define singleton method for literals", 114..126],
+        ["cannot define singleton method for literals", 142..150],
+        ["cannot define singleton method for literals", 166..171],
+        ["cannot define singleton method for literals", 187..191],
+        ["cannot define singleton method for literals", 207..212],
+        ["cannot define singleton method for literals", 228..232],
+        ["cannot define singleton method for literals", 248..254],
+        ["cannot define singleton method for literals", 270..277],
+        ["cannot define singleton method for literals", 293..298],
+        ["cannot define singleton method for literals", 314..319],
+        ["cannot define singleton method for literals", 335..343],
+        ["cannot define singleton method for literals", 359..364],
+        ["cannot define singleton method for literals", 380..388],
+        ["cannot define singleton method for literals", 404..407]
+      ]
       assert_errors expression(source), source, errors, compare_ripper: false
     end
 

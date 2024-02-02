@@ -720,8 +720,15 @@ module Prism
     end
 
     def test_InterpolatedXStringNode
-      assert_prism_eval('`echo #{1}`')
-      assert_prism_eval('`echo #{"100"}`')
+      assert_prism_eval(<<~RUBY)
+        def self.`(command) = command * 2
+        `echo \#{1}`
+      RUBY
+
+      assert_prism_eval(<<~RUBY)
+        def self.`(command) = command * 2
+        `echo \#{"100"}`
+      RUBY
     end
 
     def test_MatchLastLineNode
@@ -827,6 +834,13 @@ module Prism
 
       # Test keyword splat inside of array
       assert_prism_eval("[**{x: 'hello'}]")
+
+      # Test UTF-8 string array literal in a US-ASCII file
+      assert_prism_eval(<<~'RUBY', raw: true)
+        # -*- coding: us-ascii -*-
+        # frozen_string_literal: true
+        %W"\u{1f44b} \u{1f409}"
+      RUBY
     end
 
     def test_AssocNode
@@ -1486,6 +1500,13 @@ a
         end
         prism_test_return_node
       CODE
+
+      assert_prism_eval(<<-CODE)
+        def self.prism_test_return_node(*args, **kwargs)
+          return *args, *args, **kwargs
+        end
+        prism_test_return_node(1, foo: 0)
+      CODE
     end
 
     ############################################################################
@@ -2037,6 +2058,18 @@ end
       assert_prism_eval(<<~'RUBY', raw: true)
         # -*- coding: us-ascii -*-
         "\xff".freeze.encoding
+      RUBY
+
+      # Test opt_aref_with instruction when calling [] with a string
+      assert_prism_eval(<<~RUBY)
+        ObjectSpace.count_objects
+
+        h = {"abc" => 1}
+        before = ObjectSpace.count_objects[:T_STRING]
+        5.times{ h["abc"] }
+        after = ObjectSpace.count_objects[:T_STRING]
+
+        before == after
       RUBY
     end
 
