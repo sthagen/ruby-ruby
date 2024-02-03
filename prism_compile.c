@@ -1009,8 +1009,9 @@ pm_arg_compile_keyword_hash_node(pm_keyword_hash_node_t *node, rb_iseq_t *iseq, 
     }
 }
 
+// This is details. Users should call pm_setup_args() instead.
 static int
-pm_setup_args(const pm_arguments_node_t *arguments_node, int *flags, struct rb_callinfo_kwarg **kw_arg, rb_iseq_t *iseq, LINK_ANCHOR *const ret, bool popped, pm_scope_node_t *scope_node, NODE dummy_line_node, pm_parser_t *parser)
+pm_setup_args_core(const pm_arguments_node_t *arguments_node, const pm_node_t *block, int *flags, const bool has_regular_blockarg, struct rb_callinfo_kwarg **kw_arg, rb_iseq_t *iseq, LINK_ANCHOR *const ret, pm_scope_node_t *scope_node, NODE dummy_line_node, pm_parser_t *parser)
 {
     int orig_argc = 0;
     bool has_splat = false;
@@ -1106,7 +1107,7 @@ pm_setup_args(const pm_arguments_node_t *arguments_node, int *flags, struct rb_c
                     //
                     // foo(a, *b, c)
                     //        ^^
-                    if (index + 1 < arguments_node_list.size) {
+                    if (index + 1 < arguments_node_list.size || has_regular_blockarg) {
                         ADD_INSN1(ret, &dummy_line_node, splatarray, Qtrue);
                         *flags |= VM_CALL_ARGS_SPLAT_MUT;
                     }
@@ -1225,6 +1226,42 @@ pm_setup_args(const pm_arguments_node_t *arguments_node, int *flags, struct rb_c
     return orig_argc;
 }
 
+// Compile the argument parts of a call
+static int
+pm_setup_args(const pm_arguments_node_t *arguments_node, const pm_node_t *block, int *flags, struct rb_callinfo_kwarg **kw_arg, rb_iseq_t *iseq, LINK_ANCHOR *const ret, pm_scope_node_t *scope_node, NODE dummy_line_node, pm_parser_t *parser)
+{
+    if (block && PM_NODE_TYPE_P(block, PM_BLOCK_ARGUMENT_NODE)) {
+        // We compile the `&block_arg` expression first and stitch it later
+        // since the nature of the expression influences whether splat should
+        // duplicate the array.
+        bool regular_block_arg = true;
+        DECL_ANCHOR(block_arg);
+        INIT_ANCHOR(block_arg);
+        pm_compile_node(iseq, block, block_arg, false, scope_node);
+
+        *flags |= VM_CALL_ARGS_BLOCKARG;
+
+        if (LIST_INSN_SIZE_ONE(block_arg)) {
+            LINK_ELEMENT *elem = FIRST_ELEMENT(block_arg);
+            if (IS_INSN(elem)) {
+                INSN *iobj = (INSN *)elem;
+                if (iobj->insn_id == BIN(getblockparam)) {
+                    iobj->insn_id = BIN(getblockparamproxy);
+                }
+                // Allow splat without duplication for simple one-instruction
+                // block arguments like `&arg`. It is known that this optimization
+                // can be too aggressive in some cases. See [Bug #16504].
+                regular_block_arg = false;
+            }
+        }
+
+        int argc = pm_setup_args_core(arguments_node, block, flags, regular_block_arg, kw_arg, iseq, ret, scope_node, dummy_line_node, parser);
+        ADD_SEQ(ret, block_arg);
+        return argc;
+    }
+    return pm_setup_args_core(arguments_node, block, flags, false, kw_arg, iseq, ret, scope_node, dummy_line_node, parser);
+}
+
 /**
  * Compile an index operator write node, which is a node that is writing a value
  * using the [] and []= methods. It looks like:
@@ -1250,12 +1287,7 @@ pm_compile_index_operator_write_node(pm_scope_node_t *scope_node, const pm_index
     int boff = (node->block == NULL ? 0 : 1);
     int flag = PM_NODE_TYPE_P(node->receiver, PM_SELF_NODE) ? VM_CALL_FCALL : 0;
     struct rb_callinfo_kwarg *keywords = NULL;
-    int argc = pm_setup_args(node->arguments, &flag, &keywords, iseq, ret, popped, scope_node, dummy_line_node, scope_node->parser);
-
-    if (node->block != NULL) {
-        flag |= VM_CALL_ARGS_BLOCKARG;
-        PM_COMPILE_NOT_POPPED(node->block);
-    }
+    int argc = pm_setup_args(node->arguments, node->block, &flag, &keywords, iseq, ret, scope_node, dummy_line_node, scope_node->parser);
 
     if ((argc > 0 || boff) && (flag & VM_CALL_KW_SPLAT)) {
         if (boff) {
@@ -1375,12 +1407,7 @@ pm_compile_index_control_flow_write_node(pm_scope_node_t *scope_node, const pm_n
     int boff = (block == NULL ? 0 : 1);
     int flag = PM_NODE_TYPE_P(receiver, PM_SELF_NODE) ? VM_CALL_FCALL : 0;
     struct rb_callinfo_kwarg *keywords = NULL;
-    int argc = pm_setup_args(arguments, &flag, &keywords, iseq, ret, popped, scope_node, dummy_line_node, scope_node->parser);
-
-    if (block != NULL) {
-        flag |= VM_CALL_ARGS_BLOCKARG;
-        PM_COMPILE_NOT_POPPED(block);
-    }
+    int argc = pm_setup_args(arguments, block, &flag, &keywords, iseq, ret, scope_node, dummy_line_node, scope_node->parser);
 
     if ((argc > 0 || boff) && (flag & VM_CALL_KW_SPLAT)) {
         if (boff) {
@@ -2413,89 +2440,89 @@ pm_scope_node_init(const pm_node_t *node, pm_scope_node_t *scope, pm_scope_node_
     pm_constant_id_list_init(&scope->locals);
 
     switch (PM_NODE_TYPE(node)) {
-        case PM_BLOCK_NODE: {
-            pm_block_node_t *cast = (pm_block_node_t *) node;
-            scope->body = cast->body;
-            scope->locals = cast->locals;
-            scope->parameters = cast->parameters;
-            break;
-        }
-        case PM_CLASS_NODE: {
-            pm_class_node_t *cast = (pm_class_node_t *) node;
-            scope->body = cast->body;
-            scope->locals = cast->locals;
-            break;
-        }
-        case PM_DEF_NODE: {
-            pm_def_node_t *cast = (pm_def_node_t *) node;
-            scope->parameters = (pm_node_t *)cast->parameters;
-            scope->body = cast->body;
-            scope->locals = cast->locals;
-            break;
-        }
-        case PM_ENSURE_NODE: {
-            scope->body = (pm_node_t *)node;
-            break;
-        }
-        case PM_FOR_NODE: {
-            pm_for_node_t *cast = (pm_for_node_t *)node;
-            scope->body = (pm_node_t *)cast->statements;
-            break;
-        }
-        case PM_INTERPOLATED_REGULAR_EXPRESSION_NODE: {
-            RUBY_ASSERT(node->flags & PM_REGULAR_EXPRESSION_FLAGS_ONCE);
-            scope->body = (pm_node_t *)node;
-            break;
-        }
-        case PM_LAMBDA_NODE: {
-            pm_lambda_node_t *cast = (pm_lambda_node_t *) node;
-            scope->parameters = cast->parameters;
-            scope->body = cast->body;
-            scope->locals = cast->locals;
-            break;
-        }
-        case PM_MODULE_NODE: {
-            pm_module_node_t *cast = (pm_module_node_t *) node;
-            scope->body = cast->body;
-            scope->locals = cast->locals;
-            break;
-        }
-        case PM_POST_EXECUTION_NODE: {
-            pm_post_execution_node_t *cast = (pm_post_execution_node_t *) node;
-            scope->body = (pm_node_t *) cast->statements;
-            break;
-        }
-        case PM_PROGRAM_NODE: {
-            pm_program_node_t *cast = (pm_program_node_t *) node;
-            scope->body = (pm_node_t *) cast->statements;
-            scope->locals = cast->locals;
-            break;
-        }
-        case PM_RESCUE_NODE: {
-            pm_rescue_node_t *cast = (pm_rescue_node_t *)node;
-            scope->body = (pm_node_t *)cast->statements;
-            break;
-        }
-        case PM_RESCUE_MODIFIER_NODE: {
-            pm_rescue_modifier_node_t *cast = (pm_rescue_modifier_node_t *)node;
-            scope->body = (pm_node_t *)cast->rescue_expression;
-            break;
-        }
-        case PM_SINGLETON_CLASS_NODE: {
-            pm_singleton_class_node_t *cast = (pm_singleton_class_node_t *) node;
-            scope->body = cast->body;
-            scope->locals = cast->locals;
-            break;
-        }
-        case PM_STATEMENTS_NODE: {
-            pm_statements_node_t *cast = (pm_statements_node_t *) node;
-            scope->body = (pm_node_t *)cast;
-            break;
-        }
-        default:
-            assert(false && "unreachable");
-            break;
-    }
+      case PM_BLOCK_NODE: {
+        pm_block_node_t *cast = (pm_block_node_t *) node;
+        scope->body = cast->body;
+        scope->locals = cast->locals;
+        scope->parameters = cast->parameters;
+        break;
+      }
+      case PM_CLASS_NODE: {
+        pm_class_node_t *cast = (pm_class_node_t *) node;
+        scope->body = cast->body;
+        scope->locals = cast->locals;
+        break;
+      }
+      case PM_DEF_NODE: {
+        pm_def_node_t *cast = (pm_def_node_t *) node;
+        scope->parameters = (pm_node_t *)cast->parameters;
+        scope->body = cast->body;
+        scope->locals = cast->locals;
+        break;
+      }
+      case PM_ENSURE_NODE: {
+        scope->body = (pm_node_t *)node;
+        break;
+      }
+      case PM_FOR_NODE: {
+        pm_for_node_t *cast = (pm_for_node_t *)node;
+        scope->body = (pm_node_t *)cast->statements;
+        break;
+      }
+      case PM_INTERPOLATED_REGULAR_EXPRESSION_NODE: {
+        RUBY_ASSERT(node->flags & PM_REGULAR_EXPRESSION_FLAGS_ONCE);
+        scope->body = (pm_node_t *)node;
+        break;
+      }
+      case PM_LAMBDA_NODE: {
+        pm_lambda_node_t *cast = (pm_lambda_node_t *) node;
+        scope->parameters = cast->parameters;
+        scope->body = cast->body;
+        scope->locals = cast->locals;
+        break;
+      }
+      case PM_MODULE_NODE: {
+        pm_module_node_t *cast = (pm_module_node_t *) node;
+        scope->body = cast->body;
+        scope->locals = cast->locals;
+        break;
+      }
+      case PM_POST_EXECUTION_NODE: {
+        pm_post_execution_node_t *cast = (pm_post_execution_node_t *) node;
+        scope->body = (pm_node_t *) cast->statements;
+        break;
+      }
+      case PM_PROGRAM_NODE: {
+        pm_program_node_t *cast = (pm_program_node_t *) node;
+        scope->body = (pm_node_t *) cast->statements;
+        scope->locals = cast->locals;
+        break;
+      }
+      case PM_RESCUE_NODE: {
+        pm_rescue_node_t *cast = (pm_rescue_node_t *)node;
+        scope->body = (pm_node_t *)cast->statements;
+        break;
+      }
+      case PM_RESCUE_MODIFIER_NODE: {
+        pm_rescue_modifier_node_t *cast = (pm_rescue_modifier_node_t *)node;
+        scope->body = (pm_node_t *)cast->rescue_expression;
+        break;
+      }
+      case PM_SINGLETON_CLASS_NODE: {
+        pm_singleton_class_node_t *cast = (pm_singleton_class_node_t *) node;
+        scope->body = cast->body;
+        scope->locals = cast->locals;
+        break;
+      }
+      case PM_STATEMENTS_NODE: {
+        pm_statements_node_t *cast = (pm_statements_node_t *) node;
+        scope->body = (pm_node_t *)cast;
+        break;
+      }
+      default:
+        assert(false && "unreachable");
+        break;
+      }
 }
 
 void
@@ -2867,7 +2894,7 @@ pm_compile_call(rb_iseq_t *iseq, const pm_call_node_t *call_node, LINK_ANCHOR *c
     int flags = 0;
     struct rb_callinfo_kwarg *kw_arg = NULL;
 
-    int orig_argc = pm_setup_args(call_node->arguments, &flags, &kw_arg, iseq, ret, popped, scope_node, dummy_line_node, parser);
+    int orig_argc = pm_setup_args(call_node->arguments, call_node->block, &flags, &kw_arg, iseq, ret, scope_node, dummy_line_node, parser);
     const rb_iseq_t *block_iseq = NULL;
 
     if (call_node->block != NULL && PM_NODE_TYPE_P(call_node->block, PM_BLOCK_NODE)) {
@@ -2885,11 +2912,6 @@ pm_compile_call(rb_iseq_t *iseq, const pm_call_node_t *call_node, LINK_ANCHOR *c
     else {
         if (PM_NODE_FLAG_P(call_node, PM_CALL_NODE_FLAGS_VARIABLE_CALL)) {
             flags |= VM_CALL_VCALL;
-        }
-
-        if (call_node->block != NULL) {
-            PM_COMPILE_NOT_POPPED(call_node->block);
-            flags |= VM_CALL_ARGS_BLOCKARG;
         }
 
         if (!flags) {
@@ -3448,12 +3470,7 @@ pm_compile_target_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *cons
 
         int flags = 0;
         struct rb_callinfo_kwarg *kwargs = NULL;
-        int argc = pm_setup_args(cast->arguments, &flags, &kwargs, iseq, parents, false, scope_node, dummy_line_node, scope_node->parser);
-
-        if (cast->block != NULL) {
-            flags |= VM_CALL_ARGS_BLOCKARG;
-            if (cast->block != NULL) pm_compile_node(iseq, cast->block, parents, false, scope_node);
-        }
+        int argc = pm_setup_args(cast->arguments, cast->block, &flags, &kwargs, iseq, parents, scope_node, dummy_line_node, scope_node->parser);
 
         if (state != NULL) {
             ADD_INSN1(writes, &dummy_line_node, topn, INT2FIX(argc + 1));
@@ -7039,10 +7056,15 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
         // Fill in any NumberedParameters, if they exist
         if (scope_node->parameters && PM_NODE_TYPE_P(scope_node->parameters, PM_NUMBERED_PARAMETERS_NODE)) {
             int maximum = ((pm_numbered_parameters_node_t *)scope_node->parameters)->maximum;
+            RUBY_ASSERT(0 < maximum && maximum <= 9);
             for (int i = 0; i < maximum; i++, local_index++) {
-                pm_constant_id_t constant_id = locals->ids[i];
+                const uint8_t param_name[] = { '_', '1' + i };
+                pm_constant_id_t constant_id = pm_constant_pool_find(&parser->constant_pool, param_name, 2);
+                RUBY_ASSERT(constant_id && "parser should fill in any gaps in numbered parameters");
                 pm_insert_local_index(constant_id, local_index, index_lookup_table, local_table_for_iseq, scope_node);
             }
+            body->param.lead_num = maximum;
+            body->param.flags.has_lead = true;
         }
         //********END OF STEP 3**********
 
@@ -7424,27 +7446,14 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
 
         PM_PUTSELF;
 
-        int argc = pm_setup_args(super_node->arguments, &flags, &keywords, iseq, ret, popped, scope_node, dummy_line_node, parser);
+        int argc = pm_setup_args(super_node->arguments, super_node->block, &flags, &keywords, iseq, ret, scope_node, dummy_line_node, parser);
         flags |= VM_CALL_SUPER | VM_CALL_FCALL;
 
-        if (super_node->block) {
-            switch (PM_NODE_TYPE(super_node->block)) {
-              case PM_BLOCK_ARGUMENT_NODE: {
-                PM_COMPILE_NOT_POPPED(super_node->block);
-                flags |= VM_CALL_ARGS_BLOCKARG;
-                break;
-              }
-              case PM_BLOCK_NODE: {
-                pm_scope_node_t next_scope_node;
-                pm_scope_node_init(super_node->block, &next_scope_node, scope_node, parser);
-                parent_block = NEW_CHILD_ISEQ(&next_scope_node, make_name_for_block(iseq), ISEQ_TYPE_BLOCK, lineno);
-                pm_scope_node_destroy(&next_scope_node);
-                break;
-              }
-              default: {
-                rb_bug("Unexpected node type on a SuperNode's block: %s", pm_node_type_to_str(PM_NODE_TYPE(super_node->block)));
-              }
-            }
+        if (super_node->block && PM_NODE_TYPE_P(super_node->block, PM_BLOCK_NODE)) {
+            pm_scope_node_t next_scope_node;
+            pm_scope_node_init(super_node->block, &next_scope_node, scope_node, parser);
+            parent_block = NEW_CHILD_ISEQ(&next_scope_node, make_name_for_block(iseq), ISEQ_TYPE_BLOCK, lineno);
+            pm_scope_node_destroy(&next_scope_node);
         }
 
         if ((flags & VM_CALL_ARGS_BLOCKARG) && (flags & VM_CALL_KW_SPLAT) && !(flags & VM_CALL_KW_SPLAT_MUT)) {
@@ -7549,7 +7558,7 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
         int argc = 0;
 
         if (yield_node->arguments) {
-            argc = pm_setup_args(yield_node->arguments, &flags, &keywords, iseq, ret, popped, scope_node, dummy_line_node, parser);
+            argc = pm_setup_args(yield_node->arguments, NULL, &flags, &keywords, iseq, ret, scope_node, dummy_line_node, parser);
         }
 
         ADD_INSN1(ret, &dummy_line_node, invokeblock, new_callinfo(iseq, 0, argc, flags, keywords, FALSE));

@@ -2844,19 +2844,21 @@ pm_constant_write_node_create(pm_parser_t *parser, pm_constant_read_node_t *targ
  * Check if the receiver of a `def` node is allowed.
  */
 static void
-pm_check_def_receiver(pm_parser_t *parser, pm_node_t *receiver) {
-    switch (receiver->type) {
+pm_def_node_receiver_check(pm_parser_t *parser, const pm_node_t *node) {
+    switch (PM_NODE_TYPE(node)) {
         case PM_BEGIN_NODE: {
-            pm_begin_node_t *begin_node = (pm_begin_node_t *)receiver;
-            pm_check_def_receiver(parser, (pm_node_t *) begin_node->statements);
+            const pm_begin_node_t *cast = (pm_begin_node_t *) node;
+            if (cast->statements != NULL) pm_def_node_receiver_check(parser, (pm_node_t *) cast->statements);
             break;
         }
-        case PM_PARENTHESES_NODE:
-            pm_check_def_receiver(parser, ((pm_parentheses_node_t *) receiver)->body);
+        case PM_PARENTHESES_NODE: {
+            const pm_parentheses_node_t *cast = (const pm_parentheses_node_t *) node;
+            if (cast->body != NULL) pm_def_node_receiver_check(parser, cast->body);
             break;
+        }
         case PM_STATEMENTS_NODE: {
-            pm_statements_node_t *statements_node = (pm_statements_node_t *)receiver;
-            pm_check_def_receiver(parser, statements_node->body.nodes[statements_node->body.size - 1]);
+            const pm_statements_node_t *cast = (const pm_statements_node_t *) node;
+            pm_def_node_receiver_check(parser, cast->body.nodes[cast->body.size - 1]);
             break;
         }
         case PM_ARRAY_NODE:
@@ -2875,7 +2877,10 @@ pm_check_def_receiver(pm_parser_t *parser, pm_node_t *receiver) {
         case PM_STRING_NODE:
         case PM_SYMBOL_NODE:
         case PM_X_STRING_NODE:
-            pm_parser_err_node(parser, receiver, PM_ERR_SINGLETON_FOR_LITERALS);
+            pm_parser_err_node(parser, node, PM_ERR_SINGLETON_FOR_LITERALS);
+            break;
+        default:
+            break;
     }
 }
 
@@ -2907,7 +2912,7 @@ pm_def_node_create(
     }
 
     if ((receiver != NULL) && PM_NODE_TYPE_P(receiver, PM_PARENTHESES_NODE)) {
-        pm_check_def_receiver(parser, receiver);
+        pm_def_node_receiver_check(parser, receiver);
     }
 
     *node = (pm_def_node_t) {
@@ -6321,6 +6326,16 @@ pm_parser_local_add_owned(pm_parser_t *parser, const uint8_t *start, size_t leng
 }
 
 /**
+ * Add a local variable from a constant string to the current scope.
+ */
+static pm_constant_id_t
+pm_parser_local_add_constant(pm_parser_t *parser, const char *start, size_t length) {
+    pm_constant_id_t constant_id = pm_parser_constant_id_constant(parser, start, length);
+    if (constant_id != 0) pm_parser_local_add(parser, constant_id);
+    return constant_id;
+}
+
+/**
  * Add a parameter name to the current scope and check whether the name of the
  * parameter is unique or not.
  *
@@ -7675,6 +7690,28 @@ escape_write_byte_encoded(pm_parser_t *parser, pm_buffer_t *buffer, uint8_t byte
 }
 
 /**
+ * Write each byte of the given escaped character into the buffer.
+ */
+static inline void
+escape_write_escape_encoded(pm_parser_t *parser, pm_buffer_t *buffer) {
+    size_t width;
+    if (parser->encoding_changed) {
+        width = parser->encoding->char_width(parser->current.end, parser->end - parser->current.end);
+    } else {
+        width = pm_encoding_utf_8_char_width(parser->current.end, parser->end - parser->current.end);
+    }
+
+    // TODO: If the character is invalid in the given encoding, then we'll just
+    // push one byte into the buffer. This should actually be an error.
+    width = (width == 0) ? 1 : width;
+
+    for (size_t index = 0; index < width; index++) {
+        escape_write_byte_encoded(parser, buffer, *parser->current.end);
+        parser->current.end++;
+    }
+}
+
+/**
  * The regular expression engine doesn't support the same escape sequences as
  * Ruby does. So first we have to read the escape sequence, and then we have to
  * format it like the regular expression engine expects it. For example, in Ruby
@@ -8012,7 +8049,7 @@ escape_read(pm_parser_t *parser, pm_buffer_t *buffer, uint8_t flags) {
         /* fallthrough */
         default: {
             if (parser->current.end < parser->end) {
-                escape_write_byte_encoded(parser, buffer, *parser->current.end++);
+                escape_write_escape_encoded(parser, buffer);
             }
             return;
         }
@@ -8289,8 +8326,38 @@ typedef struct {
  * Push the given byte into the token buffer.
  */
 static inline void
-pm_token_buffer_push(pm_token_buffer_t *token_buffer, uint8_t byte) {
+pm_token_buffer_push_byte(pm_token_buffer_t *token_buffer, uint8_t byte) {
     pm_buffer_append_byte(&token_buffer->buffer, byte);
+}
+
+/**
+ * Append the given bytes into the token buffer.
+ */
+static inline void
+pm_token_buffer_push_bytes(pm_token_buffer_t *token_buffer, const uint8_t *bytes, size_t length) {
+    pm_buffer_append_bytes(&token_buffer->buffer, bytes, length);
+}
+
+/**
+ * Push an escaped character into the token buffer.
+ */
+static inline void
+pm_token_buffer_push_escaped(pm_token_buffer_t *token_buffer, pm_parser_t *parser) {
+    // First, determine the width of the character to be escaped.
+    size_t width;
+    if (parser->encoding_changed) {
+        width = parser->encoding->char_width(parser->current.end, parser->end - parser->current.end);
+    } else {
+        width = pm_encoding_utf_8_char_width(parser->current.end, parser->end - parser->current.end);
+    }
+
+    // TODO: If the character is invalid in the given encoding, then we'll just
+    // push one byte into the buffer. This should actually be an error.
+    width = (width == 0 ? 1 : width);
+
+    // Now, push the bytes into the buffer.
+    pm_token_buffer_push_bytes(token_buffer, parser->current.end, width);
+    parser->current.end += width;
 }
 
 /**
@@ -9705,18 +9772,18 @@ parser_lex(pm_parser_t *parser) {
                         case '\t':
                         case '\v':
                         case '\\':
-                            pm_token_buffer_push(&token_buffer, peeked);
+                            pm_token_buffer_push_byte(&token_buffer, peeked);
                             parser->current.end++;
                             break;
                         case '\r':
                             parser->current.end++;
                             if (peek(parser) != '\n') {
-                                pm_token_buffer_push(&token_buffer, '\r');
+                                pm_token_buffer_push_byte(&token_buffer, '\r');
                                 break;
                             }
                         /* fallthrough */
                         case '\n':
-                            pm_token_buffer_push(&token_buffer, '\n');
+                            pm_token_buffer_push_byte(&token_buffer, '\n');
 
                             if (parser->heredoc_end) {
                                 // ... if we are on the same line as a heredoc,
@@ -9734,14 +9801,13 @@ parser_lex(pm_parser_t *parser) {
                             break;
                         default:
                             if (peeked == lex_mode->as.list.incrementor || peeked == lex_mode->as.list.terminator) {
-                                pm_token_buffer_push(&token_buffer, peeked);
+                                pm_token_buffer_push_byte(&token_buffer, peeked);
                                 parser->current.end++;
                             } else if (lex_mode->as.list.interpolation) {
                                 escape_read(parser, &token_buffer.buffer, PM_ESCAPE_FLAG_NONE);
                             } else {
-                                pm_token_buffer_push(&token_buffer, '\\');
-                                pm_token_buffer_push(&token_buffer, peeked);
-                                parser->current.end++;
+                                pm_token_buffer_push_byte(&token_buffer, '\\');
+                                pm_token_buffer_push_escaped(&token_buffer, parser);
                             }
 
                             break;
@@ -9899,9 +9965,9 @@ parser_lex(pm_parser_t *parser) {
                             parser->current.end++;
                             if (peek(parser) != '\n') {
                                 if (lex_mode->as.regexp.terminator != '\r') {
-                                    pm_token_buffer_push(&token_buffer, '\\');
+                                    pm_token_buffer_push_byte(&token_buffer, '\\');
                                 }
-                                pm_token_buffer_push(&token_buffer, '\r');
+                                pm_token_buffer_push_byte(&token_buffer, '\r');
                                 break;
                             }
                         /* fallthrough */
@@ -9936,20 +10002,19 @@ parser_lex(pm_parser_t *parser) {
                                     case '$': case ')': case '*': case '+':
                                     case '.': case '>': case '?': case ']':
                                     case '^': case '|': case '}':
-                                        pm_token_buffer_push(&token_buffer, '\\');
+                                        pm_token_buffer_push_byte(&token_buffer, '\\');
                                         break;
                                     default:
                                         break;
                                 }
 
-                                pm_token_buffer_push(&token_buffer, peeked);
+                                pm_token_buffer_push_byte(&token_buffer, peeked);
                                 parser->current.end++;
                                 break;
                             }
 
-                            if (peeked < 0x80) pm_token_buffer_push(&token_buffer, '\\');
-                            pm_token_buffer_push(&token_buffer, peeked);
-                            parser->current.end++;
+                            if (peeked < 0x80) pm_token_buffer_push_byte(&token_buffer, '\\');
+                            pm_token_buffer_push_escaped(&token_buffer, parser);
                             break;
                     }
 
@@ -10116,23 +10181,23 @@ parser_lex(pm_parser_t *parser) {
 
                         switch (peeked) {
                             case '\\':
-                                pm_token_buffer_push(&token_buffer, '\\');
+                                pm_token_buffer_push_byte(&token_buffer, '\\');
                                 parser->current.end++;
                                 break;
                             case '\r':
                                 parser->current.end++;
                                 if (peek(parser) != '\n') {
                                     if (!lex_mode->as.string.interpolation) {
-                                        pm_token_buffer_push(&token_buffer, '\\');
+                                        pm_token_buffer_push_byte(&token_buffer, '\\');
                                     }
-                                    pm_token_buffer_push(&token_buffer, '\r');
+                                    pm_token_buffer_push_byte(&token_buffer, '\r');
                                     break;
                                 }
                             /* fallthrough */
                             case '\n':
                                 if (!lex_mode->as.string.interpolation) {
-                                    pm_token_buffer_push(&token_buffer, '\\');
-                                    pm_token_buffer_push(&token_buffer, '\n');
+                                    pm_token_buffer_push_byte(&token_buffer, '\\');
+                                    pm_token_buffer_push_byte(&token_buffer, '\n');
                                 }
 
                                 if (parser->heredoc_end) {
@@ -10151,17 +10216,16 @@ parser_lex(pm_parser_t *parser) {
                                 break;
                             default:
                                 if (lex_mode->as.string.incrementor != '\0' && peeked == lex_mode->as.string.incrementor) {
-                                    pm_token_buffer_push(&token_buffer, peeked);
+                                    pm_token_buffer_push_byte(&token_buffer, peeked);
                                     parser->current.end++;
                                 } else if (lex_mode->as.string.terminator != '\0' && peeked == lex_mode->as.string.terminator) {
-                                    pm_token_buffer_push(&token_buffer, peeked);
+                                    pm_token_buffer_push_byte(&token_buffer, peeked);
                                     parser->current.end++;
                                 } else if (lex_mode->as.string.interpolation) {
                                     escape_read(parser, &token_buffer.buffer, PM_ESCAPE_FLAG_NONE);
                                 } else {
-                                    pm_token_buffer_push(&token_buffer, '\\');
-                                    pm_token_buffer_push(&token_buffer, peeked);
-                                    parser->current.end++;
+                                    pm_token_buffer_push_byte(&token_buffer, '\\');
+                                    pm_token_buffer_push_escaped(&token_buffer, parser);
                                 }
 
                                 break;
@@ -10418,21 +10482,20 @@ parser_lex(pm_parser_t *parser) {
                                 case '\r':
                                     parser->current.end++;
                                     if (peek(parser) != '\n') {
-                                        pm_token_buffer_push(&token_buffer, '\\');
-                                        pm_token_buffer_push(&token_buffer, '\r');
+                                        pm_token_buffer_push_byte(&token_buffer, '\\');
+                                        pm_token_buffer_push_byte(&token_buffer, '\r');
                                         break;
                                     }
                                 /* fallthrough */
                                 case '\n':
-                                    pm_token_buffer_push(&token_buffer, '\\');
-                                    pm_token_buffer_push(&token_buffer, '\n');
+                                    pm_token_buffer_push_byte(&token_buffer, '\\');
+                                    pm_token_buffer_push_byte(&token_buffer, '\n');
                                     token_buffer.cursor = parser->current.end + 1;
                                     breakpoint = parser->current.end;
                                     continue;
                                 default:
-                                    parser->current.end++;
-                                    pm_token_buffer_push(&token_buffer, '\\');
-                                    pm_token_buffer_push(&token_buffer, peeked);
+                                    pm_token_buffer_push_byte(&token_buffer, '\\');
+                                    pm_token_buffer_push_escaped(&token_buffer, parser);
                                     break;
                             }
                         } else {
@@ -10440,7 +10503,7 @@ parser_lex(pm_parser_t *parser) {
                                 case '\r':
                                     parser->current.end++;
                                     if (peek(parser) != '\n') {
-                                        pm_token_buffer_push(&token_buffer, '\r');
+                                        pm_token_buffer_push_byte(&token_buffer, '\r');
                                         break;
                                     }
                                 /* fallthrough */
@@ -13151,6 +13214,15 @@ outer_scope_using_numbered_parameters_p(pm_parser_t *parser) {
 }
 
 /**
+ * These are the names of the various numbered parameters. We have them here so
+ * that when we insert them into the constant pool we can use a constant string
+ * and not have to allocate.
+ */
+static const char * const pm_numbered_parameter_names[] = {
+    "_1", "_2", "_3", "_4", "_5", "_6", "_7", "_8", "_9"
+};
+
+/**
  * Parse an identifier into either a local variable read. If the local variable
  * is not found, it returns NULL instead.
  */
@@ -13172,12 +13244,10 @@ parse_variable(pm_parser_t *parser) {
             pm_parser_err_previous(parser, PM_ERR_NUMBERED_PARAMETER_OUTER_SCOPE);
         } else {
             // Indicate that this scope is using numbered params so that child
-            // scopes cannot.
-            uint8_t number = parser->previous.start[1];
-
-            // We subtract the value for the character '0' to get the actual
-            // integer value of the number (only _1 through _9 are valid)
-            uint8_t numbered_parameters = (uint8_t) (number - '0');
+            // scopes cannot. We subtract the value for the character '0' to get
+            // the actual integer value of the number (only _1 through _9 are
+            // valid).
+            uint8_t numbered_parameters = (uint8_t) (parser->previous.start[1] - '0');
             if (numbered_parameters > parser->current_scope->numbered_parameters) {
                 parser->current_scope->numbered_parameters = numbered_parameters;
                 pm_parser_numbered_parameters_set(parser, numbered_parameters);
@@ -13188,21 +13258,13 @@ parse_variable(pm_parser_t *parser) {
             // referencing _2 means that _1 must exist. Therefore here we
             // loop through all of the possibilities and add them into the
             // constant pool.
-            uint8_t current = '1';
-            uint8_t *value;
-
-            while (current < number) {
-                value = malloc(2);
-                value[0] = '_';
-                value[1] = current++;
-                pm_parser_local_add_owned(parser, value, 2);
+            for (uint8_t numbered_parameter = 1; numbered_parameter <= numbered_parameters - 1; numbered_parameter++) {
+                pm_parser_local_add_constant(parser, pm_numbered_parameter_names[numbered_parameter - 1], 2);
             }
 
-            // Now we can add the actual token that is being used. For
-            // this one we can add a shared version since it is directly
-            // referenced in the source.
-            pm_parser_local_add_token(parser, &parser->previous);
-            return pm_local_variable_read_node_create(parser, &parser->previous, 0);
+            // Finally we can create the local variable read node.
+            pm_constant_id_t name_id = pm_parser_local_add_constant(parser, pm_numbered_parameter_names[numbered_parameters - 1], 2);
+            return pm_local_variable_read_node_create_constant_id(parser, &parser->previous, name_id, 0);
         }
     }
 
@@ -18061,7 +18123,9 @@ pm_parser_errors_format_sort(const pm_list_t *error_list, const pm_newline_list_
 
         // Now we're going to shift all of the errors after this one down one
         // index to make room for the new error.
-        memcpy(&errors[index + 1], &errors[index], sizeof(pm_error_t) * (error_list->size - index - 1));
+        if (index + 1 < error_list->size) {
+            memmove(&errors[index + 1], &errors[index], sizeof(pm_error_t) * (error_list->size - index - 1));
+        }
 
         // Finally, we'll insert the error into the array.
         uint32_t column_end;
