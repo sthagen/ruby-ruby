@@ -712,6 +712,16 @@ module Prism
 
         ("a""#{1}""b").frozen?
       CODE
+
+      # Test encoding of interpolated strings
+      assert_prism_eval(<<~'RUBY')
+        "#{"foo"}s".encoding
+      RUBY
+      assert_prism_eval(<<~'RUBY')
+        a = "foo"
+        b = "#{a}" << "Bar"
+        [a, b, b.encoding]
+      RUBY
     end
 
     def test_InterpolatedSymbolNode
@@ -2072,6 +2082,18 @@ end
         h = {"abc" => 1}
         before = ObjectSpace.count_objects[:T_STRING]
         5.times{ h["abc"] }
+        after = ObjectSpace.count_objects[:T_STRING]
+
+        before == after
+      RUBY
+
+      # Test opt_aset_with instruction when calling []= with a string key
+      assert_prism_eval(<<~RUBY)
+        ObjectSpace.count_objects
+
+        h = {"abc" => 1}
+        before = ObjectSpace.count_objects[:T_STRING]
+        5.times{ h["abc"] = 2}
         after = ObjectSpace.count_objects[:T_STRING]
 
         before == after

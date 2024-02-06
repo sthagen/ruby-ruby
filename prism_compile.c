@@ -751,18 +751,33 @@ pm_interpolated_node_compile(pm_node_list_t *parts, rb_iseq_t *iseq, NODE dummy_
                     current_string = string_value;
                 }
             }
-            else {
+            else if (PM_NODE_TYPE_P(part, PM_EMBEDDED_STATEMENTS_NODE) &&
+                    ((pm_embedded_statements_node_t *)part)->statements->body.size == 1 &&
+                    PM_NODE_TYPE_P(((pm_embedded_statements_node_t *)part)->statements->body.nodes[0], PM_STRING_NODE)) {
+                pm_string_node_t *string_node = (pm_string_node_t *)((pm_embedded_statements_node_t *)part)->statements->body.nodes[0];
+                VALUE string_value = parse_string_encoded((pm_node_t *)string_node, &string_node->unescaped, parser);
                 if (RTEST(current_string)) {
-                    current_string = rb_fstring(current_string);
-                    if (parser->frozen_string_literal) {
-                        ADD_INSN1(ret, &dummy_line_node, putobject, current_string);
-                    }
-                    else {
-                        ADD_INSN1(ret, &dummy_line_node, putstring, current_string);
-                    }
-                    current_string = Qnil;
-                    number_of_items_pushed++;
+                    current_string = rb_str_concat(current_string, string_value);
                 }
+                else {
+                    current_string = string_value;
+                }
+            }
+            else {
+                if (!RTEST(current_string)) {
+                    rb_encoding *enc = rb_enc_from_index(rb_enc_find_index(parser->encoding->name));
+                    current_string = rb_enc_str_new(NULL, 0, enc);
+                }
+
+                if (parser->frozen_string_literal) {
+                    ADD_INSN1(ret, &dummy_line_node, putobject, rb_str_freeze(current_string));
+                }
+                else {
+                    ADD_INSN1(ret, &dummy_line_node, putstring, rb_str_freeze(current_string));
+                }
+                current_string = Qnil;
+                number_of_items_pushed++;
+
                 PM_COMPILE_NOT_POPPED(part);
                 PM_DUP;
                 ADD_INSN1(ret, &dummy_line_node, objtostring, new_callinfo(iseq, idTo_s, 0, VM_CALL_FCALL | VM_CALL_ARGS_SIMPLE , NULL, FALSE));
@@ -1802,11 +1817,13 @@ pm_compile_pattern(rb_iseq_t *iseq, pm_scope_node_t *scope_node, const pm_node_t
         const size_t posts_size = cast->posts.size;
         const size_t minimum_size = requireds_size + posts_size;
 
-        bool use_rest_size = (
-            cast->rest != NULL &&
-            PM_NODE_TYPE_P(cast->rest, PM_SPLAT_NODE) &&
-            ((((const pm_splat_node_t *) cast->rest)->expression != NULL) || posts_size > 0)
-        );
+        bool rest_named = false;
+        bool use_rest_size = false;
+
+        if (cast->rest != NULL) {
+            rest_named = (PM_NODE_TYPE_P(cast->rest, PM_SPLAT_NODE) && ((const pm_splat_node_t *) cast->rest)->expression != NULL);
+            use_rest_size = (rest_named || (!rest_named && posts_size > 0));
+        }
 
         LABEL *match_failed_label = NEW_LABEL(line.lineno);
         LABEL *type_error_label = NEW_LABEL(line.lineno);
@@ -1844,7 +1861,7 @@ pm_compile_pattern(rb_iseq_t *iseq, pm_scope_node_t *scope_node, const pm_node_t
         }
 
         if (cast->rest != NULL) {
-            if (((const pm_splat_node_t *) cast->rest)->expression != NULL) {
+            if (rest_named) {
                 ADD_INSN(ret, &line.node, dup);
                 ADD_INSN1(ret, &line.node, putobject, INT2FIX(requireds_size));
                 ADD_INSN1(ret, &line.node, topn, INT2FIX(1));
@@ -4142,18 +4159,10 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
         }
 
         ID method_id = pm_constant_id_lookup(scope_node, call_node->name);
-        if (node->flags & PM_CALL_NODE_FLAGS_ATTRIBUTE_WRITE) {
-            if (!popped) {
-                PM_PUTNIL;
-            }
-        }
 
-        if (call_node->receiver == NULL) {
-            PM_PUTSELF;
-            pm_compile_call(iseq, call_node, ret, popped, scope_node, method_id, start);
-        }
-        else if ((method_id == idUMinus || method_id == idFreeze) &&
+        if ((method_id == idUMinus || method_id == idFreeze) &&
                 !PM_NODE_FLAG_P(call_node, PM_CALL_NODE_FLAGS_SAFE_NAVIGATION) &&
+                call_node->receiver != NULL &&
                 PM_NODE_TYPE_P(call_node->receiver, PM_STRING_NODE) &&
                 call_node->arguments == NULL &&
                 call_node->block == NULL &&
@@ -4184,8 +4193,38 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
                 ADD_INSN(ret, &dummy_line_node, pop);
             }
         }
-        else {
+        else if (method_id == idASET &&
+                !PM_NODE_FLAG_P(call_node, PM_CALL_NODE_FLAGS_SAFE_NAVIGATION) &&
+                call_node->arguments != NULL &&
+                PM_NODE_TYPE_P((pm_node_t *)call_node->arguments, PM_ARGUMENTS_NODE) &&
+                ((pm_arguments_node_t *)call_node->arguments)->arguments.size == 2 &&
+                PM_NODE_TYPE_P(((pm_arguments_node_t *)call_node->arguments)->arguments.nodes[0], PM_STRING_NODE) &&
+                call_node->block == NULL &&
+                !ISEQ_COMPILE_DATA(iseq)->option->frozen_string_literal &&
+                ISEQ_COMPILE_DATA(iseq)->option->specialized_instruction) {
+            pm_string_node_t *str_node = (pm_string_node_t *)((pm_arguments_node_t *)call_node->arguments)->arguments.nodes[0];
+            VALUE str = rb_fstring(parse_string_encoded((pm_node_t *)str_node, &str_node->unescaped, parser));
             PM_COMPILE_NOT_POPPED(call_node->receiver);
+            PM_COMPILE_NOT_POPPED(((pm_arguments_node_t *)call_node->arguments)->arguments.nodes[1]);
+            if (!popped) {
+                ADD_INSN(ret, &dummy_line_node, swap);
+                ADD_INSN1(ret, &dummy_line_node, topn, INT2FIX(1));
+            }
+            ADD_INSN2(ret, &dummy_line_node, opt_aset_with, str, new_callinfo(iseq, idASET, 2, 0, NULL, FALSE));
+            RB_OBJ_WRITTEN(iseq, Qundef, str);
+            ADD_INSN(ret, &dummy_line_node, pop);
+        }
+        else {
+            if ((node->flags & PM_CALL_NODE_FLAGS_ATTRIBUTE_WRITE) && !popped) {
+                PM_PUTNIL;
+            }
+
+            if (call_node->receiver == NULL) {
+                PM_PUTSELF;
+            }
+            else {
+                PM_COMPILE_NOT_POPPED(call_node->receiver);
+            }
             pm_compile_call(iseq, call_node, ret, popped, scope_node, method_id, start);
         }
 
@@ -5494,10 +5533,6 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
         pm_interpolated_match_last_line_node_t *cast = (pm_interpolated_match_last_line_node_t *) node;
 
         int parts_size = (int)cast->parts.size;
-        if (parts_size > 0 && !PM_NODE_TYPE_P(cast->parts.nodes[0], PM_STRING_NODE)) {
-            ADD_INSN1(ret, &dummy_line_node, putobject, rb_str_new(0, 0));
-            parts_size++;
-        }
 
         pm_interpolated_node_compile(&cast->parts, iseq, dummy_line_node, ret, popped, scope_node, parser);
 
@@ -5530,13 +5565,7 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
 
         pm_interpolated_regular_expression_node_t *cast = (pm_interpolated_regular_expression_node_t *) node;
 
-        int parts_size = (int)cast->parts.size;
-        if (cast->parts.size > 0 && !PM_NODE_TYPE_P(cast->parts.nodes[0], PM_STRING_NODE)) {
-            ADD_INSN1(ret, &dummy_line_node, putobject, rb_str_new(0, 0));
-            parts_size++;
-        }
-
-        pm_interpolated_node_compile(&cast->parts, iseq, dummy_line_node, ret, popped, scope_node, parser);
+        int parts_size = pm_interpolated_node_compile(&cast->parts, iseq, dummy_line_node, ret, popped, scope_node, parser);
 
         ADD_INSN2(ret, &dummy_line_node, toregexp, INT2FIX(pm_reg_flags(node)), INT2FIX(parts_size));
         PM_POP_IF_POPPED;
@@ -5544,12 +5573,7 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
       }
       case PM_INTERPOLATED_STRING_NODE: {
         pm_interpolated_string_node_t *interp_string_node = (pm_interpolated_string_node_t *) node;
-        int number_of_items_pushed = 0;
-        if (!PM_NODE_TYPE_P(interp_string_node->parts.nodes[0], PM_STRING_NODE)) {
-            ADD_INSN1(ret, &dummy_line_node, putstring, rb_str_new(0, 0));
-            number_of_items_pushed++;
-        }
-        number_of_items_pushed += pm_interpolated_node_compile(&interp_string_node->parts, iseq, dummy_line_node, ret, popped, scope_node, parser);
+        int number_of_items_pushed = pm_interpolated_node_compile(&interp_string_node->parts, iseq, dummy_line_node, ret, popped, scope_node, parser);
 
         if (number_of_items_pushed > 1) {
             ADD_INSN1(ret, &dummy_line_node, concatstrings, INT2FIX(number_of_items_pushed));
@@ -7252,13 +7276,8 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
                   case PM_INTERPOLATED_REGULAR_EXPRESSION_NODE: {
                     pm_interpolated_regular_expression_node_t *cast = (pm_interpolated_regular_expression_node_t *) scope_node->ast_node;
 
-                    int parts_size = (int)cast->parts.size;
-                    if (parts_size > 0 && !PM_NODE_TYPE_P(cast->parts.nodes[0], PM_STRING_NODE)) {
-                        ADD_INSN1(ret, &dummy_line_node, putobject, rb_str_new(0, 0));
-                        parts_size++;
-                    }
+                    int parts_size = pm_interpolated_node_compile(&cast->parts, iseq, dummy_line_node, ret, popped, scope_node, parser);
 
-                    pm_interpolated_node_compile(&cast->parts, iseq, dummy_line_node, ret, false, scope_node, parser);
                     ADD_INSN2(ret, &dummy_line_node, toregexp, INT2FIX(pm_reg_flags((pm_node_t *)cast)), INT2FIX(parts_size));
                     break;
                   }
@@ -7297,7 +7316,9 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
             } else {
                 PM_PUTNIL;
             }
+
             ADD_TRACE(ret, RUBY_EVENT_RETURN);
+            ISEQ_COMPILE_DATA(iseq)->last_line = body->location.code_location.end_pos.lineno;
 
             break;
           }
@@ -7635,17 +7656,38 @@ pm_parse_input(pm_parse_result_t *result, VALUE filepath)
 
     // If there are errors, raise an appropriate error and free the result.
     if (result->parser.error_list.size > 0) {
+        // Determine the error to raise. Any errors with the level
+        // PM_ERROR_LEVEL_ARGUMENT effectively take over as the only argument
+        // that gets raised.
+        const pm_diagnostic_t *error_argument = NULL;
+        for (const pm_diagnostic_t *error = (pm_diagnostic_t *) result->parser.error_list.head; error != NULL; error = (pm_diagnostic_t *) error->node.next) {
+            if (error->level == PM_ERROR_LEVEL_ARGUMENT) {
+                error_argument = error;
+                break;
+            }
+        }
+
+        VALUE error_class;
         pm_buffer_t buffer = { 0 };
-        pm_parser_errors_format(&result->parser, &buffer, rb_stderr_tty_p());
 
-        pm_buffer_prepend_string(&buffer, "syntax errors found\n", 20);
-        VALUE error = rb_exc_new(rb_eSyntaxError, pm_buffer_value(&buffer), pm_buffer_length(&buffer));
+        // If we found an error argument, then we need to use that as the error
+        // message. Otherwise, we will format all of the parser error together.
+        if (error_argument == NULL) {
+            error_class = rb_eSyntaxError;
+            pm_buffer_append_string(&buffer, "syntax errors found\n", 20);
+            pm_parser_errors_format(&result->parser, &buffer, rb_stderr_tty_p());
+        }
+        else {
+            error_class = rb_eArgError;
+            pm_buffer_append_string(&buffer, error_argument->message, strlen(error_argument->message));
+        }
 
+        VALUE error_object = rb_exc_new(error_class, pm_buffer_value(&buffer), pm_buffer_length(&buffer));
         pm_buffer_free(&buffer);
 
         // TODO: We need to set the backtrace.
         // rb_funcallv(error, rb_intern("set_backtrace"), 1, &path);
-        return error;
+        return error_object;
     }
 
     // Emit all of the various warnings from the parse.
