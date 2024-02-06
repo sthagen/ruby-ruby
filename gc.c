@@ -3810,7 +3810,7 @@ obj_free(rb_objspace_t *objspace, VALUE obj)
             RB_DEBUG_COUNTER_INC(obj_imemo_constcache);
             break;
         }
-        return TRUE;
+        break;
 
       default:
         rb_bug("gc_sweep(): unknown data type 0x%x(%p) 0x%"PRIxVALUE,
@@ -3822,6 +3822,7 @@ obj_free(rb_objspace_t *objspace, VALUE obj)
         return FALSE;
     }
     else {
+        RBASIC(obj)->flags = 0;
         return TRUE;
     }
 }
@@ -3984,15 +3985,13 @@ objspace_each_objects_try(VALUE arg)
             uintptr_t pstart = (uintptr_t)page->start;
             uintptr_t pend = pstart + (page->total_slots * size_pool->slot_size);
 
-            if (!__asan_region_is_poisoned((void *)pstart, pend - pstart)) {
-                if (data->each_obj_callback &&
-                    (*data->each_obj_callback)((void *)pstart, (void *)pend, size_pool->slot_size, data->data)) {
-                    break;
-                }
-                if (data->each_page_callback &&
-                    (*data->each_page_callback)(page, data->data)) {
-                    break;
-                }
+            if (data->each_obj_callback &&
+                (*data->each_obj_callback)((void *)pstart, (void *)pend, size_pool->slot_size, data->data)) {
+                break;
+            }
+            if (data->each_page_callback &&
+                (*data->each_page_callback)(page, data->data)) {
+                break;
             }
 
             page = ccan_list_next(&SIZE_POOL_EDEN_HEAP(size_pool)->pages, page, page_node);
@@ -4618,16 +4617,11 @@ rb_objspace_free_objects(rb_objspace_t *objspace)
         for (; p < pend; p += stride) {
             VALUE vp = (VALUE)p;
             switch (BUILTIN_TYPE(vp)) {
-              case T_DATA: {
-                if (rb_obj_is_mutex(vp) || rb_obj_is_thread(vp) || rb_obj_is_main_ractor(vp)) {
-                    obj_free(objspace, vp);
-                }
-                break;
-              }
-              case T_ARRAY:
-                obj_free(objspace, vp);
+              case T_NONE:
+              case T_SYMBOL:
                 break;
               default:
+                obj_free(objspace, vp);
                 break;
             }
         }
