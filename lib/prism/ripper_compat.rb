@@ -97,6 +97,8 @@ module Prism
         result.errors.each do |error|
           on_parse_error(error.message)
         end
+
+        nil
       else
         result.value.accept(self)
       end
@@ -106,41 +108,91 @@ module Prism
     # Visitor methods
     ############################################################################
 
+    # Visit an ArrayNode node.
+    def visit_array_node(node)
+      elements = visit_elements(node.elements) unless node.elements.empty?
+      bounds(node.location)
+      on_array(elements)
+    end
+
     # Visit a CallNode node.
     def visit_call_node(node)
-      if !node.message.match?(/^[[:alpha:]_]/) && node.opening_loc.nil? && node.arguments&.arguments&.length == 1
-        left = visit(node.receiver)
-        right = visit(node.arguments.arguments.first)
+      if node.variable_call?
+        if node.message.match?(/^[[:alpha:]_]/)
+          bounds(node.message_loc)
+          return on_vcall(on_ident(node.message))
+        end
 
-        bounds(node.location)
-        on_binary(left, node.name, right)
+        raise NotImplementedError, "Non-alpha variable call"
+      end
+
+      if node.opening_loc.nil?
+        left = visit(node.receiver)
+        if node.arguments&.arguments&.length == 1
+          right = visit(node.arguments.arguments.first)
+
+          on_binary(left, node.name, right)
+        elsif !node.arguments || node.arguments.empty?
+          on_unary(node.name, left)
+        else
+          raise NotImplementedError, "More than two arguments for operator"
+        end
       else
-        raise NotImplementedError
+        raise NotImplementedError, "Non-nil opening_loc"
       end
     end
 
     # Visit a FloatNode node.
     def visit_float_node(node)
-      bounds(node.location)
-      on_float(node.slice)
+      visit_number(node) { |text| on_float(text) }
     end
 
     # Visit a ImaginaryNode node.
     def visit_imaginary_node(node)
-      bounds(node.location)
-      on_imaginary(node.slice)
+      visit_number(node) { |text| on_imaginary(text) }
     end
 
     # Visit an IntegerNode node.
     def visit_integer_node(node)
+      visit_number(node) { |text| on_int(text) }
+    end
+
+    # Visit a ParenthesesNode node.
+    def visit_parentheses_node(node)
+      body =
+        if node.body.nil?
+          on_stmts_add(on_stmts_new, on_void_stmt)
+        else
+          visit(node.body)
+        end
+
       bounds(node.location)
-      on_int(node.slice)
+      on_paren(body)
+    end
+
+    # Visit a ProgramNode node.
+    def visit_program_node(node)
+      statements = visit(node.statements)
+      bounds(node.location)
+      on_program(statements)
+    end
+
+    # Visit a RangeNode node.
+    def visit_range_node(node)
+      left = visit(node.left)
+      right = visit(node.right)
+
+      bounds(node.location)
+      if node.exclude_end?
+        on_dot3(left, right)
+      else
+        on_dot2(left, right)
+      end
     end
 
     # Visit a RationalNode node.
     def visit_rational_node(node)
-      bounds(node.location)
-      on_rational(node.slice)
+      visit_number(node) { |text| on_rational(text) }
     end
 
     # Visit a StatementsNode node.
@@ -149,13 +201,6 @@ module Prism
       node.body.inject(on_stmts_new) do |stmts, stmt|
         on_stmts_add(stmts, visit(stmt))
       end
-    end
-
-    # Visit a ProgramNode node.
-    def visit_program_node(node)
-      statements = visit(node.statements)
-      bounds(node.location)
-      on_program(statements)
     end
 
     ############################################################################
@@ -174,6 +219,32 @@ module Prism
 
     private
 
+    # Visit a list of elements, like the elements of an array or arguments.
+    def visit_elements(elements)
+      bounds(elements.first.location)
+      elements.inject(on_args_new) do |args, element|
+        on_args_add(args, visit(element))
+      end
+    end
+
+    # Visit a node that represents a number. We need to explicitly handle the
+    # unary - operator.
+    def visit_number(node)
+      slice = node.slice
+      location = node.location
+
+      if slice[0] == "-"
+        bounds_values(location.start_line, location.start_column + 1)
+        value = yield slice[1..-1]
+
+        bounds(node.location)
+        on_unary(RUBY_ENGINE == "jruby" ? :- : :-@, value)
+      else
+        bounds(location)
+        yield slice
+      end
+    end
+
     # This method is responsible for updating lineno and column information
     # to reflect the current node.
     #
@@ -182,6 +253,13 @@ module Prism
     def bounds(location)
       @lineno = location.start_line
       @column = location.start_column
+    end
+
+    # If we need to do something unusual, we can directly update the line number
+    # and column to reflect the current node.
+    def bounds_values(lineno, column)
+      @lineno = lineno
+      @column = column
     end
 
     # Lazily initialize the parse result.

@@ -32,14 +32,15 @@ permissions: # added using https://github.com/step-security/secure-workflows
 jobs:
   analyze:
     name: Analyze
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     permissions:
       actions: read # for github/codeql-action/init to get workflow details
       contents: read # for actions/checkout to fetch code
       security-events: write # for github/codeql-action/autobuild to send a status report
     # CodeQL fails to run pull requests from dependabot due to missing write access to upload results.
     if: >-
-      ${{!(false
+      ${{github.repository == 'ruby/ruby' &&
+      !(false
       || contains(github.event.head_commit.message, '[DOC]')
       || contains(github.event.pull_request.title, '[DOC]')
       || contains(github.event.pull_request.labels.*.name, 'Documentation')
@@ -52,41 +53,53 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        language: ['cpp', 'ruby']
+        include:
+          - language: cpp
+            os: ubuntu-latest
+            ram: 8192
+          - language: ruby
+            os: macos-arm-oss
+            ram: 13312
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
 
       - name: Install libraries
+        if: ${{ matrix.os == 'macos-arm-oss' }}
+        uses: ./.github/actions/setup/macos
+
+      - name: Install libraries
+        if : ${{ matrix.os == 'ubuntu-latest' }}
         uses: ./.github/actions/setup/ubuntu
 
       - uses: ./.github/actions/setup/directories
 
       - name: Remove an obsolete rubygems vendored file
+        if: ${{ matrix.os == 'ubuntu-latest' }}
         run: sudo rm /usr/lib/ruby/vendor_ruby/rubygems/defaults/operating_system.rb
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@cdcdbb579706841c47f7063dda365e292e5cad7a # v2.13.4
+        uses: github/codeql-action/init@e8893c57a1f3a2b659b6b55564fdfdbbd2982911 # v3.24.0
         with:
           languages: ${{ matrix.language }}
 
       - name: Autobuild
-        uses: github/codeql-action/autobuild@cdcdbb579706841c47f7063dda365e292e5cad7a # v2.13.4
+        uses: github/codeql-action/autobuild@e8893c57a1f3a2b659b6b55564fdfdbbd2982911 # v3.24.0
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@cdcdbb579706841c47f7063dda365e292e5cad7a # v2.13.4
+        uses: github/codeql-action/analyze@e8893c57a1f3a2b659b6b55564fdfdbbd2982911 # v3.24.0
         with:
           category: '/language:${{ matrix.language }}'
           upload: False
           output: sarif-results
-          ram: 8192
+          ram: ${{ matrix.ram }}
         # CodeQL randomly hits `OutOfMemoryError "Java heap space"`.
         # GitHub recommends running a larger runner to fix it, but we don't pay for it.
         continue-on-error: true
 
       - name: filter-sarif
-        uses: advanced-security/filter-sarif@f3b8118a9349d88f7b1c0c488476411145b6270d # v1.0
+        uses: advanced-security/filter-sarif@f3b8118a9349d88f7b1c0c488476411145b6270d # v1.0.1
         with:
           patterns: |
             +**/*.rb
@@ -109,7 +122,7 @@ jobs:
         continue-on-error: true
 
       - name: Upload SARIF
-        uses: github/codeql-action/upload-sarif@cdcdbb579706841c47f7063dda365e292e5cad7a # v2.13.4
+        uses: github/codeql-action/upload-sarif@e8893c57a1f3a2b659b6b55564fdfdbbd2982911 # v3.24.0
         with:
           sarif_file: sarif-results/${{ matrix.language }}.sarif
         continue-on-error: true
