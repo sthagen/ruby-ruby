@@ -27,9 +27,9 @@ The following default gems are updated.
 * erb 4.0.4
 * fiddle 1.1.3
 * io-console 0.7.2
-* irb 1.11.1
+* irb 1.11.2
 * net-http 0.4.1
-* prism 0.21.0
+* prism 0.22.0
 * reline 0.4.2
 * stringio 3.1.1
 * strscan 3.0.9

@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "delegate"
+require "ripper"
 
 module Prism
   # This class is responsible for lexing the source using prism and then
@@ -860,7 +861,7 @@ module Prism
       previous = []
       results = []
 
-      Ripper.lex(source, raise_errors: true).each do |token|
+      lex(source).each do |token|
         case token[1]
         when :on_sp
           # skip
@@ -885,6 +886,21 @@ module Prism
       end
 
       results
+    end
+
+    private
+
+    if Ripper.method(:lex).parameters.assoc(:keyrest)
+      def lex(source)
+        Ripper.lex(source, raise_errors: true)
+      end
+    else
+      def lex(source)
+        ripper = Ripper::Lexer.new(source)
+        ripper.lex.tap do |result|
+          raise SyntaxError, ripper.errors.map(&:message).join(' ;') if ripper.errors.any?
+        end
+      end
     end
   end
 
