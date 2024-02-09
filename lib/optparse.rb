@@ -697,6 +697,11 @@ class OptionParser
       q.object_group(self) {pretty_print_contents(q)}
     end
 
+    def omitted_argument(val)   # :nodoc:
+      val.pop if val.size == 3 and val.last.nil?
+      val
+    end
+
     #
     # Switch that takes no arguments.
     #
@@ -755,7 +760,7 @@ class OptionParser
         if arg
           conv_arg(*parse_arg(arg, &error))
         else
-          conv_arg(arg)
+          omitted_argument conv_arg(arg)
         end
       end
 
@@ -774,13 +779,14 @@ class OptionParser
       #
       def parse(arg, argv, &error)
         if !(val = arg) and (argv.empty? or /\A-./ =~ (val = argv[0]))
-          return nil, block, nil
+          return nil, block
         end
         opt = (val = parse_arg(val, &error))[1]
         val = conv_arg(*val)
         if opt and !arg
           argv.shift
         else
+          omitted_argument val
           val[0] = nil
         end
         val
@@ -1033,7 +1039,7 @@ XXX
     to << "#compdef #{name}\n"
     to << COMPSYS_HEADER
     visit(:compsys, {}, {}) {|o, d|
-      to << %Q[  "#{o}[#{d.gsub(/[\"\[\]]/, '\\\\\&')}]" \\\n]
+      to << %Q[  "#{o}[#{d.gsub(/[\\\"\[\]]/, '\\\\\&')}]" \\\n]
     }
     to << "  '*:file:_files' && return 0\n"
   end
@@ -1048,7 +1054,7 @@ XXX
   # Shows option summary.
   #
   Officious['help'] = proc do |parser|
-    Switch::NoArgument.new do |arg|
+    Switch::NoArgument.new(nil, nil, ["-h"], ["--help"]) do |arg|
       puts parser.help
       exit
     end
@@ -1473,7 +1479,7 @@ XXX
           default_style = default_style.guess(arg = a)
           default_pattern, conv = search(:atype, o) unless default_pattern
         end
-        ldesc << "--[no-]#{q}"
+        ldesc << "--#{q}" << "--no-#{q}"
         (o = q.downcase).tr!('_', '-')
         long << o
         not_pattern, not_conv = search(:atype, FalseClass) unless not_style
@@ -1649,7 +1655,7 @@ XXX
           opt.tr!('_', '-')
           begin
             sw, = complete(:long, opt, true)
-            if require_exact && !sw.long.include?(arg)
+            if require_exact && !sw.long.include?("--#{opt}")
               throw :terminate, arg unless raise_unknown
               raise InvalidOption, arg
             end
@@ -1658,9 +1664,9 @@ XXX
             raise $!.set_option(arg, true)
           end
           begin
-            opt, cb, val = sw.parse(rest, argv) {|*exc| raise(*exc)}
-            val = cb.call(val) if cb
-            setter.call(sw.switch_name, val) if setter
+            opt, cb, *val = sw.parse(rest, argv) {|*exc| raise(*exc)}
+            val = callback!(cb, 1, *val) if cb
+            callback!(setter, 2, sw.switch_name, *val) if setter
           rescue ParseError
             raise $!.set_option(arg, rest)
           end
@@ -1690,7 +1696,7 @@ XXX
             raise $!.set_option(arg, true)
           end
           begin
-            opt, cb, val = sw.parse(val, argv) {|*exc| raise(*exc) if eq}
+            opt, cb, *val = sw.parse(val, argv) {|*exc| raise(*exc) if eq}
           rescue ParseError
             raise $!.set_option(arg, arg.length > 2)
           else
@@ -1698,8 +1704,8 @@ XXX
           end
           begin
             argv.unshift(opt) if opt and (!rest or (opt = opt.sub(/\A-*/, '-')) != '-')
-            val = cb.call(val) if cb
-            setter.call(sw.switch_name, val) if setter
+            val = callback!(cb, 1, *val) if cb
+            callback!(setter, 2, sw.switch_name, *val) if setter
           rescue ParseError
             raise $!.set_option(arg, arg.length > 2)
           end
@@ -1724,6 +1730,17 @@ XXX
     argv
   end
   private :parse_in_order
+
+  # Calls callback with _val_.
+  def callback!(cb, max_arity, *args) # :nodoc:
+    if (size = args.size) < max_arity and cb.to_proc.lambda?
+      (arity = cb.arity) < 0 and arity = (1-arity)
+      arity = max_arity if arity > max_arity
+      args[arity - 1] = nil if arity > size
+    end
+    cb.call(*args)
+  end
+  private :callback!
 
   #
   # Parses command line arguments +argv+ in permutation mode and returns
