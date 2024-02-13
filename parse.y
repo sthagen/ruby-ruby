@@ -90,6 +90,7 @@ hash_literal_key_p(VALUE k)
           case NODE_SYM:
           case NODE_LINE:
           case NODE_FILE:
+          case NODE_ENCODING:
             return true;
           default:
             return false;
@@ -193,6 +194,8 @@ node_cdhash_cmp(VALUE val, VALUE lit)
             return node_val->nd_loc.beg_pos.lineno != node_lit->nd_loc.beg_pos.lineno;
           case NODE_FILE:
             return rb_parser_string_hash_cmp(RNODE_FILE(node_val)->path, RNODE_FILE(node_lit)->path);
+          case NODE_ENCODING:
+            return RNODE_ENCODING(node_val)->enc != RNODE_ENCODING(node_lit)->enc;
           default:
             rb_bug("unexpected node: %s, %s", ruby_node_name(type_val), ruby_node_name(type_lit));
         }
@@ -204,6 +207,8 @@ node_cdhash_cmp(VALUE val, VALUE lit)
         return rb_iseq_cdhash_cmp(val, lit);
     }
 }
+
+static st_index_t rb_parser_str_hash(rb_parser_string_t *str);
 
 static st_index_t
 node_cdhash_hash(VALUE a)
@@ -228,15 +233,15 @@ node_cdhash_hash(VALUE a)
             val = rb_node_imaginary_literal_val(node);
             return rb_complex_hash(val);
           case NODE_STR:
-            return rb_str_hash(rb_node_str_string_val(node));
+            return rb_parser_str_hash(RNODE_STR(node)->string);
           case NODE_SYM:
-            return rb_node_sym_string_val(node);
+            return rb_parser_str_hash(RNODE_SYM(node)->string);
           case NODE_LINE:
             /* Same with NODE_INTEGER FIXNUM case */
             return (st_index_t)node->nd_loc.beg_pos.lineno;
           case NODE_FILE:
             /* Same with NODE_STR */
-            return rb_str_hash(rb_node_file_path_val(node));
+            return rb_parser_str_hash(RNODE_FILE(node)->path);
           case NODE_ENCODING:
             return rb_node_encoding_val(node);
           default:
@@ -2135,6 +2140,24 @@ get_nd_args(struct parser_params *p, NODE *node)
         return 0;
     }
 }
+
+static st_index_t
+djb2(const uint8_t *str, size_t len)
+{
+    st_index_t hash = 5381;
+
+    for (size_t i = 0; i < len; i++) {
+        hash = ((hash << 5) + hash) + str[i];
+    }
+
+    return hash;
+}
+
+static st_index_t
+parser_memhash(const void *ptr, long len)
+{
+    return djb2(ptr, len);
+}
 #endif
 
 #define PARSER_STRING_PTR(str) (str->ptr)
@@ -2193,6 +2216,12 @@ rb_parser_string_free(rb_parser_t *p, rb_parser_string_t *str)
 }
 
 #ifndef RIPPER
+static st_index_t
+rb_parser_str_hash(rb_parser_string_t *str)
+{
+    return parser_memhash((const void *)PARSER_STRING_PTR(str), PARSER_STRING_LEN(str));
+}
+
 static size_t
 rb_parser_str_capacity(rb_parser_string_t *str, const int termlen)
 {
@@ -15461,6 +15490,7 @@ nd_type_st_key_enable_p(NODE *node)
       case NODE_SYM:
       case NODE_LINE:
       case NODE_FILE:
+      case NODE_ENCODING:
         return true;
       default:
         return false;
@@ -15520,6 +15550,23 @@ nd_value(struct parser_params *p, NODE *node)
 }
 
 static void
+warn_duplicate_keys_check_key(struct parser_params *p, st_data_t key, st_table *literal_keys)
+{
+    if (OBJ_BUILTIN_TYPE(key) == T_NODE && nd_type(key) == NODE_SYM) {
+        rb_parser_string_t *parser_str = RNODE_SYM(key)->string;
+        struct RString fake_str;
+        VALUE str = rb_setup_fake_str(&fake_str, parser_str->ptr, parser_str->len, parser_str->enc);
+        if (rb_enc_asciicompat(parser_str->enc) && rb_enc_str_coderange(str) == ENC_CODERANGE_BROKEN) {
+            st_free_table(literal_keys);
+            /* Since we have a ASCII compatible encoding and the coderange is
+             * broken, sym_check_asciionly should raise an EncodingError. */
+            rb_check_id_cstr(parser_str->ptr, parser_str->len, parser_str->enc);
+            rb_bug("unreachable");
+        }
+    }
+}
+
+static void
 warn_duplicate_keys(struct parser_params *p, NODE *hash)
 {
     struct st_hash_type literal_type = {
@@ -15537,12 +15584,18 @@ warn_duplicate_keys(struct parser_params *p, NODE *hash)
         if (!head) {
             key = (st_data_t)value;
         }
-        else if (nd_type_st_key_enable_p(head) &&
-                 st_delete(literal_keys, (key = (st_data_t)nd_st_key(p, head), &key), &data)) {
-            rb_compile_warn(p->ruby_sourcefile, nd_line((NODE *)data),
-                            "key %+"PRIsVALUE" is duplicated and overwritten on line %d",
-                            nd_value(p, head), nd_line(head));
+        else if (nd_type_st_key_enable_p(head)) {
+            warn_duplicate_keys_check_key(p, (st_data_t)head, literal_keys);
+
+            key = (st_data_t)nd_st_key(p, head);
+            if (st_delete(literal_keys, &key, &data)) {
+                rb_compile_warn(p->ruby_sourcefile, nd_line((NODE *)data),
+                                "key %+"PRIsVALUE" is duplicated and overwritten on line %d",
+                                nd_value(p, head), nd_line(head));
+            }
         }
+
+        warn_duplicate_keys_check_key(p, key, literal_keys);
         st_insert(literal_keys, (st_data_t)key, (st_data_t)hash);
         hash = next;
     }
