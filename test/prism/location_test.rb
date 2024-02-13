@@ -178,6 +178,10 @@ module Prism
       assert_location(CallNode, "-> { it }", 5...7, version: "3.3.0") do |node|
         node.body.body.first
       end
+
+      assert_location(LocalVariableReadNode, "-> { it }", 5...7, version: "3.4.0") do |node|
+        node.body.body.first
+      end
     end
 
     def test_CallAndWriteNode
