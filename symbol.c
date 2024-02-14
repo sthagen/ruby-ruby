@@ -843,7 +843,7 @@ rb_gc_free_dsymbol(VALUE sym)
  *     str.intern   -> symbol
  *     str.to_sym   -> symbol
  *
- *  Returns the Symbol corresponding to <i>str</i>, creating the
+ *  Returns the +Symbol+ corresponding to <i>str</i>, creating the
  *  symbol if it did not previously exist. See Symbol#id2name.
  *
  *     "Koala".intern         #=> :Koala
@@ -1140,9 +1140,11 @@ rb_get_symbol_id(VALUE name)
             return 0;
         }
     }
-    else {
-        RUBY_ASSERT_ALWAYS(RB_TYPE_P(name, T_STRING));
+    else if (RB_TYPE_P(name, T_STRING)) {
         return lookup_str_id(name);
+    }
+    else {
+        return 0;
     }
 }
 
