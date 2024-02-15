@@ -20,7 +20,7 @@ module Prism
 
     # The minor version of prism that we are expecting to find in the serialized
     # strings.
-    MINOR_VERSION = 23
+    MINOR_VERSION = 24
 
     # The patch version of prism that we are expecting to find in the serialized
     # strings.
@@ -112,7 +112,7 @@ module Prism
           length = load_varuint
           lex_state = load_varuint
           location = Location.new(@source, start, length)
-          tokens << [Prism::Token.new(type, location.slice, location), lex_state]
+          tokens << [Prism::Token.new(source, type, location.slice, location), lex_state]
         end
 
         tokens
@@ -274,7 +274,8 @@ module Prism
             <%- if node.needs_serialized_length? -%>
             load_serialized_length
             <%- end -%>
-            <%= node.name %>.new(<%= (node.fields.map { |field|
+            <%= node.name %>.new(
+              source, <%= (node.fields.map { |field|
               case field
               when Prism::NodeField then "load_node"
               when Prism::OptionalNodeField then "load_optional_node"
@@ -308,7 +309,8 @@ module Prism
               <%- if node.needs_serialized_length? -%>
               load_serialized_length
               <%- end -%>
-              <%= node.name %>.new(<%= (node.fields.map { |field|
+              <%= node.name %>.new(
+                source, <%= (node.fields.map { |field|
                 case field
                 when Prism::NodeField then "load_node"
                 when Prism::OptionalNodeField then "load_optional_node"
