@@ -319,17 +319,20 @@ macro_rules! jit_perf_symbol_pop {
     };
 }
 
-/// Macro to push and pop perf symbols around a function definition.
-/// This is useful when the function has early returns.
-macro_rules! perf_fn {
-    (fn $func_name:ident($jit:ident: $jit_t:ty, $asm:ident: $asm_t:ty, $($arg:ident: $type:ty,)*) -> $ret:ty $block:block) => {
-        fn $func_name($jit: $jit_t, $asm: $asm_t, $($arg: $type),*) -> $ret {
-            fn func_body($jit: $jit_t, $asm: $asm_t, $($arg: $type),*) -> $ret $block
-            jit_perf_symbol_push!($jit, $asm, stringify!($func_name), PerfMap::Codegen);
-            let ret = func_body($jit, $asm, $($arg),*);
+/// Macro to push and pop a perf symbol around a function call.
+macro_rules! perf_call {
+    // perf_call!("prefix: ", func(...)) uses "prefix: func" as a symbol.
+    ($prefix:expr, $func_name:ident($jit:expr, $asm:expr$(, $arg:expr)*$(,)?) ) => {
+        {
+            jit_perf_symbol_push!($jit, $asm, &format!("{}{}", $prefix, stringify!($func_name)), PerfMap::Codegen);
+            let ret = $func_name($jit, $asm, $($arg),*);
             jit_perf_symbol_pop!($jit, $asm, PerfMap::Codegen);
             ret
         }
+    };
+    // perf_call! { func(...) } uses "func" as a symbol.
+    { $func_name:ident($jit:expr, $asm:expr$(, $arg:expr)*$(,)?) } => {
+        perf_call!("", $func_name($jit, $asm, $($arg),*))
     };
 }
 
@@ -389,7 +392,7 @@ fn gen_save_sp(asm: &mut Assembler) {
 fn gen_save_sp_with_offset(asm: &mut Assembler, offset: i8) {
     if asm.ctx.get_sp_offset() != -offset {
         asm_comment!(asm, "save SP to CFP");
-        let stack_pointer = asm.ctx.sp_opnd((offset as i32 * SIZEOF_VALUE_I32) as isize);
+        let stack_pointer = asm.ctx.sp_opnd(offset as i32 * SIZEOF_VALUE_I32);
         let sp_addr = asm.lea(stack_pointer);
         asm.mov(SP, sp_addr);
         let cfp_sp_opnd = Opnd::mem(64, CFP, RUBY_OFFSET_CFP_SP);
@@ -1420,7 +1423,7 @@ fn gen_newarray(
     } else {
         asm_comment!(asm, "load pointer to array elements");
         let offset_magnitude = (SIZEOF_VALUE as u32) * n;
-        let values_opnd = asm.ctx.sp_opnd(-(offset_magnitude as isize));
+        let values_opnd = asm.ctx.sp_opnd(-(offset_magnitude as i32));
         asm.lea(values_opnd)
     };
 
@@ -1621,7 +1624,7 @@ fn gen_pushtoarray(
 
     // Get the operands from the stack
     let ary_opnd = asm.stack_opnd(num as i32);
-    let objp_opnd = asm.lea(asm.ctx.sp_opnd(-(num as isize) * SIZEOF_VALUE as isize));
+    let objp_opnd = asm.lea(asm.ctx.sp_opnd(-(num as i32) * SIZEOF_VALUE_I32));
 
     let ary = asm.ccall(rb_ary_cat as *const u8, vec![ary_opnd, objp_opnd, num.into()]);
     asm.stack_pop(num as usize + 1); // Keep it on stack during ccall for GC
@@ -3043,7 +3046,7 @@ fn gen_concatstrings(
     // Save the PC and SP because we are allocating
     jit_prepare_call_with_gc(jit, asm);
 
-    let values_ptr = asm.lea(asm.ctx.sp_opnd(-((SIZEOF_VALUE as isize) * n as isize)));
+    let values_ptr = asm.lea(asm.ctx.sp_opnd(-(SIZEOF_VALUE_I32 * n as i32)));
 
     // call rb_str_concat_literals(size_t n, const VALUE *strings);
     let return_value = asm.ccall(
@@ -3352,7 +3355,7 @@ fn gen_opt_neq(
     // opt_neq is passed two rb_call_data as arguments:
     // first for ==, second for !=
     let cd = jit.get_arg(1).as_ptr();
-    return gen_send_general(jit, asm, ocb, cd, None);
+    perf_call! { gen_send_general(jit, asm, ocb, cd, None) }
 }
 
 fn gen_opt_aref(
@@ -3910,7 +3913,7 @@ fn gen_opt_newarray_max(
     }
 
     let offset_magnitude = (SIZEOF_VALUE as u32) * num;
-    let values_opnd = asm.ctx.sp_opnd(-(offset_magnitude as isize));
+    let values_opnd = asm.ctx.sp_opnd(-(offset_magnitude as i32));
     let values_ptr = asm.lea(values_opnd);
 
     let val_opnd = asm.ccall(
@@ -3963,7 +3966,7 @@ fn gen_opt_newarray_hash(
     }
 
     let offset_magnitude = (SIZEOF_VALUE as u32) * num;
-    let values_opnd = asm.ctx.sp_opnd(-(offset_magnitude as isize));
+    let values_opnd = asm.ctx.sp_opnd(-(offset_magnitude as i32));
     let values_ptr = asm.lea(values_opnd);
 
     let val_opnd = asm.ccall(
@@ -3998,7 +4001,7 @@ fn gen_opt_newarray_min(
     }
 
     let offset_magnitude = (SIZEOF_VALUE as u32) * num;
-    let values_opnd = asm.ctx.sp_opnd(-(offset_magnitude as isize));
+    let values_opnd = asm.ctx.sp_opnd(-(offset_magnitude as i32));
     let values_ptr = asm.lea(values_opnd);
 
     let val_opnd = asm.ccall(
@@ -5994,7 +5997,7 @@ fn gen_push_frame(
     asm.mov(cfp_opnd(RUBY_OFFSET_CFP_EP), ep);
 }
 
-perf_fn!(fn gen_send_cfunc(
+fn gen_send_cfunc(
     jit: &mut JITState,
     asm: &mut Assembler,
     ocb: &mut OutlinedCb,
@@ -6046,11 +6049,7 @@ perf_fn!(fn gen_send_cfunc(
     if kw_arg.is_null() && flags & VM_CALL_OPT_SEND == 0 && flags & VM_CALL_ARGS_SPLAT == 0 && (cfunc_argc == -1 || argc == cfunc_argc) {
         let expected_stack_after = asm.ctx.get_stack_size() as i32 - argc;
         if let Some(known_cfunc_codegen) = lookup_cfunc_codegen(unsafe { (*cme).def }) {
-            jit_perf_symbol_push!(jit, asm, "gen_send_cfunc: known_cfunc_codegen", PerfMap::Codegen);
-            let specialized = known_cfunc_codegen(jit, asm, ocb, ci, cme, block, argc, recv_known_class);
-            jit_perf_symbol_pop!(jit, asm, PerfMap::Codegen);
-
-            if specialized {
+            if perf_call!("gen_send_cfunc: ", known_cfunc_codegen(jit, asm, ocb, ci, cme, block, argc, recv_known_class)) {
                 assert_eq!(expected_stack_after, asm.ctx.get_stack_size() as i32);
                 gen_counter_incr(asm, Counter::num_send_cfunc_inline);
                 // cfunc codegen generated code. Terminate the block so
@@ -6068,7 +6067,7 @@ perf_fn!(fn gen_send_cfunc(
     // #define CHECK_VM_STACK_OVERFLOW0(cfp, sp, margin)
     // REG_CFP <= REG_SP + 4 * SIZEOF_VALUE + sizeof(rb_control_frame_t)
     asm_comment!(asm, "stack overflow check");
-    let stack_limit = asm.lea(asm.ctx.sp_opnd((SIZEOF_VALUE * 4 + 2 * RUBY_SIZEOF_CONTROL_FRAME) as isize));
+    let stack_limit = asm.lea(asm.ctx.sp_opnd((SIZEOF_VALUE * 4 + 2 * RUBY_SIZEOF_CONTROL_FRAME) as i32));
     asm.cmp(CFP, stack_limit);
     asm.jbe(Target::side_exit(Counter::guard_send_se_cf_overflow));
 
@@ -6162,7 +6161,7 @@ perf_fn!(fn gen_send_cfunc(
 
     // Increment the stack pointer by 3 (in the callee)
     // sp += 3
-    let sp = asm.lea(asm.ctx.sp_opnd((SIZEOF_VALUE as isize) * 3));
+    let sp = asm.lea(asm.ctx.sp_opnd(SIZEOF_VALUE_I32 * 3));
 
     let specval = if block_arg_type == Some(Type::BlockParamProxy) {
         SpecVal::BlockHandler(Some(BlockHandler::BlockParamProxy))
@@ -6175,8 +6174,7 @@ perf_fn!(fn gen_send_cfunc(
         frame_type |= VM_FRAME_FLAG_CFRAME_KW
     }
 
-    jit_perf_symbol_push!(jit, asm, "gen_send_cfunc: gen_push_frame", PerfMap::Codegen);
-    gen_push_frame(jit, asm, ControlFrame {
+    perf_call!("gen_send_cfunc: ", gen_push_frame(jit, asm, ControlFrame {
         frame_type,
         specval,
         cme,
@@ -6188,8 +6186,7 @@ perf_fn!(fn gen_send_cfunc(
             None     // Leave PC uninitialized as cfuncs shouldn't read it
         },
         iseq: None,
-    });
-    jit_perf_symbol_pop!(jit, asm, PerfMap::Codegen);
+    }));
 
     asm_comment!(asm, "set ec->cfp");
     let new_cfp = asm.lea(Opnd::mem(64, CFP, -(RUBY_SIZEOF_CONTROL_FRAME as i32)));
@@ -6228,7 +6225,7 @@ perf_fn!(fn gen_send_cfunc(
         // rb_f_puts(int argc, VALUE *argv, VALUE recv)
         vec![
             Opnd::Imm(passed_argc.into()),
-            asm.lea(asm.ctx.sp_opnd((-argc * SIZEOF_VALUE_I32) as isize)),
+            asm.lea(asm.ctx.sp_opnd(-argc * SIZEOF_VALUE_I32)),
             asm.stack_opnd(argc),
         ]
     }
@@ -6281,7 +6278,7 @@ perf_fn!(fn gen_send_cfunc(
     // We do this to end the current block after the call
     jump_to_next_insn(jit, asm, ocb);
     Some(EndBlock)
-});
+}
 
 // Generate RARRAY_LEN. For array_opnd, use Opnd::Reg to reduce memory access,
 // and use Opnd::Mem to save registers.
@@ -6443,7 +6440,7 @@ fn gen_send_bmethod(
     }
 
     let frame_type = VM_FRAME_MAGIC_BLOCK | VM_FRAME_FLAG_BMETHOD | VM_FRAME_FLAG_LAMBDA;
-    gen_send_iseq(jit, asm, ocb, iseq, ci, frame_type, Some(capture.ep), cme, block, flags, argc, None)
+    perf_call! { gen_send_iseq(jit, asm, ocb, iseq, ci, frame_type, Some(capture.ep), cme, block, flags, argc, None) }
 }
 
 /// Return the ISEQ's return value if it consists of only putnil/putobject and leave.
@@ -6471,7 +6468,7 @@ fn iseq_get_return_value(iseq: IseqPtr) -> Option<VALUE> {
     }
 }
 
-perf_fn!(fn gen_send_iseq(
+fn gen_send_iseq(
     jit: &mut JITState,
     asm: &mut Assembler,
     ocb: &mut OutlinedCb,
@@ -6507,7 +6504,7 @@ perf_fn!(fn gen_send_iseq(
     let arg_setup_block = captured_opnd.is_some(); // arg_setup_type: arg_setup_block (invokeblock)
 
     // For computing offsets to callee locals
-    let num_params = unsafe { get_iseq_body_param_size(iseq) };
+    let num_params = unsafe { get_iseq_body_param_size(iseq) as i32 };
     let num_locals = unsafe { get_iseq_body_local_table_size(iseq) as i32 };
 
     let mut start_pc_offset: u16 = 0;
@@ -6749,7 +6746,7 @@ perf_fn!(fn gen_send_iseq(
     let stack_max: i32 = unsafe { get_iseq_body_stack_max(iseq) }.try_into().unwrap();
     let locals_offs =
         SIZEOF_VALUE_I32 * (num_locals + stack_max) + 2 * (RUBY_SIZEOF_CONTROL_FRAME as i32);
-    let stack_limit = asm.lea(asm.ctx.sp_opnd(locals_offs as isize));
+    let stack_limit = asm.lea(asm.ctx.sp_opnd(locals_offs));
     asm.cmp(CFP, stack_limit);
     asm.jbe(Target::side_exit(Counter::guard_send_se_cf_overflow));
 
@@ -6820,7 +6817,7 @@ perf_fn!(fn gen_send_iseq(
                 return None;
             }
             let proc = asm.stack_pop(1); // Pop first, as argc doesn't account for the block arg
-            let callee_specval = asm.ctx.sp_opnd(callee_specval as isize * SIZEOF_VALUE as isize);
+            let callee_specval = asm.ctx.sp_opnd(callee_specval * SIZEOF_VALUE_I32);
             asm.store(callee_specval, proc);
         }
         None => {
@@ -6878,7 +6875,7 @@ perf_fn!(fn gen_send_iseq(
                 // diff is >0 so no need to worry about null pointer
                 asm_comment!(asm, "load pointer to array elements");
                 let offset_magnitude = SIZEOF_VALUE as u32 * diff;
-                let values_opnd = asm.ctx.sp_opnd(-(offset_magnitude as isize));
+                let values_opnd = asm.ctx.sp_opnd(-(offset_magnitude as i32));
                 let values_ptr = asm.lea(values_opnd);
 
                 asm_comment!(asm, "prepend stack values to rest array");
@@ -6923,7 +6920,7 @@ perf_fn!(fn gen_send_iseq(
             } else {
                 asm_comment!(asm, "load pointer to array elements");
                 let offset_magnitude = SIZEOF_VALUE as u32 * n;
-                let values_opnd = asm.ctx.sp_opnd(-(offset_magnitude as isize));
+                let values_opnd = asm.ctx.sp_opnd(-(offset_magnitude as i32));
                 asm.lea(values_opnd)
             };
 
@@ -7010,14 +7007,14 @@ perf_fn!(fn gen_send_iseq(
         argc = lead_num;
     }
 
-    fn nil_fill(comment: &'static str, fill_range: std::ops::Range<isize>, asm: &mut Assembler) {
+    fn nil_fill(comment: &'static str, fill_range: std::ops::Range<i32>, asm: &mut Assembler) {
         if fill_range.is_empty() {
             return;
         }
 
         asm_comment!(asm, "{}", comment);
         for i in fill_range {
-            let value_slot = asm.ctx.sp_opnd(i * SIZEOF_VALUE as isize);
+            let value_slot = asm.ctx.sp_opnd(i * SIZEOF_VALUE_I32);
             asm.store(value_slot, Qnil.into());
         }
     }
@@ -7026,8 +7023,8 @@ perf_fn!(fn gen_send_iseq(
     nil_fill(
         "nil-initialize missing optionals",
         {
-            let begin = -(argc as isize) + required_num as isize + opts_filled as isize;
-            let end   = -(argc as isize) + required_num as isize + opt_num as isize;
+            let begin = -argc + required_num + opts_filled;
+            let end   = -argc + required_num + opt_num;
 
             begin..end
         },
@@ -7036,7 +7033,7 @@ perf_fn!(fn gen_send_iseq(
     // Nil-initialize the block parameter. It's the last parameter local
     if iseq_has_block_param {
         let block_param = asm.ctx.sp_opnd(
-            SIZEOF_VALUE as isize * (-(argc as isize) + num_params as isize - 1)
+            SIZEOF_VALUE_I32 * (-argc + num_params - 1)
         );
         asm.store(block_param, Qnil.into());
     }
@@ -7044,8 +7041,8 @@ perf_fn!(fn gen_send_iseq(
     nil_fill(
         "nil-initialize locals",
         {
-            let begin = -(argc as isize) + num_params as isize;
-            let end   = -(argc as isize) + num_locals as isize;
+            let begin = -argc + num_params;
+            let end   = -argc + num_locals;
 
             begin..end
         },
@@ -7058,20 +7055,18 @@ perf_fn!(fn gen_send_iseq(
         _ => asm.stack_opnd(argc),
     };
     let captured_self = captured_opnd.is_some();
-    let sp_offset = (argc as isize) + if captured_self { 0 } else { 1 };
+    let sp_offset = argc + if captured_self { 0 } else { 1 };
 
     // Store the updated SP on the current frame (pop arguments and receiver)
     asm_comment!(asm, "store caller sp");
-    let caller_sp = asm.lea(asm.ctx.sp_opnd((SIZEOF_VALUE as isize) * -sp_offset));
+    let caller_sp = asm.lea(asm.ctx.sp_opnd(SIZEOF_VALUE_I32 * -sp_offset));
     asm.store(Opnd::mem(64, CFP, RUBY_OFFSET_CFP_SP), caller_sp);
 
     // Store the next PC in the current frame
     jit_save_pc(jit, asm);
 
     // Adjust the callee's stack pointer
-    let offs = (SIZEOF_VALUE as isize) * (
-        -(argc as isize) + num_locals as isize + VM_ENV_DATA_SIZE as isize
-    );
+    let offs = SIZEOF_VALUE_I32 * (-argc + num_locals + VM_ENV_DATA_SIZE as i32);
     let callee_sp = asm.lea(asm.ctx.sp_opnd(offs));
 
     let specval = if let Some(prev_ep) = prev_ep {
@@ -7090,8 +7085,7 @@ perf_fn!(fn gen_send_iseq(
     };
 
     // Setup the new frame
-    jit_perf_symbol_push!(jit, asm, "gen_send_iseq: gen_push_frame", PerfMap::Codegen);
-    gen_push_frame(jit, asm, ControlFrame {
+    perf_call!("gen_send_iseq: ", gen_push_frame(jit, asm, ControlFrame {
         frame_type,
         specval,
         cme,
@@ -7099,8 +7093,7 @@ perf_fn!(fn gen_send_iseq(
         sp: callee_sp,
         iseq: Some(iseq),
         pc: None, // We are calling into jitted code, which will set the PC as necessary
-    });
-    jit_perf_symbol_pop!(jit, asm, PerfMap::Codegen);
+    }));
 
     // Log the name of the method we're calling to. We intentionally don't do this for inlined ISEQs.
     // We also do this after gen_push_frame() to minimize the impact of spill_temps() on asm.ccall().
@@ -7191,7 +7184,7 @@ perf_fn!(fn gen_send_iseq(
     );
 
     Some(EndBlock)
-});
+}
 
 // Check if we can handle a keyword call
 fn gen_iseq_kw_call_checks(
@@ -7375,7 +7368,7 @@ fn gen_iseq_kw_call(
         gen_save_sp(asm);
 
         // Build the kwrest hash. `struct rb_callinfo_kwarg` is malloc'd, so no GC concerns.
-        let kwargs_start = asm.lea(asm.ctx.sp_opnd(-(caller_keyword_len_i32 * SIZEOF_VALUE_I32) as isize));
+        let kwargs_start = asm.lea(asm.ctx.sp_opnd(-caller_keyword_len_i32 * SIZEOF_VALUE_I32));
         let kwrest = asm.ccall(
             build_kw_rest as _,
             vec![rest_mask.into(), kwargs_start, Opnd::const_ptr(ci_kwarg.cast())]
@@ -7791,7 +7784,7 @@ fn gen_send_dynamic<F: Fn(&mut Assembler) -> Opnd>(
     Some(KeepCompiling)
 }
 
-perf_fn!(fn gen_send_general(
+fn gen_send_general(
     jit: &mut JITState,
     asm: &mut Assembler,
     ocb: &mut OutlinedCb,
@@ -7864,8 +7857,7 @@ perf_fn!(fn gen_send_general(
         return None;
     }
 
-    jit_perf_symbol_push!(jit, asm, "gen_send_general: jit_guard_known_klass", PerfMap::Codegen);
-    jit_guard_known_klass(
+    perf_call!("gen_send_general: ", jit_guard_known_klass(
         jit,
         asm,
         ocb,
@@ -7875,8 +7867,7 @@ perf_fn!(fn gen_send_general(
         comptime_recv,
         SEND_MAX_DEPTH,
         Counter::guard_send_klass_megamorphic,
-    );
-    jit_perf_symbol_pop!(jit, asm, PerfMap::Codegen);
+    ));
 
     // Do method lookup
     let mut cme = unsafe { rb_callable_method_entry(comptime_recv_klass, mid) };
@@ -7927,10 +7918,10 @@ perf_fn!(fn gen_send_general(
             VM_METHOD_TYPE_ISEQ => {
                 let iseq = unsafe { get_def_iseq_ptr((*cme).def) };
                 let frame_type = VM_FRAME_MAGIC_METHOD | VM_ENV_FLAG_LOCAL;
-                return gen_send_iseq(jit, asm, ocb, iseq, ci, frame_type, None, cme, block, flags, argc, None);
+                return perf_call! { gen_send_iseq(jit, asm, ocb, iseq, ci, frame_type, None, cme, block, flags, argc, None) };
             }
             VM_METHOD_TYPE_CFUNC => {
-                return gen_send_cfunc(
+                return perf_call! { gen_send_cfunc(
                     jit,
                     asm,
                     ocb,
@@ -7940,7 +7931,7 @@ perf_fn!(fn gen_send_general(
                     Some(comptime_recv_klass),
                     flags,
                     argc,
-                );
+                ) };
             }
             VM_METHOD_TYPE_IVAR => {
                 // This is a .send call not supported right now for getters
@@ -8244,7 +8235,7 @@ perf_fn!(fn gen_send_general(
             }
         }
     }
-});
+}
 
 /// Assemble "{class_name}#{method_name}" from a class pointer and a method ID
 fn get_method_name(class: Option<VALUE>, mid: u64) -> String {
@@ -8300,7 +8291,7 @@ fn gen_opt_send_without_block(
 ) -> Option<CodegenStatus> {
     // Generate specialized code if possible
     let cd = jit.get_arg(0).as_ptr();
-    if let Some(status) = gen_send_general(jit, asm, ocb, cd, None) {
+    if let Some(status) = perf_call! { gen_send_general(jit, asm, ocb, cd, None) } {
         return Some(status);
     }
 
@@ -8324,7 +8315,7 @@ fn gen_send(
     // Generate specialized code if possible
     let cd = jit.get_arg(0).as_ptr();
     let block = jit.get_arg(1).as_optional_ptr().map(|iseq| BlockHandler::BlockISeq(iseq));
-    if let Some(status) = gen_send_general(jit, asm, ocb, cd, block) {
+    if let Some(status) = perf_call! { gen_send_general(jit, asm, ocb, cd, block) } {
         return Some(status);
     }
 
@@ -8437,7 +8428,7 @@ fn gen_invokeblock_specialized(
             Counter::guard_invokeblock_iseq_block_changed,
         );
 
-        gen_send_iseq(jit, asm, ocb, comptime_iseq, ci, VM_FRAME_MAGIC_BLOCK, None, 0 as _, None, flags, argc, Some(captured_opnd))
+        perf_call! { gen_send_iseq(jit, asm, ocb, comptime_iseq, ci, VM_FRAME_MAGIC_BLOCK, None, 0 as _, None, flags, argc, Some(captured_opnd)) }
     } else if comptime_handler.0 & 0x3 == 0x3 { // VM_BH_IFUNC_P
         // We aren't handling CALLER_SETUP_ARG and CALLER_REMOVE_EMPTY_KW_SPLAT yet.
         if flags & VM_CALL_ARGS_SPLAT != 0 {
@@ -8475,7 +8466,7 @@ fn gen_invokeblock_specialized(
         }
         asm_comment!(asm, "call ifunc");
         let captured_opnd = asm.and(block_handler_opnd, Opnd::Imm(!0x3));
-        let argv = asm.lea(asm.ctx.sp_opnd((-argc * SIZEOF_VALUE_I32) as isize));
+        let argv = asm.lea(asm.ctx.sp_opnd(-argc * SIZEOF_VALUE_I32));
         let ret = asm.ccall(
             rb_vm_yield_with_cfunc as *const u8,
             vec![EC, captured_opnd, argc.into(), argv],
@@ -8650,10 +8641,10 @@ fn gen_invokesuper_specialized(
         VM_METHOD_TYPE_ISEQ => {
             let iseq = unsafe { get_def_iseq_ptr((*cme).def) };
             let frame_type = VM_FRAME_MAGIC_METHOD | VM_ENV_FLAG_LOCAL;
-            gen_send_iseq(jit, asm, ocb, iseq, ci, frame_type, None, cme, Some(block), ci_flags, argc, None)
+            perf_call! { gen_send_iseq(jit, asm, ocb, iseq, ci, frame_type, None, cme, Some(block), ci_flags, argc, None) }
         }
         VM_METHOD_TYPE_CFUNC => {
-            gen_send_cfunc(jit, asm, ocb, ci, cme, Some(block), None, ci_flags, argc)
+            perf_call! { gen_send_cfunc(jit, asm, ocb, ci, cme, Some(block), None, ci_flags, argc) }
         }
         _ => unreachable!(),
     }
@@ -8792,7 +8783,7 @@ fn gen_objtostring(
         Some(KeepCompiling)
     } else {
         let cd = jit.get_arg(0).as_ptr();
-        gen_send_general(jit, asm, ocb, cd, None)
+        perf_call! { gen_send_general(jit, asm, ocb, cd, None) }
     }
 }
 
@@ -8827,7 +8818,7 @@ fn gen_toregexp(
     // raise an exception.
     jit_prepare_non_leaf_call(jit, asm);
 
-    let values_ptr = asm.lea(asm.ctx.sp_opnd(-((SIZEOF_VALUE as isize) * (cnt as isize))));
+    let values_ptr = asm.lea(asm.ctx.sp_opnd(-(SIZEOF_VALUE_I32 * cnt as i32)));
 
     let ary = asm.ccall(
         rb_ary_tmp_new_from_values as *const u8,

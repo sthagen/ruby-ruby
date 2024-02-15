@@ -983,7 +983,7 @@ $(RBCONFIG): $(tooldir)/mkconfig.rb config.status $(srcdir)/version.h $(srcdir)/
 test-rubyspec: test-spec
 yes-test-rubyspec: yes-test-spec
 
-yes-test-spec-precheck: yes-test-all-precheck yes-fake prepare-gems
+yes-test-spec-precheck: yes-test-all-precheck yes-fake
 
 test-spec: $(TEST_RUNNABLE)-test-spec
 yes-test-spec: yes-test-spec-precheck
@@ -1563,11 +1563,11 @@ no-test-bundled-gems-prepare: no-test-bundled-gems-precheck
 yes-test-bundled-gems-prepare: yes-test-bundled-gems-precheck
 	$(ACTIONS_GROUP)
 	$(XRUBY) -C "$(srcdir)" bin/gem install --no-document \
-		--install-dir .bundle --conservative "hoe" "json-schema" "test-unit-rr" "ipaddr" "forwardable" "ruby2_keywords"
+		--install-dir .bundle --conservative "hoe" "json-schema" "test-unit-rr" "ipaddr" "forwardable" "singleton" "ruby2_keywords"
 	$(ACTIONS_ENDGROUP)
 
 PREPARE_BUNDLED_GEMS = test-bundled-gems-prepare
-test-bundled-gems: $(TEST_RUNNABLE)-test-bundled-gems
+test-bundled-gems: $(TEST_RUNNABLE)-test-bundled-gems $(TEST_RUNNABLE)-test-bundled-gems-spec
 yes-test-bundled-gems: test-bundled-gems-run
 no-test-bundled-gems:
 
@@ -1577,6 +1577,15 @@ no-test-bundled-gems:
 BUNDLED_GEMS =
 test-bundled-gems-run: $(PREPARE_BUNDLED_GEMS)
 	$(gnumake_recursive)$(Q) $(XRUBY) $(tooldir)/test-bundled-gems.rb $(BUNDLED_GEMS)
+
+test-bundled-gems-spec: $(TEST_RUNNABLE)-test-bundled-gems-spec
+yes-test-bundled-gems-spec: yes-test-spec-precheck $(PREPARE_BUNDLED_GEMS)
+	$(ACTIONS_GROUP)
+	$(gnumake_recursive)$(Q) \
+	$(RUNRUBY) -r./$(arch)-fake -r$(tooldir)/rubyspec_temp \
+		$(srcdir)/spec/mspec/bin/mspec run -B $(srcdir)/spec/bundled_gems.mspec $(MSPECOPT) $(SPECOPTS)
+	$(ACTIONS_ENDGROUP)
+no-test-bundled-gems-spec:
 
 test-syntax-suggest-precheck: $(TEST_RUNNABLE)-test-syntax-suggest-precheck
 no-test-syntax-suggest-precheck:
