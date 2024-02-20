@@ -292,18 +292,6 @@ enc_symname_type(const char *name, long len, void *enc, unsigned int allowed_att
     return rb_enc_symname_type(name, len, (rb_encoding *)enc, allowed_attrset);
 }
 
-static ID
-check_id_cstr(const char *ptr, long len, void *enc)
-{
-    return rb_check_id_cstr(ptr, len, (rb_encoding *)enc);
-}
-
-static VALUE
-setup_fake_str(struct RString *fake_str, const char *name, long len, void *enc)
-{
-    return rb_setup_fake_str(fake_str, name, len, (rb_encoding *)enc);
-}
-
 typedef struct {
     struct parser_params *parser;
     rb_encoding *enc;
@@ -368,12 +356,6 @@ static VALUE
 syntax_error_new(void)
 {
     return rb_class_new_instance(0, 0, rb_eSyntaxError);
-}
-
-static int
-obj_frozen(VALUE obj)
-{
-    return (int)RB_OBJ_FROZEN(obj);
 }
 
 static VALUE
@@ -523,7 +505,6 @@ static const rb_parser_config_t rb_global_parser_config = {
 
     .obj_freeze = rb_obj_freeze,
     .obj_hide = rb_obj_hide,
-    .obj_frozen = obj_frozen,
     .type_p = type_p,
     .obj_freeze_raw = OBJ_FREEZE_RAW,
 
@@ -535,17 +516,13 @@ static const rb_parser_config_t rb_global_parser_config = {
     .ary_new = rb_ary_new,
     .ary_push = rb_ary_push,
     .ary_new_from_args = rb_ary_new_from_args,
-    .ary_pop = rb_ary_pop,
-    .ary_last = rb_ary_last,
     .ary_unshift = rb_ary_unshift,
     .ary_new2 = rb_ary_new2,
-    .ary_entry = rb_ary_entry,
     .ary_clear = rb_ary_clear,
     .ary_modify = rb_ary_modify,
     .array_len = rb_array_len,
     .array_aref = RARRAY_AREF,
 
-    .sym_intern_ascii_cstr = rb_sym_intern_ascii_cstr,
     .make_temporary_id = rb_make_temporary_id,
     .is_local_id = is_local_id2,
     .is_attrset_id = is_attrset_id2,
@@ -558,17 +535,14 @@ static const rb_parser_config_t rb_global_parser_config = {
     .intern_str = rb_intern_str,
     .is_notop_id = is_notop_id2,
     .enc_symname_type = enc_symname_type,
-    .str_intern = rb_str_intern,
     .id2name = rb_id2name,
     .id2str = rb_id2str,
     .id2sym = rb_id2sym,
     .sym2id = rb_sym2id,
-    .check_id_cstr = check_id_cstr,
 
     .str_catf = rb_str_catf,
     .str_cat_cstr = rb_str_cat_cstr,
     .str_subseq = rb_str_subseq,
-    .str_dup = rb_str_dup,
     .str_new_frozen = rb_str_new_frozen,
     .str_buf_new = rb_str_buf_new,
     .str_buf_cat = rb_str_buf_cat,
@@ -578,12 +552,10 @@ static const rb_parser_config_t rb_global_parser_config = {
     .str_resize = rb_str_resize,
     .str_new = rb_str_new,
     .str_new_cstr = rb_str_new_cstr,
-    .setup_fake_str = setup_fake_str,
     .fstring = rb_fstring,
     .is_ascii_string = is_ascii_string2,
     .enc_str_new = enc_str_new,
     .enc_str_buf_cat = enc_str_buf_cat,
-    .enc_str_coderange = rb_enc_str_coderange,
     .str_buf_append = rb_str_buf_append,
     .str_vcatf = rb_str_vcatf,
     .string_value_cstr = rb_string_value_cstr,
@@ -643,7 +615,6 @@ static const rb_parser_config_t rb_global_parser_config = {
     .encoding_set = encoding_set,
     .encoding_is_ascii8bit = encoding_is_ascii8bit,
     .usascii_encoding = usascii_encoding,
-    .enc_coderange_broken = ENC_CODERANGE_BROKEN,
 
     .ractor_make_shareable = rb_ractor_make_shareable,
 
