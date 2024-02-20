@@ -2046,6 +2046,16 @@ assert_equal '[97, :nil, 97, :nil, :raised]', %q{
   [getbyte("a", 0), getbyte("a", 1), getbyte("a", -1), getbyte("a", -2), getbyte("a", "a")]
 } unless rjit_enabled? # Not yet working on RJIT
 
+# non-leaf String#byteslice
+assert_equal 'TypeError', %q{
+  def ccall = "".byteslice(nil, nil)
+  begin
+    ccall
+  rescue => e
+    e.class
+  end
+}
+
 # Test << operator on string subclass
 assert_equal 'abab', %q{
   class MyString < String; end
@@ -4559,15 +4569,6 @@ assert_equal '[1, []]', %q{
   call_site([1])
 }
 
-# splat+kw_splat+opt+rest
-assert_equal '[1, []]', %q{
-  def opt_rest(a = 0, *rest) = [a, rest]
-
-  def call_site(args) = opt_rest(*args, **nil)
-
-  call_site([1])
-}
-
 # splat and nil kw_splat
 assert_equal 'ok', %q{
   def identity(x) = x
@@ -4575,4 +4576,10 @@ assert_equal 'ok', %q{
   def splat_nil_kw_splat(args) = identity(*args, **nil)
 
   splat_nil_kw_splat([:ok])
+}
+
+# empty splat and kwsplat into leaf builtins
+assert_equal '[1, 1, 1]', %q{
+  empty = []
+  [1.abs(*empty), 1.abs(**nil), 1.bit_length(*empty, **nil)]
 }

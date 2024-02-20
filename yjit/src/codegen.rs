@@ -411,8 +411,10 @@ fn jit_prepare_non_leaf_call(
     jit: &mut JITState,
     asm: &mut Assembler
 ) {
-    // Prepare for GC. This also sets PC, which prepares for showing a backtrace.
-    jit_prepare_call_with_gc(jit, asm);
+    // Prepare for GC. Setting PC also prepares for showing a backtrace.
+    jit.record_boundary_patch_point = true; // VM lock could trigger invalidation
+    jit_save_pc(jit, asm); // for allocation tracing
+    gen_save_sp(asm); // protect objects from GC
 
     // In case the routine calls Ruby methods, it can set local variables
     // through Kernel#binding, rb_debug_inspector API, and other means.
@@ -429,6 +431,9 @@ fn jit_prepare_call_with_gc(
     jit.record_boundary_patch_point = true; // VM lock could trigger invalidation
     jit_save_pc(jit, asm); // for allocation tracing
     gen_save_sp(asm); // protect objects from GC
+
+    // Expect a leaf ccall(). You should use jit_prepare_non_leaf_call() if otherwise.
+    asm.expect_leaf_ccall();
 }
 
 /// Record the current codeblock write position for rewriting into a jump into
@@ -1083,6 +1088,9 @@ pub fn gen_single_block(
             jit_perf_symbol_push!(jit, &mut asm, &insn_name(opcode), PerfMap::Codegen);
             status = gen_fn(&mut jit, &mut asm, ocb);
             jit_perf_symbol_pop!(jit, &mut asm, PerfMap::Codegen);
+
+            #[cfg(debug_assertions)]
+            assert!(!asm.get_leaf_ccall(), "ccall() wasn't used after leaf_ccall was set in {}", insn_name(opcode));
         }
 
         // If we can't compile this instruction
@@ -5376,18 +5384,26 @@ fn jit_rb_str_byteslice(
     argc: i32,
     _known_recv_class: Option<VALUE>,
 ) -> bool {
-    asm_comment!(asm, "String#byteslice");
-
     if argc != 2 {
         return false
     }
 
-    // Raises when non-integers are passed in
-    jit_prepare_non_leaf_call(jit, asm);
-
     let len = asm.stack_opnd(0);
     let beg = asm.stack_opnd(1);
     let recv = asm.stack_opnd(2);
+
+    // rb_str_byte_substr should be leaf if indexes are fixnums
+    match (asm.ctx.get_opnd_type(beg.into()), asm.ctx.get_opnd_type(len.into())) {
+        (Type::Fixnum, Type::Fixnum) => {},
+        // Raises when non-integers are passed in, which requires the method frame
+        // to be pushed for the backtrace
+        _ => return false,
+    }
+    asm_comment!(asm, "String#byteslice");
+
+    // rb_str_byte_substr allocates a substring
+    jit_prepare_call_with_gc(jit, asm);
+
     let ret_opnd = asm.ccall(rb_str_byte_substr as *const u8, vec![recv, beg, len]);
     asm.stack_pop(3);
 
@@ -5398,7 +5414,7 @@ fn jit_rb_str_byteslice(
 }
 
 fn jit_rb_str_getbyte(
-    jit: &mut JITState,
+    _jit: &mut JITState,
     asm: &mut Assembler,
     _ocb: &mut OutlinedCb,
     _ci: *const rb_callinfo,
@@ -5407,7 +5423,6 @@ fn jit_rb_str_getbyte(
     _argc: i32,
     _known_recv_class: Option<VALUE>,
 ) -> bool {
-    asm_comment!(asm, "String#getbyte");
     extern "C" {
         fn rb_str_getbyte(str: VALUE, index: VALUE) -> VALUE;
     }
@@ -5417,9 +5432,11 @@ fn jit_rb_str_getbyte(
 
     // rb_str_getbyte should be leaf if the index is a fixnum
     if asm.ctx.get_opnd_type(index.into()) != Type::Fixnum {
-        // Raises when non-integers are passed in
-        jit_prepare_non_leaf_call(jit, asm);
+        // Raises when non-integers are passed in, which requires the method frame
+        // to be pushed for the backtrace
+        return false;
     }
+    asm_comment!(asm, "String#getbyte");
 
     let ret_opnd = asm.ccall(rb_str_getbyte as *const u8, vec![recv, index]);
     asm.stack_pop(2); // Keep them on stack during ccall for GC
@@ -5507,10 +5524,11 @@ fn jit_rb_str_concat(
     // Guard that the concat argument is a string
     guard_object_is_string(asm, asm.stack_opnd(0), StackOpnd(0), Counter::guard_send_not_string);
 
-    // Guard buffers from GC since rb_str_buf_append may allocate. During the VM lock on GC,
-    // other Ractors may trigger global invalidation, so we need ctx.clear_local_types().
-    // PC is used on errors like Encoding::CompatibilityError raised by rb_str_buf_append.
+    // Guard buffers from GC since rb_str_buf_append may allocate.
     jit_prepare_non_leaf_call(jit, asm);
+    // rb_str_buf_append may raise Encoding::CompatibilityError, but we accept compromised
+    // backtraces on this method since the interpreter does the same thing on opt_ltlt.
+    asm.allow_non_leaf_ccall();
     asm.spill_temps(); // For ccall. Unconditionally spill them for RegTemps consistency.
 
     let concat_arg = asm.stack_pop(1);
@@ -6037,11 +6055,8 @@ fn gen_send_cfunc(
         return None;
     }
 
-    // Don't JIT calls with keyword splat
-    if flags & VM_CALL_KW_SPLAT != 0 {
-        gen_counter_incr(asm, Counter::send_cfunc_kw_splat);
-        return None;
-    }
+    exit_if_kwsplat_non_nil(asm, flags, Counter::send_cfunc_kw_splat_non_nil)?;
+    let kw_splat = flags & VM_CALL_KW_SPLAT != 0;
 
     let kw_arg = unsafe { vm_ci_kwarg(ci) };
     let kw_arg_num = if kw_arg.is_null() {
@@ -6065,10 +6080,17 @@ fn gen_send_cfunc(
     gen_counter_incr(asm, Counter::num_send_cfunc);
 
     // Delegate to codegen for C methods if we have it.
-    if kw_arg.is_null() && flags & VM_CALL_OPT_SEND == 0 && flags & VM_CALL_ARGS_SPLAT == 0 && (cfunc_argc == -1 || argc == cfunc_argc) {
+    if kw_arg.is_null() &&
+            !kw_splat &&
+            flags & VM_CALL_OPT_SEND == 0 &&
+            flags & VM_CALL_ARGS_SPLAT == 0 &&
+            (cfunc_argc == -1 || argc == cfunc_argc) {
         let expected_stack_after = asm.ctx.get_stack_size() as i32 - argc;
         if let Some(known_cfunc_codegen) = lookup_cfunc_codegen(unsafe { (*cme).def }) {
-            if perf_call!("gen_send_cfunc: ", known_cfunc_codegen(jit, asm, ocb, ci, cme, block, argc, recv_known_class)) {
+            // We don't push a frame for specialized cfunc codegen, so the generated code must be leaf.
+            if asm.with_leaf_ccall(|asm|
+                perf_call!("gen_send_cfunc: ", known_cfunc_codegen(jit, asm, ocb, ci, cme, block, argc, recv_known_class))
+            ) {
                 assert_eq!(expected_stack_after, asm.ctx.get_stack_size() as i32);
                 gen_counter_incr(asm, Counter::num_send_cfunc_inline);
                 // cfunc codegen generated code. Terminate the block so
@@ -6097,6 +6119,11 @@ fn gen_send_cfunc(
     } else {
         argc - kw_arg_num + 1
     };
+
+    // Exclude the kw_splat hash from arity check
+    if kw_splat {
+        passed_argc -= 1;
+    }
 
     // If the argument count doesn't match
     if cfunc_argc >= 0 && cfunc_argc != passed_argc && flags & VM_CALL_ARGS_SPLAT == 0 {
@@ -6145,6 +6172,14 @@ fn gen_send_cfunc(
         _ => {
             assert!(false);
         }
+    }
+
+    // Pop the empty kw_splat hash
+    if kw_splat {
+        // Only `**nil` is supported right now. Checked in exit_if_kwsplat_non_nil()
+        assert_eq!(Type::Nil, asm.ctx.get_opnd_type(StackOpnd(0)));
+        asm.stack_pop(1);
+        argc -= 1;
     }
 
     // push_splat_args does stack manipulation so we can no longer side exit
@@ -6559,7 +6594,7 @@ fn gen_send_iseq(
     exit_if_stack_too_large(iseq)?;
     exit_if_tail_call(asm, ci)?;
     exit_if_has_post(asm, iseq)?;
-    exit_if_kwsplat_non_nil(asm, flags)?;
+    exit_if_kwsplat_non_nil(asm, flags, Counter::send_iseq_kw_splat_non_nil)?;
     exit_if_has_rest_and_captured(asm, iseq_has_rest, captured_opnd)?;
     exit_if_has_kwrest_and_captured(asm, has_kwrest, captured_opnd)?;
     exit_if_has_rest_and_supplying_kws(asm, iseq_has_rest, supplying_kws)?;
@@ -6699,7 +6734,8 @@ fn gen_send_iseq(
     let builtin_func_raw = unsafe { rb_yjit_builtin_function(iseq) };
     let builtin_func = if builtin_func_raw.is_null() { None } else { Some(builtin_func_raw) };
     let opt_send_call = flags & VM_CALL_OPT_SEND != 0; // .send call is not currently supported for builtins
-    if let (None, Some(builtin_info), true, false) = (block, builtin_func, builtin_attrs & BUILTIN_ATTR_LEAF != 0, opt_send_call) {
+    if let (None, Some(builtin_info), true, false, None | Some(0)) =
+           (block, builtin_func, builtin_attrs & BUILTIN_ATTR_LEAF != 0, opt_send_call, splat_array_length) {
         let builtin_argc = unsafe { (*builtin_info).argc };
         if builtin_argc + 1 < (C_ARG_OPNDS.len() as i32) {
             // We pop the block arg without using it because:
@@ -6711,6 +6747,16 @@ fn gen_send_iseq(
                     gen_counter_incr(asm, Counter::send_iseq_leaf_builtin_block_arg_block_param);
                     return None;
                 }
+                asm.stack_pop(1);
+            }
+
+            // Pop empty kw_splat hash which passes nothing (exit_if_kwsplat_non_nil())
+            if kw_splat {
+                asm.stack_pop(1);
+            }
+
+            // Pop empty splat array which passes nothing
+            if let Some(0) = splat_array_length {
                 asm.stack_pop(1);
             }
 
@@ -7560,10 +7606,10 @@ fn exit_if_has_post(asm: &mut Assembler, iseq: *const rb_iseq_t) -> Option<()> {
 }
 
 #[must_use]
-fn exit_if_kwsplat_non_nil(asm: &mut Assembler, flags: u32) -> Option<()> {
+fn exit_if_kwsplat_non_nil(asm: &mut Assembler, flags: u32, counter: Counter) -> Option<()> {
     let kw_splat = flags & VM_CALL_KW_SPLAT != 0;
     let kw_splat_stack = StackOpnd((flags & VM_CALL_ARGS_BLOCKARG != 0).into());
-    exit_if(asm, kw_splat && asm.ctx.get_opnd_type(kw_splat_stack) != Type::Nil, Counter::send_iseq_kw_splat_non_nil)
+    exit_if(asm, kw_splat && asm.ctx.get_opnd_type(kw_splat_stack) != Type::Nil, counter)
 }
 
 #[must_use]
