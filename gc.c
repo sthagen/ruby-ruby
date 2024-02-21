@@ -3745,6 +3745,7 @@ obj_free(rb_objspace_t *objspace, VALUE obj)
           case imemo_callinfo:
             {
                 const struct rb_callinfo * ci = ((const struct rb_callinfo *)obj);
+                rb_vm_ci_free(ci);
                 if (ci->kwarg) {
                     ((struct rb_callinfo_kwarg *)ci->kwarg)->references--;
                     if (ci->kwarg->references == 0) xfree((void *)ci->kwarg);
@@ -10897,16 +10898,20 @@ gc_update_references(rb_objspace_t *objspace)
  *
  * Returns information about object moved in the most recent \GC compaction.
  *
- * The returned +hash+ has the following keys:
+ * The returned +hash+ contains the following keys:
  *
- * - +:considered+: a hash containing the type of the object as the key and
- *   the number of objects of that type that were considered for movement.
- * - +:moved+: a hash containing the type of the object as the key and the
- *   number of objects of that type that were actually moved.
- * - +:moved_up+: a hash containing the type of the object as the key and the
- *   number of objects of that type that were increased in size.
- * - +:moved_down+: a hash containing the type of the object as the key and
- *   the number of objects of that type that were decreased in size.
+ * [considered]
+ *   Hash containing the type of the object as the key and the number of
+ *   objects of that type that were considered for movement.
+ * [moved]
+ *   Hash containing the type of the object as the key and the number of
+ *   objects of that type that were actually moved.
+ * [moved_up]
+ *   Hash containing the type of the object as the key and the number of
+ *   objects of that type that were increased in size.
+ * [moved_down]
+ *   Hash containing the type of the object as the key and the number of
+ *   objects of that type that were decreased in size.
  *
  * Some objects can't be moved (due to pinning) so these numbers can be used to
  * calculate compaction efficiency.
