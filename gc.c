@@ -3013,11 +3013,11 @@ rb_imemo_name(enum imemo_type type)
 #undef rb_imemo_new
 
 VALUE
-rb_imemo_new(enum imemo_type type, VALUE v1, VALUE v2, VALUE v3, VALUE v0)
+rb_imemo_new(enum imemo_type type, VALUE v0)
 {
     size_t size = RVALUE_SIZE;
     VALUE flags = T_IMEMO | (type << FL_USHIFT);
-    return newobj_of(GET_RACTOR(), v0, flags, v1, v2, v3, TRUE, size);
+    return newobj_of(GET_RACTOR(), v0, flags, 0, 0, 0, TRUE, size);
 }
 
 static VALUE
@@ -3060,6 +3060,9 @@ imemo_memsize(VALUE obj)
       case imemo_ast:
         size += rb_ast_memsize(&RANY(obj)->as.imemo.ast);
         break;
+      case imemo_callcache:
+      case imemo_callinfo:
+      case imemo_constcache:
       case imemo_cref:
       case imemo_svar:
       case imemo_throw_data:
@@ -3068,7 +3071,7 @@ imemo_memsize(VALUE obj)
       case imemo_parser_strterm:
         break;
       default:
-        /* unreachable */
+        rb_bug("unreachable");
         break;
     }
     return size;
@@ -3076,9 +3079,9 @@ imemo_memsize(VALUE obj)
 
 #if IMEMO_DEBUG
 VALUE
-rb_imemo_new_debug(enum imemo_type type, VALUE v1, VALUE v2, VALUE v3, VALUE v0, const char *file, int line)
+rb_imemo_new_debug(enum imemo_type type, VALUE v0, const char *file, int line)
 {
-    VALUE memo = rb_imemo_new(type, v1, v2, v3, v0);
+    VALUE memo = rb_imemo_new(type, v0);
     fprintf(stderr, "memo %p (type: %d) @ %s:%d\n", (void *)memo, imemo_type(memo), file, line);
     return memo;
 }
