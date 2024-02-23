@@ -57,24 +57,10 @@ module Prism
 
   private_constant :HeredocQuery
 
-  class FloatNode < Node
-    # Returns the value of the node as a Ruby Float.
-    def value
-      Float(slice)
-    end
-  end
-
   class ImaginaryNode < Node
     # Returns the value of the node as a Ruby Complex.
     def value
       Complex(0, numeric.value)
-    end
-  end
-
-  class IntegerNode < Node
-    # Returns the value of the node as a Ruby Integer.
-    def value
-      Integer(slice)
     end
   end
 
@@ -86,6 +72,19 @@ module Prism
   end
 
   class ConstantReadNode < Node
+    # Returns the list of parts for the full name of this constant.
+    # For example: [:Foo]
+    def full_name_parts
+      [name]
+    end
+
+    # Returns the full name of this constant. For example: "Foo"
+    def full_name
+      name.to_s
+    end
+  end
+
+  class ConstantWriteNode < Node
     # Returns the list of parts for the full name of this constant.
     # For example: [:Foo]
     def full_name_parts
