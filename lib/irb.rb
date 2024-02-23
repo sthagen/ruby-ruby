@@ -1,4 +1,4 @@
-# frozen_string_literal: false
+# frozen_string_literal: true
 #
 #   irb.rb - irb main module
 #       by Keiju ISHITSUKA(keiju@ruby-lang.org)
@@ -903,8 +903,8 @@ module IRB
     # parsed as a :method_add_arg and the output won't be suppressed
 
     PROMPT_MAIN_TRUNCATE_LENGTH = 32
-    PROMPT_MAIN_TRUNCATE_OMISSION = '...'.freeze
-    CONTROL_CHARACTERS_PATTERN = "\x00-\x1F".freeze
+    PROMPT_MAIN_TRUNCATE_OMISSION = '...'
+    CONTROL_CHARACTERS_PATTERN = "\x00-\x1F"
 
     # Returns the current context of this irb session
     attr_reader :context
@@ -1056,7 +1056,7 @@ module IRB
       return read_input(prompt) if @context.io.respond_to?(:check_termination)
 
       # nomultiline
-      code = ''
+      code = +''
       line_offset = 0
       loop do
         line = read_input(prompt)
@@ -1138,7 +1138,6 @@ module IRB
       end
       if @context.io.respond_to?(:dynamic_prompt)
         @context.io.dynamic_prompt do |lines|
-          lines << '' if lines.empty?
           tokens = RubyLex.ripper_lex_without_warning(lines.map{ |l| l + "\n" }.join, local_variables: @context.local_variables)
           line_results = IRB::NestingParser.parse_by_line(tokens)
           tokens_until_line = []
