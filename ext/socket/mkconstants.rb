@@ -748,6 +748,7 @@ SHUT_RDWR	2	Shut down the both sides of the socket
 
 IPV6_JOIN_GROUP	nil	Join a group membership
 IPV6_LEAVE_GROUP	nil	Leave a group membership
+IPV6_MTU_DISCOVER nil Path MTU discovery
 IPV6_MULTICAST_HOPS	nil	IP6 multicast hops
 IPV6_MULTICAST_IF	nil	IP6 multicast interface
 IPV6_MULTICAST_LOOP	nil	IP6 multicast loopback
@@ -762,6 +763,7 @@ IPV6_NEXTHOP	nil	Next hop address
 IPV6_PATHMTU	nil	Retrieve current path MTU
 IPV6_PKTINFO	nil	Receive packet information with datagram
 IPV6_RECVDSTOPTS	nil	Receive all IP6 options for response
+IPV6_RECVERR	nil	Enable extended reliable error message passing
 IPV6_RECVHOPLIMIT	nil	Receive hop limit with datagram
 IPV6_RECVHOPOPTS	nil	Receive hop-by-hop options
 IPV6_RECVPKTINFO	nil	Receive destination IP address and incoming interface

@@ -398,7 +398,6 @@ fstr_update_callback(st_data_t *key, st_data_t *value, st_data_t data, int exist
     }
 }
 
-RUBY_FUNC_EXPORTED
 VALUE
 rb_fstring(VALUE str)
 {
@@ -3098,7 +3097,7 @@ rb_str_unlocktmp(VALUE str)
     return str;
 }
 
-RUBY_FUNC_EXPORTED VALUE
+VALUE
 rb_str_locktmp_ensure(VALUE str, VALUE (*func)(VALUE), VALUE arg)
 {
     rb_str_locktmp(str);
@@ -6174,7 +6173,7 @@ rb_str_getbyte(VALUE str, VALUE index)
  *
  *  Related: String#getbyte.
  */
-static VALUE
+VALUE
 rb_str_setbyte(VALUE str, VALUE index, VALUE value)
 {
     long pos = NUM2LONG(index);
