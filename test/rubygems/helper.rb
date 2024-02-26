@@ -76,6 +76,8 @@ class Gem::TestCase < Test::Unit::TestCase
 
   attr_accessor :uri # :nodoc:
 
+  @@tempdirs = []
+
   def assert_activate(expected, *specs)
     specs.each do |spec|
       case spec
@@ -471,6 +473,13 @@ class Gem::TestCase < Test::Unit::TestCase
     end
 
     @back_ui.close
+
+    refute_directory_exists @tempdir, "may be still in use"
+    ghosts = @@tempdirs.filter_map do |test_name, tempdir|
+      test_name if File.exist?(tempdir)
+    end
+    @@tempdirs << [method_name, @tempdir]
+    assert_empty ghosts
   end
 
   def credential_setup
