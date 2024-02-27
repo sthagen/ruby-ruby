@@ -260,12 +260,10 @@ void rb_gc_ref_update_table_values_only(st_table *tbl);
 
 RUBY_SYMBOL_EXPORT_BEGIN
 /* exports for objspace module */
-size_t rb_objspace_data_type_memsize(VALUE obj);
 void rb_objspace_reachable_objects_from(VALUE obj, void (func)(VALUE, void *), void *data);
 void rb_objspace_reachable_objects_from_root(void (func)(const char *category, VALUE, void *), void *data);
 int rb_objspace_markable_object_p(VALUE obj);
 int rb_objspace_internal_object_p(VALUE obj);
-int rb_objspace_marked_object_p(VALUE obj);
 
 void rb_objspace_each_objects(
     int (*callback)(void *start, void *end, size_t stride, void *data),
