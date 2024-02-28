@@ -4372,29 +4372,15 @@ rb_objspace_call_finalizer(rb_objspace_t *objspace)
     ATOMIC_SET(finalizing, 0);
 }
 
-static inline int
-is_swept_object(VALUE ptr)
-{
-    struct heap_page *page = GET_HEAP_PAGE(ptr);
-    return page->flags.before_sweep ? FALSE : TRUE;
-}
-
 /* garbage objects will be collected soon. */
-static inline int
+static inline bool
 is_garbage_object(rb_objspace_t *objspace, VALUE ptr)
 {
-    if (!is_lazy_sweeping(objspace) ||
-        is_swept_object(ptr) ||
-        MARKED_IN_BITMAP(GET_HEAP_MARK_BITS(ptr), ptr)) {
-
-        return FALSE;
-    }
-    else {
-        return TRUE;
-    }
+    return is_lazy_sweeping(objspace) && GET_HEAP_PAGE(ptr)->flags.before_sweep &&
+        !MARKED_IN_BITMAP(GET_HEAP_MARK_BITS(ptr), ptr);
 }
 
-static inline int
+static inline bool
 is_live_object(rb_objspace_t *objspace, VALUE ptr)
 {
     switch (BUILTIN_TYPE(ptr)) {
@@ -4406,18 +4392,13 @@ is_live_object(rb_objspace_t *objspace, VALUE ptr)
         break;
     }
 
-    if (!is_garbage_object(objspace, ptr)) {
-        return TRUE;
-    }
-    else {
-        return FALSE;
-    }
+    return !is_garbage_object(objspace, ptr);
 }
 
 static inline int
 is_markable_object(VALUE obj)
 {
-    if (rb_special_const_p(obj)) return FALSE; /* special const is not markable */
+    if (RB_SPECIAL_CONST_P(obj)) return FALSE; /* special const is not markable */
     check_rvalue_consistency(obj);
     return TRUE;
 }
@@ -7573,8 +7554,20 @@ verify_internal_consistency_i(void *page_start, void *page_end, size_t stride,
         }
         else {
             if (BUILTIN_TYPE(obj) == T_ZOMBIE) {
-                GC_ASSERT((RBASIC(obj)->flags & ~ZOMBIE_OBJ_KEPT_FLAGS) == T_ZOMBIE);
                 data->zombie_object_count++;
+
+                if ((RBASIC(obj)->flags & ~ZOMBIE_OBJ_KEPT_FLAGS) != T_ZOMBIE) {
+                    fprintf(stderr, "verify_internal_consistency_i: T_ZOMBIE has extra flags set: %s\n",
+                            obj_info(obj));
+                    data->err_count++;
+                }
+
+                if (!!FL_TEST(obj, FL_FINALIZE) != !!st_is_member(finalizer_table, obj)) {
+                    fprintf(stderr, "verify_internal_consistency_i: FL_FINALIZE %s but %s finalizer_table: %s\n",
+                            FL_TEST(obj, FL_FINALIZE) ? "set" : "not set", st_is_member(finalizer_table, obj) ? "in" : "not in",
+                            obj_info(obj));
+                    data->err_count++;
+                }
             }
         }
         if (poisoned) {
@@ -13575,7 +13568,7 @@ rb_gcdebug_print_obj_condition(VALUE obj)
 
     if (is_lazy_sweeping(objspace)) {
         fprintf(stderr, "lazy sweeping?: true\n");
-        fprintf(stderr, "swept?: %s\n", is_swept_object(obj) ? "done" : "not yet");
+        fprintf(stderr, "page swept?: %s\n", GET_HEAP_PAGE(ptr)->flags.before_sweep ? "false" : "true");
     }
     else {
         fprintf(stderr, "lazy sweeping?: false\n");
