@@ -6324,9 +6324,8 @@ fn gen_send_cfunc(
     // Push a dynamic number of items from the splat array to the stack when calling a vargs method
     let dynamic_splat_size = if variable_splat {
         asm_comment!(asm, "variable length splat");
-        let just_splat = usize::from(!kw_splat && kw_arg.is_null()).into();
         let stack_splat_array = asm.lea(asm.stack_opnd(0));
-        Some(asm.ccall(rb_yjit_splat_varg_cfunc as _, vec![stack_splat_array, just_splat]))
+        Some(asm.ccall(rb_yjit_splat_varg_cfunc as _, vec![stack_splat_array]))
     } else {
         None
     };
@@ -6639,8 +6638,14 @@ fn gen_send_bmethod(
     perf_call! { gen_send_iseq(jit, asm, ocb, iseq, ci, frame_type, Some(capture.ep), cme, block, flags, argc, None) }
 }
 
+/// The kind of a value an ISEQ returns
+enum IseqReturn {
+    Value(VALUE),
+    Receiver,
+}
+
 /// Return the ISEQ's return value if it consists of only putnil/putobject and leave.
-fn iseq_get_return_value(iseq: IseqPtr) -> Option<VALUE> {
+fn iseq_get_return_value(iseq: IseqPtr, captured_opnd: Option<Opnd>) -> Option<IseqReturn> {
     // Expect only two instructions and one possible operand
     let iseq_size = unsafe { get_iseq_encoded_size(iseq) };
     if !(2..=3).contains(&iseq_size) {
@@ -6656,10 +6661,12 @@ fn iseq_get_return_value(iseq: IseqPtr) -> Option<VALUE> {
         return None;
     }
     match first_insn {
-        YARVINSN_putnil => Some(Qnil),
-        YARVINSN_putobject => unsafe { Some(*rb_iseq_pc_at_idx(iseq, 1)) },
-        YARVINSN_putobject_INT2FIX_0_ => Some(VALUE::fixnum_from_usize(0)),
-        YARVINSN_putobject_INT2FIX_1_ => Some(VALUE::fixnum_from_usize(1)),
+        YARVINSN_putnil => Some(IseqReturn::Value(Qnil)),
+        YARVINSN_putobject => Some(IseqReturn::Value(unsafe { *rb_iseq_pc_at_idx(iseq, 1) })),
+        YARVINSN_putobject_INT2FIX_0_ => Some(IseqReturn::Value(VALUE::fixnum_from_usize(0))),
+        YARVINSN_putobject_INT2FIX_1_ => Some(IseqReturn::Value(VALUE::fixnum_from_usize(1))),
+        // We don't support invokeblock for now. Such ISEQs are likely not used by blocks anyway.
+        YARVINSN_putself if captured_opnd.is_none() => Some(IseqReturn::Receiver),
         _ => None,
     }
 }
@@ -6935,16 +6942,24 @@ fn gen_send_iseq(
     }
 
     // Inline simple ISEQs whose return value is known at compile time
-    if let (Some(value), None, false) = (iseq_get_return_value(iseq), block_arg_type, opt_send_call) {
+    if let (Some(value), None, false) = (iseq_get_return_value(iseq, captured_opnd), block_arg_type, opt_send_call) {
         asm_comment!(asm, "inlined simple ISEQ");
         gen_counter_incr(asm, Counter::num_send_iseq_inline);
 
-        // Pop receiver and arguments
-        asm.stack_pop(argc as usize + if captured_opnd.is_some() { 0 } else { 1 });
+        match value {
+            IseqReturn::Value(value) => {
+                // Pop receiver and arguments
+                asm.stack_pop(argc as usize + if captured_opnd.is_some() { 0 } else { 1 });
 
-        // Push the return value
-        let stack_ret = asm.stack_push(Type::from(value));
-        asm.mov(stack_ret, value.into());
+                // Push the return value
+                let stack_ret = asm.stack_push(Type::from(value));
+                asm.mov(stack_ret, value.into());
+            },
+            IseqReturn::Receiver => {
+                // Just pop arguments and leave the receiver on stack
+                asm.stack_pop(argc as usize);
+            }
+        }
 
         // Let guard chains share the same successor
         jump_to_next_insn(jit, asm, ocb);
@@ -8006,6 +8021,12 @@ fn gen_send_dynamic<F: Fn(&mut Assembler) -> Opnd>(
 
     // Save PC and SP to prepare for dynamic dispatch
     jit_prepare_non_leaf_call(jit, asm);
+
+    // Squash stack canary that might be left over from elsewhere
+    assert_eq!(false, asm.get_leaf_ccall());
+    if cfg!(debug_assertions) {
+        asm.store(asm.ctx.sp_opnd(0), 0.into());
+    }
 
     // Dispatch a method
     let ret = vm_sendish(asm);

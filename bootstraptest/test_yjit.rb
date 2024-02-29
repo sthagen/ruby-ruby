@@ -4513,6 +4513,10 @@ assert_equal 'true', %q{
   def entry = yield
   entry { true }
 }
+assert_equal 'sym', %q{
+  def entry = :sym.to_sym
+  entry
+}
 
 assert_normal_exit %q{
   ivars = 1024.times.map { |i| "@iv_#{i} = #{i}\n" }.join
@@ -4657,4 +4661,20 @@ assert_equal '[[1, 2, 3], [0, 2, 3], [1, 2, 3], [2, 2, 3], [], [], [{}]]', %q{
   end
 
   test_cfunc_vargs_splat(Foo.new, Array, Hash.ruby2_keywords_hash({}))
+}
+
+# Class#new (arity=-1), splat, and ruby2_keywords
+assert_equal '[0, {1=>1}]', %q{
+  class KwInit
+    attr_reader :init_args
+    def initialize(x = 0, **kw)
+      @init_args = [x, kw]
+    end
+  end
+
+  def test(klass, args)
+    klass.new(*args).init_args
+  end
+
+  test(KwInit, [Hash.ruby2_keywords_hash({1 => 1})])
 }
