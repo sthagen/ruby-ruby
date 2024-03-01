@@ -5,7 +5,7 @@ require_relative "test_helper"
 module Prism
   class CommandLineTest < TestCase
     def test_command_line_p
-      program = Prism.parse("1", command_line_p: true).value
+      program = Prism.parse("1", command_line: "p").value
       statements = program.statements.body
 
       assert_equal 2, statements.length
@@ -14,7 +14,7 @@ module Prism
     end
 
     def test_command_line_n
-      program = Prism.parse("1", command_line_n: true).value
+      program = Prism.parse("1", command_line: "n").value
       statements = program.statements.body
 
       assert_equal 1, statements.length
@@ -30,7 +30,7 @@ module Prism
     end
 
     def test_command_line_a
-      program = Prism.parse("1", command_line_n: true, command_line_a: true).value
+      program = Prism.parse("1", command_line: "na").value
       statements = program.statements.body
 
       assert_equal 1, statements.length
@@ -42,7 +42,7 @@ module Prism
     end
 
     def test_command_line_l
-      program = Prism.parse("1", command_line_n: true, command_line_l: true).value
+      program = Prism.parse("1", command_line: "nl").value
       statements = program.statements.body
 
       assert_equal 1, statements.length
@@ -56,6 +56,14 @@ module Prism
       assert_equal 2, arguments.length
       assert_equal :$/, arguments.first.name
       assert_equal "chomp", arguments.last.elements.first.key.unescaped
+    end
+
+    def test_command_line_e
+      result = Prism.parse("1 if 2..3")
+      assert_equal 2, result.warnings.length
+
+      result = Prism.parse("1 if 2..3", command_line: "e")
+      assert_equal 0, result.warnings.length
     end
   end
 end

@@ -3192,7 +3192,11 @@ optimize_args_splat_no_copy(rb_iseq_t *iseq, INSN *insn, LINK_ELEMENT *niobj,
                                  unsigned int set_flags, unsigned int unset_flags)
 {
     LINK_ELEMENT *iobj = (LINK_ELEMENT *)insn;
-    if (!IS_NEXT_INSN_ID(niobj, send)) {
+    if ((set_flags & VM_CALL_ARGS_BLOCKARG) && (set_flags & VM_CALL_KW_SPLAT) &&
+            IS_NEXT_INSN_ID(niobj, splatkw)) {
+        niobj = niobj->next;
+    }
+    if (!IS_NEXT_INSN_ID(niobj, send) && !IS_NEXT_INSN_ID(niobj, invokesuper)) {
         return false;
     }
     niobj = niobj->next;
@@ -9516,7 +9520,7 @@ compile_super(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *const node, i
             /* rest argument */
             int idx = local_body->local_table_size - local_body->param.rest_start;
             ADD_GETLOCAL(args, node, idx, lvar_level);
-            ADD_INSN1(args, node, splatarray, Qfalse);
+            ADD_INSN1(args, node, splatarray, RBOOL(local_body->param.flags.has_post));
 
             argc = local_body->param.rest_start + 1;
             flag |= VM_CALL_ARGS_SPLAT;
@@ -9532,8 +9536,8 @@ compile_super(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *const node, i
                     int idx = local_body->local_table_size - (post_start + j);
                     ADD_GETLOCAL(args, node, idx, lvar_level);
                 }
-                ADD_INSN1(args, node, newarray, INT2FIX(j));
-                ADD_INSN (args, node, concatarray);
+                ADD_INSN1(args, node, pushtoarray, INT2FIX(j));
+                flag |= VM_CALL_ARGS_SPLAT_MUT;
                 /* argc is settled at above */
             }
             else {
