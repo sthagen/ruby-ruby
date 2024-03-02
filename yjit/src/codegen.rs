@@ -2179,16 +2179,11 @@ fn gen_setlocal_generic(
     let ep_opnd = gen_get_ep(asm, level);
 
     // Fallback because of write barrier
-    if asm.ctx.get_chain_depth() > 0
-    {
-        // Save the PC and SP because it runs GC
-        jit_prepare_call_with_gc(jit, asm);
-
-        // Pop the value to write from the stack
-        let value_opnd = asm.stack_opnd(0);
-
+    if asm.ctx.get_chain_depth() > 0 {
+        // This function should not yield to the GC.
         // void rb_vm_env_write(const VALUE *ep, int index, VALUE v)
         let index = -(ep_offset as i64);
+        let value_opnd = asm.stack_opnd(0);
         asm.ccall(
             rb_vm_env_write as *const u8,
             vec![
@@ -2197,7 +2192,7 @@ fn gen_setlocal_generic(
                 value_opnd,
             ]
         );
-        asm.stack_pop(1); // Keep it on stack during ccall for GC
+        asm.stack_pop(1);
 
         return Some(KeepCompiling);
     }
@@ -7515,7 +7510,7 @@ fn gen_iseq_kw_call(
         unsafe { get_cikw_keyword_len(ci_kwarg) }
     };
     let caller_keyword_len: usize = caller_keyword_len_i32.try_into().unwrap();
-    let anon_kwrest = unsafe { rb_get_iseq_flags_anon_kwrest(iseq) };
+    let anon_kwrest = unsafe { rb_get_iseq_flags_anon_kwrest(iseq) && !get_iseq_flags_has_kw(iseq) };
 
     // This struct represents the metadata about the callee-specified
     // keyword parameters.

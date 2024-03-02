@@ -4415,9 +4415,7 @@ is_live_object(rb_objspace_t *objspace, VALUE ptr)
 static inline int
 is_markable_object(VALUE obj)
 {
-    if (RB_SPECIAL_CONST_P(obj)) return FALSE; /* special const is not markable */
-    check_rvalue_consistency(obj);
-    return TRUE;
+    return !RB_SPECIAL_CONST_P(obj);
 }
 
 int
@@ -8707,14 +8705,6 @@ rb_copy_wb_protected_attribute(VALUE dest, VALUE obj)
     }
 
     check_rvalue_consistency(dest);
-}
-
-/* RGENGC analysis information */
-
-VALUE
-rb_obj_rgengc_writebarrier_protected_p(VALUE obj)
-{
-    return RBOOL(!RVALUE_WB_UNPROTECTED(obj));
 }
 
 VALUE
