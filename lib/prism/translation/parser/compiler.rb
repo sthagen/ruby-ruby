@@ -254,6 +254,10 @@ module Prism
               end
             when :!
               return visit_block(builder.not_op(token(node.message_loc), token(node.opening_loc), visit(node.receiver), token(node.closing_loc)), block)
+            when :=~
+              if (receiver = node.receiver).is_a?(RegularExpressionNode)
+                return builder.match_op(visit(receiver), token(node.message_loc), visit(node.arguments.arguments.first))
+              end
             when :[]
               return visit_block(builder.index(visit(node.receiver), token(node.opening_loc), visit_all(arguments), token(node.closing_loc)), block)
             when :[]=
@@ -1603,7 +1607,11 @@ module Prism
           builder.when(
             token(node.keyword_loc),
             visit_all(node.conditions),
-            srange_find(node.conditions.last.location.end_offset, node.statements&.location&.start_offset || (node.conditions.last.location.end_offset + 1), [";", "then"]),
+            if node.then_keyword_loc
+              token(node.then_keyword_loc)
+            else
+              srange_find(node.conditions.last.location.end_offset, node.statements&.location&.start_offset || (node.conditions.last.location.end_offset + 1), [";"])
+            end,
             visit(node.statements)
           )
         end

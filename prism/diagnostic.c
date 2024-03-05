@@ -306,12 +306,14 @@ static const pm_diagnostic_data_t diagnostic_messages[PM_DIAGNOSTIC_ID_LEN] = {
     [PM_WARN_AMBIGUOUS_FIRST_ARGUMENT_PLUS]     = { "ambiguous first argument; put parentheses or a space even after `+` operator", PM_WARNING_LEVEL_VERBOSE },
     [PM_WARN_AMBIGUOUS_PREFIX_STAR]             = { "ambiguous `*` has been interpreted as an argument prefix", PM_WARNING_LEVEL_VERBOSE },
     [PM_WARN_AMBIGUOUS_SLASH]                   = { "ambiguous `/`; wrap regexp in parentheses or add a space after `/` operator", PM_WARNING_LEVEL_VERBOSE },
+    [PM_WARN_DOT_DOT_DOT_EOL]                   = { "... at EOL, should be parenthesized?", PM_WARNING_LEVEL_DEFAULT },
     [PM_WARN_DUPLICATED_HASH_KEY]               = { "key %.*s is duplicated and overwritten on line %" PRIi32, PM_WARNING_LEVEL_DEFAULT },
     [PM_WARN_DUPLICATED_WHEN_CLAUSE]            = { "duplicated 'when' clause with line %" PRIi32 " is ignored", PM_WARNING_LEVEL_VERBOSE },
     [PM_WARN_EQUAL_IN_CONDITIONAL]              = { "found `= literal' in conditional, should be ==", PM_WARNING_LEVEL_DEFAULT },
     [PM_WARN_END_IN_METHOD]                     = { "END in method; use at_exit", PM_WARNING_LEVEL_DEFAULT },
     [PM_WARN_FLOAT_OUT_OF_RANGE]                = { "Float %.*s%s out of range", PM_WARNING_LEVEL_VERBOSE },
-    [PM_WARN_INTEGER_IN_FLIP_FLOP]              = { "integer literal in flip-flop", PM_WARNING_LEVEL_DEFAULT }
+    [PM_WARN_INTEGER_IN_FLIP_FLOP]              = { "integer literal in flip-flop", PM_WARNING_LEVEL_DEFAULT },
+    [PM_WARN_KEYWORD_EOL]                       = { "`%.*s` at the end of line without an expression", PM_WARNING_LEVEL_VERBOSE }
 };
 
 static inline const char *
@@ -336,7 +338,7 @@ pm_diagnostic_level(pm_diagnostic_id_t diag_id) {
  */
 bool
 pm_diagnostic_list_append(pm_list_t *list, const uint8_t *start, const uint8_t *end, pm_diagnostic_id_t diag_id) {
-    pm_diagnostic_t *diagnostic = (pm_diagnostic_t *) calloc(sizeof(pm_diagnostic_t), 1);
+    pm_diagnostic_t *diagnostic = (pm_diagnostic_t *) xcalloc(sizeof(pm_diagnostic_t), 1);
     if (diagnostic == NULL) return false;
 
     *diagnostic = (pm_diagnostic_t) {
@@ -367,15 +369,15 @@ pm_diagnostic_list_append_format(pm_list_t *list, const uint8_t *start, const ui
         return false;
     }
 
-    pm_diagnostic_t *diagnostic = (pm_diagnostic_t *) calloc(sizeof(pm_diagnostic_t), 1);
+    pm_diagnostic_t *diagnostic = (pm_diagnostic_t *) xcalloc(sizeof(pm_diagnostic_t), 1);
     if (diagnostic == NULL) {
         return false;
     }
 
     size_t length = (size_t) (result + 1);
-    char *message = (char *) malloc(length);
+    char *message = (char *) xmalloc(length);
     if (message == NULL) {
-        free(diagnostic);
+        xfree(diagnostic);
         return false;
     }
 
@@ -404,8 +406,8 @@ pm_diagnostic_list_free(pm_list_t *list) {
     while (node != NULL) {
         pm_diagnostic_t *next = (pm_diagnostic_t *) node->node.next;
 
-        if (node->owned) free((void *) node->message);
-        free(node);
+        if (node->owned) xfree((void *) node->message);
+        xfree(node);
 
         node = next;
     }
