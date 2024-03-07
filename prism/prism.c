@@ -9450,7 +9450,8 @@ parser_lex(pm_parser_t *parser) {
                                         .next_start = parser->current.end,
                                         .quote = quote,
                                         .indent = indent,
-                                        .common_whitespace = (size_t) -1
+                                        .common_whitespace = (size_t) -1,
+                                        .line_continuation = false
                                     }
                                 });
 
@@ -10719,6 +10720,9 @@ parser_lex(pm_parser_t *parser) {
             // current lex mode.
             pm_lex_mode_t *lex_mode = parser->lex_modes.current;
 
+            bool line_continuation = lex_mode->as.heredoc.line_continuation;
+            lex_mode->as.heredoc.line_continuation = false;
+
             // We'll check if we're at the end of the file. If we are, then we
             // will add an error (because we weren't able to find the
             // terminator) but still continue parsing so that content after the
@@ -10736,7 +10740,7 @@ parser_lex(pm_parser_t *parser) {
 
             // If we are immediately following a newline and we have hit the
             // terminator, then we need to return the ending of the heredoc.
-            if (current_token_starts_line(parser)) {
+            if (!line_continuation && current_token_starts_line(parser)) {
                 const uint8_t *start = parser->current.start;
                 if (start + ident_length <= parser->end) {
                     const uint8_t *newline = next_newline(start, parser->end - start);
@@ -10808,7 +10812,7 @@ parser_lex(pm_parser_t *parser) {
 
             const uint8_t *breakpoint = pm_strpbrk(parser, parser->current.end, breakpoints, parser->end - parser->current.end, true);
             pm_token_buffer_t token_buffer = { { 0 }, 0 };
-            bool was_escaped_newline = false;
+            bool was_line_continuation = false;
 
             while (breakpoint != NULL) {
                 switch (*breakpoint) {
@@ -10831,7 +10835,7 @@ parser_lex(pm_parser_t *parser) {
                         // some leading whitespace.
                         const uint8_t *start = breakpoint + 1;
 
-                        if (!was_escaped_newline && (start + ident_length <= parser->end)) {
+                        if (!was_line_continuation && (start + ident_length <= parser->end)) {
                             // We want to match the terminator starting from the end of the line in case
                             // there is whitespace in the ident such as <<-'   DOC' or <<~'   DOC'.
                             const uint8_t *newline = next_newline(start, parser->end - start);
@@ -10873,7 +10877,6 @@ parser_lex(pm_parser_t *parser) {
                         // heredoc here as string content. Then, the next time a
                         // token is lexed, it will match again and return the
                         // end of the heredoc.
-
                         if (lex_mode->as.heredoc.indent == PM_HEREDOC_INDENT_TILDE) {
                             if ((lex_mode->as.heredoc.common_whitespace > whitespace) && peek_at(parser, start) != '\n') {
                                 lex_mode->as.heredoc.common_whitespace = whitespace;
@@ -10881,7 +10884,7 @@ parser_lex(pm_parser_t *parser) {
 
                             parser->current.end = breakpoint + 1;
 
-                            if (!was_escaped_newline) {
+                            if (!was_line_continuation) {
                                 pm_token_buffer_flush(parser, &token_buffer);
                                 LEX(PM_TOKEN_STRING_CONTENT);
                             }
@@ -10943,7 +10946,26 @@ parser_lex(pm_parser_t *parser) {
                                     }
                                 /* fallthrough */
                                 case '\n':
-                                    was_escaped_newline = true;
+                                    // If we are in a tilde here, we should
+                                    // break out of the loop and return the
+                                    // string content.
+                                    if (lex_mode->as.heredoc.indent == PM_HEREDOC_INDENT_TILDE) {
+                                        const uint8_t *end = parser->current.end;
+                                        pm_newline_list_append(&parser->newline_list, end);
+
+                                        // Here we want the buffer to only
+                                        // include up to the backslash.
+                                        parser->current.end = breakpoint;
+                                        pm_token_buffer_flush(parser, &token_buffer);
+
+                                        // Now we can advance the end of the
+                                        // token past the newline.
+                                        parser->current.end = end + 1;
+                                        lex_mode->as.heredoc.line_continuation = true;
+                                        LEX(PM_TOKEN_STRING_CONTENT);
+                                    }
+
+                                    was_line_continuation = true;
                                     token_buffer.cursor = parser->current.end + 1;
                                     breakpoint = parser->current.end;
                                     continue;
@@ -10980,7 +11002,7 @@ parser_lex(pm_parser_t *parser) {
                         assert(false && "unreachable");
                 }
 
-                was_escaped_newline = false;
+                was_line_continuation = false;
             }
 
             if (parser->current.end > parser->current.start) {
@@ -18681,6 +18703,99 @@ pm_parse(pm_parser_t *parser) {
     return parse_program(parser);
 }
 
+/**
+ * Read into the stream until the gets callback returns false. If the last read
+ * line from the stream matches an __END__ marker, then halt and return false,
+ * otherwise return true.
+ */
+static bool
+pm_parse_stream_read(pm_buffer_t *buffer, void *stream, pm_parse_stream_fgets_t *fgets) {
+#define LINE_SIZE 4096
+    char line[LINE_SIZE];
+
+    while (fgets(line, LINE_SIZE, stream) != NULL) {
+        size_t length = strlen(line);
+
+        if (length == LINE_SIZE && line[length - 1] != '\n') {
+            // If we read a line that is the maximum size and it doesn't end
+            // with a newline, then we'll just append it to the buffer and
+            // continue reading.
+            pm_buffer_append_string(buffer, line, length);
+            continue;
+        }
+
+        // Append the line to the buffer.
+        pm_buffer_append_string(buffer, line, length);
+
+        // Check if the line matches the __END__ marker. If it does, then stop
+        // reading and return false. In most circumstances, this means we should
+        // stop reading from the stream so that the DATA constant can pick it
+        // up.
+        switch (length) {
+            case 7:
+                if (strncmp(line, "__END__", 7) == 0) return false;
+                break;
+            case 8:
+                if (strncmp(line, "__END__\n", 8) == 0) return false;
+                break;
+            case 9:
+                if (strncmp(line, "__END__\r\n", 9) == 0) return false;
+                break;
+        }
+    }
+
+    return true;
+#undef LINE_SIZE
+}
+
+/**
+ * Determine if there was an unterminated heredoc at the end of the input, which
+ * would mean the stream isn't finished and we should keep reading.
+ *
+ * For the other lex modes we can check if the lex mode has been closed, but for
+ * heredocs when we hit EOF we close the lex mode and then go back to parse the
+ * rest of the line after the heredoc declaration so that we get more of the
+ * syntax tree.
+ */
+static bool
+pm_parse_stream_unterminated_heredoc_p(pm_parser_t *parser) {
+    pm_diagnostic_t *diagnostic = (pm_diagnostic_t *) parser->error_list.head;
+
+    for (; diagnostic != NULL; diagnostic = (pm_diagnostic_t *) diagnostic->node.next) {
+        if (diagnostic->diag_id == PM_ERR_HEREDOC_TERM) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/**
+ * Parse a stream of Ruby source and return the tree.
+ *
+ * Prism is designed around having the entire source in memory at once, but you
+ * can stream stdin in to Ruby so we need to support a streaming API.
+ */
+PRISM_EXPORTED_FUNCTION pm_node_t *
+pm_parse_stream(pm_parser_t *parser, pm_buffer_t *buffer, void *stream, pm_parse_stream_fgets_t *fgets, const pm_options_t *options) {
+    pm_buffer_init(buffer);
+
+    bool eof = pm_parse_stream_read(buffer, stream, fgets);
+    pm_parser_init(parser, (const uint8_t *) pm_buffer_value(buffer), pm_buffer_length(buffer), options);
+    pm_node_t *node = pm_parse(parser);
+
+    while (!eof && parser->error_list.size > 0 && (parser->lex_modes.index > 0 || pm_parse_stream_unterminated_heredoc_p(parser))) {
+        pm_node_destroy(parser, node);
+        eof = pm_parse_stream_read(buffer, stream, fgets);
+
+        pm_parser_free(parser);
+        pm_parser_init(parser, (const uint8_t *) pm_buffer_value(buffer), pm_buffer_length(buffer), options);
+        node = pm_parse(parser);
+    }
+
+    return node;
+}
+
 static inline void
 pm_serialize_header(pm_buffer_t *buffer) {
     pm_buffer_append_string(buffer, "PRISM", 5);
@@ -18719,6 +18834,28 @@ pm_serialize_parse(pm_buffer_t *buffer, const uint8_t *source, size_t size, cons
     pm_buffer_append_byte(buffer, '\0');
 
     pm_node_destroy(&parser, node);
+    pm_parser_free(&parser);
+    pm_options_free(&options);
+}
+
+/**
+ * Parse and serialize the AST represented by the source that is read out of the
+ * given stream into to the given buffer.
+ */
+PRISM_EXPORTED_FUNCTION void
+pm_serialize_parse_stream(pm_buffer_t *buffer, void *stream, pm_parse_stream_fgets_t *fgets, const char *data) {
+    pm_parser_t parser;
+    pm_options_t options = { 0 };
+    pm_options_read(&options, data);
+
+    pm_buffer_t parser_buffer;
+    pm_node_t *node = pm_parse_stream(&parser, &parser_buffer, stream, fgets, &options);
+    pm_serialize_header(buffer);
+    pm_serialize_content(&parser, node, buffer);
+    pm_buffer_append_byte(buffer, '\0');
+
+    pm_node_destroy(&parser, node);
+    pm_buffer_free(&parser_buffer);
     pm_parser_free(&parser);
     pm_options_free(&options);
 }
