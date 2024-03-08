@@ -742,6 +742,12 @@ struct pm_parser {
      * a true value.
      */
     bool frozen_string_literal;
+
+    /**
+     * True if the current regular expression being lexed contains only ASCII
+     * characters.
+     */
+    bool current_regular_expression_ascii_only;
 };
 
 #endif
