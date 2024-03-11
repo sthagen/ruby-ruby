@@ -54,7 +54,9 @@ jobs:
     if: >-
       ${{!(false
       || contains(github.event.head_commit.message, '[DOC]')
+      || contains(github.event.head_commit.message, 'Documentation')
       || contains(github.event.pull_request.title, '[DOC]')
+      || contains(github.event.pull_request.title, 'Documentation')
       || contains(github.event.pull_request.labels.*.name, 'Documentation')
       || (github.event_name == 'push' && github.actor == 'dependabot[bot]')
       )}}
@@ -79,6 +81,7 @@ jobs:
           srcdir: src
           builddir: build
           makeup: true
+          clean: true
           dummy-files: ${{ matrix.test_task == 'check' }}
           # Set fetch-depth: 10 so that Launchable can receive commits information.
           fetch-depth: 10
