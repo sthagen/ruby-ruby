@@ -15,6 +15,14 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if defined(_MSC_VER) && !defined(ssize_t)
+# ifdef _WIN64
+#   define ssize_t __int64
+# else
+#   define ssize_t int
+# endif
+#endif
+
 /**
  * A pm_buffer_t is a simple memory buffer that stores data in a contiguous
  * block of memory.
@@ -187,6 +195,26 @@ void pm_buffer_clear(pm_buffer_t *buffer);
  * @param buffer The buffer to strip.
  */
 void pm_buffer_rstrip(pm_buffer_t *buffer);
+
+/**
+ * Checks if the buffer includes the given value.
+ *
+ * @param buffer The buffer to check.
+ * @param value The value to check for.
+ * @returns The index of the first occurrence of the value in the buffer, or -1
+ *   if the value is not found.
+ */
+ssize_t pm_buffer_index(const pm_buffer_t *buffer, char value);
+
+/**
+ * Insert the given string into the buffer at the given index.
+ *
+ * @param buffer The buffer to insert into.
+ * @param index The index to insert at.
+ * @param value The string to insert.
+ * @param length The length of the string to insert.
+ */
+void pm_buffer_insert(pm_buffer_t *buffer, size_t index, const char *value, size_t length);
 
 /**
  * Free the memory associated with the buffer.
