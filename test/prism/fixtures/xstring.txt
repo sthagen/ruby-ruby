@@ -3,3 +3,11 @@
 `foo #{bar} baz`
 
 `foo`
+
+%x{
+  foo
+}
+
+``
+
+%x{}

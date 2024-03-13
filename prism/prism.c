@@ -5898,8 +5898,13 @@ pm_string_node_create_unescaped(pm_parser_t *parser, const pm_token_t *opening, 
     pm_string_node_t *node = PM_ALLOC_NODE(parser, pm_string_node_t);
     pm_node_flags_t flags = 0;
 
-    if (parser->frozen_string_literal) {
-        flags = PM_NODE_FLAG_STATIC_LITERAL | PM_STRING_FLAGS_FROZEN;
+    switch (parser->frozen_string_literal) {
+        case PM_OPTIONS_FROZEN_STRING_LITERAL_DISABLED:
+            flags = PM_STRING_FLAGS_MUTABLE;
+            break;
+        case PM_OPTIONS_FROZEN_STRING_LITERAL_ENABLED:
+            flags = PM_NODE_FLAG_STATIC_LITERAL | PM_STRING_FLAGS_FROZEN;
+            break;
     }
 
     *node = (pm_string_node_t) {
@@ -6298,8 +6303,13 @@ pm_symbol_node_to_string_node(pm_parser_t *parser, pm_symbol_node_t *node) {
     pm_string_node_t *new_node = PM_ALLOC_NODE(parser, pm_string_node_t);
     pm_node_flags_t flags = 0;
 
-    if (parser->frozen_string_literal) {
-        flags = PM_NODE_FLAG_STATIC_LITERAL | PM_STRING_FLAGS_FROZEN;
+    switch (parser->frozen_string_literal) {
+        case PM_OPTIONS_FROZEN_STRING_LITERAL_DISABLED:
+            flags = PM_STRING_FLAGS_MUTABLE;
+            break;
+        case PM_OPTIONS_FROZEN_STRING_LITERAL_ENABLED:
+            flags = PM_NODE_FLAG_STATIC_LITERAL | PM_STRING_FLAGS_FROZEN;
+            break;
     }
 
     *new_node = (pm_string_node_t) {
@@ -7173,9 +7183,9 @@ parser_lex_magic_comment_encoding(pm_parser_t *parser) {
 static void
 parser_lex_magic_comment_frozen_string_literal_value(pm_parser_t *parser, const uint8_t *start, const uint8_t *end) {
     if ((start + 4 <= end) && pm_strncasecmp(start, (const uint8_t *) "true", 4) == 0) {
-        parser->frozen_string_literal = true;
+        parser->frozen_string_literal = PM_OPTIONS_FROZEN_STRING_LITERAL_ENABLED;
     } else if ((start + 5 <= end) && pm_strncasecmp(start, (const uint8_t *) "false", 5) == 0) {
-        parser->frozen_string_literal = false;
+        parser->frozen_string_literal = PM_OPTIONS_FROZEN_STRING_LITERAL_DISABLED;
     }
 }
 
@@ -7585,26 +7595,33 @@ lex_optional_float_suffix(pm_parser_t *parser, bool* seen_e) {
             parser->current.end += pm_strspn_decimal_number_validate(parser, parser->current.end);
             type = PM_TOKEN_FLOAT;
         } else {
-            // If we had a . and then something else, then it's not a float suffix on
-            // a number it's a method call or something else.
+            // If we had a . and then something else, then it's not a float
+            // suffix on a number it's a method call or something else.
             return type;
         }
     }
 
     // Here we're going to attempt to parse the optional exponent portion of a
     // float. If it's not there, it's okay and we'll just continue on.
-    if (match(parser, 'e') || match(parser, 'E')) {
-        (void) (match(parser, '+') || match(parser, '-'));
-        *seen_e = true;
+    if ((peek(parser) == 'e') || (peek(parser) == 'E')) {
+        if ((peek_offset(parser, 1) == '+') || (peek_offset(parser, 1) == '-')) {
+            parser->current.end += 2;
 
-        if (pm_char_is_decimal_digit(peek(parser))) {
+            if (pm_char_is_decimal_digit(peek(parser))) {
+                parser->current.end++;
+                parser->current.end += pm_strspn_decimal_number_validate(parser, parser->current.end);
+            } else {
+                pm_parser_err_current(parser, PM_ERR_INVALID_FLOAT_EXPONENT);
+            }
+        } else if (pm_char_is_decimal_digit(peek_offset(parser, 1))) {
             parser->current.end++;
             parser->current.end += pm_strspn_decimal_number_validate(parser, parser->current.end);
-            type = PM_TOKEN_FLOAT;
         } else {
-            pm_parser_err_current(parser, PM_ERR_INVALID_FLOAT_EXPONENT);
-            type = PM_TOKEN_FLOAT;
+            return type;
         }
+
+        *seen_e = true;
+        type = PM_TOKEN_FLOAT;
     }
 
     return type;
@@ -9610,7 +9627,10 @@ parser_lex(pm_parser_t *parser) {
 
                         pm_token_type_t type = PM_TOKEN_STAR_STAR;
 
-                        if (lex_state_spcarg_p(parser, space_seen) || lex_state_beg_p(parser)) {
+                        if (lex_state_spcarg_p(parser, space_seen)) {
+                            pm_parser_warn_token(parser, &parser->current, PM_WARN_AMBIGUOUS_PREFIX_STAR_STAR);
+                            type = PM_TOKEN_USTAR_STAR;
+                        } else if (lex_state_beg_p(parser)) {
                             type = PM_TOKEN_USTAR_STAR;
                         }
 
@@ -9909,7 +9929,10 @@ parser_lex(pm_parser_t *parser) {
                     }
 
                     pm_token_type_t type = PM_TOKEN_AMPERSAND;
-                    if (lex_state_spcarg_p(parser, space_seen) || lex_state_beg_p(parser)) {
+                    if (lex_state_spcarg_p(parser, space_seen)) {
+                        pm_parser_warn_token(parser, &parser->current, PM_WARN_AMBIGUOUS_PREFIX_AMPERSAND);
+                        type = PM_TOKEN_UAMPERSAND;
+                    } else if (lex_state_beg_p(parser)) {
                         type = PM_TOKEN_UAMPERSAND;
                     }
 
@@ -13275,18 +13298,22 @@ parse_block_parameters(
     }
 
     pm_block_parameters_node_t *block_parameters = pm_block_parameters_node_create(parser, parameters, opening);
-    if ((opening->type != PM_TOKEN_NOT_PROVIDED) && accept1(parser, PM_TOKEN_SEMICOLON)) {
-        do {
-            expect1(parser, PM_TOKEN_IDENTIFIER, PM_ERR_BLOCK_PARAM_LOCAL_VARIABLE);
-            bool repeated = pm_parser_parameter_name_check(parser, &parser->previous);
-            pm_parser_local_add_token(parser, &parser->previous);
+    if ((opening->type != PM_TOKEN_NOT_PROVIDED)) {
+        accept1(parser, PM_TOKEN_NEWLINE);
 
-            pm_block_local_variable_node_t *local = pm_block_local_variable_node_create(parser, &parser->previous);
-            if (repeated) {
-                pm_node_flag_set_repeated_parameter((pm_node_t *)local);
-            }
-            pm_block_parameters_node_append_local(block_parameters, local);
-        } while (accept1(parser, PM_TOKEN_COMMA));
+        if (accept1(parser, PM_TOKEN_SEMICOLON)) {
+            do {
+                expect1(parser, PM_TOKEN_IDENTIFIER, PM_ERR_BLOCK_PARAM_LOCAL_VARIABLE);
+                bool repeated = pm_parser_parameter_name_check(parser, &parser->previous);
+                pm_parser_local_add_token(parser, &parser->previous);
+
+                pm_block_local_variable_node_t *local = pm_block_local_variable_node_create(parser, &parser->previous);
+                if (repeated) {
+                    pm_node_flag_set_repeated_parameter((pm_node_t *)local);
+                }
+                pm_block_parameters_node_append_local(block_parameters, local);
+            } while (accept1(parser, PM_TOKEN_COMMA));
+        }
     }
 
     return block_parameters;
@@ -14873,14 +14900,20 @@ parse_pattern_primitives(pm_parser_t *parser, pm_diagnostic_id_t diag_id) {
                 break;
             }
             case PM_TOKEN_PARENTHESIS_LEFT: {
+                pm_token_t opening = parser->current;
                 parser_lex(parser);
-                if (node != NULL) {
-                    pm_node_destroy(parser, node);
-                }
-                node = parse_pattern(parser, false, PM_ERR_PATTERN_EXPRESSION_AFTER_PAREN);
 
+                pm_node_t *body = parse_pattern(parser, false, PM_ERR_PATTERN_EXPRESSION_AFTER_PAREN);
                 accept1(parser, PM_TOKEN_NEWLINE);
                 expect1(parser, PM_TOKEN_PARENTHESIS_RIGHT, PM_ERR_PATTERN_TERM_PAREN);
+                pm_node_t *right = (pm_node_t *) pm_parentheses_node_create(parser, &opening, body, &parser->previous);
+
+                if (node == NULL) {
+                    node = right;
+                } else {
+                    node = (pm_node_t *) pm_alternation_pattern_node_create(parser, node, right, &operator);
+                }
+
                 break;
             }
             default: {
@@ -18896,7 +18929,7 @@ pm_parser_init(pm_parser_t *parser, const uint8_t *source, size_t size, const pm
         .in_keyword_arg = false,
         .current_param_name = 0,
         .semantic_token_seen = false,
-        .frozen_string_literal = false,
+        .frozen_string_literal = PM_OPTIONS_FROZEN_STRING_LITERAL_UNSET,
         .current_regular_expression_ascii_only = false
     };
 
@@ -18955,9 +18988,7 @@ pm_parser_init(pm_parser_t *parser, const uint8_t *source, size_t size, const pm
         }
 
         // frozen_string_literal option
-        if (options->frozen_string_literal) {
-            parser->frozen_string_literal = true;
-        }
+        parser->frozen_string_literal = options->frozen_string_literal;
 
         // command_line option
         parser->command_line = options->command_line;
