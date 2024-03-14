@@ -448,7 +448,7 @@ pm_static_literal_value(const pm_node_t *node, const pm_scope_node_t *scope_node
       case PM_SOURCE_LINE_NODE:
         return INT2FIX(pm_node_line_number(scope_node->parser, node));
       case PM_STRING_NODE:
-        return parse_string_encoded(scope_node, node, &((pm_string_node_t *)node)->unescaped);
+        return rb_fstring(parse_string_encoded(scope_node, node, &((pm_string_node_t *)node)->unescaped));
       case PM_SYMBOL_NODE:
         return ID2SYM(parse_string_symbol(scope_node, (const pm_symbol_node_t *) node));
       case PM_TRUE_NODE:
@@ -1117,55 +1117,97 @@ pm_setup_args_core(const pm_arguments_node_t *arguments_node, const pm_node_t *b
         int post_splat_counter = 0;
 
         for (size_t index = 0; index < arguments_node_list.size; index++) {
-            pm_node_t *argument = arguments_node_list.nodes[index];
+            const pm_node_t *argument = arguments_node_list.nodes[index];
 
             switch (PM_NODE_TYPE(argument)) {
               // A keyword hash node contains all keyword arguments as AssocNodes and AssocSplatNodes
               case PM_KEYWORD_HASH_NODE: {
-                pm_keyword_hash_node_t *keyword_arg = (pm_keyword_hash_node_t *)argument;
+                const pm_keyword_hash_node_t *keyword_arg = (const pm_keyword_hash_node_t *) argument;
+                const pm_node_list_t *elements = &keyword_arg->elements;
 
                 if (has_keyword_splat || has_splat) {
                     *flags |= VM_CALL_KW_SPLAT;
                     has_keyword_splat = true;
-                    pm_compile_hash_elements(&keyword_arg->elements, nd_line(&dummy_line_node), iseq, ret, scope_node);
+                    pm_compile_hash_elements(elements, nd_line(&dummy_line_node), iseq, ret, scope_node);
                 }
                 else {
-                    size_t len = keyword_arg->elements.size;
-
-                    // We need to first figure out if all elements of the KeywordHashNode are AssocNodes
-                    // with symbol keys.
+                    // We need to first figure out if all elements of the
+                    // KeywordHashNode are AssocNodes with symbol keys.
                     if (PM_NODE_FLAG_P(keyword_arg, PM_KEYWORD_HASH_NODE_FLAGS_SYMBOL_KEYS)) {
-                        // If they are all symbol keys then we can pass them as keyword arguments.
-                        *kw_arg = rb_xmalloc_mul_add(len, sizeof(VALUE), sizeof(struct rb_callinfo_kwarg));
+                        // If they are all symbol keys then we can pass them as
+                        // keyword arguments. The first thing we need to do is
+                        // deduplicate. We'll do this using the combination of a
+                        // Ruby hash and a Ruby array.
+                        VALUE stored_indices = rb_hash_new();
+                        VALUE keyword_indices = rb_ary_new_capa(elements->size);
+
+                        size_t size = 0;
+                        for (size_t element_index = 0; element_index < elements->size; element_index++) {
+                            const pm_assoc_node_t *assoc = (const pm_assoc_node_t *) elements->nodes[element_index];
+
+                            // Retrieve the stored index from the hash for this
+                            // keyword.
+                            VALUE keyword = pm_static_literal_value(assoc->key, scope_node);
+                            VALUE stored_index = rb_hash_aref(stored_indices, keyword);
+
+                            // If this keyword was already seen in the hash,
+                            // then mark the array at that index as false and
+                            // decrement the keyword size.
+                            if (!NIL_P(stored_index)) {
+                                rb_ary_store(keyword_indices, NUM2LONG(stored_index), Qfalse);
+                                size--;
+                            }
+
+                            // Store (and possibly overwrite) the index for this
+                            // keyword in the hash, mark the array at that index
+                            // as true, and increment the keyword size.
+                            rb_hash_aset(stored_indices, keyword, ULONG2NUM(element_index));
+                            rb_ary_store(keyword_indices, (long) element_index, Qtrue);
+                            size++;
+                        }
+
+                        *kw_arg = rb_xmalloc_mul_add(size, sizeof(VALUE), sizeof(struct rb_callinfo_kwarg));
                         *flags |= VM_CALL_KWARG;
+
                         VALUE *keywords = (*kw_arg)->keywords;
                         (*kw_arg)->references = 0;
-                        (*kw_arg)->keyword_len = (int)len;
+                        (*kw_arg)->keyword_len = (int) size;
 
-                        for (size_t i = 0; i < len; i++) {
-                            pm_assoc_node_t *assoc = (pm_assoc_node_t *)keyword_arg->elements.nodes[i];
-                            pm_node_t *key = assoc->key;
-                            keywords[i] = pm_static_literal_value(key, scope_node);
-                            PM_COMPILE_NOT_POPPED(assoc->value);
+                        size_t keyword_index = 0;
+                        for (size_t element_index = 0; element_index < elements->size; element_index++) {
+                            const pm_assoc_node_t *assoc = (const pm_assoc_node_t *) elements->nodes[element_index];
+                            bool popped = true;
+
+                            if (rb_ary_entry(keyword_indices, (long) element_index) == Qtrue) {
+                                keywords[keyword_index++] = pm_static_literal_value(assoc->key, scope_node);
+                                popped = false;
+                            }
+
+                            PM_COMPILE(assoc->value);
                         }
+
+                        RUBY_ASSERT(keyword_index == size);
                     } else {
-                        // If they aren't all symbol keys then we need to construct a new hash
-                        // and pass that as an argument.
+                        // If they aren't all symbol keys then we need to
+                        // construct a new hash and pass that as an argument.
                         orig_argc++;
                         *flags |= VM_CALL_KW_SPLAT;
-                        if (len > 1) {
-                            // A new hash will be created for the keyword arguments in this case,
-                            // so mark the method as passing mutable keyword splat.
+
+                        size_t size = elements->size;
+                        if (size > 1) {
+                            // A new hash will be created for the keyword
+                            // arguments in this case, so mark the method as
+                            // passing mutable keyword splat.
                             *flags |= VM_CALL_KW_SPLAT_MUT;
                         }
 
-                        for (size_t i = 0; i < len; i++) {
-                            pm_assoc_node_t *assoc = (pm_assoc_node_t *)keyword_arg->elements.nodes[i];
+                        for (size_t element_index = 0; element_index < size; element_index++) {
+                            pm_assoc_node_t *assoc = (pm_assoc_node_t *) elements->nodes[element_index];
                             PM_COMPILE_NOT_POPPED(assoc->key);
                             PM_COMPILE_NOT_POPPED(assoc->value);
                         }
 
-                        ADD_INSN1(ret, &dummy_line_node, newhash, INT2FIX(len * 2));
+                        ADD_INSN1(ret, &dummy_line_node, newhash, INT2FIX(size * 2));
                     }
                 }
                 break;
@@ -6488,18 +6530,35 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
 
         return;
       }
-      case PM_NIL_NODE:
-        PM_PUTNIL_UNLESS_POPPED;
+      case PM_NIL_NODE: {
+        // nil
+        // ^^^
+        if (!popped) {
+            PUSH_INSN(ret, location, putnil);
+        }
+
         return;
+      }
       case PM_NO_KEYWORDS_PARAMETER_NODE: {
+        // def foo(**nil); end
+        //         ^^^^^
         ISEQ_BODY(iseq)->param.flags.accepts_no_kwarg = TRUE;
         return;
       }
       case PM_NUMBERED_REFERENCE_READ_NODE: {
+        // $1
+        // ^^
         if (!popped) {
-            uint32_t reference_number = ((pm_numbered_reference_read_node_t *)node)->number;
-            ADD_INSN2(ret, &dummy_line_node, getspecial, INT2FIX(1), INT2FIX(reference_number << 1));
+            uint32_t reference_number = ((const pm_numbered_reference_read_node_t *) node)->number;
+
+            if (reference_number > 0) {
+                PUSH_INSN2(ret, location, getspecial, INT2FIX(1), INT2FIX(reference_number << 1));
+            }
+            else {
+                PUSH_INSN(ret, location, putnil);
+            }
         }
+
         return;
       }
       case PM_OR_NODE: {
@@ -6949,11 +7008,14 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
                 break;
               }
               case PM_NUMBERED_PARAMETERS_NODE: {
-                body->param.lead_num = ((pm_numbered_parameters_node_t *) scope_node->parameters)->maximum;
+                uint32_t maximum = ((pm_numbered_parameters_node_t *) scope_node->parameters)->maximum;
+                body->param.lead_num = maximum;
+                body->param.flags.ambiguous_param0 = maximum == 1;
                 break;
               }
               case PM_IT_PARAMETERS_NODE:
                 body->param.lead_num = 1;
+                body->param.flags.ambiguous_param0 = true;
                 break;
               default:
                 rb_bug("Unexpected node type for parameters: %s", pm_node_type_to_str(PM_NODE_TYPE(node)));

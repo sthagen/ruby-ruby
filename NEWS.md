@@ -36,7 +36,7 @@ The following default gems are updated.
 
 The following bundled gems are updated.
 
-* minitest 5.22.2
+* minitest 5.22.3
 * test-unit 3.6.2
 * net-ftp 0.3.4
 * net-imap 0.4.10
@@ -50,7 +50,7 @@ The following bundled gems are promoted from default gems.
 * mutex_m 0.2.0
 * getoptlong 0.2.1
 * base64 0.2.0
-* bigdecimal 3.1.6
+* bigdecimal 3.1.7
 * observer 0.1.2
 * abbrev 0.1.2
 * resolv-replace 0.1.1
