@@ -820,7 +820,7 @@ pm_interpolated_node_compile(pm_node_list_t *parts, rb_iseq_t *iseq, NODE dummy_
                     current_string = rb_enc_str_new(NULL, 0, scope_node->encoding);
                 }
 
-                if (ISEQ_COMPILE_DATA(iseq)->option->frozen_string_literal) {
+                if (frozen_string_literal_p(iseq)) {
                     ADD_INSN1(ret, &dummy_line_node, putobject, rb_str_freeze(current_string));
                 }
                 else {
@@ -842,7 +842,7 @@ pm_interpolated_node_compile(pm_node_list_t *parts, rb_iseq_t *iseq, NODE dummy_
         if (RTEST(current_string)) {
             current_string = rb_fstring(current_string);
 
-            if (ISEQ_COMPILE_DATA(iseq)->option->frozen_string_literal) {
+            if (frozen_string_literal_p(iseq)) {
                 ADD_INSN1(ret, &dummy_line_node, putobject, current_string);
             }
             else {
@@ -4019,7 +4019,7 @@ pm_opt_aref_with_p(const rb_iseq_t *iseq, const pm_call_node_t *node)
         ((const pm_arguments_node_t *) node->arguments)->arguments.size == 1 &&
         PM_NODE_TYPE_P(((const pm_arguments_node_t *) node->arguments)->arguments.nodes[0], PM_STRING_NODE) &&
         node->block == NULL &&
-        !ISEQ_COMPILE_DATA(iseq)->option->frozen_string_literal &&
+        !frozen_string_literal_p(iseq) &&
         ISEQ_COMPILE_DATA(iseq)->option->specialized_instruction
     );
 }
@@ -4038,7 +4038,7 @@ pm_opt_aset_with_p(const rb_iseq_t *iseq, const pm_call_node_t *node)
         ((const pm_arguments_node_t *) node->arguments)->arguments.size == 2 &&
         PM_NODE_TYPE_P(((const pm_arguments_node_t *) node->arguments)->arguments.nodes[0], PM_STRING_NODE) &&
         node->block == NULL &&
-        !ISEQ_COMPILE_DATA(iseq)->option->frozen_string_literal &&
+        !frozen_string_literal_p(iseq) &&
         ISEQ_COMPILE_DATA(iseq)->option->specialized_instruction
     );
 }
@@ -4167,8 +4167,17 @@ pm_compile_case_node_dispatch(VALUE dispatch, const pm_node_t *node, LABEL *labe
     VALUE key = Qundef;
 
     switch (PM_NODE_TYPE(node)) {
+      case PM_FLOAT_NODE: {
+        key = pm_static_literal_value(node, scope_node);
+        double intptr;
+
+        if (modf(RFLOAT_VALUE(key), &intptr) == 0.0) {
+            key = (FIXABLE(intptr) ? LONG2FIX((long) intptr) : rb_dbl2big(intptr));
+        }
+
+        break;
+      }
       case PM_FALSE_NODE:
-      case PM_FLOAT_NODE:
       case PM_INTEGER_NODE:
       case PM_NIL_NODE:
       case PM_SOURCE_FILE_NODE:
@@ -7870,6 +7879,11 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
             PUSH_INSN(ret, location, putself);
         }
         return;
+      case PM_SHAREABLE_CONSTANT_NODE:
+        // A value that is being written to a constant that is being marked as
+        // shared depending on the current lexical context.
+        PM_COMPILE(((const pm_shareable_constant_node_t *) node)->write);
+        return;
       case PM_SINGLETON_CLASS_NODE: {
         // class << self; end
         // ^^^^^^^^^^^^^^^^^^
@@ -7905,8 +7919,15 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
         // __FILE__
         // ^^^^^^^^
         if (!popped) {
-            VALUE value = pm_static_literal_value(node, scope_node);
-            PUSH_INSN1(ret, location, putstring, value);
+            const pm_source_file_node_t *cast = (const pm_source_file_node_t *) node;
+            VALUE string = rb_fstring(parse_string(scope_node, &cast->filepath));
+
+            if (PM_NODE_FLAG_P(cast, PM_STRING_FLAGS_FROZEN)) {
+                PUSH_INSN1(ret, location, putobject, string);
+            }
+            else {
+                PUSH_INSN1(ret, location, putstring, string);
+            }
         }
         return;
       }
@@ -7955,7 +7976,7 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
             const pm_string_node_t *cast = (const pm_string_node_t *) node;
             VALUE value = rb_fstring(parse_string_encoded(scope_node, node, &cast->unescaped));
 
-            if (PM_NODE_FLAG_P(node, PM_STRING_FLAGS_FROZEN) || ISEQ_COMPILE_DATA(iseq)->option->frozen_string_literal) {
+            if (PM_NODE_FLAG_P(node, PM_STRING_FLAGS_FROZEN)) {
                 PUSH_INSN1(ret, location, putobject, value);
             }
             else {
