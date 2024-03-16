@@ -217,6 +217,8 @@ module Prism
           index = 0
           length = lexed.length
 
+          heredoc_identifier_stack = []
+
           while index < length
             token, state = lexed[index]
             index += 1
@@ -275,6 +277,9 @@ module Prism
             when :tSPACE
               value = nil
             when :tSTRING_BEG
+              if token.type == :HEREDOC_START
+                heredoc_identifier_stack.push(value.match(/<<[-~]?["']?(?<heredoc_identifier>.*?)["']?\z/)[:heredoc_identifier])
+              end
               if ["\"", "'"].include?(value) && (next_token = lexed[index][0]) && next_token.type == :STRING_END
                 next_location = token.location.join(next_token.location)
                 type = :tSTRING
@@ -284,7 +289,7 @@ module Prism
               elsif ["\"", "'"].include?(value) && (next_token = lexed[index][0]) && next_token.type == :STRING_CONTENT && next_token.value.lines.count <= 1 && (next_next_token = lexed[index + 1][0]) && next_next_token.type == :STRING_END
                 next_location = token.location.join(next_next_token.location)
                 type = :tSTRING
-                value = next_token.value
+                value = next_token.value.gsub("\\\\", "\\")
                 location = Range.new(source_buffer, offset_cache[next_location.start_offset], offset_cache[next_location.end_offset])
                 index += 2
               elsif value.start_with?("<<")
@@ -322,7 +327,7 @@ module Prism
             when :tSTRING_END
               if token.type == :HEREDOC_END && value.end_with?("\n")
                 newline_length = value.end_with?("\r\n") ? 2 : 1
-                value = value.sub(/\r?\n\z/, '')
+                value = heredoc_identifier_stack.pop
                 location = Range.new(source_buffer, offset_cache[token.location.start_offset], offset_cache[token.location.end_offset - newline_length])
               elsif token.type == :REGEXP_END
                 value = value[0]
