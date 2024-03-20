@@ -7,6 +7,12 @@ Note that each entry is kept to a minimum, see links for details.
 
 ## Language changes
 
+* String literals in files without a `frozen_string_literal` comment now behave
+  as if they were frozen. If they are mutated a deprecation warning is emited.
+  These warnings can be enabled with `-W:deprecated` or by setting `Warning[:deprecated] = true`.
+  To disable this change you can run Ruby with the `--disable-frozen-string-literal` command line
+  argument. [Feature #20205]
+
 * `it` is added to reference a block parameter. [[Feature #18980]]
 
 * Keyword splatting `nil` when calling methods is now supported.
@@ -39,7 +45,7 @@ The following default gems are updated.
 * irb 1.12.0
 * net-http 0.4.1
 * prism 0.24.0
-* reline 0.4.3
+* reline 0.5.0.pre.1
 * resolv 0.4.0
 * stringio 3.1.1
 * strscan 3.1.1
