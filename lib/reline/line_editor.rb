@@ -85,7 +85,7 @@ class Reline::LineEditor
     end
   end
 
-  private def check_multiline_prompt(buffer)
+  private def check_multiline_prompt(buffer, mode_string)
     if @vi_arg
       prompt = "(arg: #{@vi_arg}) "
     elsif @searching_prompt
@@ -97,7 +97,6 @@ class Reline::LineEditor
       prompt_list = @prompt_proc.(buffer).map { |pr| pr.gsub("\n", "\\n") }
       prompt_list.map!{ prompt } if @vi_arg or @searching_prompt
       prompt_list = [prompt] if prompt_list.empty?
-      mode_string = check_mode_string
       prompt_list = prompt_list.map{ |pr| mode_string + pr } if mode_string
       prompt = prompt_list[@line_index]
       prompt = prompt_list[0] if prompt.nil?
@@ -109,7 +108,6 @@ class Reline::LineEditor
       end
       prompt_list
     else
-      mode_string = check_mode_string
       prompt = mode_string + prompt if mode_string
       [prompt] * buffer.size
     end
@@ -319,8 +317,8 @@ class Reline::LineEditor
   end
 
   def prompt_list
-    with_cache(__method__, whole_lines, @vi_arg, @searching_prompt) do |lines|
-      check_multiline_prompt(lines)
+    with_cache(__method__, whole_lines, check_mode_string, @vi_arg, @searching_prompt) do |lines, mode_string|
+      check_multiline_prompt(lines, mode_string)
     end
   end
 
@@ -372,12 +370,12 @@ class Reline::LineEditor
         # do nothing
       elsif level == :blank
         Reline::IOGate.move_cursor_column base_x
-        @output.write "\e[0m#{' ' * width}"
+        @output.write "#{Reline::IOGate::RESET_COLOR}#{' ' * width}"
       else
         x, w, content = new_items[level]
         content = Reline::Unicode.take_range(content, base_x - x, width) unless x == base_x && w == width
         Reline::IOGate.move_cursor_column base_x
-        @output.write "\e[0m#{content}\e[0m"
+        @output.write "#{Reline::IOGate::RESET_COLOR}#{content}#{Reline::IOGate::RESET_COLOR}"
       end
       base_x += width
     end
