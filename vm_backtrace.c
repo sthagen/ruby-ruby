@@ -134,7 +134,14 @@ static void
 location_mark(void *ptr)
 {
     struct valued_frame_info *vfi = (struct valued_frame_info *)ptr;
-    rb_gc_mark(vfi->btobj);
+    rb_gc_mark_movable(vfi->btobj);
+}
+
+static void
+location_ref_update(void *ptr)
+{
+    struct valued_frame_info *vfi = ptr;
+    vfi->btobj = rb_gc_location(vfi->btobj);
 }
 
 static void
@@ -150,6 +157,7 @@ static const rb_data_type_t location_data_type = {
         location_mark,
         RUBY_TYPED_DEFAULT_FREE,
         NULL, // No external memory to report,
+        location_ref_update,
     },
     0, 0, RUBY_TYPED_FREE_IMMEDIATELY | RUBY_TYPED_WB_PROTECTED | RUBY_TYPED_EMBEDDABLE
 };
@@ -532,7 +540,10 @@ static const rb_data_type_t backtrace_data_type = {
         NULL, // No external memory to report,
         backtrace_update,
     },
-    0, 0, RUBY_TYPED_FREE_IMMEDIATELY | RUBY_TYPED_WB_PROTECTED | RUBY_TYPED_EMBEDDABLE
+    /* Cannot set the RUBY_TYPED_EMBEDDABLE flag because the loc of frame_info
+     * points elements in the backtrace array. This can cause the loc to become
+     * incorrect if this backtrace object is moved by compaction. */
+    0, 0, RUBY_TYPED_FREE_IMMEDIATELY | RUBY_TYPED_WB_PROTECTED
 };
 
 int
