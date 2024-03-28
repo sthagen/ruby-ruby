@@ -1876,10 +1876,22 @@ calloc1(size_t n)
     return calloc(1, n);
 }
 
+static VALUE initial_stress = Qfalse;
+
+void
+rb_gc_initial_stress_set(VALUE flag)
+{
+    initial_stress = flag;
+}
+
 rb_objspace_t *
 rb_objspace_alloc(void)
 {
     rb_objspace_t *objspace = calloc1(sizeof(rb_objspace_t));
+
+    objspace->flags.gc_stressful = RTEST(initial_stress);
+    objspace->gc_stress_mode = initial_stress;
+
     objspace->flags.measure_gc = 1;
     malloc_limit = gc_params.malloc_limit_min;
     objspace->finalize_deferred_pjob = rb_postponed_job_preregister(0, gc_finalize_deferred, objspace);
@@ -1898,7 +1910,10 @@ rb_objspace_alloc(void)
 
     rb_darray_make_without_gc(&objspace->weak_references, 0);
 
+    // TODO: debug why on Windows Ruby crashes on boot when GC is on.
+#ifdef _WIN32
     dont_gc_on();
+#endif
 
     return objspace;
 }
@@ -8691,11 +8706,12 @@ rb_gc_writebarrier_remember(VALUE obj)
 }
 
 void
-rb_copy_wb_protected_attribute(VALUE dest, VALUE obj)
+rb_gc_copy_attributes(VALUE dest, VALUE obj)
 {
     if (RVALUE_WB_UNPROTECTED(obj)) {
         rb_gc_writebarrier_unprotect(dest);
     }
+    rb_gc_copy_finalizer(dest, obj);
 }
 
 size_t
@@ -8950,7 +8966,7 @@ gc_start(rb_objspace_t *objspace, unsigned int reason)
     /* reason may be clobbered, later, so keep set immediate_sweep here */
     objspace->flags.immediate_sweep = !!(reason & GPR_FLAG_IMMEDIATE_SWEEP);
 
-    if (!heap_allocated_pages) return FALSE; /* heap is not ready */
+    if (!heap_allocated_pages) return TRUE; /* heap is not ready */
     if (!(reason & GPR_FLAG_METHOD) && !ready_to_gc(objspace)) return TRUE; /* GC is not allowed */
 
     GC_ASSERT(gc_mode(objspace) == gc_mode_none);
@@ -9346,18 +9362,20 @@ gc_set_candidate_object_i(void *vstart, void *vend, size_t stride, void *data)
     rb_objspace_t *objspace = &rb_objspace;
     VALUE v = (VALUE)vstart;
     for (; v != (VALUE)vend; v += stride) {
-        switch (BUILTIN_TYPE(v)) {
-          case T_NONE:
-          case T_ZOMBIE:
-            break;
-          case T_STRING:
-            // precompute the string coderange. This both save time for when it will be
-            // eventually needed, and avoid mutating heap pages after a potential fork.
-            rb_enc_str_coderange(v);
-            // fall through
-          default:
-            if (!RVALUE_OLD_P(v) && !RVALUE_WB_UNPROTECTED(v)) {
-                RVALUE_AGE_SET_CANDIDATE(objspace, v);
+        asan_unpoisoning_object(v) {
+            switch (BUILTIN_TYPE(v)) {
+            case T_NONE:
+            case T_ZOMBIE:
+                break;
+            case T_STRING:
+                // precompute the string coderange. This both save time for when it will be
+                // eventually needed, and avoid mutating heap pages after a potential fork.
+                rb_enc_str_coderange(v);
+                // fall through
+            default:
+                if (!RVALUE_OLD_P(v) && !RVALUE_WB_UNPROTECTED(v)) {
+                    RVALUE_AGE_SET_CANDIDATE(objspace, v);
+                }
             }
         }
     }
@@ -9543,19 +9561,25 @@ gc_move(rb_objspace_t *objspace, VALUE scan, VALUE free, size_t src_slot_size, s
         DURING_GC_COULD_MALLOC_REGION_END();
     }
 
-    st_data_t srcid = (st_data_t)src, id;
+    if (FL_TEST((VALUE)src, FL_SEEN_OBJ_ID)) {
+        /* If the source object's object_id has been seen, we need to update
+         * the object to object id mapping. */
+        st_data_t srcid = (st_data_t)src, id;
 
-    /* If the source object's object_id has been seen, we need to update
-     * the object to object id mapping. */
-    if (st_lookup(objspace->obj_to_id_tbl, srcid, &id)) {
         gc_report(4, objspace, "Moving object with seen id: %p -> %p\n", (void *)src, (void *)dest);
         /* Resizing the st table could cause a malloc */
         DURING_GC_COULD_MALLOC_REGION_START();
         {
-            st_delete(objspace->obj_to_id_tbl, &srcid, 0);
+            if (!st_delete(objspace->obj_to_id_tbl, &srcid, &id)) {
+                rb_bug("gc_move: object ID seen, but not in mapping table: %s", obj_info((VALUE)src));
+            }
+
             st_insert(objspace->obj_to_id_tbl, (st_data_t)dest, id);
         }
         DURING_GC_COULD_MALLOC_REGION_END();
+    }
+    else {
+        GC_ASSERT(!st_lookup(objspace->obj_to_id_tbl, (st_data_t)src, NULL));
     }
 
     /* Move the object */
@@ -11146,20 +11170,14 @@ gc_stress_get(rb_execution_context_t *ec, VALUE self)
     return ruby_gc_stress_mode;
 }
 
-void
-rb_gc_stress_set(VALUE flag)
+static VALUE
+gc_stress_set_m(rb_execution_context_t *ec, VALUE self, VALUE flag)
 {
     rb_objspace_t *objspace = &rb_objspace;
 
     objspace->flags.gc_stressful = RTEST(flag);
     objspace->gc_stress_mode = flag;
-}
 
-static VALUE
-gc_stress_set_m(rb_execution_context_t *ec, VALUE self, VALUE flag)
-{
-
-    rb_gc_stress_set(flag);
     return flag;
 }
 

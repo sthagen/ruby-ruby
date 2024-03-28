@@ -812,12 +812,21 @@ pm_parser_warn_conditional_predicate_literal(pm_parser_t *parser, pm_node_t *nod
 }
 
 /**
- * Add a warning to the parser if the value that is being written inside of a
- * predicate to a conditional is a literal.
+ * Return true if the value being written within the predicate of a conditional
+ * is a literal value.
  */
-static void
-pm_conditional_predicate_warn_write_literal(pm_parser_t *parser, pm_node_t *node) {
+static bool
+pm_conditional_predicate_warn_write_literal_p(const pm_node_t *node) {
     switch (PM_NODE_TYPE(node)) {
+        case PM_ARRAY_NODE: {
+            const pm_array_node_t *cast = (const pm_array_node_t *) node;
+            for (size_t index = 0; index < cast->elements.size; index++) {
+                if (!pm_conditional_predicate_warn_write_literal_p(cast->elements.nodes[index])) {
+                    return false;
+                }
+            }
+            return true;
+        }
         case PM_FALSE_NODE:
         case PM_FLOAT_NODE:
         case PM_IMAGINARY_NODE:
@@ -831,10 +840,20 @@ pm_conditional_predicate_warn_write_literal(pm_parser_t *parser, pm_node_t *node
         case PM_STRING_NODE:
         case PM_SYMBOL_NODE:
         case PM_TRUE_NODE:
-            pm_parser_warn_node(parser, node, parser->version == PM_OPTIONS_VERSION_CRUBY_3_3_0 ? PM_WARN_EQUAL_IN_CONDITIONAL_3_3_0 : PM_WARN_EQUAL_IN_CONDITIONAL);
-            break;
+            return true;
         default:
-            break;
+            return false;
+    }
+}
+
+/**
+ * Add a warning to the parser if the value that is being written inside of a
+ * predicate to a conditional is a literal.
+ */
+static inline void
+pm_conditional_predicate_warn_write_literal(pm_parser_t *parser, const pm_node_t *node) {
+    if (pm_conditional_predicate_warn_write_literal_p(node)) {
+        pm_parser_warn_node(parser, node, parser->version == PM_OPTIONS_VERSION_CRUBY_3_3_0 ? PM_WARN_EQUAL_IN_CONDITIONAL_3_3_0 : PM_WARN_EQUAL_IN_CONDITIONAL);
     }
 }
 
@@ -16444,7 +16463,7 @@ parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power, b
                         (parser->current_context->context == PM_CONTEXT_CLASS) ||
                         (parser->current_context->context == PM_CONTEXT_MODULE)
                     ) {
-                        pm_parser_err_current(parser, PM_ERR_RETURN_INVALID);
+                        pm_parser_err_previous(parser, PM_ERR_RETURN_INVALID);
                     }
                     return (pm_node_t *) pm_return_node_create(parser, &keyword, arguments.arguments);
                 }
@@ -19251,6 +19270,11 @@ pm_parser_init(pm_parser_t *parser, const uint8_t *source, size_t size, const pm
     if (size >= 3 && source[0] == 0xef && source[1] == 0xbb && source[2] == 0xbf) {
         parser->current.end += 3;
         parser->encoding_comment_start += 3;
+
+        if (parser->encoding != PM_ENCODING_UTF_8_ENTRY) {
+            parser->encoding = PM_ENCODING_UTF_8_ENTRY;
+            if (parser->encoding_changed_callback != NULL) parser->encoding_changed_callback(parser);
+        }
     }
 
     // If the first two bytes of the source are a shebang, then we'll indicate
@@ -19588,7 +19612,7 @@ typedef struct {
 
 #define PM_COLOR_GRAY "\033[38;5;102m"
 #define PM_COLOR_RED "\033[1;31m"
-#define PM_COLOR_RESET "\033[0m"
+#define PM_COLOR_RESET "\033[m"
 
 static inline pm_error_t *
 pm_parser_errors_format_sort(const pm_parser_t *parser, const pm_list_t *error_list, const pm_newline_list_t *newline_list) {
@@ -19644,7 +19668,11 @@ pm_parser_errors_format_sort(const pm_parser_t *parser, const pm_list_t *error_l
 
 static inline void
 pm_parser_errors_format_line(const pm_parser_t *parser, const pm_newline_list_t *newline_list, const char *number_prefix, int32_t line, pm_buffer_t *buffer) {
-    size_t index = (size_t) (line - parser->start_line);
+    int32_t line_delta = line - parser->start_line;
+    assert(line_delta >= 0);
+
+    size_t index = (size_t) line_delta;
+    assert(index < newline_list->size);
 
     const uint8_t *start = &parser->start[newline_list->offsets[index]];
     const uint8_t *end;
@@ -19667,8 +19695,7 @@ pm_parser_errors_format_line(const pm_parser_t *parser, const pm_newline_list_t 
  * Format the errors on the parser into the given buffer.
  */
 PRISM_EXPORTED_FUNCTION void
-pm_parser_errors_format(const pm_parser_t *parser, pm_buffer_t *buffer, bool colorize) {
-    const pm_list_t *error_list = &parser->error_list;
+pm_parser_errors_format(const pm_parser_t *parser, const pm_list_t *error_list, pm_buffer_t *buffer, bool colorize, bool inline_messages) {
     assert(error_list->size != 0);
 
     // First, we're going to sort all of the errors by line number using an
@@ -19683,7 +19710,15 @@ pm_parser_errors_format(const pm_parser_t *parser, pm_buffer_t *buffer, bool col
     // blank lines based on the maximum number of digits in the line numbers
     // that are going to be displaid.
     pm_error_format_t error_format;
-    int32_t max_line_number = errors[error_list->size - 1].line - start_line;
+    int32_t first_line_number = errors[0].line;
+    int32_t last_line_number = errors[error_list->size - 1].line;
+
+    // If we have a maximum line number that is negative, then we're going to
+    // use the absolute value for comparison but multiple by 10 to additionally
+    // have a column for the negative sign.
+    if (first_line_number < 0) first_line_number = (-first_line_number) * 10;
+    if (last_line_number < 0) last_line_number = (-last_line_number) * 10;
+    int32_t max_line_number = first_line_number > last_line_number ? first_line_number : last_line_number;
 
     if (max_line_number < 10) {
         if (colorize) {
@@ -19765,7 +19800,7 @@ pm_parser_errors_format(const pm_parser_t *parser, pm_buffer_t *buffer, bool col
     // the source before the error to give some context. We'll be careful not to
     // display the same line twice in case the errors are close enough in the
     // source.
-    int32_t last_line = 0;
+    int32_t last_line = parser->start_line - 1;
     const pm_encoding_t *encoding = parser->encoding;
 
     for (size_t index = 0; index < error_list->size; index++) {
@@ -19791,12 +19826,15 @@ pm_parser_errors_format(const pm_parser_t *parser, pm_buffer_t *buffer, bool col
         // the line that has the error in it.
         if ((index == 0) || (error->line != last_line)) {
             if (colorize) {
-                pm_buffer_append_string(buffer, PM_COLOR_RED "> " PM_COLOR_RESET, 13);
+                pm_buffer_append_string(buffer, PM_COLOR_RED "> " PM_COLOR_RESET, 12);
             } else {
                 pm_buffer_append_string(buffer, "> ", 2);
             }
             pm_parser_errors_format_line(parser, newline_list, error_format.number_prefix, error->line, buffer);
         }
+
+        const uint8_t *start = &parser->start[newline_list->offsets[error->line - start_line]];
+        if (start == parser->end) pm_buffer_append_byte(buffer, '\n');
 
         // Now we'll display the actual error message. We'll do this by first
         // putting the prefix to the line, then a bunch of blank spaces
@@ -19811,13 +19849,11 @@ pm_parser_errors_format(const pm_parser_t *parser, pm_buffer_t *buffer, bool col
         pm_buffer_append_string(buffer, error_format.blank_prefix, error_format.blank_prefix_length);
 
         size_t column = 0;
-        const uint8_t *start = &parser->start[newline_list->offsets[error->line - start_line]];
-
         while (column < error->column_end) {
             if (column < error->column_start) {
                 pm_buffer_append_byte(buffer, ' ');
             } else if (colorize) {
-                pm_buffer_append_string(buffer, PM_COLOR_RED "^" PM_COLOR_RESET, 12);
+                pm_buffer_append_string(buffer, PM_COLOR_RED "^" PM_COLOR_RESET, 11);
             } else {
                 pm_buffer_append_byte(buffer, '^');
             }
@@ -19826,16 +19862,18 @@ pm_parser_errors_format(const pm_parser_t *parser, pm_buffer_t *buffer, bool col
             column += (char_width == 0 ? 1 : char_width);
         }
 
-        pm_buffer_append_byte(buffer, ' ');
+        if (inline_messages) {
+            pm_buffer_append_byte(buffer, ' ');
+            const char *message = error->error->message;
+            pm_buffer_append_string(buffer, message, strlen(message));
+        }
 
-        const char *message = error->error->message;
-        pm_buffer_append_string(buffer, message, strlen(message));
         pm_buffer_append_byte(buffer, '\n');
 
         // Here we determine how many lines of padding to display after the
         // error, depending on where the next error is in source.
         last_line = error->line;
-        int32_t next_line = (index == error_list->size - 1) ? ((int32_t) newline_list->size) : errors[index + 1].line;
+        int32_t next_line = (index == error_list->size - 1) ? (((int32_t) newline_list->size) + parser->start_line) : errors[index + 1].line;
 
         if (next_line - last_line > 1) {
             pm_buffer_append_string(buffer, "  ", 2);

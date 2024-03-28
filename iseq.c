@@ -1253,8 +1253,6 @@ pm_iseq_compile_with_option(VALUE src, VALUE file, VALUE realpath, VALUE line, V
     pm_parse_result_t result = { 0 };
     pm_options_line_set(&result.options, NUM2INT(line));
 
-    pm_options_frozen_string_literal_init(&result, option.frozen_string_literal);
-
     VALUE error;
     if (RB_TYPE_P(src, T_FILE)) {
         VALUE filepath = rb_io_path(src);
@@ -1386,30 +1384,18 @@ rb_iseq_remove_coverage_all(void)
 static void
 iseqw_mark(void *ptr)
 {
-    rb_gc_mark_movable(*(VALUE *)ptr);
+    rb_gc_mark((VALUE)ptr);
 }
 
 static size_t
 iseqw_memsize(const void *ptr)
 {
-    return rb_iseq_memsize(*(const rb_iseq_t **)ptr);
-}
-
-static void
-iseqw_ref_update(void *ptr)
-{
-    VALUE *vptr = ptr;
-    *vptr = rb_gc_location(*vptr);
+    return rb_iseq_memsize((const rb_iseq_t *)ptr);
 }
 
 static const rb_data_type_t iseqw_data_type = {
     "T_IMEMO/iseq",
-    {
-        iseqw_mark,
-        RUBY_TYPED_DEFAULT_FREE,
-        iseqw_memsize,
-        iseqw_ref_update,
-    },
+    {iseqw_mark, NULL, iseqw_memsize,},
     0, 0, RUBY_TYPED_FREE_IMMEDIATELY|RUBY_TYPED_WB_PROTECTED
 };
 
@@ -1417,12 +1403,18 @@ static VALUE
 iseqw_new(const rb_iseq_t *iseq)
 {
     if (iseq->wrapper) {
+        if (rb_check_typeddata(iseq->wrapper, &iseqw_data_type) != iseq) {
+            rb_raise(rb_eTypeError, "wrong iseq wrapper: %" PRIsVALUE " for %p",
+                     iseq->wrapper, (void *)iseq);
+        }
         return iseq->wrapper;
     }
     else {
-        rb_iseq_t **ptr;
-        VALUE obj = TypedData_Make_Struct(rb_cISeq, rb_iseq_t *, &iseqw_data_type, ptr);
-        RB_OBJ_WRITE(obj, ptr, iseq);
+        union { const rb_iseq_t *in; void *out; } deconst;
+        VALUE obj;
+        deconst.in = iseq;
+        obj = TypedData_Wrap_Struct(rb_cISeq, &iseqw_data_type, deconst.out);
+        RB_OBJ_WRITTEN(obj, Qundef, iseq);
 
         /* cache a wrapper object */
         RB_OBJ_WRITE((VALUE)iseq, &iseq->wrapper, obj);
@@ -1746,9 +1738,7 @@ iseqw_s_compile_option_get(VALUE self)
 static const rb_iseq_t *
 iseqw_check(VALUE iseqw)
 {
-    rb_iseq_t **iseq_ptr;
-    TypedData_Get_Struct(iseqw, rb_iseq_t *, &iseqw_data_type, iseq_ptr);
-    rb_iseq_t *iseq = *iseq_ptr;
+    rb_iseq_t *iseq = DATA_PTR(iseqw);
 
     if (!ISEQ_BODY(iseq)) {
         rb_ibf_load_iseq_complete(iseq);
