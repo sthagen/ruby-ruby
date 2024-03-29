@@ -260,10 +260,13 @@ lex_mode_push_list(pm_parser_t *parser, bool interpolation, uint8_t delimiter) {
     // We'll use strpbrk to find the first of these characters.
     uint8_t *breakpoints = lex_mode.as.list.breakpoints;
     memcpy(breakpoints, "\\ \t\f\r\v\n\0\0\0", sizeof(lex_mode.as.list.breakpoints));
-
-    // Now we'll add the terminator to the list of breakpoints.
     size_t index = 7;
-    breakpoints[index++] = terminator;
+
+    // Now we'll add the terminator to the list of breakpoints. If the
+    // terminator is not already a NULL byte, add it to the list.
+    if (terminator != '\0') {
+        breakpoints[index++] = terminator;
+    }
 
     // If interpolation is allowed, then we're going to check for the #
     // character. Otherwise we'll only look for escapes and the terminator.
@@ -309,13 +312,16 @@ lex_mode_push_regexp(pm_parser_t *parser, uint8_t incrementor, uint8_t terminato
     // characters.
     uint8_t *breakpoints = lex_mode.as.regexp.breakpoints;
     memcpy(breakpoints, "\r\n\\#\0\0", sizeof(lex_mode.as.regexp.breakpoints));
+    size_t index = 4;
 
     // First we'll add the terminator.
-    breakpoints[4] = terminator;
+    if (terminator != '\0') {
+        breakpoints[index++] = terminator;
+    }
 
     // Next, if there is an incrementor, then we'll check for that as well.
     if (incrementor != '\0') {
-        breakpoints[5] = incrementor;
+        breakpoints[index++] = incrementor;
     }
 
     return lex_mode_push(parser, lex_mode);
@@ -341,10 +347,13 @@ lex_mode_push_string(pm_parser_t *parser, bool interpolation, bool label_allowed
     // string. We'll use strpbrk to find the first of these characters.
     uint8_t *breakpoints = lex_mode.as.string.breakpoints;
     memcpy(breakpoints, "\r\n\\\0\0\0", sizeof(lex_mode.as.string.breakpoints));
-
-    // Now add in the terminator.
     size_t index = 3;
-    breakpoints[index++] = terminator;
+
+    // Now add in the terminator. If the terminator is not already a NULL byte,
+    // then we'll add it.
+    if (terminator != '\0') {
+        breakpoints[index++] = terminator;
+    }
 
     // If interpolation is allowed, then we're going to check for the #
     // character. Otherwise we'll only look for escapes and the terminator.
@@ -7582,7 +7591,7 @@ parser_lex_magic_comment(pm_parser_t *parser, bool semantic_token_seen) {
 
         // Allocate a new magic comment node to append to the parser's list.
         pm_magic_comment_t *magic_comment;
-        if ((magic_comment = (pm_magic_comment_t *) xcalloc(sizeof(pm_magic_comment_t), 1)) != NULL) {
+        if ((magic_comment = (pm_magic_comment_t *) xcalloc(1, sizeof(pm_magic_comment_t))) != NULL) {
             magic_comment->key_start = key_start;
             magic_comment->value_start = value_start;
             magic_comment->key_length = (uint32_t) key_length;
@@ -9077,7 +9086,7 @@ parser_lex_callback(pm_parser_t *parser) {
  */
 static inline pm_comment_t *
 parser_comment(pm_parser_t *parser, pm_comment_type_t type) {
-    pm_comment_t *comment = (pm_comment_t *) xcalloc(sizeof(pm_comment_t), 1);
+    pm_comment_t *comment = (pm_comment_t *) xcalloc(1, sizeof(pm_comment_t));
     if (comment == NULL) return NULL;
 
     *comment = (pm_comment_t) {
@@ -10752,12 +10761,6 @@ parser_lex(pm_parser_t *parser) {
             pm_token_buffer_t token_buffer = { 0 };
 
             while (breakpoint != NULL) {
-                // If we hit a null byte, skip directly past it.
-                if (*breakpoint == '\0') {
-                    breakpoint = pm_strpbrk(parser, breakpoint + 1, breakpoints, parser->end - (breakpoint + 1), true);
-                    continue;
-                }
-
                 // If we hit whitespace, then we must have received content by
                 // now, so we can return an element of the list.
                 if (pm_char_is_whitespace(*breakpoint)) {
@@ -10792,6 +10795,12 @@ parser_lex(pm_parser_t *parser) {
                     lex_mode_pop(parser);
                     lex_state_set(parser, PM_LEX_STATE_END);
                     LEX(PM_TOKEN_STRING_END);
+                }
+
+                // If we hit a null byte, skip directly past it.
+                if (*breakpoint == '\0') {
+                    breakpoint = pm_strpbrk(parser, breakpoint + 1, breakpoints, parser->end - (breakpoint + 1), true);
+                    continue;
                 }
 
                 // If we hit escapes, then we need to treat the next token
