@@ -544,6 +544,23 @@ pm_source_file_value(const pm_source_file_node_t *node, const pm_scope_node_t *s
 }
 
 /**
+ * Return a static literal string, optionally with attached debugging
+ * information.
+ */
+static VALUE
+pm_static_literal_string(rb_iseq_t *iseq, VALUE string, int line_number)
+{
+    if (ISEQ_COMPILE_DATA(iseq)->option->debug_frozen_string_literal || RTEST(ruby_debug)) {
+        VALUE debug_info = rb_ary_new_from_args(2, rb_iseq_path(iseq), INT2FIX(line_number));
+        rb_ivar_set(string, id_debug_created_info, rb_obj_freeze(debug_info));
+        return rb_str_freeze(string);
+    }
+    else {
+        return rb_fstring(string);
+    }
+}
+
+/**
  * Certain nodes can be compiled literally. This function returns the literal
  * value described by the given node. For example, an array node with all static
  * literal values can be compiled into a literal array.
@@ -603,8 +620,11 @@ pm_static_literal_value(rb_iseq_t *iseq, const pm_node_t *node, const pm_scope_n
         const pm_interpolated_regular_expression_node_t *cast = (const pm_interpolated_regular_expression_node_t *) node;
         return parse_regexp_concat(iseq, scope_node, (const pm_node_t *) cast, &cast->parts);
       }
-      case PM_INTERPOLATED_STRING_NODE:
-        return pm_static_literal_concat(&((const pm_interpolated_string_node_t *) node)->parts, scope_node, true);
+      case PM_INTERPOLATED_STRING_NODE: {
+        VALUE string = pm_static_literal_concat(&((const pm_interpolated_string_node_t *) node)->parts, scope_node, false);
+        int line_number = pm_node_line_number(scope_node->parser, node);
+        return pm_static_literal_string(iseq, string, line_number);
+      }
       case PM_INTERPOLATED_SYMBOL_NODE: {
         const pm_interpolated_symbol_node_t *cast = (const pm_interpolated_symbol_node_t *) node;
         VALUE string = pm_static_literal_concat(&cast->parts, scope_node, true);
@@ -631,8 +651,11 @@ pm_static_literal_value(rb_iseq_t *iseq, const pm_node_t *node, const pm_scope_n
       }
       case PM_SOURCE_LINE_NODE:
         return INT2FIX(pm_node_line_number(scope_node->parser, node));
-      case PM_STRING_NODE:
-        return rb_fstring(parse_string_encoded(scope_node, node, &((pm_string_node_t *)node)->unescaped));
+      case PM_STRING_NODE: {
+        VALUE string = parse_string_encoded(scope_node, node, &((const pm_string_node_t *) node)->unescaped);
+        int line_number = pm_node_line_number(scope_node->parser, node);
+        return pm_static_literal_string(iseq, string, line_number);
+      }
       case PM_SYMBOL_NODE:
         return ID2SYM(parse_string_symbol(scope_node, (const pm_symbol_node_t *) node));
       case PM_TRUE_NODE:
@@ -4308,7 +4331,10 @@ pm_compile_case_node_dispatch(rb_iseq_t *iseq, VALUE dispatch, const pm_node_t *
         break;
       case PM_STRING_NODE: {
         const pm_string_node_t *cast = (const pm_string_node_t *) node;
-        key = rb_fstring(parse_string_encoded(scope_node, node, &cast->unescaped));
+        VALUE string = parse_string_encoded(scope_node, node, &cast->unescaped);
+
+        int line_number = pm_node_line_number(scope_node->parser, node);
+        key = pm_static_literal_string(iseq, string, line_number);
         break;
       }
       default:
@@ -8140,7 +8166,8 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
         // ^^^^^
         if (!popped) {
             const pm_string_node_t *cast = (const pm_string_node_t *) node;
-            VALUE value = rb_fstring(parse_string_encoded(scope_node, node, &cast->unescaped));
+            VALUE value = parse_string_encoded(scope_node, node, &cast->unescaped);
+            value = pm_static_literal_string(iseq, value, location.line);
 
             if (PM_NODE_FLAG_P(node, PM_STRING_FLAGS_FROZEN)) {
                 PUSH_INSN1(ret, location, putobject, value);
@@ -8390,10 +8417,21 @@ pm_parse_process_error(const pm_parse_result_t *result)
     const pm_string_t *filepath = &parser->filepath;
 
     for (const pm_diagnostic_t *error = head; error != NULL; error = (const pm_diagnostic_t *) error->node.next) {
-        // Any errors with the level PM_ERROR_LEVEL_ARGUMENT effectively take
-        // over as the only argument that gets raised. This is to allow priority
-        // messages that should be handled before anything else.
-        if (error->level == PM_ERROR_LEVEL_ARGUMENT) {
+        switch (error->level) {
+          case PM_ERROR_LEVEL_SYNTAX:
+            // It is implicitly assumed that the error messages will be
+            // encodeable as UTF-8. Because of this, we can't include source
+            // examples that contain invalid byte sequences. So if any source
+            // examples include invalid UTF-8 byte sequences, we will skip
+            // showing source examples entirely.
+            if (valid_utf8 && !pm_parse_process_error_utf8_p(parser, &error->location)) {
+                valid_utf8 = false;
+            }
+            break;
+          case PM_ERROR_LEVEL_ARGUMENT: {
+            // Any errors with the level PM_ERROR_LEVEL_ARGUMENT take over as
+            // the only argument that gets raised. This is to allow priority
+            // messages that should be handled before anything else.
             int32_t line_number = (int32_t) pm_location_line_number(parser, &error->location);
 
             pm_buffer_append_format(
@@ -8414,19 +8452,20 @@ pm_parse_process_error(const pm_parse_result_t *result)
                 pm_parser_errors_format(parser, &error_list, &buffer, rb_stderr_tty_p(), false);
             }
 
-            VALUE arg_error = rb_exc_new(rb_eArgError, pm_buffer_value(&buffer), pm_buffer_length(&buffer));
+            VALUE value = rb_exc_new(rb_eArgError, pm_buffer_value(&buffer), pm_buffer_length(&buffer));
             pm_buffer_free(&buffer);
 
-            return arg_error;
-        }
-
-        // It is implicitly assumed that the error messages will be encodeable
-        // as UTF-8. Because of this, we can't include source examples that
-        // contain invalid byte sequences. So if any source examples include
-        // invalid UTF-8 byte sequences, we will skip showing source examples
-        // entirely.
-        if (valid_utf8 && !pm_parse_process_error_utf8_p(parser, &error->location)) {
-            valid_utf8 = false;
+            return value;
+          }
+          case PM_ERROR_LEVEL_LOAD: {
+            // Load errors are much simpler, because they don't include any of
+            // the source in them. We create the error directly from the
+            // message.
+            VALUE message = rb_enc_str_new_cstr(error->message, rb_locale_encoding());
+            VALUE value = rb_exc_new3(rb_eLoadError, message);
+            rb_ivar_set(value, rb_intern_const("@path"), Qnil);
+            return value;
+          }
         }
     }
 

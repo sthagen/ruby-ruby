@@ -500,6 +500,9 @@ debug_lex_state_set(pm_parser_t *parser, pm_lex_state_t state, char const * call
 /** True if the -p command line option was given. */
 #define PM_PARSER_COMMAND_LINE_OPTION_P(parser) PM_PARSER_COMMAND_LINE_OPTION(parser, PM_OPTIONS_COMMAND_LINE_P)
 
+/** True if the -x command line option was given. */
+#define PM_PARSER_COMMAND_LINE_OPTION_X(parser) PM_PARSER_COMMAND_LINE_OPTION(parser, PM_OPTIONS_COMMAND_LINE_X)
+
 /******************************************************************************/
 /* Diagnostic-related functions                                               */
 /******************************************************************************/
@@ -1179,6 +1182,77 @@ token_is_setter_name(pm_token_t *token) {
         (token->end - token->start >= 2) &&
         (token->end[-1] == '=')
     );
+}
+
+/**
+ * Returns true if the given local variable is a keyword.
+ */
+static bool
+pm_local_is_keyword(const char *source, size_t length) {
+#define KEYWORD(name) if (memcmp(source, name, length) == 0) return true
+
+    switch (length) {
+        case 2:
+            switch (source[0]) {
+                case 'd': KEYWORD("do"); return false;
+                case 'i': KEYWORD("if"); KEYWORD("in"); return false;
+                case 'o': KEYWORD("or"); return false;
+                default: return false;
+            }
+        case 3:
+            switch (source[0]) {
+                case 'a': KEYWORD("and"); return false;
+                case 'd': KEYWORD("def"); return false;
+                case 'e': KEYWORD("end"); return false;
+                case 'f': KEYWORD("for"); return false;
+                case 'n': KEYWORD("nil"); KEYWORD("not"); return false;
+                default: return false;
+            }
+        case 4:
+            switch (source[0]) {
+                case 'c': KEYWORD("case"); return false;
+                case 'e': KEYWORD("else"); return false;
+                case 'n': KEYWORD("next"); return false;
+                case 'r': KEYWORD("redo"); return false;
+                case 's': KEYWORD("self"); return false;
+                case 't': KEYWORD("then");  KEYWORD("true"); return false;
+                case 'w': KEYWORD("when"); return false;
+                default: return false;
+            }
+        case 5:
+            switch (source[0]) {
+                case 'a': KEYWORD("alias"); return false;
+                case 'b': KEYWORD("begin"); KEYWORD("break"); return false;
+                case 'c': KEYWORD("class"); return false;
+                case 'e': KEYWORD("elsif"); return false;
+                case 'f': KEYWORD("false"); return false;
+                case 'r': KEYWORD("retry"); return false;
+                case 's': KEYWORD("super"); return false;
+                case 'u': KEYWORD("undef"); KEYWORD("until"); return false;
+                case 'w': KEYWORD("while"); return false;
+                case 'y': KEYWORD("yield"); return false;
+                default: return false;
+            }
+        case 6:
+            switch (source[0]) {
+                case 'e': KEYWORD("ensure"); return false;
+                case 'm': KEYWORD("module"); return false;
+                case 'r': KEYWORD("rescue"); KEYWORD("return"); return false;
+                case 'u': KEYWORD("unless"); return false;
+                default: return false;
+            }
+        case 8:
+            KEYWORD("__LINE__");
+            KEYWORD("__FILE__");
+            return false;
+        case 12:
+            KEYWORD("__ENCODING__");
+            return false;
+        default:
+            return false;
+    }
+
+#undef KEYWORD
 }
 
 /******************************************************************************/
@@ -10573,19 +10647,19 @@ parser_lex(pm_parser_t *parser) {
 
                     pm_token_type_t type = lex_identifier(parser, previous_command_start);
 
-                    // If we've hit a __END__ and it was at the start of the line or the
-                    // start of the file and it is followed by either a \n or a \r\n, then
-                    // this is the last token of the file.
+                    // If we've hit a __END__ and it was at the start of the
+                    // line or the start of the file and it is followed by
+                    // either a \n or a \r\n, then this is the last token of the
+                    // file.
                     if (
                         ((parser->current.end - parser->current.start) == 7) &&
                         current_token_starts_line(parser) &&
                         (memcmp(parser->current.start, "__END__", 7) == 0) &&
                         (parser->current.end == parser->end || match_eol(parser))
-                        )
-                    {
-                        // Since we know we're about to add an __END__ comment, we know we
-                        // need to add all of the newlines to get the correct column
-                        // information for it.
+                    ) {
+                        // Since we know we're about to add an __END__ comment,
+                        // we know we need to add all of the newlines to get the
+                        // correct column information for it.
                         const uint8_t *cursor = parser->current.end;
                         while ((cursor = next_newline(cursor, parser->end - cursor)) != NULL) {
                             pm_newline_list_append(&parser->newline_list, cursor++);
@@ -18003,18 +18077,32 @@ parse_call_operator_write(pm_parser_t *parser, pm_call_node_t *call_node, const 
     }
 }
 
+/**
+ * Returns true if the name of the capture group is a valid local variable that
+ * can be written to.
+ */
 static bool
-name_is_identifier(pm_parser_t *parser, const uint8_t *source, size_t length) {
+parse_regular_expression_named_capture(pm_parser_t *parser, const uint8_t *source, size_t length) {
     if (length == 0) {
         return false;
     }
 
+    // First ensure that it starts with a valid identifier starting character.
     size_t width = char_is_identifier_start(parser, source);
     if (!width) {
         return false;
     }
 
-    uint8_t *cursor = ((uint8_t *)source) + width;
+    // Next, ensure that it's not an uppercase character.
+    if (parser->encoding_changed) {
+        if (parser->encoding->isupper_char(source, (ptrdiff_t) length)) return false;
+    } else {
+        if (pm_encoding_utf_8_isupper_char(source, (ptrdiff_t) length)) return false;
+    }
+
+    // Next, iterate through all of the bytes of the string to ensure that they
+    // are all valid identifier characters.
+    const uint8_t *cursor = source + width;
     while (cursor < source + length && (width = char_is_identifier(parser, cursor))) {
         cursor += width;
     }
@@ -18048,7 +18136,7 @@ parse_regular_expression_named_captures(pm_parser_t *parser, const pm_string_t *
 
             // If the name of the capture group isn't a valid identifier, we do
             // not add it to the local table.
-            if (!name_is_identifier(parser, source, length)) continue;
+            if (!parse_regular_expression_named_capture(parser, source, length)) continue;
 
             if (content->type == PM_STRING_SHARED) {
                 // If the unescaped string is a slice of the source, then we can
@@ -18079,15 +18167,18 @@ parse_regular_expression_named_captures(pm_parser_t *parser, const pm_string_t *
                 if (pm_constant_id_list_includes(&names, name)) continue;
                 pm_constant_id_list_append(&names, name);
 
+                int depth;
+                if ((depth = pm_parser_local_depth_constant_id(parser, name)) == -1) {
+                    // If the identifier is not already a local, then we'll add
+                    // it to the local table unless it's a keyword.
+                    if (pm_local_is_keyword((const char *) source, length)) continue;
+
+                    pm_parser_local_add(parser, name);
+                }
+
                 // Here we lazily create the MatchWriteNode since we know we're
                 // about to add a target.
                 if (match == NULL) match = pm_match_write_node_create(parser, call);
-
-                // First, find the depth of the local that is being assigned.
-                int depth;
-                if ((depth = pm_parser_local_depth_constant_id(parser, name)) == -1) {
-                    pm_parser_local_add(parser, name);
-                }
 
                 // Next, create the local variable target and add it to the
                 // list of targets for the match.
@@ -19123,6 +19214,38 @@ parse_program(pm_parser_t *parser) {
 /******************************************************************************/
 
 /**
+ * A vendored version of strnstr that is used to find a substring within a
+ * string with a given length. This function is used to search for the Ruby
+ * engine name within a shebang when the -x option is passed to Ruby.
+ *
+ * The only modification that we made here is that we don't do NULL byte checks
+ * because we know the little parameter will not have a NULL byte and we allow
+ * the big parameter to have them.
+ */
+static const char *
+pm_strnstr(const char *big, const char *little, size_t big_length) {
+    size_t little_length = strlen(little);
+
+    for (const char *big_end = big + big_length; big < big_end; big++) {
+        if (*big == *little && memcmp(big, little, little_length) == 0) return big;
+    }
+
+    return NULL;
+}
+
+/**
+ * Potentially warn the user if the shebang that has been found to include
+ * "ruby" has a carriage return at the end, as that can cause problems on some
+ * platforms.
+ */
+static void
+pm_parser_warn_shebang_carriage_return(pm_parser_t *parser, const uint8_t *start, size_t length) {
+    if (length > 2 && start[length - 1] == '\n' && start[length - 2] == '\r') {
+        pm_parser_warn(parser, start, start + length, PM_WARN_SHEBANG_CARRIAGE_RETURN);
+    }
+}
+
+/**
  * Initialize a parser with the given start and end pointers.
  */
 PRISM_EXPORTED_FUNCTION void
@@ -19208,22 +19331,6 @@ pm_parser_init(pm_parser_t *parser, const uint8_t *source, size_t size, const pm
         // line option
         parser->start_line = options->line;
 
-        // offset option
-        if (options->offset != 0) {
-            const uint8_t *cursor = parser->start;
-            const uint8_t *offset = cursor + options->offset;
-
-            const uint8_t *newline = NULL;
-            while ((newline = next_newline(cursor, parser->end - cursor)) != NULL) {
-                if (newline > offset) break;
-                pm_newline_list_append(&parser->newline_list, newline);
-                cursor = newline + 1;
-            }
-
-            parser->previous = (pm_token_t) { .type = PM_TOKEN_EOF, .start = offset, .end = offset };
-            parser->current = (pm_token_t) { .type = PM_TOKEN_EOF, .start = offset, .end = offset };
-        }
-
         // encoding option
         size_t encoding_length = pm_string_length(&options->encoding);
         if (encoding_length > 0) {
@@ -19277,14 +19384,74 @@ pm_parser_init(pm_parser_t *parser, const uint8_t *source, size_t size, const pm
         }
     }
 
+    // If the -x command line flag is set, or the first shebang of the file does
+    // not include "ruby", then we'll search for a shebang that does include
+    // "ruby" and start parsing from there.
+    bool search_shebang = PM_PARSER_COMMAND_LINE_OPTION_X(parser);
+
     // If the first two bytes of the source are a shebang, then we'll indicate
     // that the encoding comment is at the end of the shebang.
     if (peek(parser) == '#' && peek_offset(parser, 1) == '!') {
-        const uint8_t *encoding_comment_start = next_newline(source, (ptrdiff_t) size);
-        if (encoding_comment_start) {
-            parser->encoding_comment_start = encoding_comment_start + 1;
+        const uint8_t *newline = next_newline(parser->start, parser->end - parser->start);
+        size_t length = (size_t) ((newline != NULL ? newline : parser->end) - parser->start);
+
+        if (pm_strnstr((const char *) parser->start, "ruby", length) != NULL) {
+            pm_parser_warn_shebang_carriage_return(parser, parser->start, length);
+            if (newline != NULL) parser->encoding_comment_start = newline + 1;
+            search_shebang = false;
+        } else {
+            search_shebang = true;
         }
     }
+
+    // Here we're going to find the first shebang that includes "ruby" and start
+    // parsing from there.
+    if (search_shebang) {
+        // If a shebang that includes "ruby" is not found, then we're going to a
+        // a load error to the list of errors on the parser.
+        bool found_shebang = false;
+
+        // This is going to point to the start of each line as we check it.
+        // We'll maintain a moving window looking at each line at they come.
+        const uint8_t *cursor = parser->start;
+
+        // The newline pointer points to the end of the current line that we're
+        // considering. If it is NULL, then we're at the end of the file.
+        const uint8_t *newline = next_newline(cursor, parser->end - cursor);
+
+        while (newline != NULL) {
+            pm_newline_list_append(&parser->newline_list, newline);
+
+            cursor = newline + 1;
+            newline = next_newline(cursor, parser->end - cursor);
+
+            size_t length = (size_t) ((newline != NULL ? newline : parser->end) - cursor);
+            if (length > 2 && cursor[0] == '#' && cursor[1] == '!') {
+                if (parser->newline_list.size == 1) {
+                    pm_parser_warn_shebang_carriage_return(parser, cursor, length);
+                }
+
+                if (pm_strnstr((const char *) cursor, "ruby", length) != NULL) {
+                    found_shebang = true;
+                    parser->encoding_comment_start = newline + 1;
+                    break;
+                }
+            }
+        }
+
+        if (found_shebang) {
+            parser->previous = (pm_token_t) { .type = PM_TOKEN_EOF, .start = cursor, .end = cursor };
+            parser->current = (pm_token_t) { .type = PM_TOKEN_EOF, .start = cursor, .end = cursor };
+        } else {
+            pm_parser_err(parser, parser->start, parser->start, PM_ERR_SCRIPT_NOT_FOUND);
+            pm_newline_list_clear(&parser->newline_list);
+        }
+    }
+
+    // The encoding comment can start after any amount of inline whitespace, so
+    // here we'll advance it to the first non-inline-whitespace character so
+    // that it is ready for future comparisons.
+    parser->encoding_comment_start += pm_strspn_inline_whitespace(parser->encoding_comment_start, parser->end - parser->encoding_comment_start);
 }
 
 /**

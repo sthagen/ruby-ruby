@@ -1,12 +1,5 @@
 # frozen_string_literal: true
 
-## Command line
-MSpec.register(:exclude, "The -S command line option runs launcher found in PATH, but only code after the first /#!.*ruby.*/-ish line in target file")
-MSpec.register(:exclude, "The -x command line option runs code after the first /#!.*ruby.*/-ish line in target file")
-MSpec.register(:exclude, "The -x command line option fails when /#!.*ruby.*/-ish line in target file is not found")
-MSpec.register(:exclude, "The -x command line option behaves as -x was set when non-ruby shebang is encountered on first line")
-MSpec.register(:exclude, "The --debug flag produces debugging info on attempted frozen string modification")
-
 ## Language
 MSpec.register(:exclude, "The BEGIN keyword runs multiple begins in FIFO order")
 MSpec.register(:exclude, "Executing break from within a block works when passing through a super call")
@@ -33,8 +26,6 @@ MSpec.register(:exclude, "A Symbol literal raises an SyntaxError at parse time w
 ## Core
 MSpec.register(:exclude, "IO.popen with a leading Array argument accepts a trailing Hash of Process.exec options")
 MSpec.register(:exclude, "IO.popen with a leading Array argument accepts an IO mode argument following the Array")
-MSpec.register(:exclude, "Kernel#eval with a magic encoding comment allows spaces before the magic encoding comment")
-MSpec.register(:exclude, "Kernel#eval with a magic encoding comment allows a shebang line and some spaces before the magic encoding comment")
 MSpec.register(:exclude, "TracePoint#eval_script is the evald source code")
 MSpec.register(:exclude, "TracePoint#event returns the type of event")
 MSpec.register(:exclude, "TracePoint#inspect returns a String showing the event, method, path and line for a :return event")
