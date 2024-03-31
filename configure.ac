@@ -75,8 +75,10 @@ AC_ARG_WITH(baseruby,
 	[
 		AC_PATH_PROG([BASERUBY], [ruby], [false])
 	])
-# BASERUBY must be >= 3.0.0. Note that `"3.0.0" > "3.0"` is true.
-AS_IF([test "$HAVE_BASERUBY" != no -a "`RUBYOPT=- $BASERUBY --disable=gems -e 'print true if RUBY_VERSION > "3.0"' 2>/dev/null`" = true], [
+AS_IF([test "$HAVE_BASERUBY" != no], [
+    RUBYOPT=- $BASERUBY --disable=gems "${tooldir}/missing-baseruby.bat" || HAVE_BASERUBY=no
+])
+AS_IF([test "${HAVE_BASERUBY:=no}" != no], [
     AS_CASE(["$build_os"], [mingw*], [
         # Can MSys shell run a command with a drive letter?
         RUBYOPT=- `cygpath -ma "$BASERUBY"` --disable=gems -e exit 2>/dev/null || HAVE_BASERUBY=no
@@ -84,12 +86,10 @@ AS_IF([test "$HAVE_BASERUBY" != no -a "`RUBYOPT=- $BASERUBY --disable=gems -e 'p
     RUBY_APPEND_OPTION(BASERUBY, "--disable=gems")
     BASERUBY_VERSION=`$BASERUBY -v`
     $BASERUBY -C "$srcdir" tool/downloader.rb -d tool -e gnu config.guess config.sub >&AS_MESSAGE_FD
-], [
-    HAVE_BASERUBY=no
 ])
 AS_IF([test "$HAVE_BASERUBY" = no], [
     AS_IF([test "$cross_compiling" = yes], [AC_MSG_ERROR([executable host ruby is required for cross-compiling])])
-    BASERUBY=$srcdir/tool/missing-baseruby.bat
+    BASERUBY=${tooldir}/missing-baseruby.bat
 ])
 AC_SUBST(BASERUBY)
 AC_SUBST(HAVE_BASERUBY)
