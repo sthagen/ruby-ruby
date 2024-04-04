@@ -36,6 +36,7 @@
 #include "internal/thread.h"
 #include "internal/variable.h"
 #include "iseq.h"
+#include "ruby/ractor.h"
 #include "ruby/re.h"
 #include "ruby/util.h"
 #include "vm_core.h"
@@ -1926,9 +1927,6 @@ iseq_set_arguments_keywords(rb_iseq_t *iseq, LINK_ANCHOR *const optargs,
         }
         else {
             switch (nd_type(val_node)) {
-              case NODE_LIT:
-                dv = RNODE_LIT(val_node)->nd_lit;
-                break;
               case NODE_SYM:
                 dv = rb_node_sym_string_val(val_node);
                 break;
@@ -4509,7 +4507,6 @@ compile_branch_condition(rb_iseq_t *iseq, LINK_ANCHOR *ret, const NODE *cond,
             else_label = NEW_LABEL(nd_line(cond));
         }
         goto again;
-      case NODE_LIT:		/* NODE_LIT is always true */
       case NODE_SYM:
       case NODE_LINE:
       case NODE_FILE:
@@ -4590,8 +4587,6 @@ static VALUE
 get_symbol_value(rb_iseq_t *iseq, const NODE *node)
 {
     switch (nd_type(node)) {
-      case NODE_LIT:
-        return RNODE_LIT(node)->nd_lit;
       case NODE_SYM:
         return rb_node_sym_string_val(node);
       default:
@@ -4640,10 +4635,7 @@ compile_keyword_arg(rb_iseq_t *iseq, LINK_ANCHOR *const ret,
             seen_nodes++;
 
             RUBY_ASSERT(nd_type_p(node, NODE_LIST));
-            if (key_node && nd_type_p(key_node, NODE_LIT) && SYMBOL_P(RNODE_LIT(key_node)->nd_lit)) {
-                /* can be keywords */
-            }
-            else if (key_node && nd_type_p(key_node, NODE_SYM)) {
+            if (key_node && nd_type_p(key_node, NODE_SYM)) {
                 /* can be keywords */
             }
             else {
@@ -4728,7 +4720,6 @@ static inline bool
 static_literal_node_p(const NODE *node, const rb_iseq_t *iseq, bool hash_key)
 {
     switch (nd_type(node)) {
-      case NODE_LIT:
       case NODE_SYM:
       case NODE_REGX:
       case NODE_LINE:
@@ -4787,8 +4778,6 @@ static_literal_value(const NODE *node, rb_iseq_t *iseq)
         else {
             return rb_fstring(get_string_value(node));
         }
-      case NODE_LIT:
-        return RNODE_LIT(node)->nd_lit;
       default:
         rb_bug("unexpected node: %s", ruby_node_name(nd_type(node)));
     }
@@ -5067,7 +5056,7 @@ compile_hash(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *node, int meth
                 FLUSH_CHUNK();
 
                 const NODE *kw = RNODE_LIST(RNODE_LIST(node)->nd_next)->nd_head;
-                int empty_kw = nd_type_p(kw, NODE_LIT) && RB_TYPE_P(RNODE_LIT(kw)->nd_lit, T_HASH); /* foo(  ..., **{}, ...) */
+                int empty_kw = nd_type_p(kw, NODE_HASH) && (!RNODE_HASH(kw)->nd_head); /* foo(  ..., **{}, ...) */
                 int first_kw = first_chunk && stack_len == 0; /* foo(1,2,3, **kw, ...) */
                 int last_kw = !RNODE_LIST(RNODE_LIST(node)->nd_next)->nd_next; /* foo(  ..., **kw) */
                 int only_kw = last_kw && first_kw;            /* foo(1,2,3, **kw) */
@@ -5132,13 +5121,6 @@ VALUE
 rb_node_case_when_optimizable_literal(const NODE *const node)
 {
     switch (nd_type(node)) {
-      case NODE_LIT: {
-        VALUE v = RNODE_LIT(node)->nd_lit;
-        if (SYMBOL_P(v)) {
-            return v;
-        }
-        break;
-      }
       case NODE_INTEGER:
         return rb_node_integer_literal_val(node);
       case NODE_FLOAT: {
@@ -5814,7 +5796,6 @@ defined_expr0(rb_iseq_t *iseq, LINK_ANCHOR *const ret,
       }
         /* fall through */
       case NODE_STR:
-      case NODE_LIT:
       case NODE_SYM:
       case NODE_REGX:
       case NODE_LINE:
@@ -6398,8 +6379,6 @@ optimizable_range_item_p(const NODE *n)
 {
     if (!n) return FALSE;
     switch (nd_type(n)) {
-      case NODE_LIT:
-        return RB_INTEGER_TYPE_P(RNODE_LIT(n)->nd_lit);
       case NODE_LINE:
         return TRUE;
       case NODE_INTEGER:
@@ -6415,8 +6394,6 @@ static VALUE
 optimized_range_item(const NODE *n)
 {
     switch (nd_type(n)) {
-      case NODE_LIT:
-        return RNODE_LIT(n)->nd_lit;
       case NODE_LINE:
         return rb_node_line_lineno_val(n);
       case NODE_INTEGER:
@@ -7242,7 +7219,6 @@ iseq_compile_pattern_each(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *c
         ADD_INSNL(ret, line_node, jump, unmatched);
         break;
       }
-      case NODE_LIT:
       case NODE_SYM:
       case NODE_REGX:
       case NODE_LINE:
@@ -8644,9 +8620,6 @@ compile_builtin_attr(rb_iseq_t *iseq, const NODE *node)
           case NODE_SYM:
             symbol = rb_node_sym_string_val(node);
             break;
-          case NODE_LIT:
-            symbol = RNODE_LIT(node)->nd_lit;
-            break;
           default:
             goto bad_arg;
         }
@@ -8692,9 +8665,6 @@ compile_builtin_arg(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *node, c
     switch (nd_type(node)) {
       case NODE_SYM:
         name = rb_node_sym_string_val(node);
-        break;
-      case NODE_LIT:
-        name = RNODE_LIT(node)->nd_lit;
         break;
       default:
         goto bad_arg;
@@ -8934,20 +8904,7 @@ compile_call(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *const node, co
                 labels_table = st_init_numtable();
                 ISEQ_COMPILE_DATA(iseq)->labels_table = labels_table;
             }
-            if (nd_type_p(node->nd_args->nd_head, NODE_LIT) &&
-                SYMBOL_P(node->nd_args->nd_head->nd_lit)) {
-
-                label_name = node->nd_args->nd_head->nd_lit;
-                if (!st_lookup(labels_table, (st_data_t)label_name, &data)) {
-                    label = NEW_LABEL(nd_line(line_node));
-                    label->position = nd_line(line_node);
-                    st_insert(labels_table, (st_data_t)label_name, (st_data_t)label);
-                }
-                else {
-                    label = (LABEL *)data;
-                }
-            }
-            else {
+            {
                 COMPILE_ERROR(ERROR_ARGS "invalid goto/label format");
                 return COMPILE_NG;
             }
@@ -9375,6 +9332,8 @@ compile_op_asgn2(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *const node
     return COMPILE_OK;
 }
 
+static int compile_shareable_constant_value(rb_iseq_t *iseq, LINK_ANCHOR *ret, enum rb_parser_shareability shareable, const NODE *lhs, const NODE *value);
+
 static int
 compile_op_cdecl(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *const node, int popped)
 {
@@ -9418,7 +9377,7 @@ compile_op_cdecl(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *const node
         /* cref [obj] */
         if (!popped) ADD_INSN(ret, node, pop); /* cref */
         if (lassign) ADD_LABEL(ret, lassign);
-        CHECK(COMPILE(ret, "NODE_OP_CDECL#nd_value", RNODE_OP_CDECL(node)->nd_value));
+        CHECK(compile_shareable_constant_value(iseq, ret, RNODE_OP_CDECL(node)->shareability, RNODE_OP_CDECL(node)->nd_head, RNODE_OP_CDECL(node)->nd_value));
         /* cref value */
         if (popped)
             ADD_INSN1(ret, node, topn, INT2FIX(1)); /* cref value cref */
@@ -9432,7 +9391,7 @@ compile_op_cdecl(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *const node
         ADD_INSN(ret, node, pop); /* [value] */
     }
     else {
-        CHECK(COMPILE(ret, "NODE_OP_CDECL#nd_value", RNODE_OP_CDECL(node)->nd_value));
+        CHECK(compile_shareable_constant_value(iseq, ret, RNODE_OP_CDECL(node)->shareability, RNODE_OP_CDECL(node)->nd_head, RNODE_OP_CDECL(node)->nd_value));
         /* cref obj value */
         ADD_CALL(ret, node, RNODE_OP_CDECL(node)->nd_aid, INT2FIX(1));
         /* cref value */
@@ -9831,8 +9790,7 @@ compile_kw_arg(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *const node, 
         COMPILE_ERROR(ERROR_ARGS "unreachable");
         return COMPILE_NG;
     }
-    else if (nd_type_p(default_value, NODE_LIT) ||
-             nd_type_p(default_value, NODE_SYM) ||
+    else if (nd_type_p(default_value, NODE_SYM) ||
              nd_type_p(default_value, NODE_REGX) ||
              nd_type_p(default_value, NODE_LINE) ||
              nd_type_p(default_value, NODE_INTEGER) ||
@@ -9946,6 +9904,367 @@ compile_attrasgn(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *const node
     qcall_branch_end(iseq, ret, else_label, branches, node, node);
     ADD_INSN(ret, node, pop);
     return COMPILE_OK;
+}
+
+static int
+compile_make_shareable_node(rb_iseq_t *iseq, LINK_ANCHOR *ret, LINK_ANCHOR *sub, const NODE *value, bool copy)
+{
+    ADD_INSN1(ret, value, putobject, rb_mRubyVMFrozenCore);
+    ADD_SEQ(ret, sub);
+
+    if (copy) {
+        /*
+         * NEW_CALL(fcore, rb_intern("make_shareable_copy"),
+         *          NEW_LIST(value, loc), loc);
+         */
+        ADD_SEND_WITH_FLAG(ret, value, rb_intern("make_shareable_copy"), INT2FIX(1), INT2FIX(VM_CALL_ARGS_SIMPLE));
+    }
+    else {
+        /*
+         * NEW_CALL(fcore, rb_intern("make_shareable"),
+         *          NEW_LIST(value, loc), loc);
+         */
+        ADD_SEND_WITH_FLAG(ret, value, rb_intern("make_shareable"), INT2FIX(1), INT2FIX(VM_CALL_ARGS_SIMPLE));
+    }
+
+    return COMPILE_OK;
+}
+
+static VALUE
+node_const_decl_val(const NODE *node)
+{
+    VALUE path;
+    switch (nd_type(node)) {
+      case NODE_CDECL:
+        if (RNODE_CDECL(node)->nd_vid) {
+            path = rb_id2str(RNODE_CDECL(node)->nd_vid);
+            goto end;
+        }
+        else {
+            node = RNODE_CDECL(node)->nd_else;
+        }
+        break;
+      case NODE_COLON2:
+        break;
+      case NODE_COLON3:
+        // ::Const
+        path = rb_str_new_cstr("::");
+        rb_str_append(path, rb_id2str(RNODE_COLON3(node)->nd_mid));
+        goto end;
+      default:
+        rb_bug("unexpected node: %s", ruby_node_name(nd_type(node)));
+        UNREACHABLE_RETURN(0);
+    }
+
+    path = rb_ary_new();
+    if (node) {
+        for (; node && nd_type_p(node, NODE_COLON2); node = RNODE_COLON2(node)->nd_head) {
+            rb_ary_push(path, rb_id2str(RNODE_COLON2(node)->nd_mid));
+        }
+        if (node && nd_type_p(node, NODE_CONST)) {
+            // Const::Name
+            rb_ary_push(path, rb_id2str(RNODE_CONST(node)->nd_vid));
+        }
+        else if (node && nd_type_p(node, NODE_COLON3)) {
+            // ::Const::Name
+            rb_ary_push(path, rb_id2str(RNODE_COLON3(node)->nd_mid));
+            rb_ary_push(path, rb_str_new(0, 0));
+        }
+        else {
+            // expression::Name
+            rb_ary_push(path, rb_str_new_cstr("..."));
+        }
+        path = rb_ary_join(rb_ary_reverse(path), rb_str_new_cstr("::"));
+    }
+  end:
+    path = rb_fstring(path);
+    return path;
+}
+
+static VALUE
+const_decl_path(NODE *dest)
+{
+    VALUE path = Qnil;
+    if (!nd_type_p(dest, NODE_CALL)) {
+        path = node_const_decl_val(dest);
+    }
+    return path;
+}
+
+static int
+compile_ensure_shareable_node(rb_iseq_t *iseq, LINK_ANCHOR *ret, NODE *dest, const NODE *value)
+{
+    /*
+     *. RubyVM::FrozenCore.ensure_shareable(value, const_decl_path(dest))
+     */
+    VALUE path = const_decl_path(dest);
+    ADD_INSN1(ret, value, putobject, rb_mRubyVMFrozenCore);
+    CHECK(COMPILE(ret, "compile_ensure_shareable_node", value));
+    ADD_INSN1(ret, value, putobject, path);
+    RB_OBJ_WRITTEN(iseq, Qundef, path);
+    ADD_SEND_WITH_FLAG(ret, value, rb_intern("ensure_shareable"), INT2FIX(2), INT2FIX(VM_CALL_ARGS_SIMPLE));
+
+    return COMPILE_OK;
+}
+
+#ifndef SHAREABLE_BARE_EXPRESSION
+#define SHAREABLE_BARE_EXPRESSION 1
+#endif
+
+static int
+compile_shareable_literal_constant(rb_iseq_t *iseq, LINK_ANCHOR *ret, enum rb_parser_shareability shareable, NODE *dest, const NODE *node, size_t level, VALUE *value_p, int *shareable_literal_p)
+{
+# define compile_shareable_literal_constant_next(node, anchor, value_p, shareable_literal_p) \
+    compile_shareable_literal_constant(iseq, anchor, shareable, dest, node, level+1, value_p, shareable_literal_p)
+    VALUE lit = Qnil;
+    DECL_ANCHOR(anchor);
+
+    enum node_type type = nd_type(node);
+    switch (type) {
+      case NODE_TRUE:
+        *value_p = Qtrue;
+        goto compile;
+      case NODE_FALSE:
+        *value_p = Qfalse;
+        goto compile;
+      case NODE_NIL:
+        *value_p = Qnil;
+        goto compile;
+      case NODE_SYM:
+        *value_p = rb_node_sym_string_val(node);
+        goto compile;
+      case NODE_REGX:
+        *value_p = rb_node_regx_string_val(node);
+        goto compile;
+      case NODE_LINE:
+        *value_p = rb_node_line_lineno_val(node);
+        goto compile;
+      case NODE_INTEGER:
+        *value_p = rb_node_integer_literal_val(node);
+        goto compile;
+      case NODE_FLOAT:
+        *value_p = rb_node_float_literal_val(node);
+        goto compile;
+      case NODE_RATIONAL:
+        *value_p = rb_node_rational_literal_val(node);
+        goto compile;
+      case NODE_IMAGINARY:
+        *value_p = rb_node_imaginary_literal_val(node);
+        goto compile;
+      case NODE_ENCODING:
+        *value_p = rb_node_encoding_val(node);
+
+      compile:
+        CHECK(COMPILE(ret, "shareable_literal_constant", node));
+        *shareable_literal_p = 1;
+        return COMPILE_OK;
+
+      case NODE_DSTR:
+        CHECK(COMPILE(ret, "shareable_literal_constant", node));
+        if (shareable == rb_parser_shareable_literal) {
+            /*
+             *  NEW_CALL(node, idUMinus, 0, loc);
+             *
+             *  -"#{var}"
+             */
+            ADD_SEND_WITH_FLAG(ret, node, idUMinus, INT2FIX(0), INT2FIX(VM_CALL_ARGS_SIMPLE));
+        }
+        *value_p = Qundef;
+        *shareable_literal_p = 1;
+        return COMPILE_OK;
+
+      case NODE_STR:{
+        VALUE lit = rb_fstring(rb_node_str_string_val(node));
+        ADD_INSN1(ret, node, putobject, lit);
+        RB_OBJ_WRITTEN(iseq, Qundef, lit);
+        *value_p = lit;
+        *shareable_literal_p = 1;
+
+        return COMPILE_OK;
+      }
+
+      case NODE_FILE:{
+        VALUE lit = rb_fstring(rb_node_file_path_val(node));
+        ADD_INSN1(ret, node, putobject, lit);
+        RB_OBJ_WRITTEN(iseq, Qundef, lit);
+        *value_p = lit;
+        *shareable_literal_p = 1;
+
+        return COMPILE_OK;
+      }
+
+      case NODE_ZLIST:{
+        VALUE lit = rb_ary_new();
+        OBJ_FREEZE_RAW(lit);
+        ADD_INSN1(ret, node, putobject, lit);
+        RB_OBJ_WRITTEN(iseq, Qundef, lit);
+        *value_p = lit;
+        *shareable_literal_p = 1;
+
+        return COMPILE_OK;
+      }
+
+      case NODE_LIST:{
+        INIT_ANCHOR(anchor);
+        lit = rb_ary_new();
+        for (NODE *n = (NODE *)node; n; n = RNODE_LIST(n)->nd_next) {
+            VALUE val;
+            int shareable_literal_p2;
+            NODE *elt = RNODE_LIST(n)->nd_head;
+            if (elt) {
+                CHECK(compile_shareable_literal_constant_next(elt, anchor, &val, &shareable_literal_p2));
+                if (shareable_literal_p2) {
+                    /* noop */
+                }
+                else if (RTEST(lit)) {
+                    rb_ary_clear(lit);
+                    lit = Qfalse;
+                }
+            }
+            if (RTEST(lit)) {
+                if (!UNDEF_P(val)) {
+                    rb_ary_push(lit, val);
+                }
+                else {
+                    rb_ary_clear(lit);
+                    lit = Qnil; /* make shareable at runtime */
+                }
+            }
+        }
+        break;
+      }
+      case NODE_HASH:{
+        if (!RNODE_HASH(node)->nd_brace) {
+            *value_p = Qundef;
+            *shareable_literal_p = 0;
+            return COMPILE_OK;
+        }
+
+        INIT_ANCHOR(anchor);
+        lit = rb_hash_new();
+        for (NODE *n = RNODE_HASH(node)->nd_head; n; n = RNODE_LIST(RNODE_LIST(n)->nd_next)->nd_next) {
+            VALUE key_val;
+            VALUE value_val;
+            int shareable_literal_p2;
+            NODE *key = RNODE_LIST(n)->nd_head;
+            NODE *val = RNODE_LIST(RNODE_LIST(n)->nd_next)->nd_head;
+            if (key) {
+                CHECK(compile_shareable_literal_constant_next(key, anchor, &key_val, &shareable_literal_p2));
+                if (shareable_literal_p2) {
+                    /* noop */
+                }
+                else if (RTEST(lit)) {
+                    rb_hash_clear(lit);
+                    lit = Qfalse;
+                }
+            }
+            if (val) {
+                CHECK(compile_shareable_literal_constant_next(val, anchor, &value_val, &shareable_literal_p2));
+                if (shareable_literal_p2) {
+                    /* noop */
+                }
+                else if (RTEST(lit)) {
+                    rb_hash_clear(lit);
+                    lit = Qfalse;
+                }
+            }
+            if (RTEST(lit)) {
+                if (!UNDEF_P(key_val) && !UNDEF_P(value_val)) {
+                    rb_hash_aset(lit, key_val, value_val);
+                }
+                else {
+                    rb_hash_clear(lit);
+                    lit = Qnil; /* make shareable at runtime */
+                }
+            }
+        }
+        break;
+      }
+
+      default:
+        if (shareable == rb_parser_shareable_literal &&
+            (SHAREABLE_BARE_EXPRESSION || level > 0)) {
+            CHECK(compile_ensure_shareable_node(iseq, ret, dest, node));
+            *value_p = Qundef;
+            *shareable_literal_p = 1;
+            return COMPILE_OK;
+        }
+        CHECK(COMPILE(ret, "shareable_literal_constant", node));
+        *value_p = Qundef;
+        *shareable_literal_p = 0;
+        return COMPILE_OK;
+    }
+
+    /* Array or Hash */
+    if (!lit) {
+        if (nd_type(node) == NODE_LIST) {
+            ADD_INSN1(anchor, node, newarray, INT2FIX(RNODE_LIST(node)->as.nd_alen));
+        }
+        else if (nd_type(node) == NODE_HASH) {
+            int len = (int)RNODE_LIST(RNODE_HASH(node)->nd_head)->as.nd_alen;
+            ADD_INSN1(anchor, node, newhash, INT2FIX(len));
+        }
+        *value_p = Qundef;
+        *shareable_literal_p = 0;
+        ADD_SEQ(ret, anchor);
+        return COMPILE_OK;
+    }
+    if (NIL_P(lit)) {
+        // if shareable_literal, all elements should have been ensured
+        // as shareable
+        if (nd_type(node) == NODE_LIST) {
+            ADD_INSN1(anchor, node, newarray, INT2FIX(RNODE_LIST(node)->as.nd_alen));
+        }
+        else if (nd_type(node) == NODE_HASH) {
+            int len = (int)RNODE_LIST(RNODE_HASH(node)->nd_head)->as.nd_alen;
+            ADD_INSN1(anchor, node, newhash, INT2FIX(len));
+        }
+        CHECK(compile_make_shareable_node(iseq, ret, anchor, node, false));
+        *value_p = Qundef;
+        *shareable_literal_p = 1;
+    }
+    else {
+        VALUE val = rb_ractor_make_shareable(lit);
+        ADD_INSN1(ret, node, putobject, val);
+        RB_OBJ_WRITTEN(iseq, Qundef, val);
+        *value_p = val;
+        *shareable_literal_p = 1;
+    }
+
+    return COMPILE_OK;
+}
+
+static int
+compile_shareable_constant_value(rb_iseq_t *iseq, LINK_ANCHOR *ret, enum rb_parser_shareability shareable, const NODE *lhs, const NODE *value)
+{
+    int literal_p = 0;
+    VALUE val;
+    DECL_ANCHOR(anchor);
+    INIT_ANCHOR(anchor);
+
+    switch (shareable) {
+      case rb_parser_shareable_none:
+        CHECK(COMPILE(ret, "compile_shareable_constant_value", value));
+        return COMPILE_OK;
+
+      case rb_parser_shareable_literal:
+        CHECK(compile_shareable_literal_constant(iseq, anchor, shareable, (NODE *)lhs, value, 0, &val, &literal_p));
+        ADD_SEQ(ret, anchor);
+        return COMPILE_OK;
+
+      case rb_parser_shareable_copy:
+      case rb_parser_shareable_everything:
+        CHECK(compile_shareable_literal_constant(iseq, anchor, shareable, (NODE *)lhs, value, 0, &val, &literal_p));
+        if (!literal_p) {
+            CHECK(compile_make_shareable_node(iseq, ret, anchor, value, shareable == rb_parser_shareable_copy));
+        }
+        else {
+            ADD_SEQ(ret, anchor);
+        }
+        return COMPILE_OK;
+      default:
+        rb_bug("unexpected rb_parser_shareability: %d", shareable);
+    }
 }
 
 static int iseq_compile_each0(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *const node, int popped);
@@ -10130,7 +10449,7 @@ iseq_compile_each0(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *const no
       }
       case NODE_CDECL:{
         if (RNODE_CDECL(node)->nd_vid) {
-            CHECK(COMPILE(ret, "lvalue", RNODE_CDECL(node)->nd_value));
+            CHECK(compile_shareable_constant_value(iseq, ret, RNODE_CDECL(node)->shareability, node, RNODE_CDECL(node)->nd_value));
 
             if (!popped) {
                 ADD_INSN(ret, node, dup);
@@ -10142,7 +10461,7 @@ iseq_compile_each0(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *const no
         }
         else {
             compile_cpath(ret, iseq, RNODE_CDECL(node)->nd_else);
-            CHECK(COMPILE(ret, "lvalue", RNODE_CDECL(node)->nd_value));
+            CHECK(compile_shareable_constant_value(iseq, ret, RNODE_CDECL(node)->shareability, node, RNODE_CDECL(node)->nd_value));
             ADD_INSN(ret, node, swap);
 
             if (!popped) {
@@ -10299,14 +10618,6 @@ iseq_compile_each0(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *const no
       case NODE_MATCH3:
         CHECK(compile_match(iseq, ret, node, popped, type));
         break;
-      case NODE_LIT:{
-        debugp_param("lit", RNODE_LIT(node)->nd_lit);
-        if (!popped) {
-            ADD_INSN1(ret, node, putobject, RNODE_LIT(node)->nd_lit);
-            RB_OBJ_WRITTEN(iseq, Qundef, RNODE_LIT(node)->nd_lit);
-        }
-        break;
-      }
       case NODE_SYM:{
         if (!popped) {
             ADD_INSN1(ret, node, putobject, rb_node_sym_string_val(node));

@@ -66,6 +66,13 @@ typedef struct rb_parser_string {
     char *ptr;
 } rb_parser_string_t;
 
+enum rb_parser_shareability {
+    rb_parser_shareable_none,
+    rb_parser_shareable_literal,
+    rb_parser_shareable_copy,
+    rb_parser_shareable_everything,
+};
+
 /*
  * AST Node
  */
@@ -129,7 +136,6 @@ enum node_type {
     NODE_MATCH,
     NODE_MATCH2,
     NODE_MATCH3,
-    NODE_LIT,
     NODE_INTEGER,
     NODE_FLOAT,
     NODE_RATIONAL,
@@ -444,6 +450,7 @@ typedef struct RNode_CDECL {
     ID nd_vid;
     struct RNode *nd_value;
     struct RNode *nd_else;
+    enum rb_parser_shareability shareability;
 } rb_node_cdecl_t;
 
 typedef struct RNode_CVASGN {
@@ -492,6 +499,7 @@ typedef struct RNode_OP_CDECL {
     struct RNode *nd_head;
     struct RNode *nd_value;
     ID nd_aid;
+    enum rb_parser_shareability shareability;
 } rb_node_op_cdecl_t;
 
 typedef struct RNode_CALL {
@@ -665,12 +673,6 @@ typedef struct RNode_MATCH3 {
     struct RNode *nd_recv;
     struct RNode *nd_value;
 } rb_node_match3_t;
-
-typedef struct RNode_LIT {
-    NODE node;
-
-    VALUE nd_lit;
-} rb_node_lit_t;
 
 typedef struct RNode_INTEGER {
     NODE node;
@@ -1122,7 +1124,6 @@ typedef struct RNode_ERROR {
 #define RNODE_MATCH(node) ((struct RNode_MATCH *)(node))
 #define RNODE_MATCH2(node) ((struct RNode_MATCH2 *)(node))
 #define RNODE_MATCH3(node) ((struct RNode_MATCH3 *)(node))
-#define RNODE_LIT(node) ((struct RNode_LIT *)(node))
 #define RNODE_INTEGER(node) ((struct RNode_INTEGER *)(node))
 #define RNODE_FLOAT(node) ((struct RNode_FLOAT *)(node))
 #define RNODE_RATIONAL(node) ((struct RNode_RATIONAL *)(node))
