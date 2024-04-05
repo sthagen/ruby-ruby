@@ -8766,12 +8766,6 @@ rb_gc_ractor_newobj_cache_clear(rb_ractor_newobj_cache_t *newobj_cache)
 }
 
 void
-rb_gc_force_recycle(VALUE obj)
-{
-    /* no-op */
-}
-
-void
 rb_gc_register_mark_object(VALUE obj)
 {
     if (!is_pointer_to_heap(&rb_objspace, (void *)obj))
@@ -13506,7 +13500,8 @@ rb_gcdebug_sentinel(VALUE obj, const char *name)
 
 #endif /* GC_DEBUG */
 
-/*
+/* :nodoc:
+ *
  *  call-seq:
  *    GC.add_stress_to_class(class[, ...])
  *
@@ -13525,7 +13520,8 @@ rb_gcdebug_add_stress_to_class(int argc, VALUE *argv, VALUE self)
     return self;
 }
 
-/*
+/* :nodoc:
+ *
  *  call-seq:
  *    GC.remove_stress_to_class(class[, ...])
  *
