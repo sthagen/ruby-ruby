@@ -78,7 +78,6 @@ ruby_setup(void)
     prctl(PR_SET_THP_DISABLE, 1, 0, 0, 0);
 #endif
     Init_BareVM();
-    Init_heap();
     rb_vm_encoded_insn_data_table_init();
     Init_vm_objects();
 
@@ -1783,6 +1782,16 @@ rb_obj_extend(int argc, VALUE *argv, VALUE obj)
     return obj;
 }
 
+VALUE
+rb_top_main_class(const char *method)
+{
+    VALUE klass = GET_THREAD()->top_wrapper;
+
+    if (!klass) return rb_cObject;
+    rb_warning("main.%s in the wrapped load is effective only in wrapper module", method);
+    return klass;
+}
+
 /*
  *  call-seq:
  *     include(module, ...)   -> self
@@ -1795,13 +1804,7 @@ rb_obj_extend(int argc, VALUE *argv, VALUE obj)
 static VALUE
 top_include(int argc, VALUE *argv, VALUE self)
 {
-    rb_thread_t *th = GET_THREAD();
-
-    if (th->top_wrapper) {
-        rb_warning("main.include in the wrapped load is effective only in wrapper module");
-        return rb_mod_include(argc, argv, th->top_wrapper);
-    }
-    return rb_mod_include(argc, argv, rb_cObject);
+    return rb_mod_include(argc, argv, rb_top_main_class("include"));
 }
 
 /*
