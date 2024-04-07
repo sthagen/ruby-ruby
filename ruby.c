@@ -439,39 +439,31 @@ usage(const char *name, int help, int highlight, int columns)
 #define rubylib_path_new rb_str_new
 
 static void
-push_include(const char *path, VALUE (*filter)(VALUE))
+ruby_push_include(const char *path, VALUE (*filter)(VALUE))
 {
     const char sep = PATH_SEP_CHAR;
     const char *p, *s;
     VALUE load_path = GET_VM()->load_path;
-
-    p = path;
-    while (*p) {
-        while (*p == sep)
-            p++;
-        if (!*p) break;
-        for (s = p; *s && *s != sep; s = CharNext(s));
-        rb_ary_push(load_path, (*filter)(rubylib_path_new(p, s - p)));
-        p = s;
-    }
-}
-
 #ifdef __CYGWIN__
-static void
-push_include_cygwin(const char *path, VALUE (*filter)(VALUE))
-{
-    const char *p, *s;
     char rubylib[FILENAME_MAX];
     VALUE buf = 0;
+# define is_path_sep(c) ((c) == sep || (c) == ';')
+#else
+# define is_path_sep(c) ((c) == sep)
+#endif
 
+    if (path == 0) return;
     p = path;
     while (*p) {
-        unsigned int len;
-        while (*p == ';')
+        long len;
+        while (is_path_sep(*p))
             p++;
         if (!*p) break;
-        for (s = p; *s && *s != ';'; s = CharNext(s));
+        for (s = p; *s && !is_path_sep(*s); s = CharNext(s));
         len = s - p;
+#undef is_path_sep
+
+#ifdef __CYGWIN__
         if (*s) {
             if (!buf) {
                 buf = rb_str_new(p, len);
@@ -488,23 +480,14 @@ push_include_cygwin(const char *path, VALUE (*filter)(VALUE))
 #else
 # error no cygwin_conv_path
 #endif
-        if (CONV_TO_POSIX_PATH(p, rubylib) == 0)
+        if (CONV_TO_POSIX_PATH(p, rubylib) == 0) {
             p = rubylib;
-        push_include(p, filter);
-        if (!*s) break;
-        p = s + 1;
-    }
-}
-
-#define push_include push_include_cygwin
+            len = strlen(p);
+        }
 #endif
-
-void
-ruby_push_include(const char *path, VALUE (*filter)(VALUE))
-{
-    if (path == 0)
-        return;
-    push_include(path, filter);
+        rb_ary_push(load_path, (*filter)(rubylib_path_new(p, len)));
+        p = s;
+    }
 }
 
 static VALUE
@@ -512,6 +495,7 @@ identical_path(VALUE path)
 {
     return path;
 }
+
 static VALUE
 locale_path(VALUE path)
 {
@@ -2367,8 +2351,6 @@ process_options(int argc, char **argv, ruby_cmdline_options_t *opt)
 
 #ifdef _WIN32
     translit_char_bin(RSTRING_PTR(opt->script_name), '\\', '/');
-#elif defined DOSISH
-    translit_char(RSTRING_PTR(opt->script_name), '\\', '/');
 #endif
 
     ruby_gc_set_params();
