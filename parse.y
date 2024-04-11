@@ -332,8 +332,6 @@ RBIMPL_WARNING_POP()
 
 #define NO_LEX_CTXT (struct lex_context){0}
 
-#define AREF(ary, i) RARRAY_AREF(ary, i)
-
 #ifndef WARN_PAST_SCOPE
 # define WARN_PAST_SCOPE 0
 #endif
@@ -3447,7 +3445,7 @@ command		: fcall command_args       %prec tLOWEST
                     {
                         set_embraced_location($5, &@4, &@6);
                         $$ = new_command_qcall(p, idCOLON2, $1, $3, Qnull, $5, &@3, &@$);
-                    /*% ripper: method_add_block!(command_call!($:1, $:2, $:3, Qundef), $:5) %*/
+                    /*% ripper: method_add_block!(command_call!($:1, $:2, $:3, Qnil), $:5) %*/
                    }
                 | keyword_super command_args
                     {
@@ -7961,7 +7959,7 @@ nextline(struct parser_params *p, int set_encoding)
         }
 #ifndef RIPPER
         if (p->debug_lines) {
-            VALUE v = rb_str_new_parser_string(str);
+            VALUE v = rb_str_new_mutable_parser_string(str);
             if (set_encoding) rb_enc_associate(v, p->enc);
             rb_ary_push(p->debug_lines, v);
         }
@@ -13816,6 +13814,10 @@ new_bv(struct parser_params *p, ID name)
     }
     if (!shadowing_lvar_0(p, name)) return;
     dyna_var(p, name);
+    ID *vidp = 0;
+    if (dvar_defined_ref(p, name, &vidp)) {
+        if (vidp) *vidp |= LVAR_USED;
+    }
 }
 
 static void

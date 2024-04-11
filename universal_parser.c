@@ -245,17 +245,12 @@
 #define Qtrue p->config->qtrue
 #undef Qfalse
 #define Qfalse p->config->qfalse
-#undef Qundef
-#define Qundef p->config->qundef
 #define rb_eArgError p->config->eArgError()
 #undef rb_long2int
 #define rb_long2int p->config->long2int
 #define rb_enc_mbminlen p->config->enc_mbminlen
 #define rb_enc_isascii p->config->enc_isascii
 #define rb_enc_mbc_to_codepoint p->config->enc_mbc_to_codepoint
-
-#undef st_init_table_with_size
-#define st_init_table_with_size rb_parser_st_init_table_with_size
 
 #define rb_ast_new() \
     rb_ast_new(p->config)
