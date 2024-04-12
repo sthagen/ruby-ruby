@@ -99,7 +99,7 @@ static const pm_diagnostic_data_t diagnostic_messages[PM_DIAGNOSTIC_ID_MAX] = {
     [PM_ERR_ARGUMENT_FORMAL_IVAR]               = { "invalid formal argument; formal argument cannot be an instance variable", PM_ERROR_LEVEL_SYNTAX },
     [PM_ERR_ARGUMENT_FORWARDING_UNBOUND]        = { "unexpected `...` in an non-parenthesized call", PM_ERROR_LEVEL_SYNTAX },
     [PM_ERR_ARGUMENT_IN]                        = { "unexpected `in` keyword in arguments", PM_ERROR_LEVEL_SYNTAX },
-    [PM_ERR_ARGUMENT_NO_FORWARDING_AMP]         = { "unexpected `&` when the parent method is not forwarding", PM_ERROR_LEVEL_SYNTAX },
+    [PM_ERR_ARGUMENT_NO_FORWARDING_AMP]         = { "unexpected `&`; no anonymous block parameter", PM_ERROR_LEVEL_SYNTAX },
     [PM_ERR_ARGUMENT_NO_FORWARDING_ELLIPSES]    = { "unexpected ... when the parent method is not forwarding", PM_ERROR_LEVEL_SYNTAX },
     [PM_ERR_ARGUMENT_NO_FORWARDING_STAR]        = { "unexpected `*`; no anonymous rest parameter", PM_ERROR_LEVEL_SYNTAX },
     [PM_ERR_ARGUMENT_NO_FORWARDING_STAR_STAR]   = { "unexpected `**`; no anonymous keyword rest parameter", PM_ERROR_LEVEL_SYNTAX },
@@ -352,7 +352,9 @@ static const pm_diagnostic_data_t diagnostic_messages[PM_DIAGNOSTIC_ID_MAX] = {
     [PM_WARN_LITERAL_IN_CONDITION_VERBOSE]      = { "%sliteral in %s", PM_WARNING_LEVEL_VERBOSE },
     [PM_WARN_SHEBANG_CARRIAGE_RETURN]           = { "shebang line ending with \\r may cause problems", PM_WARNING_LEVEL_DEFAULT },
     [PM_WARN_UNEXPECTED_CARRIAGE_RETURN]        = { "encountered \\r in middle of line, treated as a mere space", PM_WARNING_LEVEL_DEFAULT },
-    [PM_WARN_UNUSED_LOCAL_VARIABLE]             = { "assigned but unused variable - %.*s", PM_WARNING_LEVEL_VERBOSE }
+    [PM_WARN_UNREACHABLE_STATEMENT]             = { "statement not reached", PM_WARNING_LEVEL_VERBOSE },
+    [PM_WARN_UNUSED_LOCAL_VARIABLE]             = { "assigned but unused variable - %.*s", PM_WARNING_LEVEL_VERBOSE },
+    [PM_WARN_VOID_STATEMENT]                    = { "possibly useless use of %.*s in void context", PM_WARNING_LEVEL_VERBOSE }
 };
 
 /**

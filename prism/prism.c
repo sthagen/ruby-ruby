@@ -1183,6 +1183,156 @@ pm_assert_value_expression(pm_parser_t *parser, pm_node_t *node) {
 }
 
 /**
+ * Warn if the given node is a "void" statement.
+ */
+static void
+pm_void_statement_check(pm_parser_t *parser, const pm_node_t *node) {
+    const char *type = NULL;
+    int length = 0;
+
+    switch (PM_NODE_TYPE(node)) {
+        case PM_BACK_REFERENCE_READ_NODE:
+        case PM_CLASS_VARIABLE_READ_NODE:
+        case PM_GLOBAL_VARIABLE_READ_NODE:
+        case PM_INSTANCE_VARIABLE_READ_NODE:
+        case PM_LOCAL_VARIABLE_READ_NODE:
+        case PM_NUMBERED_REFERENCE_READ_NODE:
+            type = "a variable";
+            length = 10;
+            break;
+        case PM_CALL_NODE: {
+            const pm_call_node_t *cast = (const pm_call_node_t *) node;
+            if (cast->call_operator_loc.start != NULL || cast->message_loc.start == NULL) break;
+
+            const pm_constant_t *message = pm_constant_pool_id_to_constant(&parser->constant_pool, cast->name);
+            switch (message->length) {
+                case 1:
+                    switch (message->start[0]) {
+                        case '+':
+                        case '-':
+                        case '*':
+                        case '/':
+                        case '%':
+                        case '|':
+                        case '^':
+                        case '&':
+                        case '>':
+                        case '<':
+                            type = (const char *) message->start;
+                            length = 1;
+                            break;
+                    }
+                    break;
+                case 2:
+                    switch (message->start[1]) {
+                        case '=':
+                            if (message->start[0] == '<' || message->start[0] == '>' || message->start[0] == '!' || message->start[0] == '=') {
+                                type = (const char *) message->start;
+                                length = 2;
+                            }
+                            break;
+                        case '@':
+                            if (message->start[0] == '+' || message->start[0] == '-') {
+                                type = (const char *) message->start;
+                                length = 2;
+                            }
+                            break;
+                        case '*':
+                            if (message->start[0] == '*') {
+                                type = (const char *) message->start;
+                                length = 2;
+                            }
+                            break;
+                    }
+                    break;
+                case 3:
+                    if (memcmp(message->start, "<=>", 3) == 0) {
+                        type = "<=>";
+                        length = 3;
+                    }
+                    break;
+            }
+
+            break;
+        }
+        case PM_CONSTANT_PATH_NODE:
+            type = "::";
+            length = 2;
+            break;
+        case PM_CONSTANT_READ_NODE:
+            type = "a constant";
+            length = 10;
+            break;
+        case PM_DEFINED_NODE:
+            type = "defined?";
+            length = 8;
+            break;
+        case PM_FALSE_NODE:
+            type = "false";
+            length = 5;
+            break;
+        case PM_FLOAT_NODE:
+        case PM_IMAGINARY_NODE:
+        case PM_INTEGER_NODE:
+        case PM_INTERPOLATED_REGULAR_EXPRESSION_NODE:
+        case PM_INTERPOLATED_STRING_NODE:
+        case PM_RATIONAL_NODE:
+        case PM_REGULAR_EXPRESSION_NODE:
+        case PM_SOURCE_ENCODING_NODE:
+        case PM_SOURCE_FILE_NODE:
+        case PM_SOURCE_LINE_NODE:
+        case PM_STRING_NODE:
+        case PM_SYMBOL_NODE:
+            type = "a literal";
+            length = 9;
+            break;
+        case PM_NIL_NODE:
+            type = "nil";
+            length = 3;
+            break;
+        case PM_RANGE_NODE: {
+            const pm_range_node_t *cast = (const pm_range_node_t *) node;
+
+            if (PM_NODE_FLAG_P(cast, PM_RANGE_FLAGS_EXCLUDE_END)) {
+                type = "...";
+                length = 3;
+            } else {
+                type = "..";
+                length = 2;
+            }
+
+            break;
+        }
+        case PM_SELF_NODE:
+            type = "self";
+            length = 4;
+            break;
+        case PM_TRUE_NODE:
+            type = "true";
+            length = 4;
+            break;
+        default:
+            break;
+    }
+
+    if (type != NULL) {
+        PM_PARSER_WARN_NODE_FORMAT(parser, node, PM_WARN_VOID_STATEMENT, length, type);
+    }
+}
+
+/**
+ * Warn if any of the statements that are not the last statement in the list are
+ * a "void" statement.
+ */
+static void
+pm_void_statements_check(pm_parser_t *parser, const pm_statements_node_t *node) {
+    assert(node->body.size > 0);
+    for (size_t index = 0; index < node->body.size - 1; index++) {
+        pm_void_statement_check(parser, node->body.nodes[index]);
+    }
+}
+
+/**
  * When we're handling the predicate of a conditional, we need to know our
  * context in order to determine the kind of warning we should deliver to the
  * user.
@@ -1745,7 +1895,7 @@ static pm_statements_node_t *
 pm_statements_node_create(pm_parser_t *parser);
 
 static void
-pm_statements_node_body_append(pm_statements_node_t *node, pm_node_t *statement);
+pm_statements_node_body_append(pm_parser_t *parser, pm_statements_node_t *node, pm_node_t *statement);
 
 static size_t
 pm_statements_node_body_length(pm_statements_node_t *node);
@@ -4404,7 +4554,7 @@ pm_if_node_modifier_create(pm_parser_t *parser, pm_node_t *statement, const pm_t
     pm_if_node_t *node = PM_ALLOC_NODE(parser, pm_if_node_t);
 
     pm_statements_node_t *statements = pm_statements_node_create(parser);
-    pm_statements_node_body_append(statements, statement);
+    pm_statements_node_body_append(parser, statements, statement);
 
     *node = (pm_if_node_t) {
         {
@@ -4435,10 +4585,10 @@ pm_if_node_ternary_create(pm_parser_t *parser, pm_node_t *predicate, const pm_to
     pm_conditional_predicate(parser, predicate, PM_CONDITIONAL_PREDICATE_TYPE_CONDITIONAL);
 
     pm_statements_node_t *if_statements = pm_statements_node_create(parser);
-    pm_statements_node_body_append(if_statements, true_expression);
+    pm_statements_node_body_append(parser, if_statements, true_expression);
 
     pm_statements_node_t *else_statements = pm_statements_node_create(parser);
-    pm_statements_node_body_append(else_statements, false_expression);
+    pm_statements_node_body_append(parser, else_statements, false_expression);
 
     pm_token_t end_keyword = not_provided(parser);
     pm_else_node_t *else_node = pm_else_node_create(parser, colon, else_statements, &end_keyword);
@@ -6459,8 +6609,25 @@ pm_statements_node_body_update(pm_statements_node_t *node, pm_node_t *statement)
  * Append a new node to the given StatementsNode node's body.
  */
 static void
-pm_statements_node_body_append(pm_statements_node_t *node, pm_node_t *statement) {
+pm_statements_node_body_append(pm_parser_t *parser, pm_statements_node_t *node, pm_node_t *statement) {
     pm_statements_node_body_update(node, statement);
+
+    if (node->body.size > 0) {
+        const pm_node_t *previous = node->body.nodes[node->body.size - 1];
+
+        switch (PM_NODE_TYPE(previous)) {
+            case PM_BREAK_NODE:
+            case PM_NEXT_NODE:
+            case PM_REDO_NODE:
+            case PM_RETRY_NODE:
+            case PM_RETURN_NODE:
+                pm_parser_warn_node(parser, previous, PM_WARN_UNREACHABLE_STATEMENT);
+                break;
+            default:
+                break;
+        }
+    }
+
     pm_node_list_append(&node->body, statement);
     pm_node_flag_set(statement, PM_NODE_FLAG_NEWLINE);
 }
@@ -7023,7 +7190,7 @@ pm_unless_node_modifier_create(pm_parser_t *parser, pm_node_t *statement, const 
     pm_unless_node_t *node = PM_ALLOC_NODE(parser, pm_unless_node_t);
 
     pm_statements_node_t *statements = pm_statements_node_create(parser);
-    pm_statements_node_body_append(statements, statement);
+    pm_statements_node_body_append(parser, statements, statement);
 
     *node = (pm_unless_node_t) {
         {
@@ -12857,7 +13024,7 @@ parse_statements(pm_parser_t *parser, pm_context_t context) {
 
     while (true) {
         pm_node_t *node = parse_expression(parser, PM_BINDING_POWER_STATEMENT, true, PM_ERR_CANNOT_PARSE_EXPRESSION);
-        pm_statements_node_body_append(statements, node);
+        pm_statements_node_body_append(parser, statements, node);
 
         // If we're recovering from a syntax error, then we need to stop parsing the
         // statements now.
@@ -12911,6 +13078,8 @@ parse_statements(pm_parser_t *parser, pm_context_t context) {
     }
 
     context_pop(parser);
+    pm_void_statements_check(parser, statements);
+
     return statements;
 }
 
@@ -13143,7 +13312,6 @@ parse_arguments(pm_parser_t *parser, pm_arguments_t *arguments, bool accepts_for
                 if (token_begins_expression_p(parser->current.type)) {
                     expression = parse_value_expression(parser, PM_BINDING_POWER_DEFINED, false, PM_ERR_EXPECT_ARGUMENT);
                 } else {
-                    // A block forwarding in a method having `...` parameter (e.g. `def foo(...); bar(&); end`) is available.
                     pm_parser_scope_forwarding_block_check(parser, &operator);
                 }
 
@@ -13486,7 +13654,6 @@ parse_parameters(
                     update_parameter_state(parser, &parser->current, &order);
                     parser_lex(parser);
 
-                    parser->current_scope->parameters |= PM_SCOPE_PARAMETERS_FORWARDING_BLOCK;
                     parser->current_scope->parameters |= PM_SCOPE_PARAMETERS_FORWARDING_ALL;
 
                     pm_forwarding_parameter_node_t *param = pm_forwarding_parameter_node_create(parser, &parser->previous);
@@ -16612,7 +16779,7 @@ parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power, b
                 // and we didn't return a multiple assignment node, then we can return a
                 // regular parentheses node now.
                 pm_statements_node_t *statements = pm_statements_node_create(parser);
-                pm_statements_node_body_append(statements, statement);
+                pm_statements_node_body_append(parser, statements, statement);
 
                 return (pm_node_t *) pm_parentheses_node_create(parser, &opening, (pm_node_t *) statements, &parser->previous);
             }
@@ -16622,7 +16789,7 @@ parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power, b
             // We'll do that here.
             context_push(parser, PM_CONTEXT_PARENS);
             pm_statements_node_t *statements = pm_statements_node_create(parser);
-            pm_statements_node_body_append(statements, statement);
+            pm_statements_node_body_append(parser, statements, statement);
 
             // If we didn't find a terminator and we didn't find a right
             // parenthesis, then this is a syntax error.
@@ -16633,7 +16800,7 @@ parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power, b
             // Parse each statement within the parentheses.
             while (true) {
                 pm_node_t *node = parse_expression(parser, PM_BINDING_POWER_STATEMENT, true, PM_ERR_CANNOT_PARSE_EXPRESSION);
-                pm_statements_node_body_append(statements, node);
+                pm_statements_node_body_append(parser, statements, node);
 
                 // If we're recovering from a syntax error, then we need to stop
                 // parsing the statements now.
@@ -16667,6 +16834,7 @@ parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power, b
             pop_block_exits(parser, previous_block_exits);
             pm_node_list_free(&current_block_exits);
 
+            pm_void_statements_check(parser, statements);
             return (pm_node_t *) pm_parentheses_node_create(parser, &opening, (pm_node_t *) statements, &parser->previous);
         }
         case PM_TOKEN_BRACE_LEFT: {
@@ -17742,7 +17910,7 @@ parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power, b
                     statement = (pm_node_t *) pm_rescue_modifier_node_create(parser, statement, &rescue_keyword, value);
                 }
 
-                pm_statements_node_body_append((pm_statements_node_t *) statements, statement);
+                pm_statements_node_body_append(parser, (pm_statements_node_t *) statements, statement);
                 pm_do_loop_stack_pop(parser);
                 context_pop(parser);
                 end_keyword = not_provided(parser);
@@ -19713,7 +19881,7 @@ parse_expression_infix(pm_parser_t *parser, pm_node_t *node, pm_binding_power_t 
         case PM_TOKEN_KEYWORD_UNTIL_MODIFIER: {
             parser_lex(parser);
             pm_statements_node_t *statements = pm_statements_node_create(parser);
-            pm_statements_node_body_append(statements, node);
+            pm_statements_node_body_append(parser, statements, node);
 
             pm_node_t *predicate = parse_value_expression(parser, binding_power, true, PM_ERR_CONDITIONAL_UNTIL_PREDICATE);
             return (pm_node_t *) pm_until_node_modifier_create(parser, &token, predicate, statements, PM_NODE_TYPE_P(node, PM_BEGIN_NODE) ? PM_LOOP_FLAGS_BEGIN_MODIFIER : 0);
@@ -19721,7 +19889,7 @@ parse_expression_infix(pm_parser_t *parser, pm_node_t *node, pm_binding_power_t 
         case PM_TOKEN_KEYWORD_WHILE_MODIFIER: {
             parser_lex(parser);
             pm_statements_node_t *statements = pm_statements_node_create(parser);
-            pm_statements_node_body_append(statements, node);
+            pm_statements_node_body_append(parser, statements, node);
 
             pm_node_t *predicate = parse_value_expression(parser, binding_power, true, PM_ERR_CONDITIONAL_WHILE_PREDICATE);
             return (pm_node_t *) pm_while_node_modifier_create(parser, &token, predicate, statements, PM_NODE_TYPE_P(node, PM_BEGIN_NODE) ? PM_LOOP_FLAGS_BEGIN_MODIFIER : 0);
@@ -20066,7 +20234,7 @@ wrap_statements(pm_parser_t *parser, pm_statements_node_t *statements) {
             (pm_node_t *) pm_global_variable_read_node_synthesized_create(parser, pm_parser_constant_id_constant(parser, "$_", 2))
         );
 
-        pm_statements_node_body_append(statements, (pm_node_t *) pm_call_node_fcall_synthesized_create(
+        pm_statements_node_body_append(parser, statements, (pm_node_t *) pm_call_node_fcall_synthesized_create(
             parser,
             arguments,
             pm_parser_constant_id_constant(parser, "print", 5)
@@ -20112,7 +20280,7 @@ wrap_statements(pm_parser_t *parser, pm_statements_node_t *statements) {
         }
 
         pm_statements_node_t *wrapped_statements = pm_statements_node_create(parser);
-        pm_statements_node_body_append(wrapped_statements, (pm_node_t *) pm_while_node_synthesized_create(
+        pm_statements_node_body_append(parser, wrapped_statements, (pm_node_t *) pm_while_node_synthesized_create(
             parser,
             (pm_node_t *) pm_call_node_fcall_synthesized_create(parser, arguments, pm_parser_constant_id_constant(parser, "gets", 4)),
             statements
@@ -20138,8 +20306,15 @@ parse_program(pm_parser_t *parser) {
 
     parser_lex(parser);
     pm_statements_node_t *statements = parse_statements(parser, PM_CONTEXT_MAIN);
-    if (!statements) {
+
+    if (statements == NULL) {
         statements = pm_statements_node_create(parser);
+    } else if (!parser->parsing_eval) {
+        // If we have statements, then the top-level statement should be
+        // explicitly checked as well. We have to do this here because
+        // everywhere else we check all but the last statement.
+        assert(statements->body.size > 0);
+        pm_void_statement_check(parser, statements->body.nodes[statements->body.size - 1]);
     }
 
     pm_constant_id_list_t locals;
@@ -20590,7 +20765,7 @@ pm_parse_success_p(const uint8_t *source, size_t size, const char *data) {
     pm_node_t *node = pm_parse(&parser);
     pm_node_destroy(&parser, node);
 
-    bool result = parser.error_list.size == 0 && parser.warning_list.size == 0;
+    bool result = parser.error_list.size == 0;
     pm_parser_free(&parser);
     pm_options_free(&options);
 
