@@ -9605,15 +9605,23 @@ lex_embdoc(pm_parser_t *parser) {
     pm_comment_t *comment = parser_comment(parser, PM_COMMENT_EMBDOC);
     if (comment == NULL) return PM_TOKEN_EOF;
 
-    // Now, loop until we find the end of the embedded documentation or the end of
-    // the file.
+    // Now, loop until we find the end of the embedded documentation or the end
+    // of the file.
     while (parser->current.end + 4 <= parser->end) {
         parser->current.start = parser->current.end;
 
-        // If we've hit the end of the embedded documentation then we'll return that
-        // token here.
-        if (memcmp(parser->current.end, "=end", 4) == 0 &&
-                (parser->current.end + 4 == parser->end || pm_char_is_whitespace(parser->current.end[4]))) {
+        // If we've hit the end of the embedded documentation then we'll return
+        // that token here.
+        if (
+            (memcmp(parser->current.end, "=end", 4) == 0) &&
+            (
+                (parser->current.end + 4 == parser->end) || // end of file
+                pm_char_is_whitespace(parser->current.end[4]) || // whitespace
+                (parser->current.end[4] == '\0') || // NUL or end of script
+                (parser->current.end[4] == '\004') || // ^D
+                (parser->current.end[4] == '\032') // ^Z
+            )
+        ) {
             const uint8_t *newline = next_newline(parser->current.end, parser->end - parser->current.end);
 
             if (newline == NULL) {
@@ -10425,9 +10433,13 @@ parser_lex(pm_parser_t *parser) {
 
                 // = => =~ == === =begin
                 case '=':
-                    if (current_token_starts_line(parser) && (parser->current.end + 5 <= parser->end) && memcmp(parser->current.end, "begin", 5) == 0 && pm_char_is_whitespace(peek_offset(parser, 5))) {
+                    if (
+                        current_token_starts_line(parser) &&
+                        (parser->current.end + 5 <= parser->end) &&
+                        memcmp(parser->current.end, "begin", 5) == 0 &&
+                        (pm_char_is_whitespace(peek_offset(parser, 5)) || (peek_offset(parser, 5) == '\0'))
+                    ) {
                         pm_token_type_t type = lex_embdoc(parser);
-
                         if (type == PM_TOKEN_EOF) {
                             LEX(type);
                         }
@@ -14323,9 +14335,14 @@ parse_arguments_list(pm_parser_t *parser, pm_arguments_t *arguments, bool accept
         } else {
             pm_accepts_block_stack_push(parser, true);
             parse_arguments(parser, arguments, true, PM_TOKEN_PARENTHESIS_RIGHT);
-            expect1(parser, PM_TOKEN_PARENTHESIS_RIGHT, PM_ERR_ARGUMENT_TERM_PAREN);
-            pm_accepts_block_stack_pop(parser);
 
+            if (!accept1(parser, PM_TOKEN_PARENTHESIS_RIGHT)) {
+                PM_PARSER_ERR_TOKEN_FORMAT(parser, parser->current, PM_ERR_ARGUMENT_TERM_PAREN, pm_token_type_human(parser->current.type));
+                parser->previous.start = parser->previous.end;
+                parser->previous.type = PM_TOKEN_MISSING;
+            }
+
+            pm_accepts_block_stack_pop(parser);
             arguments->closing_loc = PM_LOCATION_TOKEN_VALUE(&parser->previous);
         }
     } else if (accepts_command_call && (token_begins_expression_p(parser->current.type) || match3(parser, PM_TOKEN_USTAR, PM_TOKEN_USTAR_STAR, PM_TOKEN_UAMPERSAND)) && !match1(parser, PM_TOKEN_BRACE_LEFT)) {
@@ -15269,6 +15286,7 @@ parse_method_definition_name(pm_parser_t *parser) {
             parser_lex(parser);
             return parser->previous;
         default:
+            PM_PARSER_ERR_TOKEN_FORMAT(parser, parser->current, PM_ERR_DEF_NAME, pm_token_type_human(parser->current.type));
             return (pm_token_t) { .type = PM_TOKEN_MISSING, .start = parser->current.start, .end = parser->current.end };
     }
 }
@@ -17589,6 +17607,16 @@ parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power, b
             pm_arguments_t arguments = { 0 };
             parse_arguments_list(parser, &arguments, false, accepts_command_call);
 
+            // It's possible that we've parsed a block argument through our
+            // call to parse_arguments_list. If we found one, we should mark it
+            // as invalid and destroy it, as we don't have a place for it on the
+            // yield node.
+            if (arguments.block != NULL) {
+                pm_parser_err_node(parser, arguments.block, PM_ERR_UNEXPECTED_BLOCK_ARGUMENT);
+                pm_node_destroy(parser, arguments.block);
+                arguments.block = NULL;
+            }
+
             pm_node_t *node = (pm_node_t *) pm_yield_node_create(parser, &keyword, &arguments.opening_loc, arguments.arguments, &arguments.closing_loc);
             if (!parser->parsing_eval) parse_yield(parser, node);
 
@@ -17700,7 +17728,7 @@ parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power, b
 
             pm_node_t *receiver = NULL;
             pm_token_t operator = not_provided(parser);
-            pm_token_t name = (pm_token_t) { .type = PM_TOKEN_MISSING, .start = def_keyword.end, .end = def_keyword.end };
+            pm_token_t name;
 
             // This context is necessary for lexing `...` in a bare params
             // correctly. It must be pushed before lexing the first param, so it
@@ -17782,7 +17810,7 @@ parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power, b
                                 receiver = (pm_node_t *) pm_true_node_create(parser, &identifier);
                                 break;
                             case PM_TOKEN_KEYWORD_FALSE:
-                                receiver = (pm_node_t *)pm_false_node_create(parser, &identifier);
+                                receiver = (pm_node_t *) pm_false_node_create(parser, &identifier);
                                 break;
                             case PM_TOKEN_KEYWORD___FILE__:
                                 receiver = (pm_node_t *) pm_source_file_node_create(parser, &identifier);
@@ -17804,9 +17832,10 @@ parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power, b
                     break;
                 }
                 case PM_TOKEN_PARENTHESIS_LEFT: {
-                    // The current context is `PM_CONTEXT_DEF_PARAMS`, however the inner expression
-                    // of this parenthesis should not be processed under this context.
-                    // Thus, the context is popped here.
+                    // The current context is `PM_CONTEXT_DEF_PARAMS`, however
+                    // the inner expression of this parenthesis should not be
+                    // processed under this context. Thus, the context is popped
+                    // here.
                     context_pop(parser);
                     parser_lex(parser);
 
@@ -17823,7 +17852,8 @@ parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power, b
                     operator = parser->previous;
                     receiver = (pm_node_t *) pm_parentheses_node_create(parser, &lparen, expression, &rparen);
 
-                    // To push `PM_CONTEXT_DEF_PARAMS` again is for the same reason as described the above.
+                    // To push `PM_CONTEXT_DEF_PARAMS` again is for the same
+                    // reason as described the above.
                     pm_parser_scope_push(parser, true);
                     context_push(parser, PM_CONTEXT_DEF_PARAMS);
                     name = parse_method_definition_name(parser);
@@ -17833,12 +17863,6 @@ parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power, b
                     pm_parser_scope_push(parser, true);
                     name = parse_method_definition_name(parser);
                     break;
-            }
-
-            // If, after all that, we were unable to find a method name, add an
-            // error to the error list.
-            if (name.type == PM_TOKEN_MISSING) {
-                pm_parser_err_previous(parser, PM_ERR_DEF_NAME);
             }
 
             pm_token_t lparen;
@@ -19834,7 +19858,7 @@ parse_expression_infix(pm_parser_t *parser, pm_node_t *node, pm_binding_power_t 
                     break;
                 }
                 default: {
-                    pm_parser_err_current(parser, PM_ERR_DEF_NAME);
+                    PM_PARSER_ERR_TOKEN_FORMAT(parser, parser->current, PM_ERR_EXPECT_MESSAGE, pm_token_type_human(parser->current.type));
                     message = (pm_token_t) { .type = PM_TOKEN_MISSING, .start = parser->previous.end, .end = parser->previous.end };
                 }
             }
