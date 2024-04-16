@@ -5462,10 +5462,7 @@ gc_sweep_page(rb_objspace_t *objspace, rb_heap_t *heap, struct gc_sweep_context 
     sweep_page->size_pool->total_freed_objects += ctx->freed_slots;
 
     if (heap_pages_deferred_final && !finalizing) {
-        rb_thread_t *th = GET_THREAD();
-        if (th) {
-            gc_finalize_deferred_register(objspace);
-        }
+        gc_finalize_deferred_register(objspace);
     }
 
 #if RGENGC_CHECK_MODE
@@ -9522,7 +9519,7 @@ gc_is_moveable_obj(rb_objspace_t *objspace, VALUE obj)
       case T_ZOMBIE:
         return FALSE;
       case T_SYMBOL:
-        if (DYNAMIC_SYM_P(obj) && (RSYMBOL(obj)->id & ~ID_SCOPE_MASK)) {
+        if (RSYMBOL(obj)->id & ~ID_SCOPE_MASK) {
             return FALSE;
         }
         /* fall through */
