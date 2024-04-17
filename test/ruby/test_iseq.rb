@@ -827,6 +827,24 @@ class TestISeq < Test::Unit::TestCase
     end
   end
 
+  def block_using_method
+    yield
+  end
+
+  def block_unused_method
+  end
+
+  def test_unused_param
+    a = RubyVM::InstructionSequence.of(method(:block_using_method)).to_a
+
+    omit 'TODO: Prism' if a.dig(4, :parser) != :"parse.y"
+
+    assert_equal true, a.dig(11, :use_block)
+
+    b = RubyVM::InstructionSequence.of(method(:block_unused_method)).to_a
+    assert_equal nil, b.dig(11, :use_block)
+  end
+
   def test_compile_prism_with_invalid_object_type
     assert_raise(TypeError) do
       RubyVM::InstructionSequence.compile_prism(Object.new)
