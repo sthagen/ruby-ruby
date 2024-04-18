@@ -1418,7 +1418,7 @@ fn gen_putobject(
     Some(KeepCompiling)
 }
 
-/// Combine `putobject` and and `opt_ltlt` together if profitable, for example when
+/// Combine `putobject` and `opt_ltlt` together if profitable, for example when
 /// left shifting an integer by a constant amount.
 fn fuse_putobject_opt_ltlt(
     jit: &mut JITState,
@@ -5929,8 +5929,10 @@ fn jit_rb_ary_push(
 ) -> bool {
     asm_comment!(asm, "Array#<<");
 
-    // rb_ary_push allocates memory for buffer extension
-    jit_prepare_call_with_gc(jit, asm);
+    // rb_ary_push allocates memory for buffer extension and can raise FrozenError
+    // Not using a lazy frame here since the interpreter also has a truncated
+    // stack trace from opt_ltlt.
+    jit_prepare_non_leaf_call(jit, asm);
 
     let item_opnd = asm.stack_opnd(0);
     let ary_opnd = asm.stack_opnd(1);

@@ -2693,12 +2693,6 @@ size_pool_slot_size(unsigned char pool_id)
     return slot_size;
 }
 
-size_t
-rb_size_pool_slot_size(unsigned char pool_id)
-{
-    return size_pool_slot_size(pool_id);
-}
-
 bool
 rb_gc_size_allocatable_p(size_t size)
 {
@@ -2712,7 +2706,7 @@ rb_gc_size_pool_sizes(void)
 {
     if (size_pool_sizes[0] == 0) {
         for (unsigned char i = 0; i < SIZE_POOL_COUNT; i++) {
-            size_pool_sizes[i] = rb_size_pool_slot_size(i);
+            size_pool_sizes[i] = size_pool_slot_size(i);
         }
     }
 
@@ -9984,9 +9978,6 @@ update_cc_tbl_i(VALUE ccs_ptr, void *data)
     }
 
     for (int i=0; i<ccs->len; i++) {
-        if (gc_object_moved_p(objspace, (VALUE)ccs->entries[i].ci)) {
-            ccs->entries[i].ci = (struct rb_callinfo *)rb_gc_location((VALUE)ccs->entries[i].ci);
-        }
         if (gc_object_moved_p(objspace, (VALUE)ccs->entries[i].cc)) {
             ccs->entries[i].cc = (struct rb_callcache *)rb_gc_location((VALUE)ccs->entries[i].cc);
         }

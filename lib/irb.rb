@@ -656,8 +656,10 @@ require_relative "irb/pager"
 # *   `%m`: the value of `self.to_s`.
 # *   `%M`: the value of `self.inspect`.
 # *   `%l`: an indication of the type of string; one of `"`, `'`, `/`, `]`.
-# *   `*NN*i`: Indentation level.
-# *   `*NN*n`: Line number.
+# *   `%NNi`: Indentation level. NN is a 2-digit number that specifies the number
+#             of digits of the indentation level (03 will result in 001).
+# *   `%NNn`: Line number. NN is a 2-digit number that specifies the number
+#             of digits of the line number (03 will result in 001).
 # *   `%%`: Literal `%`.
 #
 #
@@ -1455,7 +1457,7 @@ module IRB
     end
 
     def format_prompt(format, ltype, indent, line_no) # :nodoc:
-      format.gsub(/%([0-9]+)?([a-zA-Z])/) do
+      format.gsub(/%([0-9]+)?([a-zA-Z%])/) do
         case $2
         when "N"
           @context.irb_name
@@ -1488,7 +1490,7 @@ module IRB
             line_no.to_s
           end
         when "%"
-          "%"
+          "%" unless $1
         end
       end
     end
