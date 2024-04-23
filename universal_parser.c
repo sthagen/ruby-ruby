@@ -119,8 +119,6 @@
 #define rb_str_catf                       p->config->str_catf
 #undef rb_str_cat_cstr
 #define rb_str_cat_cstr                   p->config->str_cat_cstr
-#define rb_str_subseq                     p->config->str_subseq
-#define rb_str_new_frozen                 p->config->str_new_frozen
 #define rb_str_modify                     p->config->str_modify
 #define rb_str_set_len                    p->config->str_set_len
 #define rb_str_cat                        p->config->str_cat
@@ -142,7 +140,6 @@
 #define RSTRING_END                       p->config->rstring_end
 #undef RSTRING_LEN
 #define RSTRING_LEN                       p->config->rstring_len
-#define rb_filesystem_str_new_cstr        p->config->filesystem_str_new_cstr
 #define rb_obj_as_string                  p->config->obj_as_string
 
 #undef INT2NUM
@@ -153,7 +150,6 @@
 #define rb_io_write        p->config->io_write
 #define rb_io_flush        p->config->io_flush
 #define rb_io_puts         p->config->io_puts
-#define rb_io_gets_internal p->config->io_gets_internal
 
 #define rb_ractor_stdout   p->config->debug_output_stdout
 #define rb_ractor_stderr   p->config->debug_output_stderr
@@ -177,8 +173,6 @@
 #define rb_enc_isspace          p->config->enc_isspace
 #define ENC_CODERANGE_7BIT      p->config->enc_coderange_7bit
 #define ENC_CODERANGE_UNKNOWN   p->config->enc_coderange_unknown
-#define rb_enc_compatible       p->config->enc_compatible
-#define rb_enc_from_encoding    p->config->enc_from_encoding
 #define ENCODING_IS_ASCII8BIT   p->config->encoding_is_ascii8bit
 #define rb_usascii_encoding     p->config->usascii_encoding
 

@@ -73,6 +73,8 @@ enum rb_parser_shareability {
     rb_parser_shareable_everything,
 };
 
+typedef void* rb_parser_input_data;
+
 /*
  * AST Node
  */
@@ -1287,8 +1289,6 @@ typedef struct rb_parser_config_struct {
     RBIMPL_ATTR_FORMAT(RBIMPL_PRINTF_FORMAT, 2, 3)
     VALUE (*str_catf)(VALUE str, const char *format, ...);
     VALUE (*str_cat_cstr)(VALUE str, const char *ptr);
-    VALUE (*str_subseq)(VALUE str, long beg, long len);
-    VALUE (*str_new_frozen)(VALUE orig);
     void (*str_modify)(VALUE str);
     void (*str_set_len)(VALUE str, long len);
     VALUE (*str_cat)(VALUE str, const char *ptr, long len);
@@ -1306,7 +1306,6 @@ typedef struct rb_parser_config_struct {
     char *(*rstring_ptr)(VALUE str);
     char *(*rstring_end)(VALUE str);
     long (*rstring_len)(VALUE str);
-    VALUE (*filesystem_str_new_cstr)(const char *ptr);
     VALUE (*obj_as_string)(VALUE);
 
     /* Numeric */
@@ -1318,7 +1317,6 @@ typedef struct rb_parser_config_struct {
     VALUE (*io_write)(VALUE io, VALUE str);
     VALUE (*io_flush)(VALUE io);
     VALUE (*io_puts)(int argc, const VALUE *argv, VALUE out);
-    VALUE (*io_gets_internal)(VALUE io);
 
     /* IO (Ractor) */
     VALUE (*debug_output_stdout)(void);
@@ -1342,8 +1340,6 @@ typedef struct rb_parser_config_struct {
     int (*enc_find_index)(const char *name);
     rb_encoding *(*enc_from_index)(int idx);
     int (*enc_isspace)(OnigCodePoint c, rb_encoding *enc);
-    rb_encoding *(*enc_compatible)(VALUE str1, VALUE str2);
-    VALUE (*enc_from_encoding)(rb_encoding *enc);
     int (*encoding_is_ascii8bit)(VALUE obj);
     rb_encoding *(*usascii_encoding)(void);
     int enc_coderange_broken;
@@ -1419,7 +1415,6 @@ typedef struct rb_parser_config_struct {
 
 RUBY_SYMBOL_EXPORT_BEGIN
 void rb_ruby_parser_free(void *ptr);
-rb_ast_t* rb_ruby_parser_compile_string(rb_parser_t *p, const char *f, VALUE s, int line);
 
 #ifdef UNIVERSAL_PARSER
 rb_parser_t *rb_ruby_parser_allocate(const rb_parser_config_t *config);
