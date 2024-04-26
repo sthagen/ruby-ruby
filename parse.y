@@ -7722,7 +7722,6 @@ yycompile0(VALUE arg)
     n = yyparse(p);
     RUBY_DTRACE_PARSE_HOOK(END);
 
-    rb_parser_aset_script_lines_for(p->ruby_sourcefile_string, p->debug_lines);
     p->debug_lines = 0;
 
     xfree(p->lex.strterm);
@@ -15809,7 +15808,6 @@ rb_ruby_parser_mark(void *ptr)
     struct parser_params *p = (struct parser_params*)ptr;
 
     rb_gc_mark(p->ruby_sourcefile_string);
-    rb_gc_mark((VALUE)p->ast);
 #ifndef RIPPER
     rb_gc_mark(p->error_buffer);
 #else
