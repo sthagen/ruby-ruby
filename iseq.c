@@ -851,21 +851,12 @@ static int
 ast_line_count(const VALUE vast)
 {
     rb_ast_t *ast = rb_ruby_ast_data_get(vast);
-    if (!ast || !ast->body.script_lines) {
-        // this occurs when failed to parse the source code with a syntax error
-        return 0;
-    }
-    if (!FIXNUM_P((VALUE)ast->body.script_lines)) {
-        return (int)ast->body.script_lines->len;
-    }
-    return FIX2INT((VALUE)ast->body.script_lines);
+    return ast->body.line_count;
 }
 
 static VALUE
-iseq_setup_coverage(VALUE coverages, VALUE path, const VALUE vast, int line_offset)
+iseq_setup_coverage(VALUE coverages, VALUE path, int line_count)
 {
-    int line_count = line_offset + ast_line_count(vast);
-
     if (line_count >= 0) {
         int len = (rb_get_coverage_mode() & COVERAGE_TARGET_ONESHOT_LINES) ? 0 : line_count;
 
@@ -879,19 +870,19 @@ iseq_setup_coverage(VALUE coverages, VALUE path, const VALUE vast, int line_offs
 }
 
 static inline void
-iseq_new_setup_coverage(VALUE path, const VALUE vast, int line_offset)
+iseq_new_setup_coverage(VALUE path, int line_count)
 {
     VALUE coverages = rb_get_coverages();
 
     if (RTEST(coverages)) {
-        iseq_setup_coverage(coverages, path, vast, line_offset);
+        iseq_setup_coverage(coverages, path, line_count);
     }
 }
 
 rb_iseq_t *
 rb_iseq_new_top(const VALUE vast, VALUE name, VALUE path, VALUE realpath, const rb_iseq_t *parent)
 {
-    iseq_new_setup_coverage(path, vast, 0);
+    iseq_new_setup_coverage(path, ast_line_count(vast));
 
     return rb_iseq_new_with_opt(vast, name, path, realpath, 0, parent, 0,
                                 ISEQ_TYPE_TOP, &COMPILE_OPTION_DEFAULT,
@@ -904,7 +895,7 @@ rb_iseq_new_top(const VALUE vast, VALUE name, VALUE path, VALUE realpath, const 
 rb_iseq_t *
 pm_iseq_new_top(pm_scope_node_t *node, VALUE name, VALUE path, VALUE realpath, const rb_iseq_t *parent)
 {
-    // iseq_new_setup_coverage(path, ast, 0);
+    iseq_new_setup_coverage(path, (int) (node->parser->newline_list.size - 1));
 
     return pm_iseq_new_with_opt(node, name, path, realpath, 0, parent, 0,
                                 ISEQ_TYPE_TOP, &COMPILE_OPTION_DEFAULT);
@@ -913,7 +904,7 @@ pm_iseq_new_top(pm_scope_node_t *node, VALUE name, VALUE path, VALUE realpath, c
 rb_iseq_t *
 rb_iseq_new_main(const VALUE vast, VALUE path, VALUE realpath, const rb_iseq_t *parent, int opt)
 {
-    iseq_new_setup_coverage(path, vast, 0);
+    iseq_new_setup_coverage(path, ast_line_count(vast));
 
     return rb_iseq_new_with_opt(vast, rb_fstring_lit("<main>"),
                                 path, realpath, 0,
@@ -928,7 +919,7 @@ rb_iseq_new_main(const VALUE vast, VALUE path, VALUE realpath, const rb_iseq_t *
 rb_iseq_t *
 pm_iseq_new_main(pm_scope_node_t *node, VALUE path, VALUE realpath, const rb_iseq_t *parent, int opt)
 {
-    // iseq_new_setup_coverage(path, ast, 0);
+    iseq_new_setup_coverage(path, (int) (node->parser->newline_list.size - 1));
 
     return pm_iseq_new_with_opt(node, rb_fstring_lit("<main>"),
                                 path, realpath, 0,
@@ -941,7 +932,7 @@ rb_iseq_new_eval(const VALUE vast, VALUE name, VALUE path, VALUE realpath, int f
     if (rb_get_coverage_mode() & COVERAGE_TARGET_EVAL) {
         VALUE coverages = rb_get_coverages();
         if (RTEST(coverages) && RTEST(path) && !RTEST(rb_hash_has_key(coverages, path))) {
-            iseq_setup_coverage(coverages, path, vast, first_lineno - 1);
+            iseq_setup_coverage(coverages, path, ast_line_count(vast) + first_lineno - 1);
         }
     }
 
@@ -954,8 +945,15 @@ rb_iseq_t *
 pm_iseq_new_eval(pm_scope_node_t *node, VALUE name, VALUE path, VALUE realpath,
                      int first_lineno, const rb_iseq_t *parent, int isolated_depth)
 {
-        return pm_iseq_new_with_opt(node, name, path, realpath, first_lineno,
-                                    parent, isolated_depth, ISEQ_TYPE_EVAL, &COMPILE_OPTION_DEFAULT);
+    if (rb_get_coverage_mode() & COVERAGE_TARGET_EVAL) {
+        VALUE coverages = rb_get_coverages();
+        if (RTEST(coverages) && RTEST(path) && !RTEST(rb_hash_has_key(coverages, path))) {
+            iseq_setup_coverage(coverages, path, ((int) (node->parser->newline_list.size - 1)) + first_lineno - 1);
+        }
+    }
+
+    return pm_iseq_new_with_opt(node, name, path, realpath, first_lineno,
+                                parent, isolated_depth, ISEQ_TYPE_EVAL, &COMPILE_OPTION_DEFAULT);
 }
 
 static inline rb_iseq_t *
@@ -994,7 +992,7 @@ rb_iseq_new_with_opt(const VALUE vast, VALUE name, VALUE path, VALUE realpath,
     if (!NIL_P(script_lines)) {
         // noop
     }
-    else if (body && !FIXNUM_P((VALUE)body->script_lines) && body->script_lines) {
+    else if (body && body->script_lines) {
         script_lines = rb_parser_build_script_lines_from(body->script_lines);
     }
     else if (parent) {
