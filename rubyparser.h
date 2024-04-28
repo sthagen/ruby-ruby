@@ -1209,6 +1209,10 @@ typedef struct RNode_ERROR {
 
 typedef struct node_buffer_struct node_buffer_t;
 
+#ifdef UNIVERSAL_PARSER
+typedef struct rb_parser_config_struct rb_parser_config_t;
+#endif
+
 typedef struct rb_ast_body_struct {
     const NODE *root;
     rb_parser_ary_t *script_lines;
@@ -1219,6 +1223,9 @@ typedef struct rb_ast_body_struct {
 typedef struct rb_ast_struct {
     node_buffer_t *node_buffer;
     rb_ast_body_t body;
+#ifdef UNIVERSAL_PARSER
+    const rb_parser_config_t *config;
+#endif
 } rb_ast_t;
 
 
@@ -1247,8 +1254,6 @@ typedef struct rb_parser_config_struct {
     void *(*rb_memmove)(void *dest, const void *src, size_t t, size_t n);
     void *(*nonempty_memcpy)(void *dest, const void *src, size_t t, size_t n);
     void *(*xmalloc_mul_add)(size_t x, size_t y, size_t z);
-
-    rb_ast_t *(*ast_new)(node_buffer_t *nb);
 
     // VALUE rb_suppress_tracing(VALUE (*func)(VALUE), VALUE arg);
     VALUE (*compile_callback)(VALUE (*func)(VALUE), VALUE arg);

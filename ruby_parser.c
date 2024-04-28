@@ -292,14 +292,6 @@ arg_error(void)
     return rb_eArgError;
 }
 
-static rb_ast_t *
-ast_new(node_buffer_t *nb)
-{
-    rb_ast_t *ast = ruby_xcalloc(1, sizeof(rb_ast_t));
-    ast->node_buffer = nb;
-    return ast;
-}
-
 static VALUE
 static_id2sym(ID id)
 {
@@ -347,8 +339,6 @@ static const rb_parser_config_t rb_global_parser_config = {
     .rb_memmove = memmove2,
     .nonempty_memcpy = nonempty_memcpy,
     .xmalloc_mul_add = rb_xmalloc_mul_add,
-
-    .ast_new = ast_new,
 
     .compile_callback = rb_suppress_tracing,
     .reg_named_capture_assign = reg_named_capture_assign,
@@ -758,9 +748,7 @@ static void
 ast_free(void *ptr)
 {
     rb_ast_t *ast = (rb_ast_t *)ptr;
-    if (ast) {
-        rb_ast_free(ast);
-    }
+    rb_ast_free(ast);
 }
 
 static const rb_data_type_t ast_data_type = {
@@ -777,7 +765,12 @@ static VALUE
 ast_alloc(void)
 {
     rb_ast_t *ast;
-    return TypedData_Make_Struct(0, rb_ast_t, &ast_data_type, ast);
+    VALUE vast = TypedData_Make_Struct(0, rb_ast_t, &ast_data_type, ast);
+#ifdef UNIVERSAL_PARSER
+    ast = (rb_ast_t *)DATA_PTR(vast);
+    ast->config = &rb_global_parser_config;
+#endif
+    return vast;
 }
 
 VALUE
