@@ -95,6 +95,7 @@ jobs:
           - test_task: 'check'
             configure: '--enable-yjit=dev'
             yjit_opts: '--yjit-call-threshold=1 --yjit-verify-ctx --yjit-code-gc'
+            specopts: '-T --yjit-call-threshold=1 -T --yjit-verify-ctx -T --yjit-code-gc'
 
           - test_task: 'test-bundled-gems'
             configure: '--enable-yjit=dev'
@@ -108,6 +109,7 @@ jobs:
       GITPULLOPTIONS: --no-tags origin ${{ github.ref }}
       RUN_OPTS: ${{ matrix.yjit_opts }}
       YJIT_BENCH_OPTS: ${{ matrix.yjit_bench_opts }}
+      SPECOPTS: ${{ matrix.specopts }}
       RUBY_DEBUG: ci
       BUNDLE_JOBS: 8 # for yjit-bench
       RUST_BACKTRACE: 1
@@ -145,7 +147,7 @@ jobs:
         if: ${{ matrix.rust_version }}
         run: rustup install ${{ matrix.rust_version }} --profile minimal
 
-      - uses: ruby/setup-ruby@70da3bbf44ac06db1b0547ce2acc9380a5270d1e # v1.175.0
+      - uses: ruby/setup-ruby@1198b074305f9356bd56dd4b311757cc0dab2f1c # v1.175.1
         with:
           ruby-version: '3.0'
           bundler: none
@@ -180,7 +182,7 @@ jobs:
       - name: make ${{ matrix.test_task }}
         run: >-
           make -s ${{ matrix.test_task }} ${TESTS:+TESTS="$TESTS"}
-          RUN_OPTS="$RUN_OPTS" MSPECOPT=--debug
+          RUN_OPTS="$RUN_OPTS" MSPECOPT=--debug SPECOPTS="$SPECOPTS"
           YJIT_BENCH_OPTS="$YJIT_BENCH_OPTS" YJIT_BINDGEN_DIFF_OPTS="$YJIT_BINDGEN_DIFF_OPTS"
         timeout-minutes: 90
         env:
