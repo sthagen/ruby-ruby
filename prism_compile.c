@@ -3559,8 +3559,11 @@ pm_compile_destructured_param_locals(const pm_multi_target_node_t *node, st_tabl
 
         if (rest->expression != NULL) {
             RUBY_ASSERT(PM_NODE_TYPE_P(rest->expression, PM_REQUIRED_PARAMETER_NODE));
-            pm_insert_local_index(((const pm_required_parameter_node_t *) rest->expression)->name, local_index, index_lookup_table, local_table_for_iseq, scope_node);
-            local_index++;
+
+            if (!PM_NODE_FLAG_P(rest->expression, PM_PARAMETER_FLAGS_REPEATED_PARAMETER)) {
+                pm_insert_local_index(((const pm_required_parameter_node_t *) rest->expression)->name, local_index, index_lookup_table, local_table_for_iseq, scope_node);
+                local_index++;
+            }
         }
     }
 
@@ -3568,8 +3571,10 @@ pm_compile_destructured_param_locals(const pm_multi_target_node_t *node, st_tabl
         const pm_node_t *right = node->rights.nodes[index];
 
         if (PM_NODE_TYPE_P(right, PM_REQUIRED_PARAMETER_NODE)) {
-            pm_insert_local_index(((const pm_required_parameter_node_t *) right)->name, local_index, index_lookup_table, local_table_for_iseq, scope_node);
-            local_index++;
+            if (!PM_NODE_FLAG_P(right, PM_PARAMETER_FLAGS_REPEATED_PARAMETER)) {
+                pm_insert_local_index(((const pm_required_parameter_node_t *) right)->name, local_index, index_lookup_table, local_table_for_iseq, scope_node);
+                local_index++;
+            }
         }
         else {
             RUBY_ASSERT(PM_NODE_TYPE_P(right, PM_MULTI_TARGET_NODE));
@@ -5140,7 +5145,7 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
         else {
             // Establish branch coverage for the case node.
             VALUE branches = Qfalse;
-            rb_code_location_t case_location;
+            rb_code_location_t case_location = { 0 };
             int branch_id = 0;
 
             if (PM_BRANCH_COVERAGE_P(iseq)) {

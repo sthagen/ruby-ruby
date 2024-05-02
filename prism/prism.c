@@ -672,6 +672,26 @@ pm_parser_warn_node(pm_parser_t *parser, const pm_node_t *node, pm_diagnostic_id
 #define PM_PARSER_WARN_NODE_FORMAT(parser, node, diag_id, ...) \
     PM_PARSER_WARN_FORMAT(parser, (node)->location.start, (node)->location.end, diag_id, __VA_ARGS__)
 
+/**
+ * Add an error for an expected heredoc terminator. This is a special function
+ * only because it grabs its location off of a lex mode instead of a node or a
+ * token.
+ */
+static void
+pm_parser_err_heredoc_term(pm_parser_t *parser, pm_lex_mode_t *lex_mode) {
+    const uint8_t *ident_start = lex_mode->as.heredoc.ident_start;
+    size_t ident_length = lex_mode->as.heredoc.ident_length;
+
+    PM_PARSER_ERR_FORMAT(
+        parser,
+        ident_start,
+        ident_start + ident_length,
+        PM_ERR_HEREDOC_TERM,
+        (int) ident_length,
+        (const char *) ident_start
+    );
+}
+
 /******************************************************************************/
 /* Scope-related functions                                                    */
 /******************************************************************************/
@@ -1405,7 +1425,7 @@ pm_conditional_predicate_warn_write_literal_p(const pm_node_t *node) {
 static inline void
 pm_conditional_predicate_warn_write_literal(pm_parser_t *parser, const pm_node_t *node) {
     if (pm_conditional_predicate_warn_write_literal_p(node)) {
-        pm_parser_warn_node(parser, node, parser->version == PM_OPTIONS_VERSION_CRUBY_3_3_0 ? PM_WARN_EQUAL_IN_CONDITIONAL_3_3_0 : PM_WARN_EQUAL_IN_CONDITIONAL);
+        pm_parser_warn_node(parser, node, parser->version == PM_OPTIONS_VERSION_CRUBY_3_3 ? PM_WARN_EQUAL_IN_CONDITIONAL_3_3 : PM_WARN_EQUAL_IN_CONDITIONAL);
     }
 }
 
@@ -7834,7 +7854,7 @@ pm_local_variable_read_node_create_it(pm_parser_t *parser, const pm_token_t *nam
 static pm_node_t *
 pm_node_check_it(pm_parser_t *parser, pm_node_t *node) {
     if (
-        (parser->version != PM_OPTIONS_VERSION_CRUBY_3_3_0) &&
+        (parser->version != PM_OPTIONS_VERSION_CRUBY_3_3) &&
         !parser->current_scope->closed &&
         (parser->current_scope->numbered_parameters != PM_SCOPE_NUMBERED_PARAMETERS_DISALLOWED) &&
         pm_node_is_it(parser, node)
@@ -8832,7 +8852,7 @@ lex_global_variable(pm_parser_t *parser) {
                 } while (parser->current.end < parser->end && (width = char_is_identifier(parser, parser->current.end)) > 0);
 
                 // $0 isn't allowed to be followed by anything.
-                pm_diagnostic_id_t diag_id = parser->version == PM_OPTIONS_VERSION_CRUBY_3_3_0 ? PM_ERR_INVALID_VARIABLE_GLOBAL_3_3_0 : PM_ERR_INVALID_VARIABLE_GLOBAL;
+                pm_diagnostic_id_t diag_id = parser->version == PM_OPTIONS_VERSION_CRUBY_3_3 ? PM_ERR_INVALID_VARIABLE_GLOBAL_3_3 : PM_ERR_INVALID_VARIABLE_GLOBAL;
                 PM_PARSER_ERR_TOKEN_FORMAT_CONTENT(parser, parser->current, diag_id);
             }
 
@@ -8868,7 +8888,7 @@ lex_global_variable(pm_parser_t *parser) {
             } else {
                 // If we get here, then we have a $ followed by something that
                 // isn't recognized as a global variable.
-                pm_diagnostic_id_t diag_id = parser->version == PM_OPTIONS_VERSION_CRUBY_3_3_0 ? PM_ERR_INVALID_VARIABLE_GLOBAL_3_3_0 : PM_ERR_INVALID_VARIABLE_GLOBAL;
+                pm_diagnostic_id_t diag_id = parser->version == PM_OPTIONS_VERSION_CRUBY_3_3 ? PM_ERR_INVALID_VARIABLE_GLOBAL_3_3 : PM_ERR_INVALID_VARIABLE_GLOBAL;
                 size_t width = parser->encoding->char_width(parser->current.end, parser->end - parser->current.end);
                 PM_PARSER_ERR_TOKEN_FORMAT(parser, parser->current, diag_id, (int) ((parser->current.end + width) - parser->current.start), (const char *) parser->current.start);
             }
@@ -9506,22 +9526,7 @@ escape_read(pm_parser_t *parser, pm_buffer_t *buffer, pm_buffer_t *regular_expre
             const uint8_t *start = parser->current.end - 1;
             parser->current.end++;
 
-            if (
-                (parser->current.end + 4 <= parser->end) &&
-                pm_char_is_hexadecimal_digit(parser->current.end[0]) &&
-                pm_char_is_hexadecimal_digit(parser->current.end[1]) &&
-                pm_char_is_hexadecimal_digit(parser->current.end[2]) &&
-                pm_char_is_hexadecimal_digit(parser->current.end[3])
-            ) {
-                uint32_t value = escape_unicode(parser->current.end, 4);
-
-                if (flags & PM_ESCAPE_FLAG_REGEXP) {
-                    pm_buffer_append_bytes(regular_expression_buffer, start, (size_t) (parser->current.end + 4 - start));
-                }
-                escape_write_unicode(parser, buffer, flags, start, parser->current.end + 4, value);
-
-                parser->current.end += 4;
-            } else if (peek(parser) == '{') {
+            if (peek(parser) == '{') {
                 const uint8_t *unicode_codepoints_start = parser->current.end - 2;
 
                 parser->current.end++;
@@ -9571,7 +9576,21 @@ escape_read(pm_parser_t *parser, pm_buffer_t *buffer, pm_buffer_t *regular_expre
                     pm_buffer_append_bytes(regular_expression_buffer, unicode_codepoints_start, (size_t) (parser->current.end - unicode_codepoints_start));
                 }
             } else {
-                pm_parser_err_current(parser, PM_ERR_ESCAPE_INVALID_UNICODE);
+                size_t length = pm_strspn_hexadecimal_digit(parser->current.end, MIN(parser->end - parser->current.end, 4));
+
+                if (length == 4) {
+                    uint32_t value = escape_unicode(parser->current.end, 4);
+
+                    if (flags & PM_ESCAPE_FLAG_REGEXP) {
+                        pm_buffer_append_bytes(regular_expression_buffer, start, (size_t) (parser->current.end + 4 - start));
+                    }
+
+                    escape_write_unicode(parser, buffer, flags, start, parser->current.end + 4, value);
+                    parser->current.end += 4;
+                } else {
+                    parser->current.end += length;
+                    pm_parser_err_current(parser, PM_ERR_ESCAPE_INVALID_UNICODE);
+                }
             }
 
             return;
@@ -9825,8 +9844,8 @@ lex_at_variable(pm_parser_t *parser) {
         }
     } else if (parser->current.end < parser->end && pm_char_is_decimal_digit(*parser->current.end)) {
         pm_diagnostic_id_t diag_id = (type == PM_TOKEN_CLASS_VARIABLE) ? PM_ERR_INCOMPLETE_VARIABLE_CLASS : PM_ERR_INCOMPLETE_VARIABLE_INSTANCE;
-        if (parser->version == PM_OPTIONS_VERSION_CRUBY_3_3_0) {
-            diag_id = (type == PM_TOKEN_CLASS_VARIABLE) ? PM_ERR_INCOMPLETE_VARIABLE_CLASS_3_3_0 : PM_ERR_INCOMPLETE_VARIABLE_INSTANCE_3_3_0;
+        if (parser->version == PM_OPTIONS_VERSION_CRUBY_3_3) {
+            diag_id = (type == PM_TOKEN_CLASS_VARIABLE) ? PM_ERR_INCOMPLETE_VARIABLE_CLASS_3_3 : PM_ERR_INCOMPLETE_VARIABLE_INSTANCE_3_3;
         }
 
         size_t width = parser->encoding->char_width(parser->current.end, parser->end - parser->current.end);
@@ -10810,8 +10829,11 @@ parser_lex(pm_parser_t *parser) {
                                 }
 
                                 size_t ident_length = (size_t) (parser->current.end - ident_start);
+                                bool ident_error = false;
+
                                 if (quote != PM_HEREDOC_QUOTE_NONE && !match(parser, (uint8_t) quote)) {
-                                    // TODO: handle unterminated heredoc
+                                    pm_parser_err(parser, ident_start, ident_start + ident_length, PM_ERR_HEREDOC_IDENTIFIER);
+                                    ident_error = true;
                                 }
 
                                 parser->explicit_encoding = NULL;
@@ -10836,7 +10858,7 @@ parser_lex(pm_parser_t *parser) {
                                         // this is not a valid heredoc declaration. In this case we
                                         // will add an error, but we will still return a heredoc
                                         // start.
-                                        pm_parser_err_current(parser, PM_ERR_HEREDOC_TERM);
+                                        if (!ident_error) pm_parser_err_heredoc_term(parser, parser->lex_modes.current);
                                         body_start = parser->end;
                                     } else {
                                         // Otherwise, we want to indicate that the body of the
@@ -12163,7 +12185,7 @@ parser_lex(pm_parser_t *parser) {
             // terminator) but still continue parsing so that content after the
             // declaration of the heredoc can be parsed.
             if (parser->current.end >= parser->end) {
-                pm_parser_err_current(parser, PM_ERR_HEREDOC_TERM);
+                pm_parser_err_heredoc_term(parser, lex_mode);
                 parser->next_start = lex_mode->as.heredoc.next_start;
                 parser->heredoc_end = parser->current.end;
                 lex_state_set(parser, PM_LEX_STATE_END);
@@ -12802,6 +12824,23 @@ expect3(pm_parser_t *parser, pm_token_type_t type1, pm_token_type_t type2, pm_to
     parser->previous.type = PM_TOKEN_MISSING;
 }
 
+/**
+ * A special expect1 that expects a heredoc terminator and handles popping the
+ * lex mode accordingly.
+ */
+static void
+expect1_heredoc_term(pm_parser_t *parser, pm_lex_mode_t *lex_mode) {
+    if (match1(parser, PM_TOKEN_HEREDOC_END)) {
+        lex_mode_pop(parser);
+        parser_lex(parser);
+    } else {
+        pm_parser_err_heredoc_term(parser, lex_mode);
+        lex_mode_pop(parser);
+        parser->previous.start = parser->previous.end;
+        parser->previous.type = PM_TOKEN_MISSING;
+    }
+}
+
 static pm_node_t *
 parse_expression(pm_parser_t *parser, pm_binding_power_t binding_power, bool accepts_command_call, pm_diagnostic_id_t diag_id);
 
@@ -12930,6 +12969,32 @@ parse_write_name(pm_parser_t *parser, pm_constant_id_t *name_field) {
 }
 
 /**
+ * Certain expressions are not targetable, but in order to provide a better
+ * experience we give a specific error message. In order to maintain as much
+ * information in the tree as possible, we replace them with local variable
+ * writes.
+ */
+static pm_node_t *
+parse_unwriteable_target(pm_parser_t *parser, pm_node_t *target) {
+    switch (PM_NODE_TYPE(target)) {
+        case PM_SOURCE_ENCODING_NODE: pm_parser_err_node(parser, target, PM_ERR_EXPRESSION_NOT_WRITABLE_ENCODING); break;
+        case PM_FALSE_NODE: pm_parser_err_node(parser, target, PM_ERR_EXPRESSION_NOT_WRITABLE_FALSE); break;
+        case PM_SOURCE_FILE_NODE: pm_parser_err_node(parser, target, PM_ERR_EXPRESSION_NOT_WRITABLE_FILE); break;
+        case PM_SOURCE_LINE_NODE: pm_parser_err_node(parser, target, PM_ERR_EXPRESSION_NOT_WRITABLE_LINE); break;
+        case PM_NIL_NODE: pm_parser_err_node(parser, target, PM_ERR_EXPRESSION_NOT_WRITABLE_NIL); break;
+        case PM_SELF_NODE: pm_parser_err_node(parser, target, PM_ERR_EXPRESSION_NOT_WRITABLE_SELF); break;
+        case PM_TRUE_NODE: pm_parser_err_node(parser, target, PM_ERR_EXPRESSION_NOT_WRITABLE_TRUE); break;
+        default: break;
+    }
+
+    pm_constant_id_t name = pm_parser_constant_id_location(parser, target->location.start, target->location.end);
+    pm_local_variable_target_node_t *result = pm_local_variable_target_node_create(parser, &target->location, name, 0);
+
+    pm_node_destroy(parser, target);
+    return (pm_node_t *) result;
+}
+
+/**
  * Convert the given node into a valid target node.
  */
 static pm_node_t *
@@ -12937,6 +13002,17 @@ parse_target(pm_parser_t *parser, pm_node_t *target) {
     switch (PM_NODE_TYPE(target)) {
         case PM_MISSING_NODE:
             return target;
+        case PM_SOURCE_ENCODING_NODE:
+        case PM_FALSE_NODE:
+        case PM_SOURCE_FILE_NODE:
+        case PM_SOURCE_LINE_NODE:
+        case PM_NIL_NODE:
+        case PM_SELF_NODE:
+        case PM_TRUE_NODE: {
+            // In these special cases, we have specific error messages and we
+            // will replace them with local variable writes.
+            return parse_unwriteable_target(parser, target);
+        }
         case PM_CLASS_VARIABLE_READ_NODE:
             assert(sizeof(pm_class_variable_target_node_t) == sizeof(pm_class_variable_read_node_t));
             target->type = PM_CLASS_VARIABLE_TARGET_NODE;
@@ -16254,7 +16330,7 @@ parse_pattern_primitive(pm_parser_t *parser, pm_constant_id_list_t *captures, pm
 
                     if (variable == NULL) {
                         if (
-                            (parser->version != PM_OPTIONS_VERSION_CRUBY_3_3_0) &&
+                            (parser->version != PM_OPTIONS_VERSION_CRUBY_3_3) &&
                             !parser->current_scope->closed &&
                             (parser->current_scope->numbered_parameters != PM_SCOPE_NUMBERED_PARAMETERS_DISALLOWED) &&
                             pm_token_is_it(parser->previous.start, parser->previous.end)
@@ -17468,8 +17544,7 @@ parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power, b
             if (match2(parser, PM_TOKEN_HEREDOC_END, PM_TOKEN_EOF)) {
                 // If we get here, then we have an empty heredoc. We'll create
                 // an empty content token and return an empty string node.
-                lex_mode_pop(parser);
-                expect1(parser, PM_TOKEN_HEREDOC_END, PM_ERR_HEREDOC_TERM);
+                expect1_heredoc_term(parser, lex_mode);
                 pm_token_t content = parse_strings_empty_content(parser->previous.start);
 
                 if (quote == PM_HEREDOC_QUOTE_BACKTICK) {
@@ -17510,8 +17585,7 @@ parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power, b
                 }
 
                 node = (pm_node_t *) cast;
-                lex_mode_pop(parser);
-                expect1(parser, PM_TOKEN_HEREDOC_END, PM_ERR_HEREDOC_TERM);
+                expect1_heredoc_term(parser, lex_mode);
             } else {
                 // If we get here, then we have multiple parts in the heredoc,
                 // so we'll need to create an interpolated string node to hold
@@ -17533,20 +17607,18 @@ parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power, b
                     pm_interpolated_x_string_node_t *cast = pm_interpolated_xstring_node_create(parser, &opening, &opening);
                     cast->parts = parts;
 
-                    lex_mode_pop(parser);
-                    expect1(parser, PM_TOKEN_HEREDOC_END, PM_ERR_HEREDOC_TERM);
-
+                    expect1_heredoc_term(parser, lex_mode);
                     pm_interpolated_xstring_node_closing_set(cast, &parser->previous);
+
                     cast->base.location = cast->opening_loc;
                     node = (pm_node_t *) cast;
                 } else {
                     pm_interpolated_string_node_t *cast = pm_interpolated_string_node_create(parser, &opening, &parts, &opening);
                     pm_node_list_free(&parts);
 
-                    lex_mode_pop(parser);
-                    expect1(parser, PM_TOKEN_HEREDOC_END, PM_ERR_HEREDOC_TERM);
-
+                    expect1_heredoc_term(parser, lex_mode);
                     pm_interpolated_string_node_closing_set(cast, &parser->previous);
+
                     cast->base.location = cast->opening_loc;
                     node = (pm_node_t *) cast;
                 }
