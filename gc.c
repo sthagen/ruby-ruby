@@ -689,29 +689,33 @@ typedef struct RVALUE {
             VALUE v3;
         } values;
     } as;
-
-    /* Start of RVALUE_OVERHEAD.
-     * Do not directly read these members from the RVALUE as they're located
-     * at the end of the slot (which may differ in size depending on the size
-     * pool). */
-#if RACTOR_CHECK_MODE
-    uint32_t _ractor_belonging_id;
-#endif
-#if GC_DEBUG
-    const char *file;
-    int line;
-#endif
 } RVALUE;
 
-#if RACTOR_CHECK_MODE
-# define RVALUE_OVERHEAD (sizeof(RVALUE) - offsetof(RVALUE, _ractor_belonging_id))
-#elif GC_DEBUG
-# define RVALUE_OVERHEAD (sizeof(RVALUE) - offsetof(RVALUE, file))
+/* These members ae located at the end of the slot that the object is in. */
+#if RACTOR_CHECK_MODE || GC_DEBUG
+struct rvalue_overhead {
+# if RACTOR_CHECK_MODE
+    uint32_t _ractor_belonging_id;
+# endif
+# if GC_DEBUG
+    const char *file;
+    int line;
+# endif
+};
+
+// Make sure that RVALUE_OVERHEAD aligns to sizeof(VALUE)
+# define RVALUE_OVERHEAD (sizeof(struct { \
+    union { \
+        struct rvalue_overhead overhead; \
+        VALUE value; \
+    }; \
+}))
+# define GET_RVALUE_OVERHEAD(obj) ((struct rvalue_overhead *)((uintptr_t)obj + rb_gc_obj_slot_size(obj)))
 #else
 # define RVALUE_OVERHEAD 0
 #endif
 
-STATIC_ASSERT(sizeof_rvalue, sizeof(RVALUE) == (SIZEOF_VALUE * 5) + RVALUE_OVERHEAD);
+STATIC_ASSERT(sizeof_rvalue, sizeof(RVALUE) == (SIZEOF_VALUE * 5));
 STATIC_ASSERT(alignof_rvalue, RUBY_ALIGNOF(RVALUE) == SIZEOF_VALUE);
 
 typedef uintptr_t bits_t;
@@ -955,7 +959,7 @@ typedef struct rb_objspace {
 #define HEAP_PAGE_ALIGN_LOG 16
 #endif
 
-#define BASE_SLOT_SIZE sizeof(RVALUE)
+#define BASE_SLOT_SIZE (sizeof(RVALUE) + RVALUE_OVERHEAD)
 
 #define CEILDIV(i, mod) roomof(i, mod)
 enum {
@@ -2634,7 +2638,7 @@ newobj_init(VALUE klass, VALUE flags, int wb_protected, rb_objspace_t *objspace,
 #endif
 
 #if GC_DEBUG
-    RANY(obj)->file = rb_source_location_cstr(&RANY(obj)->line);
+    GET_RVALUE_OVERHEAD(obj)->file = rb_source_location_cstr(&GET_RVALUE_OVERHEAD(obj)->line);
     GC_ASSERT(!SPECIAL_CONST_P(obj)); /* check alignment */
 #endif
 
@@ -3476,7 +3480,7 @@ obj_free(rb_objspace_t *objspace, VALUE obj)
 }
 
 
-#define OBJ_ID_INCREMENT (sizeof(RVALUE))
+#define OBJ_ID_INCREMENT (BASE_SLOT_SIZE)
 #define OBJ_ID_INITIAL (OBJ_ID_INCREMENT)
 
 static int
@@ -8194,7 +8198,7 @@ gc_compact_plane(rb_objspace_t *objspace, rb_size_pool_t *size_pool, rb_heap_t *
 
     do {
         VALUE vp = (VALUE)p;
-        GC_ASSERT(vp % sizeof(RVALUE) == 0);
+        GC_ASSERT(vp % BASE_SLOT_SIZE == 0);
 
         if (bitset & 1) {
             objspace->rcompactor.considered_count_table[BUILTIN_TYPE(vp)]++;
@@ -13180,7 +13184,7 @@ rb_raw_obj_info_common(char *const buff, const size_t buff_size, const VALUE obj
         }
 
 #if GC_DEBUG
-        APPEND_F("@%s:%d", RANY(obj)->file, RANY(obj)->line);
+        APPEND_F("@%s:%d", GET_RVALUE_OVERHEAD(obj)->file, GET_RVALUE_OVERHEAD(obj)->line);
 #endif
     }
   end:
@@ -13489,7 +13493,7 @@ rb_gcdebug_print_obj_condition(VALUE obj)
 {
     rb_objspace_t *objspace = &rb_objspace;
 
-    fprintf(stderr, "created at: %s:%d\n", RANY(obj)->file, RANY(obj)->line);
+    fprintf(stderr, "created at: %s:%d\n", GET_RVALUE_OVERHEAD(obj)->file, GET_RVALUE_OVERHEAD(obj)->line);
 
     if (BUILTIN_TYPE(obj) == T_MOVED) {
         fprintf(stderr, "moved?: true\n");
@@ -13514,7 +13518,7 @@ rb_gcdebug_print_obj_condition(VALUE obj)
 
     if (is_lazy_sweeping(objspace)) {
         fprintf(stderr, "lazy sweeping?: true\n");
-        fprintf(stderr, "page swept?: %s\n", GET_HEAP_PAGE(ptr)->flags.before_sweep ? "false" : "true");
+        fprintf(stderr, "page swept?: %s\n", GET_HEAP_PAGE(obj)->flags.before_sweep ? "false" : "true");
     }
     else {
         fprintf(stderr, "lazy sweeping?: false\n");
@@ -13590,10 +13594,9 @@ rb_gcdebug_remove_stress_to_class(int argc, VALUE *argv, VALUE self)
  *  traverse all living objects with an iterator.
  *
  *  ObjectSpace also provides support for object finalizers, procs that will be
- *  called when a specific object is about to be destroyed by garbage
- *  collection. See the documentation for
- *  <code>ObjectSpace.define_finalizer</code> for important information on
- *  how to use this method correctly.
+ *  called after a specific object was destroyed by garbage collection.  See
+ *  the documentation for +ObjectSpace.define_finalizer+ for important
+ *  information on how to use this method correctly.
  *
  *     a = "A"
  *     b = "B"
@@ -13652,7 +13655,7 @@ Init_GC(void)
     rb_hash_aset(gc_constants, ID2SYM(rb_intern("DEBUG")), RBOOL(GC_DEBUG));
     rb_hash_aset(gc_constants, ID2SYM(rb_intern("BASE_SLOT_SIZE")), SIZET2NUM(BASE_SLOT_SIZE - RVALUE_OVERHEAD));
     rb_hash_aset(gc_constants, ID2SYM(rb_intern("RVALUE_OVERHEAD")), SIZET2NUM(RVALUE_OVERHEAD));
-    rb_hash_aset(gc_constants, ID2SYM(rb_intern("RVALUE_SIZE")), SIZET2NUM(sizeof(RVALUE)));
+    rb_hash_aset(gc_constants, ID2SYM(rb_intern("RVALUE_SIZE")), SIZET2NUM(BASE_SLOT_SIZE));
     rb_hash_aset(gc_constants, ID2SYM(rb_intern("HEAP_PAGE_OBJ_LIMIT")), SIZET2NUM(HEAP_PAGE_OBJ_LIMIT));
     rb_hash_aset(gc_constants, ID2SYM(rb_intern("HEAP_PAGE_BITMAP_SIZE")), SIZET2NUM(HEAP_PAGE_BITMAP_SIZE));
     rb_hash_aset(gc_constants, ID2SYM(rb_intern("HEAP_PAGE_SIZE")), SIZET2NUM(HEAP_PAGE_SIZE));

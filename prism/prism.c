@@ -2944,12 +2944,37 @@ pm_call_and_write_node_create(pm_parser_t *parser, pm_call_node_t *target, const
 }
 
 /**
+ * Validate that index expressions do not have keywords or blocks if we are
+ * parsing as Ruby 3.4+.
+ */
+static void
+pm_index_arguments_check(pm_parser_t *parser, const pm_arguments_node_t *arguments, const pm_node_t *block) {
+    if (parser->version != PM_OPTIONS_VERSION_CRUBY_3_3) {
+        if (arguments != NULL && PM_NODE_FLAG_P(arguments, PM_ARGUMENTS_NODE_FLAGS_CONTAINS_KEYWORDS)) {
+            pm_node_t *node;
+            PM_NODE_LIST_FOREACH(&arguments->arguments, index, node) {
+                if (PM_NODE_TYPE_P(node, PM_KEYWORD_HASH_NODE)) {
+                    pm_parser_err_node(parser, node, PM_ERR_UNEXPECTED_INDEX_KEYWORDS);
+                    break;
+                }
+            }
+        }
+
+        if (block != NULL) {
+            pm_parser_err_node(parser, block, PM_ERR_UNEXPECTED_INDEX_BLOCK);
+        }
+    }
+}
+
+/**
  * Allocate and initialize a new IndexAndWriteNode node.
  */
 static pm_index_and_write_node_t *
 pm_index_and_write_node_create(pm_parser_t *parser, pm_call_node_t *target, const pm_token_t *operator, pm_node_t *value) {
     assert(operator->type == PM_TOKEN_AMPERSAND_AMPERSAND_EQUAL);
     pm_index_and_write_node_t *node = PM_ALLOC_NODE(parser, pm_index_and_write_node_t);
+
+    pm_index_arguments_check(parser, target->arguments, target->block);
 
     *node = (pm_index_and_write_node_t) {
         {
@@ -3021,6 +3046,8 @@ pm_call_operator_write_node_create(pm_parser_t *parser, pm_call_node_t *target, 
 static pm_index_operator_write_node_t *
 pm_index_operator_write_node_create(pm_parser_t *parser, pm_call_node_t *target, const pm_token_t *operator, pm_node_t *value) {
     pm_index_operator_write_node_t *node = PM_ALLOC_NODE(parser, pm_index_operator_write_node_t);
+
+    pm_index_arguments_check(parser, target->arguments, target->block);
 
     *node = (pm_index_operator_write_node_t) {
         {
@@ -3095,6 +3122,8 @@ pm_index_or_write_node_create(pm_parser_t *parser, pm_call_node_t *target, const
     assert(operator->type == PM_TOKEN_PIPE_PIPE_EQUAL);
     pm_index_or_write_node_t *node = PM_ALLOC_NODE(parser, pm_index_or_write_node_t);
 
+    pm_index_arguments_check(parser, target->arguments, target->block);
+
     *node = (pm_index_or_write_node_t) {
         {
             .type = PM_INDEX_OR_WRITE_NODE,
@@ -3158,6 +3187,8 @@ static pm_index_target_node_t *
 pm_index_target_node_create(pm_parser_t *parser, pm_call_node_t *target) {
     pm_index_target_node_t *node = PM_ALLOC_NODE(parser, pm_index_target_node_t);
     pm_node_flags_t flags = target->base.flags;
+
+    pm_index_arguments_check(parser, target->arguments, target->block);
 
     *node = (pm_index_target_node_t) {
         {
@@ -3530,22 +3561,27 @@ pm_constant_path_or_write_node_create(pm_parser_t *parser, pm_constant_path_node
  * Allocate and initialize a new ConstantPathNode node.
  */
 static pm_constant_path_node_t *
-pm_constant_path_node_create(pm_parser_t *parser, pm_node_t *parent, const pm_token_t *delimiter, pm_node_t *child) {
+pm_constant_path_node_create(pm_parser_t *parser, pm_node_t *parent, const pm_token_t *delimiter, const pm_token_t *name_token) {
     pm_assert_value_expression(parser, parent);
-
     pm_constant_path_node_t *node = PM_ALLOC_NODE(parser, pm_constant_path_node_t);
+
+    pm_constant_id_t name = PM_CONSTANT_ID_UNSET;
+    if (name_token->type == PM_TOKEN_CONSTANT) {
+        name = pm_parser_constant_id_token(parser, name_token);
+    }
 
     *node = (pm_constant_path_node_t) {
         {
             .type = PM_CONSTANT_PATH_NODE,
             .location = {
                 .start = parent == NULL ? delimiter->start : parent->location.start,
-                .end = child->location.end
+                .end = name_token->end
             },
         },
         .parent = parent,
-        .child = child,
-        .delimiter_loc = PM_LOCATION_TOKEN_VALUE(delimiter)
+        .name = name,
+        .delimiter_loc = PM_LOCATION_TOKEN_VALUE(delimiter),
+        .name_loc = PM_LOCATION_TOKEN_VALUE(name_token)
     };
 
     return node;
@@ -13728,9 +13764,10 @@ parse_arguments(pm_parser_t *parser, pm_arguments_t *arguments, bool accepts_for
                 bool contains_keyword_splat = parse_assocs(parser, &hash_keys, (pm_node_t *) hash);
 
                 parse_arguments_append(parser, arguments, argument);
-                if (contains_keyword_splat) {
-                    pm_node_flag_set((pm_node_t *) arguments->arguments, PM_ARGUMENTS_NODE_FLAGS_CONTAINS_KEYWORD_SPLAT);
-                }
+
+                pm_node_flags_t flags = PM_ARGUMENTS_NODE_FLAGS_CONTAINS_KEYWORDS;
+                if (contains_keyword_splat) flags |= PM_ARGUMENTS_NODE_FLAGS_CONTAINS_KEYWORD_SPLAT;
+                pm_node_flag_set((pm_node_t *) arguments->arguments, flags);
 
                 pm_static_literals_free(&hash_keys);
                 parsed_bare_hash = true;
@@ -13808,7 +13845,9 @@ parse_arguments(pm_parser_t *parser, pm_arguments_t *arguments, bool accepts_for
                     argument = parse_value_expression(parser, PM_BINDING_POWER_DEFINED, !parsed_first_argument, PM_ERR_EXPECT_ARGUMENT);
                 }
 
+                bool contains_keywords = false;
                 bool contains_keyword_splat = false;
+
                 if (pm_symbol_node_label_p(argument) || accept1(parser, PM_TOKEN_EQUAL_GREATER)) {
                     if (parsed_bare_hash) {
                         pm_parser_err_previous(parser, PM_ERR_ARGUMENT_BARE_HASH);
@@ -13822,6 +13861,7 @@ parse_arguments(pm_parser_t *parser, pm_arguments_t *arguments, bool accepts_for
                     }
 
                     pm_keyword_hash_node_t *bare_hash = pm_keyword_hash_node_create(parser);
+                    contains_keywords = true;
 
                     // Create the set of static literals for this hash.
                     pm_static_literals_t hash_keys = { 0 };
@@ -13850,9 +13890,12 @@ parse_arguments(pm_parser_t *parser, pm_arguments_t *arguments, bool accepts_for
                 }
 
                 parse_arguments_append(parser, arguments, argument);
-                if (contains_keyword_splat) {
-                    pm_node_flag_set((pm_node_t *)arguments->arguments, PM_ARGUMENTS_NODE_FLAGS_CONTAINS_KEYWORD_SPLAT);
-                }
+
+                pm_node_flags_t flags = 0;
+                if (contains_keywords) flags |= PM_ARGUMENTS_NODE_FLAGS_CONTAINS_KEYWORDS;
+                if (contains_keyword_splat) flags |= PM_ARGUMENTS_NODE_FLAGS_CONTAINS_KEYWORD_SPLAT;
+                pm_node_flag_set((pm_node_t *) arguments->arguments, flags);
+
                 break;
             }
         }
@@ -15823,9 +15866,7 @@ parse_pattern_constant_path(pm_parser_t *parser, pm_constant_id_list_t *captures
     while (accept1(parser, PM_TOKEN_COLON_COLON)) {
         pm_token_t delimiter = parser->previous;
         expect1(parser, PM_TOKEN_CONSTANT, PM_ERR_CONSTANT_PATH_COLON_COLON_CONSTANT);
-
-        pm_node_t *child = (pm_node_t *) pm_constant_read_node_create(parser, &parser->previous);
-        node = (pm_node_t *) pm_constant_path_node_create(parser, node, &delimiter, child);
+        node = (pm_node_t *) pm_constant_path_node_create(parser, node, &delimiter, &parser->previous);
     }
 
     // If there is a [ or ( that follows, then this is part of a larger pattern
@@ -16404,8 +16445,7 @@ parse_pattern_primitive(pm_parser_t *parser, pm_constant_id_list_t *captures, pm
             parser_lex(parser);
 
             expect1(parser, PM_TOKEN_CONSTANT, PM_ERR_CONSTANT_PATH_COLON_COLON_CONSTANT);
-            pm_node_t *child = (pm_node_t *) pm_constant_read_node_create(parser, &parser->previous);
-            pm_constant_path_node_t *node = pm_constant_path_node_create(parser, NULL, &delimiter, child);
+            pm_constant_path_node_t *node = pm_constant_path_node_create(parser, NULL, &delimiter, &parser->previous);
 
             return parse_pattern_constant_path(parser, captures, (pm_node_t *) node);
         }
@@ -17379,12 +17419,10 @@ parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power, b
         }
         case PM_TOKEN_UCOLON_COLON: {
             parser_lex(parser);
-
             pm_token_t delimiter = parser->previous;
-            expect1(parser, PM_TOKEN_CONSTANT, PM_ERR_CONSTANT_PATH_COLON_COLON_CONSTANT);
 
-            pm_node_t *constant = (pm_node_t *) pm_constant_read_node_create(parser, &parser->previous);
-            pm_node_t *node = (pm_node_t *)pm_constant_path_node_create(parser, NULL, &delimiter, constant);
+            expect1(parser, PM_TOKEN_CONSTANT, PM_ERR_CONSTANT_PATH_COLON_COLON_CONSTANT);
+            pm_node_t *node = (pm_node_t *) pm_constant_path_node_create(parser, NULL, &delimiter, &parser->previous);
 
             if ((binding_power == PM_BINDING_POWER_STATEMENT) && match1(parser, PM_TOKEN_COMMA)) {
                 node = parse_targets_validate(parser, node, PM_BINDING_POWER_INDEX);
@@ -18642,9 +18680,7 @@ parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power, b
                 pm_token_t double_colon = parser->previous;
 
                 expect1(parser, PM_TOKEN_CONSTANT, PM_ERR_CONSTANT_PATH_COLON_COLON_CONSTANT);
-                pm_node_t *constant = (pm_node_t *) pm_constant_read_node_create(parser, &parser->previous);
-
-                constant_path = (pm_node_t *) pm_constant_path_node_create(parser, constant_path, &double_colon, constant);
+                constant_path = (pm_node_t *) pm_constant_path_node_create(parser, constant_path, &double_colon, &parser->previous);
             }
 
             // Here we retrieve the name of the module. If it wasn't a constant,
@@ -19173,6 +19209,14 @@ parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power, b
                 pm_token_t opening = not_provided(parser);
                 pm_token_t closing = not_provided(parser);
                 pm_node_t *part = (pm_node_t *) pm_string_node_create_unescaped(parser, &opening, &parser->previous, &closing, &unescaped);
+
+                if (parser->encoding == PM_ENCODING_US_ASCII_ENTRY) {
+                    // This is extremely strange, but the first string part of a
+                    // regular expression will always be tagged as binary if we
+                    // are in a US-ASCII file, no matter its contents.
+                    pm_node_flag_set(part, PM_STRING_FLAGS_FORCED_BINARY_ENCODING);
+                }
+
                 pm_interpolated_regular_expression_node_append(interpolated, part);
             } else {
                 // If the first part of the body of the regular expression is not a
@@ -20434,8 +20478,7 @@ parse_expression_infix(pm_parser_t *parser, pm_node_t *node, pm_binding_power_t 
                         path = (pm_node_t *) pm_call_node_call_create(parser, node, &delimiter, &message, &arguments);
                     } else {
                         // Otherwise, this is a constant path. That would look like Foo::Bar.
-                        pm_node_t *child = (pm_node_t *) pm_constant_read_node_create(parser, &parser->previous);
-                        path = (pm_node_t *)pm_constant_path_node_create(parser, node, &delimiter, child);
+                        path = (pm_node_t *) pm_constant_path_node_create(parser, node, &delimiter, &parser->previous);
                     }
 
                     // If this is followed by a comma then it is a multiple assignment.
@@ -20474,9 +20517,8 @@ parse_expression_infix(pm_parser_t *parser, pm_node_t *node, pm_binding_power_t 
                     return (pm_node_t *) pm_call_node_shorthand_create(parser, node, &delimiter, &arguments);
                 }
                 default: {
-                    pm_parser_err_token(parser, &delimiter, PM_ERR_CONSTANT_PATH_COLON_COLON_CONSTANT);
-                    pm_node_t *child = (pm_node_t *) pm_missing_node_create(parser, delimiter.start, delimiter.end);
-                    return (pm_node_t *)pm_constant_path_node_create(parser, node, &delimiter, child);
+                    expect1(parser, PM_TOKEN_CONSTANT, PM_ERR_CONSTANT_PATH_COLON_COLON_CONSTANT);
+                    return (pm_node_t *) pm_constant_path_node_create(parser, node, &delimiter, &parser->previous);
                 }
             }
         }
