@@ -13034,7 +13034,7 @@ parse_unwriteable_target(pm_parser_t *parser, pm_node_t *target) {
  * Convert the given node into a valid target node.
  */
 static pm_node_t *
-parse_target(pm_parser_t *parser, pm_node_t *target) {
+parse_target(pm_parser_t *parser, pm_node_t *target, bool multiple) {
     switch (PM_NODE_TYPE(target)) {
         case PM_MISSING_NODE:
             return target;
@@ -13102,7 +13102,7 @@ parse_target(pm_parser_t *parser, pm_node_t *target) {
             pm_splat_node_t *splat = (pm_splat_node_t *) target;
 
             if (splat->expression != NULL) {
-                splat->expression = parse_target(parser, splat->expression);
+                splat->expression = parse_target(parser, splat->expression, multiple);
             }
 
             return (pm_node_t *) splat;
@@ -13140,6 +13140,10 @@ parse_target(pm_parser_t *parser, pm_node_t *target) {
                 }
 
                 if (*call->message_loc.start == '_' || parser->encoding->alnum_char(call->message_loc.start, call->message_loc.end - call->message_loc.start)) {
+                    if (multiple && PM_NODE_FLAG_P(call, PM_CALL_NODE_FLAGS_SAFE_NAVIGATION)) {
+                        pm_parser_err_node(parser, (const pm_node_t *) call, PM_ERR_UNEXPECTED_SAFE_NAVIGATION);
+                    }
+
                     parse_write_name(parser, &call->name);
                     return (pm_node_t *) pm_call_target_node_create(parser, call);
                 }
@@ -13167,8 +13171,8 @@ parse_target(pm_parser_t *parser, pm_node_t *target) {
  * assignment.
  */
 static pm_node_t *
-parse_target_validate(pm_parser_t *parser, pm_node_t *target) {
-    pm_node_t *result = parse_target(parser, target);
+parse_target_validate(pm_parser_t *parser, pm_node_t *target, bool multiple) {
+    pm_node_t *result = parse_target(parser, target, multiple);
 
     // Ensure that we have one of an =, an 'in' in for indexes, and a ')' in parens after the targets.
     if (
@@ -13405,7 +13409,7 @@ parse_targets(pm_parser_t *parser, pm_node_t *first_target, pm_binding_power_t b
     bool has_rest = PM_NODE_TYPE_P(first_target, PM_SPLAT_NODE);
 
     pm_multi_target_node_t *result = pm_multi_target_node_create(parser);
-    pm_multi_target_node_targets_append(parser, result, parse_target(parser, first_target));
+    pm_multi_target_node_targets_append(parser, result, parse_target(parser, first_target, true));
 
     while (accept1(parser, PM_TOKEN_COMMA)) {
         if (accept1(parser, PM_TOKEN_USTAR)) {
@@ -13421,7 +13425,7 @@ parse_targets(pm_parser_t *parser, pm_node_t *first_target, pm_binding_power_t b
 
             if (token_begins_expression_p(parser->current.type)) {
                 name = parse_expression(parser, binding_power, false, PM_ERR_EXPECT_EXPRESSION_AFTER_STAR);
-                name = parse_target(parser, name);
+                name = parse_target(parser, name, true);
             }
 
             pm_node_t *splat = (pm_node_t *) pm_splat_node_create(parser, &star_operator, name);
@@ -13429,7 +13433,7 @@ parse_targets(pm_parser_t *parser, pm_node_t *first_target, pm_binding_power_t b
             has_rest = true;
         } else if (token_begins_expression_p(parser->current.type)) {
             pm_node_t *target = parse_expression(parser, binding_power, false, PM_ERR_EXPECT_EXPRESSION_AFTER_COMMA);
-            target = parse_target(parser, target);
+            target = parse_target(parser, target, true);
 
             pm_multi_target_node_targets_append(parser, result, target);
         } else if (!match1(parser, PM_TOKEN_EOF)) {
@@ -14008,7 +14012,6 @@ typedef enum {
     PM_PARAMETERS_ORDER_OPTIONAL,
     PM_PARAMETERS_ORDER_NAMED,
     PM_PARAMETERS_ORDER_NONE,
-
 } pm_parameters_order_t;
 
 /**
@@ -14316,6 +14319,7 @@ parse_parameters(
                 pm_token_t operator = parser->previous;
                 pm_token_t name;
                 bool repeated = false;
+
                 if (accept1(parser, PM_TOKEN_IDENTIFIER)) {
                     name = parser->previous;
                     repeated = pm_parser_parameter_name_check(parser, &name);
@@ -14329,6 +14333,7 @@ parse_parameters(
                 if (repeated) {
                     pm_node_flag_set_repeated_parameter(param);
                 }
+
                 if (params->rest == NULL) {
                     pm_parameters_node_rest_set(params, param);
                 } else {
@@ -14340,6 +14345,7 @@ parse_parameters(
             }
             case PM_TOKEN_STAR_STAR:
             case PM_TOKEN_USTAR_STAR: {
+                pm_parameters_order_t previous_order = order;
                 update_parameter_state(parser, &parser->current, &order);
                 parser_lex(parser);
 
@@ -14347,6 +14353,10 @@ parse_parameters(
                 pm_node_t *param;
 
                 if (accept1(parser, PM_TOKEN_KEYWORD_NIL)) {
+                    if (previous_order <= PM_PARAMETERS_ORDER_KEYWORDS) {
+                        pm_parser_err_previous(parser, PM_ERR_PARAMETER_UNEXPECTED_NO_KW);
+                    }
+
                     param = (pm_node_t *) pm_no_keywords_parameter_node_create(parser, &operator, &parser->previous);
                 } else {
                     pm_token_t name;
@@ -14444,7 +14454,7 @@ parse_rescues(pm_parser_t *parser, pm_begin_node_t *parent_node, pm_rescues_type
                 pm_rescue_node_operator_set(rescue, &parser->previous);
 
                 pm_node_t *reference = parse_expression(parser, PM_BINDING_POWER_INDEX, false, PM_ERR_RESCUE_VARIABLE);
-                reference = parse_target(parser, reference);
+                reference = parse_target(parser, reference, false);
 
                 pm_rescue_node_reference_set(rescue, reference);
                 break;
@@ -14474,7 +14484,7 @@ parse_rescues(pm_parser_t *parser, pm_begin_node_t *parent_node, pm_rescues_type
                             pm_rescue_node_operator_set(rescue, &parser->previous);
 
                             pm_node_t *reference = parse_expression(parser, PM_BINDING_POWER_INDEX, false, PM_ERR_RESCUE_VARIABLE);
-                            reference = parse_target(parser, reference);
+                            reference = parse_target(parser, reference, false);
 
                             pm_rescue_node_reference_set(rescue, reference);
                             break;
@@ -17258,7 +17268,7 @@ parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power, b
                         return (pm_node_t *) multi_target;
                     }
 
-                    return parse_target_validate(parser, (pm_node_t *) multi_target);
+                    return parse_target_validate(parser, (pm_node_t *) multi_target, false);
                 }
 
                 // If we have a single statement and are ending on a right parenthesis
@@ -18558,7 +18568,7 @@ parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power, b
             if (match1(parser, PM_TOKEN_COMMA)) {
                 index = parse_targets(parser, index, PM_BINDING_POWER_INDEX);
             } else {
-                index = parse_target(parser, index);
+                index = parse_target(parser, index, false);
             }
 
             context_pop(parser);
@@ -19345,7 +19355,7 @@ parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power, b
             if (match1(parser, PM_TOKEN_COMMA)) {
                 return parse_targets_validate(parser, splat, PM_BINDING_POWER_INDEX);
             } else {
-                return parse_target_validate(parser, splat);
+                return parse_target_validate(parser, splat, true);
             }
         }
         case PM_TOKEN_BANG: {

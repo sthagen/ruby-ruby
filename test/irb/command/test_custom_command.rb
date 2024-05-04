@@ -5,7 +5,7 @@ require_relative "../helper"
 
 module TestIRB
   class CustomCommandIntegrationTest < TestIRB::IntegrationTestCase
-    def test_command_regsitration_can_happen_after_irb_require
+    def test_command_registration_can_happen_after_irb_require
       write_ruby <<~RUBY
         require "irb"
         require "irb/command"
@@ -15,7 +15,6 @@ module TestIRB
           description 'print_command'
           def execute(*)
             puts "Hello from PrintCommand"
-            nil
           end
         end
 
@@ -25,14 +24,14 @@ module TestIRB
       RUBY
 
       output = run_ruby_file do
-        type "print!\n"
+        type "print!"
         type "exit"
       end
 
       assert_include(output, "Hello from PrintCommand")
     end
 
-    def test_command_regsitration_accepts_string_too
+    def test_command_registration_accepts_string_too
       write_ruby <<~RUBY
         require "irb/command"
 
@@ -41,7 +40,6 @@ module TestIRB
           description 'print_command'
           def execute(*)
             puts "Hello from PrintCommand"
-            nil
           end
         end
 
@@ -51,14 +49,14 @@ module TestIRB
       RUBY
 
       output = run_ruby_file do
-        type "print!\n"
+        type "print!"
         type "exit"
       end
 
       assert_include(output, "Hello from PrintCommand")
     end
 
-    def test_arguments_propogation
+    def test_arguments_propagation
       write_ruby <<~RUBY
         require "irb/command"
 
@@ -69,7 +67,6 @@ module TestIRB
             $nth_execution ||= 0
             puts "\#{$nth_execution} arg=\#{arg.inspect}"
             $nth_execution += 1
-            nil
           end
         end
 
@@ -79,9 +76,9 @@ module TestIRB
       RUBY
 
       output = run_ruby_file do
-        type "print_arg\n"
+        type "print_arg"
         type "print_arg  \n"
-        type "print_arg a r  g\n"
+        type "print_arg a r  g"
         type "print_arg  a r  g  \n"
         type "exit"
       end
@@ -103,7 +100,6 @@ module TestIRB
             $nth_execution ||= 1
             puts "\#{$nth_execution} FooBar executed"
             $nth_execution += 1
-            nil
           end
         end
 
@@ -122,6 +118,32 @@ module TestIRB
       assert_include(output, "1 FooBar executed")
       assert_include(output, "2 FooBar executed")
       assert_include(output, "foobar_description")
+    end
+
+    def test_no_meta_command_also_works
+      write_ruby <<~RUBY
+        require "irb/command"
+
+        class NoMetaCommand < IRB::Command::Base
+          def execute(*)
+            puts "This command does not override meta attributes"
+          end
+        end
+
+        IRB::Command.register(:no_meta, NoMetaCommand)
+
+        binding.irb
+      RUBY
+
+      output = run_ruby_file do
+        type "no_meta"
+        type "help no_meta"
+        type "exit"
+      end
+
+      assert_include(output, "This command does not override meta attributes")
+      assert_include(output, "No description provided.")
+      assert_not_include(output, "Maybe IRB bug")
     end
   end
 end
