@@ -749,42 +749,97 @@ pm_parser_scope_find(pm_parser_t *parser, uint32_t depth) {
     return scope;
 }
 
-static void
-pm_parser_scope_forwarding_param_check(pm_parser_t *parser, const pm_token_t * token, const uint8_t mask, pm_diagnostic_id_t diag) {
+typedef enum {
+    PM_SCOPE_FORWARDING_PARAM_CHECK_RESULT_PASS,
+    PM_SCOPE_FORWARDING_PARAM_CHECK_RESULT_CONFLICT,
+    PM_SCOPE_FORWARDING_PARAM_CHECK_RESULT_FAIL
+} pm_scope_forwarding_param_check_result_t;
+
+static pm_scope_forwarding_param_check_result_t
+pm_parser_scope_forwarding_param_check(pm_parser_t *parser, const uint8_t mask) {
     pm_scope_t *scope = parser->current_scope;
-    while (scope) {
+    bool conflict = false;
+
+    while (scope != NULL) {
         if (scope->parameters & mask) {
-            if (!scope->closed) {
-                pm_parser_err_token(parser, token, diag);
-                return;
+            if (scope->closed) {
+                if (conflict) {
+                    return PM_SCOPE_FORWARDING_PARAM_CHECK_RESULT_CONFLICT;
+                } else {
+                    return PM_SCOPE_FORWARDING_PARAM_CHECK_RESULT_PASS;
+                }
             }
-            return;
+
+            conflict = true;
         }
+
         if (scope->closed) break;
         scope = scope->previous;
     }
 
-    pm_parser_err_token(parser, token, diag);
+    return PM_SCOPE_FORWARDING_PARAM_CHECK_RESULT_FAIL;
 }
 
-static inline void
+static void
 pm_parser_scope_forwarding_block_check(pm_parser_t *parser, const pm_token_t * token) {
-    pm_parser_scope_forwarding_param_check(parser, token, PM_SCOPE_PARAMETERS_FORWARDING_BLOCK, PM_ERR_ARGUMENT_NO_FORWARDING_AMP);
+    switch (pm_parser_scope_forwarding_param_check(parser, PM_SCOPE_PARAMETERS_FORWARDING_BLOCK)) {
+        case PM_SCOPE_FORWARDING_PARAM_CHECK_RESULT_PASS:
+            // Pass.
+            break;
+        case PM_SCOPE_FORWARDING_PARAM_CHECK_RESULT_CONFLICT:
+            pm_parser_err_token(parser, token, PM_ERR_ARGUMENT_CONFLICT_AMPERSAND);
+            break;
+        case PM_SCOPE_FORWARDING_PARAM_CHECK_RESULT_FAIL:
+            pm_parser_err_token(parser, token, PM_ERR_ARGUMENT_NO_FORWARDING_AMPERSAND);
+            break;
+    }
 }
 
-static inline void
+static void
 pm_parser_scope_forwarding_positionals_check(pm_parser_t *parser, const pm_token_t * token) {
-    pm_parser_scope_forwarding_param_check(parser, token, PM_SCOPE_PARAMETERS_FORWARDING_POSITIONALS, PM_ERR_ARGUMENT_NO_FORWARDING_STAR);
+    switch (pm_parser_scope_forwarding_param_check(parser, PM_SCOPE_PARAMETERS_FORWARDING_POSITIONALS)) {
+        case PM_SCOPE_FORWARDING_PARAM_CHECK_RESULT_PASS:
+            // Pass.
+            break;
+        case PM_SCOPE_FORWARDING_PARAM_CHECK_RESULT_CONFLICT:
+            pm_parser_err_token(parser, token, PM_ERR_ARGUMENT_CONFLICT_STAR);
+            break;
+        case PM_SCOPE_FORWARDING_PARAM_CHECK_RESULT_FAIL:
+            pm_parser_err_token(parser, token, PM_ERR_ARGUMENT_NO_FORWARDING_STAR);
+            break;
+    }
 }
 
-static inline void
-pm_parser_scope_forwarding_all_check(pm_parser_t *parser, const pm_token_t * token) {
-    pm_parser_scope_forwarding_param_check(parser, token, PM_SCOPE_PARAMETERS_FORWARDING_ALL, PM_ERR_ARGUMENT_NO_FORWARDING_ELLIPSES);
+static void
+pm_parser_scope_forwarding_all_check(pm_parser_t *parser, const pm_token_t *token) {
+    switch (pm_parser_scope_forwarding_param_check(parser, PM_SCOPE_PARAMETERS_FORWARDING_ALL)) {
+        case PM_SCOPE_FORWARDING_PARAM_CHECK_RESULT_PASS:
+            // Pass.
+            break;
+        case PM_SCOPE_FORWARDING_PARAM_CHECK_RESULT_CONFLICT:
+            // This shouldn't happen, because ... is not allowed in the
+            // declaration of blocks. If we get here, we assume we already have
+            // an error for this.
+            break;
+        case PM_SCOPE_FORWARDING_PARAM_CHECK_RESULT_FAIL:
+            pm_parser_err_token(parser, token, PM_ERR_ARGUMENT_NO_FORWARDING_ELLIPSES);
+            break;
+    }
 }
 
-static inline void
+static void
 pm_parser_scope_forwarding_keywords_check(pm_parser_t *parser, const pm_token_t * token) {
-    pm_parser_scope_forwarding_param_check(parser, token, PM_SCOPE_PARAMETERS_FORWARDING_KEYWORDS, PM_ERR_ARGUMENT_NO_FORWARDING_STAR_STAR);
+    switch (pm_parser_scope_forwarding_param_check(parser, PM_SCOPE_PARAMETERS_FORWARDING_KEYWORDS)) {
+        case PM_SCOPE_FORWARDING_PARAM_CHECK_RESULT_PASS:
+            // Pass.
+            break;
+        case PM_SCOPE_FORWARDING_PARAM_CHECK_RESULT_CONFLICT:
+            pm_parser_err_token(parser, token, PM_ERR_ARGUMENT_CONFLICT_STAR_STAR);
+            break;
+        case PM_SCOPE_FORWARDING_PARAM_CHECK_RESULT_FAIL:
+            pm_parser_err_token(parser, token, PM_ERR_ARGUMENT_NO_FORWARDING_STAR_STAR);
+            break;
+    }
 }
 
 /**
@@ -8339,7 +8394,12 @@ parser_lex_magic_comment(pm_parser_t *parser, bool semantic_token_seen) {
         // If we have hit a ractor pragma, attempt to lex that.
         uint32_t value_length = (uint32_t) (value_end - value_start);
         if (key_length == 24 && pm_strncasecmp(key_source, (const uint8_t *) "shareable_constant_value", 24) == 0) {
-            if (value_length == 4 && pm_strncasecmp(value_start, (const uint8_t *) "none", 4) == 0) {
+            const uint8_t *cursor = parser->current.start;
+            while ((cursor > parser->start) && ((cursor[-1] == ' ') || (cursor[-1] == '\t'))) cursor--;
+
+            if (!((cursor == parser->start) || (cursor[-1] == '\n'))) {
+                pm_parser_warn_token(parser, &parser->current, PM_WARN_SHAREABLE_CONSTANT_VALUE_LINE);
+            } else if (value_length == 4 && pm_strncasecmp(value_start, (const uint8_t *) "none", 4) == 0) {
                 pm_parser_scope_shareable_constant_set(parser, PM_SCOPE_SHAREABLE_CONSTANT_NONE);
             } else if (value_length == 7 && pm_strncasecmp(value_start, (const uint8_t *) "literal", 7) == 0) {
                 pm_parser_scope_shareable_constant_set(parser, PM_SCOPE_SHAREABLE_CONSTANT_LITERAL);
@@ -8794,6 +8854,16 @@ lex_numeric_prefix(pm_parser_t *parser, bool* seen_e) {
 
         // Afterward, we'll lex as far as we can into an optional float suffix.
         type = lex_optional_float_suffix(parser, seen_e);
+    }
+
+    // At this point we have a completed number, but we want to provide the user
+    // with a good experience if they put an additional .xxx fractional
+    // component on the end, so we'll check for that here.
+    if (peek_offset(parser, 0) == '.' && pm_char_is_decimal_digit(peek_offset(parser, 1))) {
+        const uint8_t *fraction_start = parser->current.end;
+        const uint8_t *fraction_end = parser->current.end + 2;
+        fraction_end += pm_strspn_decimal_digit(fraction_end, parser->end - fraction_end);
+        pm_parser_err(parser, fraction_start, fraction_end, PM_ERR_INVALID_NUMBER_FRACTION);
     }
 
     return type;
