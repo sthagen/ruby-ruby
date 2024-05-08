@@ -889,6 +889,16 @@ e"
     assert_dedented_heredoc(expect, result)
   end
 
+  def test_dedented_heredoc_with_leading_blank_line
+    # the blank line has six leading spaces
+    result = "      \n" \
+             "    b\n"
+    expect = "  \n" \
+             "b\n"
+    assert_dedented_heredoc(expect, result)
+  end
+
+
   def test_dedented_heredoc_with_blank_more_indented_line_escaped
     result = "    a\n" \
              "\\ \\ \\ \\ \\ \\ \n" \
@@ -996,7 +1006,7 @@ eom
   end
 
   def test_dedented_heredoc_concatenation
-    assert_equal("\n0\n1", eval("<<~0 '1'\n \n0\#{}\n0"))
+    assert_equal(" \n0\n1", eval("<<~0 '1'\n \n0\#{}\n0"))
   end
 
   def test_heredoc_mixed_encoding
@@ -1755,8 +1765,8 @@ eom
     assert_equal("instance ok", k.new.rescued("ok"))
 
     # Current technical limitation: cannot prepend "private" or something for command endless def
-    error = /syntax error, unexpected string literal/
-    error2 = /syntax error, unexpected local variable or method/
+    error = /(syntax error,|\^~*) unexpected string literal/
+    error2 = /(syntax error,|\^~*) unexpected local variable or method/
     assert_syntax_error('private def foo = puts "Hello"', error)
     assert_syntax_error('private def foo() = puts "Hello"', error)
     assert_syntax_error('private def foo(x) = puts x', error2)
