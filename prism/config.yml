@@ -193,6 +193,7 @@ errors:
   - PARAMETER_ASSOC_SPLAT_MULTI
   - PARAMETER_BLOCK_MULTI
   - PARAMETER_CIRCULAR
+  - PARAMETER_FORWARDING_AFTER_REST
   - PARAMETER_METHOD_NAME
   - PARAMETER_NAME_DUPLICATED
   - PARAMETER_NO_DEFAULT
@@ -1212,9 +1213,9 @@ nodes:
         type: constant
       - name: write_name
         type: constant
-      - name: operator
+      - name: binary_operator
         type: constant
-      - name: operator_loc
+      - name: binary_operator_loc
         type: location
       - name: value
         type: node
@@ -1370,11 +1371,11 @@ nodes:
         type: constant
       - name: name_loc
         type: location
-      - name: operator_loc
+      - name: binary_operator_loc
         type: location
       - name: value
         type: node
-      - name: operator
+      - name: binary_operator
         type: constant
     comment: |
       Represents assigning to a class variable using an operator that isn't `=`.
@@ -1480,11 +1481,11 @@ nodes:
         type: constant
       - name: name_loc
         type: location
-      - name: operator_loc
+      - name: binary_operator_loc
         type: location
       - name: value
         type: node
-      - name: operator
+      - name: binary_operator
         type: constant
     comment: |
       Represents assigning to a constant using an operator that isn't `=`.
@@ -1568,11 +1569,11 @@ nodes:
       - name: target
         type: node
         kind: ConstantPathNode
-      - name: operator_loc
+      - name: binary_operator_loc
         type: location
       - name: value
         type: node
-      - name: operator
+      - name: binary_operator
         type: constant
     comment: |
       Represents assigning to a constant path using an operator that isn't `=`.
@@ -1939,11 +1940,11 @@ nodes:
         type: constant
       - name: name_loc
         type: location
-      - name: operator_loc
+      - name: binary_operator_loc
         type: location
       - name: value
         type: node
-      - name: operator
+      - name: binary_operator
         type: constant
     comment: |
       Represents assigning to a global variable using an operator that isn't `=`.
@@ -2275,9 +2276,9 @@ nodes:
         type: location
       - name: block
         type: node?
-      - name: operator
+      - name: binary_operator
         type: constant
-      - name: operator_loc
+      - name: binary_operator_loc
         type: location
       - name: value
         type: node
@@ -2363,11 +2364,11 @@ nodes:
         type: constant
       - name: name_loc
         type: location
-      - name: operator_loc
+      - name: binary_operator_loc
         type: location
       - name: value
         type: node
-      - name: operator
+      - name: binary_operator
         type: constant
     comment: |
       Represents assigning to an instance variable using an operator that isn't `=`.
@@ -2643,13 +2644,13 @@ nodes:
     fields:
       - name: name_loc
         type: location
-      - name: operator_loc
+      - name: binary_operator_loc
         type: location
       - name: value
         type: node
       - name: name
         type: constant
-      - name: operator
+      - name: binary_operator
         type: constant
       - name: depth
         type: uint32
@@ -3084,6 +3085,8 @@ nodes:
           # On parsing error of `f(**kwargs, ...)` or `f(**nil, ...)`, the keyword_rest value is moved here:
           - KeywordRestParameterNode
           - NoKeywordsParameterNode
+          # On parsing error of `f(..., ...)`, the first forwarding parameter is moved here:
+          - ForwardingParameterNode
       - name: keywords
         type: node[]
         kind:
