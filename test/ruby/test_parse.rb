@@ -875,7 +875,8 @@ x = __ENCODING__
     $test_parse_foobarbazqux = nil
     assert_equal(nil, $&)
     assert_equal(nil, eval('alias $& $preserve_last_match'))
-    assert_syntax_error('a = $#', /as a global variable name\na = \$\#\n    \^~$/)
+    assert_syntax_error('a = $#', /as a global variable name/)
+    assert_syntax_error('a = $#', /a = \$\#\n(^|.+?\| )    \^~(?!~)/)
   end
 
   def test_invalid_instance_variable
@@ -1336,9 +1337,9 @@ x = __ENCODING__
   end
 
   def test_unexpected_token_after_numeric
-    assert_syntax_error('0000xyz', /^    \^~~\Z/)
-    assert_syntax_error('1.2i1.1', /^    \^~~\Z/)
-    assert_syntax_error('1.2.3', /^   \^~\Z/)
+    assert_syntax_error('0000xyz', /(^|\| )    \^~~(?!~)/)
+    assert_syntax_error('1.2i1.1', /(^|\| )    \^~~(?!~)/)
+    assert_syntax_error('1.2.3', /(^|\| )   \^~(?!~)/)
     assert_syntax_error('1.', /unexpected end-of-input/)
     assert_syntax_error('1e', /expecting end-of-input/)
   end
@@ -1390,11 +1391,11 @@ x = __ENCODING__
   end
 
   def test_unexpected_eof
-    assert_syntax_error('unless', /^      \^\Z/)
+    assert_syntax_error('unless', /(^|\| )      \^(?!~)/)
   end
 
   def test_location_of_invalid_token
-    assert_syntax_error('class xxx end', /^      \^~~\Z/)
+    assert_syntax_error('class xxx end', /(^|\| )      \^~~(?!~)/)
   end
 
   def test_whitespace_warning
