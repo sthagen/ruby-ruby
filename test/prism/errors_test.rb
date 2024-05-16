@@ -208,7 +208,7 @@ module Prism
 
     def test_unterminated_argument_expression
       assert_errors expression('a %'), 'a %', [
-        ["invalid `%` token", 2..3],
+        ["unterminated quoted string meets end of file", 2..3],
         ["unexpected end-of-input; expected an expression after the operator", 3..3],
         ["unexpected end-of-input, assuming it is closing the parent top level context", 3..3]
       ]
@@ -216,13 +216,13 @@ module Prism
 
     def test_unterminated_interpolated_symbol
       assert_error_messages ":\"#", [
-        "expected a closing delimiter for the interpolated symbol"
+        "unterminated symbol; expected a closing delimiter for the interpolated symbol"
       ]
     end
 
     def test_cr_without_lf_in_percent_expression
       assert_errors expression("%\r"), "%\r", [
-        ["invalid `%` token", 0..2],
+        ["unterminated string meets end of file", 2..2],
       ]
     end
 
@@ -715,12 +715,13 @@ module Prism
 
       assert_errors expected, '"\u{000z}"', [
         ["invalid Unicode escape sequence", 7..7],
+        ["unterminated Unicode escape", 7..7]
       ]
     end
 
     def test_unterminated_unicode_brackets_should_be_a_syntax_error
       assert_errors expression('?\\u{3'), '?\\u{3', [
-        ["invalid Unicode escape sequence; needs closing `}`", 1..5],
+        ["unterminated Unicode escape", 1..5],
       ]
     end
 
@@ -1400,7 +1401,7 @@ module Prism
     end
 
     def test_alnum_delimiters
-      error_messages = ["invalid `%` token"]
+      error_messages = ["unknown type of %string"]
 
       assert_error_messages "%qXfooX", error_messages
       assert_error_messages "%QXfooX", error_messages
