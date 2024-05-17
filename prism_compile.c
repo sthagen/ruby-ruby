@@ -8745,7 +8745,7 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
             break;
         }
 
-        if (PM_NODE_TYPE_P(scope_node->ast_node, PM_CLASS_NODE)) {
+        if (PM_NODE_TYPE_P(scope_node->ast_node, PM_CLASS_NODE) || PM_NODE_TYPE_P(scope_node->ast_node, PM_MODULE_NODE)) {
             const pm_line_column_t end_location = PM_NODE_END_LINE_COLUMN(scope_node->parser, scope_node->ast_node);
             ADD_TRACE(ret, RUBY_EVENT_END);
             ISEQ_COMPILE_DATA(iseq)->last_line = end_location.line;
@@ -9269,7 +9269,8 @@ pm_parse_process_error(const pm_parse_result_t *result)
         }
     }
 
-    VALUE error = rb_exc_new(rb_eSyntaxError, pm_buffer_value(&buffer), pm_buffer_length(&buffer));
+    VALUE message = rb_enc_str_new(pm_buffer_value(&buffer), pm_buffer_length(&buffer), result->node.encoding);
+    VALUE error = rb_exc_new_str(rb_eSyntaxError, message);
 
     rb_encoding *filepath_encoding = result->node.filepath_encoding != NULL ? result->node.filepath_encoding : rb_utf8_encoding();
     VALUE path = rb_enc_str_new((const char *) pm_string_source(filepath), pm_string_length(filepath), filepath_encoding);
@@ -9453,6 +9454,7 @@ pm_load_file(pm_parse_result_t *result, VALUE filepath, bool load_error)
 VALUE
 pm_parse_file(pm_parse_result_t *result, VALUE filepath)
 {
+    result->node.filepath_encoding = rb_enc_get(filepath);
     pm_options_filepath_set(&result->options, RSTRING_PTR(filepath));
     RB_GC_GUARD(filepath);
 
