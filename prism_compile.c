@@ -5406,7 +5406,6 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
             }
 
             COMPILE_ERROR(ERROR_ARGS "Invalid break");
-            rb_bug("Invalid break");
         }
         return;
       }
@@ -9280,9 +9279,6 @@ pm_parse_process_error(const pm_parse_result_t *result)
 
     return error;
 }
-
-void rb_enc_compile_warning(rb_encoding *enc, const char *file, int line, const char *fmt, ...);
-void rb_enc_compile_warn(rb_encoding *enc, const char *file, int line, const char *fmt, ...);
 
 /**
  * Parse the parse result and raise a Ruby error if there are any syntax errors.
