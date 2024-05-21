@@ -4290,7 +4290,7 @@ pm_float_node_imaginary_create(pm_parser_t *parser, const pm_token_t *token) {
 }
 
 /**
- * Allocate and initialize a new FloatNode node from a FLOAT_RATIONAL token.
+ * Allocate and initialize a new RationalNode node from a FLOAT_RATIONAL token.
  */
 static pm_rational_node_t *
 pm_float_node_rational_create(pm_parser_t *parser, const pm_token_t *token) {
@@ -4300,16 +4300,44 @@ pm_float_node_rational_create(pm_parser_t *parser, const pm_token_t *token) {
     *node = (pm_rational_node_t) {
         {
             .type = PM_RATIONAL_NODE,
-            .flags = PM_NODE_FLAG_STATIC_LITERAL,
+            .flags = PM_INTEGER_BASE_FLAGS_DECIMAL | PM_NODE_FLAG_STATIC_LITERAL,
             .location = PM_LOCATION_TOKEN_VALUE(token)
         },
-        .numeric = (pm_node_t *) pm_float_node_create(parser, &((pm_token_t) {
-            .type = PM_TOKEN_FLOAT,
-            .start = token->start,
-            .end = token->end - 1
-        }))
+        .numerator = { 0 },
+        .denominator = { 0 }
     };
 
+    const uint8_t *start = token->start;
+    const uint8_t *end = token->end - 1; // r
+
+    while (start < end && *start == '0') start++; // 0.1 -> .1
+    while (end > start && end[-1] == '0') end--; // 1.0 -> 1.
+
+    size_t length = (size_t) (end - start);
+    if (length == 1) {
+        node->denominator.value = 1;
+        return node;
+    }
+
+    const uint8_t *point = memchr(start, '.', length);
+    assert(point && "should have a decimal point");
+
+    uint8_t *digits = malloc(length - 1);
+    if (digits == NULL) {
+        fputs("[pm_float_node_rational_create] Failed to allocate memory", stderr);
+        abort();
+    }
+
+    memcpy(digits, start, (unsigned long) (point - start));
+    memcpy(digits + (point - start), point + 1, (unsigned long) (end - point - 1));
+    pm_integer_parse(&node->numerator, PM_INTEGER_BASE_DEFAULT, digits, digits + length - 1);
+
+    digits[0] = '1';
+    memset(digits + 1, '0', (size_t) (end - point - 1));
+    pm_integer_parse(&node->denominator, PM_INTEGER_BASE_DEFAULT, digits, digits + (end - point));
+    free(digits);
+
+    pm_integers_reduce(&node->numerator, &node->denominator);
     return node;
 }
 
@@ -4943,7 +4971,7 @@ pm_integer_node_imaginary_create(pm_parser_t *parser, pm_node_flags_t base, cons
 }
 
 /**
- * Allocate and initialize a new IntegerNode node from an INTEGER_RATIONAL
+ * Allocate and initialize a new RationalNode node from an INTEGER_RATIONAL
  * token.
  */
 static pm_rational_node_t *
@@ -4954,15 +4982,23 @@ pm_integer_node_rational_create(pm_parser_t *parser, pm_node_flags_t base, const
     *node = (pm_rational_node_t) {
         {
             .type = PM_RATIONAL_NODE,
-            .flags = PM_NODE_FLAG_STATIC_LITERAL,
+            .flags = base | PM_NODE_FLAG_STATIC_LITERAL,
             .location = PM_LOCATION_TOKEN_VALUE(token)
         },
-        .numeric = (pm_node_t *) pm_integer_node_create(parser, base, &((pm_token_t) {
-            .type = PM_TOKEN_INTEGER,
-            .start = token->start,
-            .end = token->end - 1
-        }))
+        .numerator = { 0 },
+        .denominator = { .value = 1, 0 }
     };
+
+    pm_integer_base_t integer_base = PM_INTEGER_BASE_DECIMAL;
+    switch (base) {
+        case PM_INTEGER_BASE_FLAGS_BINARY: integer_base = PM_INTEGER_BASE_BINARY; break;
+        case PM_INTEGER_BASE_FLAGS_OCTAL: integer_base = PM_INTEGER_BASE_OCTAL; break;
+        case PM_INTEGER_BASE_FLAGS_DECIMAL: break;
+        case PM_INTEGER_BASE_FLAGS_HEXADECIMAL: integer_base = PM_INTEGER_BASE_HEXADECIMAL; break;
+        default: assert(false && "unreachable"); break;
+    }
+
+    pm_integer_parse(&node->numerator, integer_base, token->start, token->end - 1);
 
     return node;
 }
@@ -13365,14 +13401,20 @@ parse_write(pm_parser_t *parser, pm_node_t *target, pm_token_t *operator, pm_nod
             return (pm_node_t *) node;
         }
         case PM_LOCAL_VARIABLE_READ_NODE: {
-            pm_refute_numbered_parameter(parser, target->location.start, target->location.end);
             pm_local_variable_read_node_t *local_read = (pm_local_variable_read_node_t *) target;
 
             pm_constant_id_t name = local_read->name;
-            uint32_t depth = local_read->depth;
-            pm_locals_unread(&pm_parser_scope_find(parser, depth)->locals, name);
-
             pm_location_t name_loc = target->location;
+
+            uint32_t depth = local_read->depth;
+            pm_scope_t *scope = pm_parser_scope_find(parser, depth);
+
+            if (pm_token_is_numbered_parameter(target->location.start, target->location.end)) {
+                pm_diagnostic_id_t diag_id = scope->parameters > PM_SCOPE_NUMBERED_PARAMETERS_NONE ? PM_ERR_EXPRESSION_NOT_WRITABLE_NUMBERED : PM_ERR_PARAMETER_NUMBERED_RESERVED;
+                PM_PARSER_ERR_FORMAT(parser, target->location.start, target->location.end, diag_id, target->location.start);
+            }
+
+            pm_locals_unread(&scope->locals, name);
             pm_node_destroy(parser, target);
 
             return (pm_node_t *) pm_local_variable_write_node_create(parser, name, depth, value, &name_loc, operator);
@@ -15829,17 +15871,34 @@ parse_variable(pm_parser_t *parser) {
         } else if (current_scope->parameters & PM_SCOPE_PARAMETERS_IT) {
             pm_parser_err_previous(parser, PM_ERR_NUMBERED_PARAMETER_IT);
         } else if (outer_scope_using_numbered_parameters_p(parser)) {
-            pm_parser_err_previous(parser, PM_ERR_NUMBERED_PARAMETER_OUTER_SCOPE);
+            pm_parser_err_previous(parser, PM_ERR_NUMBERED_PARAMETER_OUTER_BLOCK);
+        } else if (current_scope->numbered_parameters == PM_SCOPE_NUMBERED_PARAMETERS_INNER) {
+            pm_parser_err_previous(parser, PM_ERR_NUMBERED_PARAMETER_INNER_BLOCK);
         } else {
             // Indicate that this scope is using numbered params so that child
             // scopes cannot. We subtract the value for the character '0' to get
             // the actual integer value of the number (only _1 through _9 are
             // valid).
             int8_t numbered_parameters = (int8_t) (parser->previous.start[1] - '0');
-            current_scope->parameters |= PM_SCOPE_PARAMETERS_NUMBERED;
 
-            if (numbered_parameters > current_scope->numbered_parameters) {
-                current_scope->numbered_parameters = numbered_parameters;
+            // If we're about to match an =, then this is an invalid use of
+            // numbered parameters. We'll create all of the necessary
+            // infrastructure around it, but not actually mark the scope as
+            // using numbered parameters so that we can get the right error
+            // message.
+            if (!match1(parser, PM_TOKEN_EQUAL)) {
+                current_scope->parameters |= PM_SCOPE_PARAMETERS_NUMBERED;
+
+                if (numbered_parameters > current_scope->numbered_parameters) {
+                    current_scope->numbered_parameters = numbered_parameters;
+                }
+
+                // Go through the parent scopes and mark them as being
+                // disallowed from using numbered parameters because this inner
+                // scope is using them.
+                for (pm_scope_t *scope = current_scope->previous; scope != NULL && !scope->closed; scope = scope->previous) {
+                    scope->numbered_parameters = PM_SCOPE_NUMBERED_PARAMETERS_INNER;
+                }
             }
 
             // When you use a numbered parameter, it implies the existence
@@ -16864,10 +16923,12 @@ parse_negative_numeric(pm_node_t *node) {
             cast->value = -cast->value;
             break;
         }
-        case PM_RATIONAL_NODE:
-            node->location.start--;
-            parse_negative_numeric(((pm_rational_node_t *) node)->numeric);
+        case PM_RATIONAL_NODE: {
+            pm_rational_node_t *cast = (pm_rational_node_t *) node;
+            cast->base.location.start--;
+            cast->numerator.negative = true;
             break;
+        }
         case PM_IMAGINARY_NODE:
             node->location.start--;
             parse_negative_numeric(((pm_imaginary_node_t *) node)->numeric);

@@ -114,6 +114,7 @@ errors:
   - EXPRESSION_NOT_WRITABLE_FILE
   - EXPRESSION_NOT_WRITABLE_LINE
   - EXPRESSION_NOT_WRITABLE_NIL
+  - EXPRESSION_NOT_WRITABLE_NUMBERED
   - EXPRESSION_NOT_WRITABLE_SELF
   - EXPRESSION_NOT_WRITABLE_TRUE
   - FLOAT_PARSE
@@ -185,9 +186,10 @@ errors:
   - NO_LOCAL_VARIABLE
   - NOT_EXPRESSION
   - NUMBER_LITERAL_UNDERSCORE
+  - NUMBERED_PARAMETER_INNER_BLOCK
   - NUMBERED_PARAMETER_IT
   - NUMBERED_PARAMETER_ORDINARY
-  - NUMBERED_PARAMETER_OUTER_SCOPE
+  - NUMBERED_PARAMETER_OUTER_BLOCK
   - OPERATOR_MULTI_ASSIGN
   - OPERATOR_WRITE_ARGUMENTS
   - OPERATOR_WRITE_BLOCK
@@ -3229,8 +3231,21 @@ nodes:
                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   - name: RationalNode
     fields:
-      - name: numeric
-        type: node
+      - name: flags
+        type: flags
+        kind: IntegerBaseFlags
+      - name: numerator
+        type: integer
+        comment: |
+          The numerator of the rational number.
+
+              1.5r # numerator 3
+      - name: denominator
+        type: integer
+        comment: |
+          The denominator of the rational number.
+
+              1.5r # denominator 2
     comment: |
       Represents a rational number literal.
 
