@@ -427,14 +427,6 @@ lex_state_p(const pm_parser_t *parser, pm_lex_state_t state) {
     return parser->lex_state & state;
 }
 
-/**
- * This is equivalent to the predicate of warn_balanced in CRuby.
- */
-static inline bool
-ambiguous_operator_p(const pm_parser_t *parser, bool space_seen) {
-    return !lex_state_p(parser, PM_LEX_STATE_CLASS | PM_LEX_STATE_DOT | PM_LEX_STATE_FNAME | PM_LEX_STATE_ENDFN) && space_seen && !pm_char_is_whitespace(*parser->current.end);
-}
-
 typedef enum {
     PM_IGNORED_NEWLINE_NONE = 0,
     PM_IGNORED_NEWLINE_ALL,
@@ -8074,7 +8066,7 @@ pm_do_loop_stack_p(pm_parser_t *parser) {
  * is beyond the end of the source then return '\0'.
  */
 static inline uint8_t
-peek_at(pm_parser_t *parser, const uint8_t *cursor) {
+peek_at(const pm_parser_t *parser, const uint8_t *cursor) {
     if (cursor < parser->end) {
         return *cursor;
     } else {
@@ -8097,7 +8089,7 @@ peek_offset(pm_parser_t *parser, ptrdiff_t offset) {
  * that position is beyond the end of the source then return '\0'.
  */
 static inline uint8_t
-peek(pm_parser_t *parser) {
+peek(const pm_parser_t *parser) {
     return peek_at(parser, parser->current.end);
 }
 
@@ -8160,6 +8152,14 @@ next_newline(const uint8_t *cursor, ptrdiff_t length) {
     // of the encodings that we support have \n as a component of a multi-byte
     // character.
     return memchr(cursor, '\n', (size_t) length);
+}
+
+/**
+ * This is equivalent to the predicate of warn_balanced in CRuby.
+ */
+static inline bool
+ambiguous_operator_p(const pm_parser_t *parser, bool space_seen) {
+    return !lex_state_p(parser, PM_LEX_STATE_CLASS | PM_LEX_STATE_DOT | PM_LEX_STATE_FNAME | PM_LEX_STATE_ENDFN) && space_seen && !pm_char_is_whitespace(peek(parser));
 }
 
 /**
@@ -9396,7 +9396,7 @@ escape_unicode(pm_parser_t *parser, const uint8_t *string, size_t length) {
  */
 static inline uint8_t
 escape_byte(uint8_t value, const uint8_t flags) {
-    if (flags & PM_ESCAPE_FLAG_CONTROL) value &= 0x1f;
+    if (flags & PM_ESCAPE_FLAG_CONTROL) value &= 0x9f;
     if (flags & PM_ESCAPE_FLAG_META) value |= 0x80;
     return value;
 }
@@ -9496,22 +9496,7 @@ escape_write_escape_encoded(pm_parser_t *parser, pm_buffer_t *buffer) {
 static inline void
 escape_write_byte(pm_parser_t *parser, pm_buffer_t *buffer, pm_buffer_t *regular_expression_buffer, uint8_t flags, uint8_t byte) {
     if (flags & PM_ESCAPE_FLAG_REGEXP) {
-        pm_buffer_append_bytes(regular_expression_buffer, (const uint8_t *) "\\x", 2);
-
-        uint8_t byte1 = (uint8_t) ((byte >> 4) & 0xF);
-        uint8_t byte2 = (uint8_t) (byte & 0xF);
-
-        if (byte1 >= 0xA) {
-            pm_buffer_append_byte(regular_expression_buffer, (uint8_t) ((byte1 - 0xA) + 'A'));
-        } else {
-            pm_buffer_append_byte(regular_expression_buffer, (uint8_t) (byte1 + '0'));
-        }
-
-        if (byte2 >= 0xA) {
-            pm_buffer_append_byte(regular_expression_buffer, (uint8_t) (byte2 - 0xA + 'A'));
-        } else {
-            pm_buffer_append_byte(regular_expression_buffer, (uint8_t) (byte2 + '0'));
-        }
+        pm_buffer_append_format(regular_expression_buffer, "\\x%02X", byte);
     }
 
     escape_write_byte_encoded(parser, buffer, byte);
@@ -9546,57 +9531,57 @@ escape_read(pm_parser_t *parser, pm_buffer_t *buffer, pm_buffer_t *regular_expre
     switch (peek(parser)) {
         case '\\': {
             parser->current.end++;
-            escape_write_byte_encoded(parser, buffer, escape_byte('\\', flags));
+            escape_write_byte(parser, buffer, regular_expression_buffer, flags, escape_byte('\\', flags));
             return;
         }
         case '\'': {
             parser->current.end++;
-            escape_write_byte_encoded(parser, buffer, escape_byte('\'', flags));
+            escape_write_byte(parser, buffer, regular_expression_buffer, flags, escape_byte('\'', flags));
             return;
         }
         case 'a': {
             parser->current.end++;
-            escape_write_byte_encoded(parser, buffer, escape_byte('\a', flags));
+            escape_write_byte(parser, buffer, regular_expression_buffer, flags, escape_byte('\a', flags));
             return;
         }
         case 'b': {
             parser->current.end++;
-            escape_write_byte_encoded(parser, buffer, escape_byte('\b', flags));
+            escape_write_byte(parser, buffer, regular_expression_buffer, flags, escape_byte('\b', flags));
             return;
         }
         case 'e': {
             parser->current.end++;
-            escape_write_byte_encoded(parser, buffer, escape_byte('\033', flags));
+            escape_write_byte(parser, buffer, regular_expression_buffer, flags, escape_byte('\033', flags));
             return;
         }
         case 'f': {
             parser->current.end++;
-            escape_write_byte_encoded(parser, buffer, escape_byte('\f', flags));
+            escape_write_byte(parser, buffer, regular_expression_buffer, flags, escape_byte('\f', flags));
             return;
         }
         case 'n': {
             parser->current.end++;
-            escape_write_byte_encoded(parser, buffer, escape_byte('\n', flags));
+            escape_write_byte(parser, buffer, regular_expression_buffer, flags, escape_byte('\n', flags));
             return;
         }
         case 'r': {
             parser->current.end++;
-            escape_write_byte_encoded(parser, buffer, escape_byte('\r', flags));
+            escape_write_byte(parser, buffer, regular_expression_buffer, flags, escape_byte('\r', flags));
             return;
         }
         case 's': {
             parser->current.end++;
-            escape_write_byte_encoded(parser, buffer, escape_byte(' ', flags));
+            escape_write_byte(parser, buffer, regular_expression_buffer, flags, escape_byte(' ', flags));
             return;
         }
         case 't': {
             parser->current.end++;
-            escape_write_byte_encoded(parser, buffer, escape_byte('\t', flags));
+            escape_write_byte(parser, buffer, regular_expression_buffer, flags, escape_byte('\t', flags));
             return;
         }
         case 'v': {
             parser->current.end++;
-            escape_write_byte_encoded(parser, buffer, escape_byte('\v', flags));
+            escape_write_byte(parser, buffer, regular_expression_buffer, flags, escape_byte('\v', flags));
             return;
         }
         case '0': case '1': case '2': case '3': case '4': case '5': case '6': case '7': {
@@ -9613,7 +9598,7 @@ escape_read(pm_parser_t *parser, pm_buffer_t *buffer, pm_buffer_t *regular_expre
                 }
             }
 
-            escape_write_byte_encoded(parser, buffer, value);
+            escape_write_byte(parser, buffer, regular_expression_buffer, flags, value);
             return;
         }
         case 'x': {
@@ -9632,11 +9617,16 @@ escape_read(pm_parser_t *parser, pm_buffer_t *buffer, pm_buffer_t *regular_expre
                     parser->current.end++;
                 }
 
+                value = escape_byte(value, flags);
                 if (flags & PM_ESCAPE_FLAG_REGEXP) {
-                    pm_buffer_append_bytes(regular_expression_buffer, start, (size_t) (parser->current.end - start));
+                    if (flags & (PM_ESCAPE_FLAG_CONTROL | PM_ESCAPE_FLAG_META)) {
+                        pm_buffer_append_format(regular_expression_buffer, "\\x%02X", value);
+                    } else {
+                        pm_buffer_append_bytes(regular_expression_buffer, start, (size_t) (parser->current.end - start));
+                    }
                 }
 
-                escape_write_byte_encoded(parser, buffer, escape_byte(value, flags));
+                escape_write_byte_encoded(parser, buffer, value);
             } else {
                 pm_parser_err_current(parser, PM_ERR_ESCAPE_INVALID_HEXADECIMAL);
             }
@@ -15459,6 +15449,13 @@ parse_string_part(pm_parser_t *parser) {
 
             expect1(parser, PM_TOKEN_EMBEXPR_END, PM_ERR_EMBEXPR_END);
             pm_token_t closing = parser->previous;
+
+            // If this set of embedded statements only contains a single
+            // statement, then Ruby does not consider it as a possible statement
+            // that could emit a line event.
+            if (statements != NULL && statements->body.size == 1) {
+                pm_node_flag_unset(statements->body.nodes[0], PM_NODE_FLAG_NEWLINE);
+            }
 
             return (pm_node_t *) pm_embedded_statements_node_create(parser, &opening, statements, &closing);
         }
