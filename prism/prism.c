@@ -1183,6 +1183,31 @@ pm_check_value_expression(pm_node_t *node) {
                 return NULL;
             case PM_BEGIN_NODE: {
                 pm_begin_node_t *cast = (pm_begin_node_t *) node;
+
+                if (cast->statements == NULL && cast->ensure_clause != NULL) {
+                    node = (pm_node_t *) cast->ensure_clause;
+                }
+                else {
+                    if (cast->rescue_clause != NULL) {
+                        if (cast->rescue_clause->statements == NULL) {
+                            return NULL;
+                        }
+                        else if (cast->else_clause != NULL) {
+                            node = (pm_node_t *) cast->else_clause;
+                        }
+                        else {
+                            node = (pm_node_t *) cast->statements;
+                        }
+                    }
+                    else {
+                        node = (pm_node_t *) cast->statements;
+                    }
+                }
+
+                break;
+            }
+            case PM_ENSURE_NODE: {
+                pm_ensure_node_t *cast = (pm_ensure_node_t *) node;
                 node = (pm_node_t *) cast->statements;
                 break;
             }
@@ -10949,6 +10974,7 @@ parser_lex(pm_parser_t *parser) {
                                     // If we have quotes, then we're going to go until we find the
                                     // end quote.
                                     while ((parser->current.end < parser->end) && quote != (pm_heredoc_quote_t) (*parser->current.end)) {
+                                        if (*parser->current.end == '\r' || *parser->current.end == '\n') break;
                                         parser->current.end++;
                                     }
                                 }
@@ -20713,7 +20739,7 @@ parse_expression_infix(pm_parser_t *parser, pm_node_t *node, pm_binding_power_t 
 
                     if (
                         (parser->current.type == PM_TOKEN_PARENTHESIS_LEFT) ||
-                        (token_begins_expression_p(parser->current.type) || match3(parser, PM_TOKEN_UAMPERSAND, PM_TOKEN_USTAR, PM_TOKEN_USTAR_STAR))
+                        (accepts_command_call && (token_begins_expression_p(parser->current.type) || match3(parser, PM_TOKEN_UAMPERSAND, PM_TOKEN_USTAR, PM_TOKEN_USTAR_STAR)))
                     ) {
                         // If we have a constant immediately following a '::' operator, then
                         // this can either be a constant path or a method call, depending on
