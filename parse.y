@@ -2082,7 +2082,9 @@ rb_parser_string_t *
 rb_str_to_parser_string(rb_parser_t *p, VALUE str)
 {
     /* Type check */
-    return rb_parser_encoding_string_new(p, RSTRING_PTR(str), RSTRING_LEN(str), rb_enc_get(str));
+    rb_parser_string_t *ret = rb_parser_encoding_string_new(p, RSTRING_PTR(str), RSTRING_LEN(str), rb_enc_get(str));
+    RB_GC_GUARD(str);
+    return ret;
 }
 #endif
 
@@ -14940,9 +14942,6 @@ new_bodystmt(struct parser_params *p, NODE *head, NODE *rescue, NODE *rescue_els
 
         result = NEW_RESCUE(head, rescue, rescue_else, &rescue_loc);
         nd_set_line(result, rescue->nd_loc.beg_pos.lineno);
-    }
-    else if (rescue_else) {
-        result = block_append(p, result, rescue_else);
     }
     if (ensure) {
         result = NEW_ENSURE(result, ensure, loc);
