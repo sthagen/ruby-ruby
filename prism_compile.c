@@ -4036,9 +4036,15 @@ pm_compile_target_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *cons
         //
         //     for i, j in []; end
         //
-        if (state != NULL) state->position--;
+        size_t before_position;
+        if (state != NULL) {
+            before_position = state->position;
+            state->position--;
+        }
+
         pm_compile_multi_target_node(iseq, node, parents, writes, cleanup, scope_node, state);
-        if (state != NULL) state->position++;
+        if (state != NULL) state->position = before_position;
+
         break;
       }
       default:
@@ -4095,7 +4101,7 @@ pm_compile_multi_target_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR
     if (state == NULL) state = &target_state;
 
     size_t base_position = state->position;
-    size_t splat_position = has_rest ? 1 : 0;
+    size_t splat_position = (has_rest || has_posts) ? 1 : 0;
 
     // Next, we'll iterate through all of the leading targets.
     for (size_t index = 0; index < lefts->size; index++) {
@@ -4257,7 +4263,7 @@ pm_compile_rescue(rb_iseq_t *iseq, const pm_begin_node_t *cast, const pm_line_co
         PM_COMPILE_NOT_POPPED((const pm_node_t *) cast->statements);
     }
     else {
-        PUSH_INSN(ret, *node_location, putnil);
+        PUSH_SYNTHETIC_PUTNIL(ret, iseq);
     }
 
     ISEQ_COMPILE_DATA(iseq)->in_rescue = prev_in_rescue;
@@ -5059,8 +5065,24 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
     const pm_line_column_t location = PM_NODE_START_LINE_COLUMN(parser, node);
     int lineno = (int) location.line;
 
-    if (!PM_NODE_TYPE_P(node, PM_RETURN_NODE) || !PM_NODE_FLAG_P(node, PM_RETURN_NODE_FLAGS_REDUNDANT) || ((const pm_return_node_t *) node)->arguments != NULL) {
+    if (PM_NODE_TYPE_P(node, PM_RETURN_NODE) && PM_NODE_FLAG_P(node, PM_RETURN_NODE_FLAGS_REDUNDANT) && ((const pm_return_node_t *) node)->arguments == NULL) {
+        // If the node that we're compiling is a return node that is redundant,
+        // then it cannot be considered a line node because the other parser
+        // eliminates it from the parse tree. In this case we must replicate
+        // this behavior.
+    } else {
+        if (PM_NODE_TYPE_P(node, PM_BEGIN_NODE) && (((const pm_begin_node_t *) node)->statements == NULL) && (((const pm_begin_node_t *) node)->rescue_clause != NULL)) {
+            // If this node is a begin node and it has empty statements and also
+            // has a rescue clause, then the other parser considers it as
+            // starting on the same line as the rescue, as opposed to the
+            // location of the begin keyword. We replicate that behavior here.
+            lineno = (int) PM_NODE_START_LINE_COLUMN(parser, ((const pm_begin_node_t *) node)->rescue_clause).line;
+        }
+
         if (PM_NODE_FLAG_P(node, PM_NODE_FLAG_NEWLINE) && ISEQ_COMPILE_DATA(iseq)->last_line != lineno) {
+            // If this node has the newline flag set and it is on a new line
+            // from the previous nodes that have been compiled for this ISEQ,
+            // then we need to emit a newline event.
             int event = RUBY_EVENT_LINE;
 
             ISEQ_COMPILE_DATA(iseq)->last_line = lineno;
@@ -5310,7 +5332,7 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
                 PM_COMPILE((const pm_node_t *) cast->statements);
             }
             else if (!popped) {
-                PUSH_INSN(ret, location, putnil);
+                PUSH_SYNTHETIC_PUTNIL(ret, iseq);
             }
         }
         return;
@@ -5605,7 +5627,7 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
                     pm_compile_node(iseq, (const pm_node_t *) clause->statements, body_seq, popped, scope_node);
                 }
                 else if (!popped) {
-                    PUSH_INSN(body_seq, location, putnil);
+                    PUSH_SYNTHETIC_PUTNIL(body_seq, iseq);
                 }
 
                 PUSH_INSNL(body_seq, location, jump, end_label);
@@ -5754,7 +5776,7 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
                     pm_compile_node(iseq, (const pm_node_t *) clause->statements, body_seq, popped, scope_node);
                 }
                 else if (!popped) {
-                    PUSH_INSN(body_seq, clause_location, putnil);
+                    PUSH_SYNTHETIC_PUTNIL(body_seq, iseq);
                 }
 
                 PUSH_INSNL(body_seq, clause_location, jump, end_label);
@@ -5902,7 +5924,7 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
                 PM_COMPILE_INTO_ANCHOR(body_seq, (const pm_node_t *) in_node->statements);
             }
             else if (!popped) {
-                PUSH_INSN(body_seq, in_location, putnil);
+                PUSH_SYNTHETIC_PUTNIL(body_seq, iseq);
             }
 
             PUSH_INSNL(body_seq, in_location, jump, end_label);
@@ -6238,7 +6260,7 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
             PM_COMPILE((const pm_node_t *) (cast->statements));
         }
         else {
-            PUSH_INSN(ret, location, putnil);
+            PUSH_SYNTHETIC_PUTNIL(ret, iseq);
         }
 
         if (popped) PUSH_INSN(ret, location, pop);
