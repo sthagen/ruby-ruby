@@ -66,25 +66,25 @@ class String
   def color(fore=nil, back=nil, opts={}, bold: false, underscore: false)
     seq = ""
     if bold || opts[:bold]
-      seq << "\e[1m"
+      seq = seq + "\e[1m"
     end
     if underscore || opts[:underscore]
-      seq << "\e[2m"
+      seq = seq + "\e[2m"
     end
     if fore
       c = COLORS[fore]
       raise "unknown foreground color #{fore}" unless c
-      seq << "\e[#{c}m"
+      seq = seq + "\e[#{c}m"
     end
     if back
       c = COLORS[back]
       raise "unknown background color #{back}" unless c
-      seq << "\e[#{c + 10}m"
+      seq = seq + "\e[#{c + 10}m"
     end
     if seq.empty?
       self
     else
-      seq << self << "\e[0m"
+      seq = seq + self + "\e[0m"
     end
   end
 end
@@ -191,10 +191,12 @@ def backport_command_string
 
       # check if the Git revision is included in master
       has_commit(c, "master")
+    end.sort_by do |changeset|
+      Integer(IO.popen(%W[git show -s --format=%ct #{changeset}], &:read))
     end
     @changesets.define_singleton_method(:validated){true}
   end
-  " #{merger_path} --ticket=#{@issue} #{@changesets.sort.join(',')}"
+  "#{merger_path} --ticket=#{@issue} #{@changesets.join(',')}"
 end
 
 def status_char(obj)
@@ -355,7 +357,8 @@ eom
     if log && rev
       str = log[/merge revision\(s\) ([^:]+)(?=:)/]
       if str
-        str.insert(5, "d")
+        str.sub!(/\Amerge/, 'merged')
+        str.gsub!(/\h{40}/, 'commit:\0')
         str = "ruby_#{TARGET_VERSION.tr('.','_')} commit:#{rev} #{str}."
       else
         str = "ruby_#{TARGET_VERSION.tr('.','_')} commit:#{rev}."
