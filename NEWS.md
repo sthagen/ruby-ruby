@@ -40,6 +40,13 @@ Note: We're only listing outstanding class updates.
 
 ## Stdlib updates
 
+* Tempfile
+
+    * The keyword argument `anonymous: true` is implemented for `Tempfile.create`.
+      `Tempfile.create(anonymous: true)` removes the created temporary file immediately.
+      So applications don't need to remove the file.
+      [[Feature #20497]]
+
 The following default gems are updated.
 
 * RubyGems 3.6.0.dev
