@@ -19,20 +19,10 @@ module Reline
   class ConfigEncodingConversionError < StandardError; end
 
   Key = Struct.new(:char, :combined_char, :with_meta) do
-    def match?(other)
-      case other
-      when Reline::Key
-        (other.char.nil? or char.nil? or char == other.char) and
-        (other.combined_char.nil? or combined_char.nil? or combined_char == other.combined_char) and
-        (other.with_meta.nil? or with_meta.nil? or with_meta == other.with_meta)
-      when Integer, Symbol
-        (combined_char and combined_char == other) or
-        (combined_char.nil? and char and char == other)
-      else
-        false
-      end
+    # For dialog_proc `key.match?(dialog.name)`
+    def match?(sym)
+      combined_char.is_a?(Symbol) && combined_char == sym
     end
-    alias_method :==, :match?
   end
   CursorPos = Struct.new(:x, :y)
   DialogRenderInfo = Struct.new(
@@ -264,7 +254,6 @@ module Reline
           raise ArgumentError.new('#readmultiline needs block to confirm multiline termination')
         end
 
-        Reline.update_iogate
         io_gate.with_raw_input do
           inner_readline(prompt, add_hist, true, &confirm_multiline_termination)
         end
@@ -287,7 +276,6 @@ module Reline
 
     def readline(prompt = '', add_hist = false)
       @mutex.synchronize do
-        Reline.update_iogate
         io_gate.with_raw_input do
           inner_readline(prompt, add_hist, false)
         end
@@ -400,9 +388,8 @@ module Reline
         end
         case result
         when :matched
-          expanded = key_stroke.expand(buffer).map{ |expanded_c|
-            Reline::Key.new(expanded_c, expanded_c, false)
-          }
+          expanded, rest_bytes = key_stroke.expand(buffer)
+          rest_bytes.reverse_each { |c| io_gate.ungetc(c) }
           block.(expanded)
           break
         when :matching
@@ -416,9 +403,8 @@ module Reline
           if buffer.size == 1 and c == "\e".ord
             read_escaped_key(keyseq_timeout, c, block)
           else
-            expanded = buffer.map{ |expanded_c|
-              Reline::Key.new(expanded_c, expanded_c, false)
-            }
+            expanded, rest_bytes = key_stroke.expand(buffer)
+            rest_bytes.reverse_each { |c| io_gate.ungetc(c) }
             block.(expanded)
           end
           break
@@ -442,9 +428,8 @@ module Reline
           return :next
         when :matched
           buffer << succ_c
-          expanded = key_stroke.expand(buffer).map{ |expanded_c|
-            Reline::Key.new(expanded_c, expanded_c, false)
-          }
+          expanded, rest_bytes = key_stroke.expand(buffer)
+          rest_bytes.reverse_each { |c| io_gate.ungetc(c) }
           block.(expanded)
           return :break
         end
@@ -474,7 +459,7 @@ module Reline
     end
 
     private def may_req_ambiguous_char_width
-      @ambiguous_width = 2 if io_gate.dumb? or !STDOUT.tty?
+      @ambiguous_width = 2 if io_gate.dumb? || !STDIN.tty? || !STDOUT.tty?
       return if defined? @ambiguous_width
       io_gate.move_cursor_column(0)
       begin
@@ -567,18 +552,6 @@ module Reline
 
   def self.line_editor
     core.line_editor
-  end
-
-  def self.update_iogate
-    return if core.config.test_mode
-
-    # Need to change IOGate when `$stdout.tty?` change from false to true by `$stdout.reopen`
-    # Example: rails/spring boot the application in non-tty, then run console in tty.
-    if ENV['TERM'] != 'dumb' && core.io_gate.dumb? && $stdout.tty?
-      require 'reline/io/ansi'
-      remove_const(:IOGate)
-      const_set(:IOGate, Reline::ANSI.new)
-    end
   end
 end
 

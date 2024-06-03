@@ -12113,7 +12113,7 @@ rb_node_dxstr_new(struct parser_params *p, rb_parser_string_t *string, long nd_a
 {
     rb_node_dxstr_t *n = NODE_NEWNODE(NODE_DXSTR, rb_node_dxstr_t, loc);
     n->string = string;
-    n->nd_alen = nd_alen;
+    n->as.nd_alen = nd_alen;
     n->nd_next = (rb_node_list_t *)nd_next;
 
     return n;
@@ -12133,7 +12133,7 @@ rb_node_dsym_new(struct parser_params *p, rb_parser_string_t *string, long nd_al
 {
     rb_node_dsym_t *n = NODE_NEWNODE(NODE_DSYM, rb_node_dsym_t, loc);
     n->string = string;
-    n->nd_alen = nd_alen;
+    n->as.nd_alen = nd_alen;
     n->nd_next = (rb_node_list_t *)nd_next;
 
     return n;
@@ -13192,15 +13192,17 @@ new_regexp(struct parser_params *p, NODE *node, int options, const YYLTYPE *loc)
       case NODE_DSTR:
         nd_set_type(node, NODE_DREGX);
         nd_set_loc(node, loc);
-        RNODE_DREGX(node)->nd_cflag = options & RE_OPTION_MASK;
-        if (RNODE_DREGX(node)->string) reg_fragment_check(p, RNODE_DREGX(node)->string, options);
-        for (list = RNODE_DREGX(prev = node)->nd_next; list; list = RNODE_LIST(list->nd_next)) {
+        rb_node_dregx_t *const dreg = RNODE_DREGX(node);
+        dreg->as.nd_cflag = options & RE_OPTION_MASK;
+        if (dreg->string) reg_fragment_check(p, dreg->string, options);
+        prev = node;
+        for (list = dreg->nd_next; list; list = RNODE_LIST(list->nd_next)) {
             NODE *frag = list->nd_head;
             enum node_type type = nd_type(frag);
             if (type == NODE_STR || (type == NODE_DSTR && !RNODE_DSTR(frag)->nd_next)) {
                 rb_parser_string_t *tail = RNODE_STR(frag)->string;
                 if (reg_fragment_check(p, tail, options) && prev && RNODE_DREGX(prev)->string) {
-                    rb_parser_string_t *lit = prev == node ? RNODE_DREGX(prev)->string : RNODE_STR(RNODE_LIST(prev)->nd_head)->string;
+                    rb_parser_string_t *lit = prev == node ? dreg->string : RNODE_STR(RNODE_LIST(prev)->nd_head)->string;
                     if (!literal_concat0(p, lit, tail)) {
                         return NEW_NIL(loc); /* dummy node on error */
                     }
@@ -13218,9 +13220,9 @@ new_regexp(struct parser_params *p, NODE *node, int options, const YYLTYPE *loc)
                 prev = 0;
             }
         }
-        if (!RNODE_DREGX(node)->nd_next) {
+        if (!dreg->nd_next) {
             /* Check string is valid regex */
-            reg_compile(p, RNODE_DREGX(node)->string, options);
+            reg_compile(p, dreg->string, options);
         }
         if (options & RE_OPTION_ONCE) {
             node = NEW_ONCE(node, loc);
@@ -14293,8 +14295,18 @@ cond0(struct parser_params *p, NODE *node, enum cond_type type, const YYLTYPE *l
         if (!top) break;
         RNODE_DOT2(node)->nd_beg = range_op(p, RNODE_DOT2(node)->nd_beg, loc);
         RNODE_DOT2(node)->nd_end = range_op(p, RNODE_DOT2(node)->nd_end, loc);
-        if (nd_type_p(node, NODE_DOT2)) nd_set_type(node,NODE_FLIP2);
-        else if (nd_type_p(node, NODE_DOT3)) nd_set_type(node, NODE_FLIP3);
+        switch (nd_type(node)) {
+          case NODE_DOT2:
+            nd_set_type(node,NODE_FLIP2);
+            rb_node_flip2_t *flip2 = RNODE_FLIP2(node); /* for debug info */
+            (void)flip2;
+            break;
+          case NODE_DOT3:
+            nd_set_type(node, NODE_FLIP3);
+            rb_node_flip3_t *flip3 = RNODE_FLIP3(node); /* for debug info */
+            (void)flip3;
+            break;
+        }
         break;
 
       case NODE_SYM:
