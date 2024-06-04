@@ -109,9 +109,9 @@ module Prism
         # { a: 1 }
         #   ^^^^
         def visit_assoc_node(node)
-          if in_pattern
-            key = node.key
+          key = node.key
 
+          if in_pattern
             if node.value.is_a?(ImplicitNode)
               if key.is_a?(SymbolNode)
                 if key.opening.nil?
@@ -122,31 +122,33 @@ module Prism
               else
                 builder.match_hash_var_from_str(token(key.opening_loc), visit_all(key.parts), token(key.closing_loc))
               end
-            else
+            elsif key.opening.nil?
               builder.pair_keyword([key.unescaped, srange(key.location)], visit(node.value))
+            else
+              builder.pair_quoted(token(key.opening_loc), [builder.string_internal([key.unescaped, srange(key.value_loc)])], token(key.closing_loc), visit(node.value))
             end
           elsif node.value.is_a?(ImplicitNode)
             if (value = node.value.value).is_a?(LocalVariableReadNode)
               builder.pair_keyword(
-                [node.key.unescaped, srange(node.key)],
-                builder.ident([value.name, srange(node.key.value_loc)]).updated(:lvar)
+                [key.unescaped, srange(key)],
+                builder.ident([value.name, srange(key.value_loc)]).updated(:lvar)
               )
             else
-              builder.pair_label([node.key.unescaped, srange(node.key.location)])
+              builder.pair_label([key.unescaped, srange(key.location)])
             end
           elsif node.operator_loc
-            builder.pair(visit(node.key), token(node.operator_loc), visit(node.value))
-          elsif node.key.is_a?(SymbolNode) && node.key.opening_loc.nil?
-            builder.pair_keyword([node.key.unescaped, srange(node.key.location)], visit(node.value))
+            builder.pair(visit(key), token(node.operator_loc), visit(node.value))
+          elsif key.is_a?(SymbolNode) && key.opening_loc.nil?
+            builder.pair_keyword([key.unescaped, srange(key.location)], visit(node.value))
           else
             parts =
-              if node.key.is_a?(SymbolNode)
-                [builder.string_internal([node.key.unescaped, srange(node.key.value_loc)])]
+              if key.is_a?(SymbolNode)
+                [builder.string_internal([key.unescaped, srange(key.value_loc)])]
               else
-                visit_all(node.key.parts)
+                visit_all(key.parts)
               end
 
-            builder.pair_quoted(token(node.key.opening_loc), parts, token(node.key.closing_loc), visit(node.value))
+            builder.pair_quoted(token(key.opening_loc), parts, token(key.closing_loc), visit(node.value))
           end
         end
 
@@ -1293,13 +1295,9 @@ module Prism
         # foo, bar = baz
         # ^^^^^^^^
         def visit_multi_target_node(node)
-          elements = [*node.lefts]
-          elements << node.rest if !node.rest.nil? && !node.rest.is_a?(ImplicitRestNode)
-          elements.concat(node.rights)
-
           builder.multi_lhs(
             token(node.lparen_loc),
-            visit_all(elements),
+            visit_all(multi_target_elements(node)),
             token(node.rparen_loc)
           )
         end
@@ -1307,9 +1305,11 @@ module Prism
         # foo, bar = baz
         # ^^^^^^^^^^^^^^
         def visit_multi_write_node(node)
-          elements = [*node.lefts]
-          elements << node.rest if !node.rest.nil? && !node.rest.is_a?(ImplicitRestNode)
-          elements.concat(node.rights)
+          elements = multi_target_elements(node)
+
+          if elements.length == 1 && elements.first.is_a?(MultiTargetNode)
+            elements = multi_target_elements(elements.first)
+          end
 
           builder.multi_assign(
             builder.multi_lhs(
@@ -1390,12 +1390,12 @@ module Prism
 
           if node.requireds.any?
             node.requireds.each do |required|
-              if required.is_a?(RequiredParameterNode)
-                params << visit(required)
-              else
-                compiler = copy_compiler(in_destructure: true)
-                params << required.accept(compiler)
-              end
+              params <<
+                if required.is_a?(RequiredParameterNode)
+                  visit(required)
+                else
+                  required.accept(copy_compiler(in_destructure: true))
+                end
             end
           end
 
@@ -1404,12 +1404,12 @@ module Prism
 
           if node.posts.any?
             node.posts.each do |post|
-              if post.is_a?(RequiredParameterNode)
-                params << visit(post)
-              else
-                compiler = copy_compiler(in_destructure: true)
-                params << post.accept(compiler)
-              end
+              params <<
+                if post.is_a?(RequiredParameterNode)
+                  visit(post)
+                else
+                  post.accept(copy_compiler(in_destructure: true))
+                end
             end
           end
 
@@ -1507,9 +1507,20 @@ module Prism
         # /foo/
         # ^^^^^
         def visit_regular_expression_node(node)
+          content = node.content
+          parts =
+            if content.include?("\n")
+              offset = node.content_loc.start_offset
+              content.lines.map do |line|
+                builder.string_internal([line, srange_offsets(offset, offset += line.bytesize)])
+              end
+            else
+              [builder.string_internal(token(node.content_loc))]
+            end
+
           builder.regexp_compose(
             token(node.opening_loc),
-            [builder.string_internal(token(node.content_loc))],
+            parts,
             [node.closing[0], srange_offsets(node.closing_loc.start_offset, node.closing_loc.start_offset + 1)],
             builder.regexp_options([node.closing[1..], srange_offsets(node.closing_loc.start_offset + 1, node.closing_loc.end_offset)])
           )
@@ -1921,6 +1932,14 @@ module Prism
           forwarding
         end
 
+        # Returns the set of targets for a MultiTargetNode or a MultiWriteNode.
+        def multi_target_elements(node)
+          elements = [*node.lefts]
+          elements << node.rest if !node.rest.nil? && !node.rest.is_a?(ImplicitRestNode)
+          elements.concat(node.rights)
+          elements
+        end
+
         # Negate the value of a numeric node. This is a special case where you
         # have a negative sign on one line and then a number on the next line.
         # In normal Ruby, this will always be a method call. The parser gem,
@@ -1973,7 +1992,7 @@ module Prism
         # Note that end_offset is allowed to be nil, in which case this will
         # search until the end of the string.
         def srange_find(start_offset, end_offset, tokens)
-          if (match = source_buffer.source.byteslice(start_offset...end_offset).match(/(\s*)(#{tokens.join("|")})/))
+          if (match = source_buffer.source.byteslice(start_offset...end_offset).match(/\A(\s*)(#{tokens.join("|")})/))
             _, whitespace, token = *match
             token_offset = start_offset + whitespace.bytesize
 
@@ -2004,7 +2023,8 @@ module Prism
                   token(parameters.opening_loc),
                   if procarg0?(parameters.parameters)
                     parameter = parameters.parameters.requireds.first
-                    [builder.procarg0(visit(parameter))].concat(visit_all(parameters.locals))
+                    visited = parameter.is_a?(RequiredParameterNode) ? visit(parameter) : parameter.accept(copy_compiler(in_destructure: true))
+                    [builder.procarg0(visited)].concat(visit_all(parameters.locals))
                   else
                     visit(parameters)
                   end,

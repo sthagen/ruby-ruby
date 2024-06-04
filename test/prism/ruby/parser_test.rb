@@ -42,21 +42,25 @@ Parser::AST::Node.prepend(
 
 module Prism
   class ParserTest < TestCase
+    # These files contain code that is being parsed incorrectly by the parser
+    # gem, and therefore we don't want to compare against our translation.
+    skip_incorrect = [
+      # https://github.com/whitequark/parser/issues/1017
+      "spanning_heredoc.txt",
+      "spanning_heredoc_newlines.txt",
+
+      # https://github.com/whitequark/parser/issues/1016
+      "whitequark/unary_num_pow_precedence.txt"
+    ]
+
     # These files are either failing to parse or failing to translate, so we'll
     # skip them for now.
-    skip_all = [
+    skip_all = skip_incorrect | [
       "dash_heredocs.txt",
       "heredocs_with_ignored_newlines.txt",
       "regex.txt",
       "regex_char_width.txt",
-      "spanning_heredoc.txt",
-      "spanning_heredoc_newlines.txt",
       "unescaping.txt",
-      "seattlerb/block_decomp_anon_splat_arg.txt",
-      "seattlerb/block_decomp_arg_splat_arg.txt",
-      "seattlerb/block_decomp_arg_splat.txt",
-      "seattlerb/block_decomp_splat.txt",
-      "seattlerb/block_paren_splat.txt",
       "seattlerb/bug190.txt",
       "seattlerb/heredoc_nested.txt",
       "seattlerb/heredoc_with_carriage_return_escapes_windows.txt",
@@ -64,22 +68,16 @@ module Prism
       "seattlerb/heredoc_with_extra_carriage_returns_windows.txt",
       "seattlerb/heredoc_with_only_carriage_returns_windows.txt",
       "seattlerb/heredoc_with_only_carriage_returns.txt",
-      "seattlerb/masgn_double_paren.txt",
       "seattlerb/parse_line_heredoc_hardnewline.txt",
       "seattlerb/pctW_lineno.txt",
       "seattlerb/regexp_esc_C_slash.txt",
-      "seattlerb/TestRubyParserShared.txt",
-      "unparser/corpus/literal/block.txt",
       "unparser/corpus/literal/literal.txt",
-      "unparser/corpus/literal/pattern.txt",
       "unparser/corpus/semantic/dstr.txt",
       "whitequark/dedenting_interpolating_heredoc_fake_line_continuation.txt",
-      "whitequark/masgn_nested.txt",
       "whitequark/parser_bug_640.txt",
       "whitequark/parser_slash_slash_n_escaping_in_literals.txt",
       "whitequark/ruby_bug_11989.txt",
-      "whitequark/slash_newline_in_heredocs.txt",
-      "whitequark/unary_num_pow_precedence.txt"
+      "whitequark/slash_newline_in_heredocs.txt"
     ]
 
     # Not sure why these files are failing on JRuby, but skipping them for now.
@@ -149,6 +147,7 @@ module Prism
       "seattlerb/str_single_newline.txt",
       "seattlerb/symbol_empty.txt",
       "seattlerb/symbols_empty_space.txt",
+      "seattlerb/TestRubyParserShared.txt",
       "unparser/corpus/literal/assignment.txt",
       "unparser/corpus/literal/dstr.txt",
       "unparser/corpus/semantic/opasgn.txt",

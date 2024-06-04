@@ -174,11 +174,9 @@ class Reline::ANSI < Reline::IO
       Reline.core.line_editor.handle_signal
     end
     c = @input.getbyte
-    (c == 0x16 && @input.raw(min: 0, time: 0, &:getbyte)) || c
+    (c == 0x16 && @input.tty? && @input.raw(min: 0, time: 0, &:getbyte)) || c
   rescue Errno::EIO
     # Maybe the I/O has been closed.
-    nil
-  rescue Errno::ENOTTY
     nil
   end
 
@@ -239,12 +237,12 @@ class Reline::ANSI < Reline::IO
   def set_screen_size(rows, columns)
     @input.winsize = [rows, columns]
     self
-  rescue Errno::ENOTTY
+  rescue Errno::ENOTTY, Errno::ENODEV
     self
   end
 
   def cursor_pos
-    begin
+    if both_tty?
       res = +''
       m = nil
       @input.raw do |stdin|
@@ -263,7 +261,7 @@ class Reline::ANSI < Reline::IO
       end
       column = m[:column].to_i - 1
       row = m[:row].to_i - 1
-    rescue Errno::ENOTTY
+    else
       begin
         buf = @output.pread(@output.pos, 0)
         row = buf.count("\n")
@@ -276,6 +274,10 @@ class Reline::ANSI < Reline::IO
       end
     end
     Reline::CursorPos.new(column, row)
+  end
+
+  def both_tty?
+    @input.tty? && @output.tty?
   end
 
   def move_cursor_column(x)
@@ -345,14 +347,14 @@ class Reline::ANSI < Reline::IO
 
   def prep
     # Enable bracketed paste
-    @output.write "\e[?2004h" if Reline.core.config.enable_bracketed_paste
+    @output.write "\e[?2004h" if Reline.core.config.enable_bracketed_paste && both_tty?
     retrieve_keybuffer
     nil
   end
 
   def deprep(otio)
     # Disable bracketed paste
-    @output.write "\e[?2004l" if Reline.core.config.enable_bracketed_paste
+    @output.write "\e[?2004l" if Reline.core.config.enable_bracketed_paste && both_tty?
     Signal.trap('WINCH', @old_winch_handler) if @old_winch_handler
   end
 end
