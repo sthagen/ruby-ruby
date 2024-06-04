@@ -4813,6 +4813,15 @@ assert_equal [0x80000000000, 'a+', :ok].inspect, %q{
   tests
 }
 
+# test integer left shift fusion followed by opt_getconstant_path
+assert_equal '33', %q{
+  def test(a)
+    (a << 5) | (Object; a)
+  end
+
+  test(1)
+}
+
 # test String#stebyte with arguments that need conversion
 assert_equal "abc", %q{
   str = +"a00"
@@ -4991,4 +5000,16 @@ assert_equal '1', %q{
   array = Array.new(100)
   array.clear
   test_body(array)
+}
+
+# regression test for splatting empty array to cfunc
+assert_normal_exit %q{
+  def test_body(args) = Array(1, *args)
+
+  test_body([])
+  0x100.times do
+    array = Array.new(100)
+    array.clear
+    test_body(array)
+  end
 }
