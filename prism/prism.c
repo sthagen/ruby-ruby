@@ -17391,6 +17391,63 @@ parse_yield(pm_parser_t *parser, const pm_node_t *node) {
 }
 
 /**
+ * This struct is used to pass information between the regular expression parser
+ * and the error callback.
+ */
+typedef struct {
+    /** The parser that we are parsing the regular expression for. */
+    pm_parser_t *parser;
+
+    /** The start of the regular expression. */
+    const uint8_t *start;
+
+    /** The end of the regular expression. */
+    const uint8_t *end;
+
+    /**
+     * Whether or not the source of the regular expression is shared. This
+     * impacts the location of error messages, because if it is shared then we
+     * can use the location directly and if it is not, then we use the bounds of
+     * the regular expression itself.
+     */
+    bool shared;
+} parse_regular_expression_error_data_t;
+
+/**
+ * This callback is called when the regular expression parser encounters a
+ * syntax error.
+ */
+static void
+parse_regular_expression_error(const uint8_t *start, const uint8_t *end, const char *message, void *data) {
+    parse_regular_expression_error_data_t *callback_data = (parse_regular_expression_error_data_t *) data;
+    pm_location_t location;
+
+    if (callback_data->shared) {
+        location = (pm_location_t) { .start = start, .end = end };
+    } else {
+        location = (pm_location_t) { .start = callback_data->start, .end = callback_data->end };
+    }
+
+    PM_PARSER_ERR_FORMAT(callback_data->parser, location.start, location.end, PM_ERR_REGEXP_PARSE_ERROR, message);
+}
+
+/**
+ * Parse the errors for the regular expression and add them to the parser.
+ */
+static void
+parse_regular_expression_errors(pm_parser_t *parser, pm_regular_expression_node_t *node) {
+    const pm_string_t *unescaped = &node->unescaped;
+    parse_regular_expression_error_data_t error_data = {
+        .parser = parser,
+        .start = node->base.location.start,
+        .end = node->base.location.end,
+        .shared = unescaped->type == PM_STRING_SHARED
+    };
+
+    pm_regexp_parse(parser, pm_string_source(unescaped), pm_string_length(unescaped), NULL, NULL, parse_regular_expression_error, &error_data);
+}
+
+/**
  * Parse an expression that begins with the previous node that we just lexed.
  */
 static inline pm_node_t *
@@ -19511,13 +19568,22 @@ parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power, b
                 bool ascii_only = parser->current_regular_expression_ascii_only;
                 parser_lex(parser);
 
-                // If we hit an end, then we can create a regular expression node
-                // without interpolation, which can be represented more succinctly and
-                // more easily compiled.
+                // If we hit an end, then we can create a regular expression
+                // node without interpolation, which can be represented more
+                // succinctly and more easily compiled.
                 if (accept1(parser, PM_TOKEN_REGEXP_END)) {
-                    pm_node_t *node = (pm_node_t *) pm_regular_expression_node_create_unescaped(parser, &opening, &content, &parser->previous, &unescaped);
-                    pm_node_flag_set(node, parse_and_validate_regular_expression_encoding(parser, &unescaped, ascii_only, node->flags));
-                    return node;
+                    pm_regular_expression_node_t *node = (pm_regular_expression_node_t *) pm_regular_expression_node_create_unescaped(parser, &opening, &content, &parser->previous, &unescaped);
+
+                    // If we're not immediately followed by a =~, then we want
+                    // to parse all of the errors at this point. If it is
+                    // followed by a =~, then it will get parsed higher up while
+                    // parsing the named captures as well.
+                    if (!match1(parser, PM_TOKEN_EQUAL_TILDE)) {
+                        parse_regular_expression_errors(parser, node);
+                    }
+
+                    pm_node_flag_set((pm_node_t *) node, parse_and_validate_regular_expression_encoding(parser, &unescaped, ascii_only, node->base.flags));
+                    return (pm_node_t *) node;
                 }
 
                 // If we get here, then we have interpolation so we'll need to create
@@ -20003,89 +20069,126 @@ parse_call_operator_write(pm_parser_t *parser, pm_call_node_t *call_node, const 
 }
 
 /**
+ * This struct is used to pass information between the regular expression parser
+ * and the named capture callback.
+ */
+typedef struct {
+    /** The parser that is parsing the regular expression. */
+    pm_parser_t *parser;
+
+    /** The call node wrapping the regular expression node. */
+    pm_call_node_t *call;
+
+    /** The match write node that is being created. */
+    pm_match_write_node_t *match;
+
+    /** The list of names that have been parsed. */
+    pm_constant_id_list_t names;
+
+    /**
+     * Whether the content of the regular expression is shared. This impacts
+     * whether or not we used owned constants or shared constants in the
+     * constant pool for the names of the captures.
+     */
+    bool shared;
+} parse_regular_expression_named_capture_data_t;
+
+/**
+ * This callback is called when the regular expression parser encounters a named
+ * capture group.
+ */
+static void
+parse_regular_expression_named_capture(const pm_string_t *capture, void *data) {
+    parse_regular_expression_named_capture_data_t *callback_data = (parse_regular_expression_named_capture_data_t *) data;
+
+    pm_parser_t *parser = callback_data->parser;
+    pm_call_node_t *call = callback_data->call;
+    pm_constant_id_list_t *names = &callback_data->names;
+
+    const uint8_t *source = pm_string_source(capture);
+    size_t length = pm_string_length(capture);
+
+    pm_location_t location;
+    pm_constant_id_t name;
+
+    // If the name of the capture group isn't a valid identifier, we do
+    // not add it to the local table.
+    if (!pm_slice_is_valid_local(parser, source, source + length)) return;
+
+    if (callback_data->shared) {
+        // If the unescaped string is a slice of the source, then we can
+        // copy the names directly. The pointers will line up.
+        location = (pm_location_t) { .start = source, .end = source + length };
+        name = pm_parser_constant_id_location(parser, location.start, location.end);
+    } else {
+        // Otherwise, the name is a slice of the malloc-ed owned string,
+        // in which case we need to copy it out into a new string.
+        location = (pm_location_t) { .start = call->receiver->location.start, .end = call->receiver->location.end };
+
+        void *memory = xmalloc(length);
+        if (memory == NULL) abort();
+
+        memcpy(memory, source, length);
+        name = pm_parser_constant_id_owned(parser, (uint8_t *) memory, length);
+    }
+
+    // Add this name to the list of constants if it is valid, not duplicated,
+    // and not a keyword.
+    if (name != 0 && !pm_constant_id_list_includes(names, name)) {
+        pm_constant_id_list_append(names, name);
+
+        int depth;
+        if ((depth = pm_parser_local_depth_constant_id(parser, name)) == -1) {
+            // If the local is not already a local but it is a keyword, then we
+            // do not want to add a capture for this.
+            if (pm_local_is_keyword((const char *) source, length)) return;
+
+            // If the identifier is not already a local, then we will add it to
+            // the local table.
+            pm_parser_local_add(parser, name, location.start, location.end, 0);
+        }
+
+        // Here we lazily create the MatchWriteNode since we know we're
+        // about to add a target.
+        if (callback_data->match == NULL) {
+            callback_data->match = pm_match_write_node_create(parser, call);
+        }
+
+        // Next, create the local variable target and add it to the list of
+        // targets for the match.
+        pm_node_t *target = (pm_node_t *) pm_local_variable_target_node_create(parser, &location, name, depth == -1 ? 0 : (uint32_t) depth);
+        pm_node_list_append(&callback_data->match->targets, target);
+    }
+}
+
+/**
  * Potentially change a =~ with a regular expression with named captures into a
  * match write node.
  */
 static pm_node_t *
 parse_regular_expression_named_captures(pm_parser_t *parser, const pm_string_t *content, pm_call_node_t *call) {
-    pm_string_list_t named_captures = { 0 };
-    pm_node_t *result;
+    parse_regular_expression_named_capture_data_t callback_data = {
+        .parser = parser,
+        .call = call,
+        .names = { 0 },
+        .shared = content->type == PM_STRING_SHARED
+    };
 
-    if (pm_regexp_named_capture_group_names(pm_string_source(content), pm_string_length(content), &named_captures, parser->encoding_changed, parser->encoding) && (named_captures.length > 0)) {
-        // Since we should not create a MatchWriteNode when all capture names
-        // are invalid, creating a MatchWriteNode is delaid here.
-        pm_match_write_node_t *match = NULL;
-        pm_constant_id_list_t names = { 0 };
+    parse_regular_expression_error_data_t error_data = {
+        .parser = parser,
+        .start = call->receiver->location.start,
+        .end = call->receiver->location.end,
+        .shared = content->type == PM_STRING_SHARED
+    };
 
-        for (size_t index = 0; index < named_captures.length; index++) {
-            pm_string_t *string = &named_captures.strings[index];
+    pm_regexp_parse(parser, pm_string_source(content), pm_string_length(content), parse_regular_expression_named_capture, &callback_data, parse_regular_expression_error, &error_data);
+    pm_constant_id_list_free(&callback_data.names);
 
-            const uint8_t *source = pm_string_source(string);
-            size_t length = pm_string_length(string);
-
-            pm_location_t location;
-            pm_constant_id_t name;
-
-            // If the name of the capture group isn't a valid identifier, we do
-            // not add it to the local table.
-            if (!pm_slice_is_valid_local(parser, source, source + length)) continue;
-
-            if (content->type == PM_STRING_SHARED) {
-                // If the unescaped string is a slice of the source, then we can
-                // copy the names directly. The pointers will line up.
-                location = (pm_location_t) { .start = source, .end = source + length };
-                name = pm_parser_constant_id_location(parser, location.start, location.end);
-            } else {
-                // Otherwise, the name is a slice of the malloc-ed owned string,
-                // in which case we need to copy it out into a new string.
-                location = call->receiver->location;
-
-                void *memory = xmalloc(length);
-                if (memory == NULL) abort();
-
-                memcpy(memory, source, length);
-                name = pm_parser_constant_id_owned(parser, (uint8_t *) memory, length);
-            }
-
-            if (name != 0) {
-                // We dont want to create duplicate targets if the capture name
-                // is duplicated.
-                if (pm_constant_id_list_includes(&names, name)) continue;
-                pm_constant_id_list_append(&names, name);
-
-                int depth;
-                if ((depth = pm_parser_local_depth_constant_id(parser, name)) == -1) {
-                    // If the identifier is not already a local, then we'll add
-                    // it to the local table unless it's a keyword.
-                    if (pm_local_is_keyword((const char *) source, length)) continue;
-
-                    pm_parser_local_add(parser, name, location.start, location.end, 0);
-                }
-
-                // Here we lazily create the MatchWriteNode since we know we're
-                // about to add a target.
-                if (match == NULL) match = pm_match_write_node_create(parser, call);
-
-                // Next, create the local variable target and add it to the
-                // list of targets for the match.
-                pm_node_t *target = (pm_node_t *) pm_local_variable_target_node_create(parser, &location, name, depth == -1 ? 0 : (uint32_t) depth);
-                pm_node_list_append(&match->targets, target);
-            }
-        }
-
-        if (match != NULL) {
-            result = (pm_node_t *) match;
-        } else {
-            result = (pm_node_t *) call;
-        }
-
-        pm_constant_id_list_free(&names);
+    if (callback_data.match != NULL) {
+        return (pm_node_t *) callback_data.match;
     } else {
-        result = (pm_node_t *) call;
+        return (pm_node_t *) call;
     }
-
-    pm_string_list_free(&named_captures);
-    return result;
 }
 
 static inline pm_node_t *
