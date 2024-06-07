@@ -49,6 +49,9 @@ module Prism
       "spanning_heredoc.txt",
       "spanning_heredoc_newlines.txt",
 
+      # https://github.com/whitequark/parser/issues/1021
+      "seattlerb/heredoc_nested.txt",
+
       # https://github.com/whitequark/parser/issues/1016
       "whitequark/unary_num_pow_precedence.txt"
     ]
@@ -56,15 +59,10 @@ module Prism
     # These files are either failing to parse or failing to translate, so we'll
     # skip them for now.
     skip_all = skip_incorrect | [
-      "dash_heredocs.txt",
-      "heredocs_with_ignored_newlines.txt",
       "regex.txt",
       "regex_char_width.txt",
       "unescaping.txt",
       "seattlerb/bug190.txt",
-      "seattlerb/heredoc_nested.txt",
-      "seattlerb/heredoc_with_carriage_return_escapes_windows.txt",
-      "seattlerb/heredoc_with_carriage_return_escapes.txt",
       "seattlerb/heredoc_with_extra_carriage_returns_windows.txt",
       "seattlerb/heredoc_with_only_carriage_returns_windows.txt",
       "seattlerb/heredoc_with_only_carriage_returns.txt",
@@ -74,10 +72,8 @@ module Prism
       "unparser/corpus/literal/literal.txt",
       "unparser/corpus/semantic/dstr.txt",
       "whitequark/dedenting_interpolating_heredoc_fake_line_continuation.txt",
-      "whitequark/parser_bug_640.txt",
       "whitequark/parser_slash_slash_n_escaping_in_literals.txt",
-      "whitequark/ruby_bug_11989.txt",
-      "whitequark/slash_newline_in_heredocs.txt"
+      "whitequark/ruby_bug_11989.txt"
     ]
 
     # Not sure why these files are failing on JRuby, but skipping them for now.
@@ -89,9 +85,11 @@ module Prism
     # output expected by the parser gem, so we'll skip them for now.
     skip_tokens = [
       "comments.txt",
+      "dash_heredocs.txt",
       "dos_endings.txt",
       "embdoc_no_newline_at_end.txt",
       "heredoc_with_comment.txt",
+      "heredocs_with_ignored_newlines.txt",
       "indented_file_end.txt",
       "methods.txt",
       "strings.txt",
@@ -116,6 +114,8 @@ module Prism
       "seattlerb/heredoc_squiggly_visually_blank_lines.txt",
       "seattlerb/heredoc_squiggly.txt",
       "seattlerb/heredoc_unicode.txt",
+      "seattlerb/heredoc_with_carriage_return_escapes_windows.txt",
+      "seattlerb/heredoc_with_carriage_return_escapes.txt",
       "seattlerb/heredoc_with_interpolation_and_carriage_return_escapes_windows.txt",
       "seattlerb/heredoc_with_interpolation_and_carriage_return_escapes.txt",
       "seattlerb/interpolated_symbol_array_line_breaks.txt",
@@ -163,10 +163,12 @@ module Prism
       "whitequark/lbrace_arg_after_command_args.txt",
       "whitequark/multiple_pattern_matches.txt",
       "whitequark/newline_in_hash_argument.txt",
+      "whitequark/parser_bug_640.txt",
       "whitequark/parser_drops_truncated_parts_of_squiggly_heredoc.txt",
       "whitequark/ruby_bug_11990.txt",
       "whitequark/ruby_bug_14690.txt",
       "whitequark/ruby_bug_9669.txt",
+      "whitequark/slash_newline_in_heredocs.txt",
       "whitequark/space_args_arg_block.txt",
       "whitequark/space_args_block.txt"
     ]

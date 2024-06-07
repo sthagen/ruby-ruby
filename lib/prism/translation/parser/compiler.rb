@@ -2040,6 +2040,13 @@ module Prism
           end
         end
 
+        # The parser gem automatically converts \r\n to \n, meaning our offsets
+        # need to be adjusted to always subtract 1 from the length.
+        def chomped_bytesize(line)
+          chomped = line.chomp
+          chomped.bytesize + (chomped == line ? 0 : 1)
+        end
+
         # Visit a heredoc that can be either a string or an xstring.
         def visit_heredoc(node)
           children = Array.new
@@ -2057,23 +2064,31 @@ module Prism
           node.parts.each do |part|
             pushing =
               if part.is_a?(StringNode) && part.unescaped.include?("\n")
-                unescaped = part.unescaped.lines(chomp: true)
-                escaped = part.content.lines(chomp: true)
+                unescaped = part.unescaped.lines
+                escaped = part.content.lines
 
-                escaped_lengths =
-                  if node.opening.end_with?("'")
-                    escaped.map { |line| line.bytesize + 1 }
-                  else
-                    escaped.chunk_while { |before, after| before.match?(/(?<!\\)\\$/) }.map { |line| line.join.bytesize + line.length }
+                escaped_lengths = []
+                normalized_lengths = []
+
+                if node.opening.end_with?("'")
+                  escaped.each do |line|
+                    escaped_lengths << line.bytesize
+                    normalized_lengths << chomped_bytesize(line)
                   end
+                else
+                  escaped
+                    .chunk_while { |before, after| before.match?(/(?<!\\)\\\r?\n$/) }
+                    .each do |lines|
+                      escaped_lengths << lines.sum(&:bytesize)
+                      normalized_lengths << lines.sum { |line| chomped_bytesize(line) }
+                    end
+                end
 
                 start_offset = part.location.start_offset
-                end_offset = nil
 
-                unescaped.zip(escaped_lengths).map do |unescaped_line, escaped_length|
-                  end_offset = start_offset + (escaped_length || 0)
-                  inner_part = builder.string_internal(["#{unescaped_line}\n", srange_offsets(start_offset, end_offset)])
-                  start_offset = end_offset
+                unescaped.map.with_index do |unescaped_line, index|
+                  inner_part = builder.string_internal([unescaped_line, srange_offsets(start_offset, start_offset + normalized_lengths.fetch(index, 0))])
+                  start_offset += escaped_lengths.fetch(index, 0)
                   inner_part
                 end
               else
@@ -2084,7 +2099,12 @@ module Prism
               if child.type == :str && child.children.last == ""
                 # nothing
               elsif child.type == :str && children.last && children.last.type == :str && !children.last.children.first.end_with?("\n")
-                children.last.children.first << child.children.first
+                appendee = children[-1]
+
+                location = appendee.loc
+                location = location.with_expression(location.expression.join(child.loc.expression))
+
+                children[-1] = appendee.updated(:str, [appendee.children.first << child.children.first], location: location)
               else
                 children << child
               end
