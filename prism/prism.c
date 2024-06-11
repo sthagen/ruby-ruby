@@ -8261,7 +8261,7 @@ parser_lex_magic_comment(pm_parser_t *parser, bool semantic_token_seen) {
 
         // We only want to attempt to compare against encoding comments if it's
         // the first line in the file (or the second in the case of a shebang).
-        if (parser->current.start == parser->encoding_comment_start) {
+        if (parser->current.start == parser->encoding_comment_start && !parser->encoding_locked) {
             if (
                 (key_length == 8 && pm_strncasecmp(key_source, (const uint8_t *) "encoding", 8) == 0) ||
                 (key_length == 6 && pm_strncasecmp(key_source, (const uint8_t *) "coding", 6) == 0)
@@ -10438,7 +10438,9 @@ parser_lex(pm_parser_t *parser) {
                         // pass and we're at the start of the file, then we need
                         // to do another pass to potentially find other patterns
                         // for encoding comments.
-                        if (length >= 10) parser_lex_magic_comment_encoding(parser);
+                        if (length >= 10 && !parser->encoding_locked) {
+                            parser_lex_magic_comment_encoding(parser);
+                        }
                     }
 
                     lexed_comment = true;
@@ -19901,10 +19903,15 @@ parse_assignment_value_local(pm_parser_t *parser, const pm_node_t *node) {
  */
 static pm_node_t *
 parse_assignment_values(pm_parser_t *parser, pm_binding_power_t previous_binding_power, pm_binding_power_t binding_power, bool accepts_command_call, pm_diagnostic_id_t diag_id) {
-    pm_node_t *value = parse_starred_expression(parser, binding_power, previous_binding_power == PM_BINDING_POWER_ASSIGNMENT ? accepts_command_call : previous_binding_power < PM_BINDING_POWER_MATCH, diag_id);
-    parse_assignment_value_local(parser, value);
+    bool permitted = true;
+    if (previous_binding_power != PM_BINDING_POWER_STATEMENT && match1(parser, PM_TOKEN_USTAR)) permitted = false;
 
+    pm_node_t *value = parse_starred_expression(parser, binding_power, previous_binding_power == PM_BINDING_POWER_ASSIGNMENT ? accepts_command_call : previous_binding_power < PM_BINDING_POWER_MATCH, diag_id);
+    if (!permitted) pm_parser_err_node(parser, value, PM_ERR_UNEXPECTED_MULTI_WRITE);
+
+    parse_assignment_value_local(parser, value);
     bool single_value = true;
+
     if (previous_binding_power == PM_BINDING_POWER_STATEMENT && (PM_NODE_TYPE_P(value, PM_SPLAT_NODE) || match1(parser, PM_TOKEN_COMMA))) {
         single_value = false;
 
@@ -21239,6 +21246,7 @@ pm_parser_init(pm_parser_t *parser, const uint8_t *source, size_t size, const pm
         .parsing_eval = false,
         .command_start = true,
         .recovering = false,
+        .encoding_locked = false,
         .encoding_changed = false,
         .pattern_matching_newlines = false,
         .in_keyword_arg = false,
@@ -21285,6 +21293,9 @@ pm_parser_init(pm_parser_t *parser, const uint8_t *source, size_t size, const pm
             const uint8_t *encoding_source = pm_string_source(&options->encoding);
             parser_lex_magic_comment_encoding_value(parser, encoding_source, encoding_source + encoding_length);
         }
+
+        // encoding_locked option
+        parser->encoding_locked = options->encoding_locked;
 
         // frozen_string_literal option
         parser->frozen_string_literal = options->frozen_string_literal;
