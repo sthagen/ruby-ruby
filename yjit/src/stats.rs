@@ -266,7 +266,7 @@ macro_rules! make_counters {
 
 /// The list of counters that are available without --yjit-stats.
 /// They are incremented only by `incr_counter!` and don't use `gen_counter_incr`.
-pub const DEFAULT_COUNTERS: [Counter; 17] = [
+pub const DEFAULT_COUNTERS: [Counter; 18] = [
     Counter::code_gc_count,
     Counter::compiled_iseq_entry,
     Counter::cold_iseq_entry,
@@ -276,6 +276,7 @@ pub const DEFAULT_COUNTERS: [Counter; 17] = [
     Counter::compiled_branch_count,
     Counter::compile_time_ns,
     Counter::max_inline_versions,
+    Counter::num_contexts_encoded,
 
     Counter::invalidation_count,
     Counter::invalidate_method_lookup,
@@ -746,6 +747,7 @@ fn rb_yjit_gen_stats_dict() -> VALUE {
         // How many bytes we are using to store context data
         let context_data = CodegenGlobals::get_context_data();
         hash_aset_usize!(hash, "context_data_bytes", context_data.num_bytes());
+        hash_aset_usize!(hash, "context_cache_bytes", crate::core::CTX_CACHE_BYTES);
 
         // VM instructions count
         hash_aset_usize!(hash, "vm_insns_count", rb_vm_insns_count as usize);
