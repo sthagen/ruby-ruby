@@ -2889,6 +2889,13 @@ rb_parser_ary_free(rb_parser_t *p, rb_parser_ary_t *ary)
 %token tLAST_TOKEN
 
 /*
+ *	inlining rules
+ */
+%rule %inline ident_or_const: tIDENTIFIER
+                            | tCONSTANT
+                            ;
+
+/*
  *	parameterizing rules
  */
 %rule f_opt(value) <node_opt_arg>: f_arg_asgn f_eq value
@@ -3232,12 +3239,7 @@ command_asgn	: lhs '=' lex_ctxt command_rhs
                     /*% ripper: opassign!(aref_field!($:1, $:3), $:5, $:7) %*/
 
                     }
-                | primary_value call_op tIDENTIFIER tOP_ASGN lex_ctxt command_rhs
-                    {
-                        $$ = new_attr_op_assign(p, $1, $2, $3, $4, $6, &@$);
-                    /*% ripper: opassign!(field!($:1, $:2, $:3), $:4, $:6) %*/
-                    }
-                | primary_value call_op tCONSTANT tOP_ASGN lex_ctxt command_rhs
+                | primary_value call_op ident_or_const tOP_ASGN lex_ctxt command_rhs
                     {
                         $$ = new_attr_op_assign(p, $1, $2, $3, $4, $6, &@$);
                     /*% ripper: opassign!(field!($:1, $:2, $:3), $:4, $:6) %*/
@@ -3744,8 +3746,7 @@ cpath		: tCOLON3 cname
                     }
                 ;
 
-fname		: tIDENTIFIER
-                | tCONSTANT
+fname		: ident_or_const
                 | tFID
                 | op
                     {
@@ -6267,8 +6268,7 @@ nonlocal_var    : tIVAR
                 | tCVAR
                 ;
 
-user_variable	: tIDENTIFIER
-                | tCONSTANT
+user_variable	: ident_or_const
                 | nonlocal_var
                 ;
 
@@ -6810,8 +6810,7 @@ assoc		: arg_value tASSOC arg_value
                     }
                 ;
 
-operation	: tIDENTIFIER
-                | tCONSTANT
+operation	: ident_or_const
                 | tFID
                 ;
 
@@ -9085,21 +9084,6 @@ set_number_literal(struct parser_params *p, enum yytokentype type, int suffix, i
     return type;
 }
 
-#ifdef RIPPER
-static void
-dispatch_heredoc_end(struct parser_params *p)
-{
-    VALUE str;
-    if (has_delayed_token(p))
-        dispatch_delayed_token(p, tSTRING_CONTENT);
-    str = STR_NEW(p->lex.ptok, p->lex.pend - p->lex.ptok);
-    ripper_dispatch1(p, ripper_token2eventid(tHEREDOC_END), str);
-    RUBY_SET_YYLLOC_FROM_STRTERM_HEREDOC(*p->yylloc);
-    lex_goto_eol(p);
-    token_flush(p);
-}
-
-#else
 #define dispatch_heredoc_end(p) parser_dispatch_heredoc_end(p, __LINE__)
 static void
 parser_dispatch_heredoc_end(struct parser_params *p, int line)
@@ -9107,17 +9091,21 @@ parser_dispatch_heredoc_end(struct parser_params *p, int line)
     if (has_delayed_token(p))
         dispatch_delayed_token(p, tSTRING_CONTENT);
 
+#ifdef RIPPER
+    VALUE str = STR_NEW(p->lex.ptok, p->lex.pend - p->lex.ptok);
+    ripper_dispatch1(p, ripper_token2eventid(tHEREDOC_END), str);
+#else
     if (p->keep_tokens) {
         rb_parser_string_t *str = rb_parser_encoding_string_new(p, p->lex.ptok, p->lex.pend - p->lex.ptok, p->enc);
         RUBY_SET_YYLLOC_OF_HEREDOC_END(*p->yylloc);
         parser_append_tokens(p, str, tHEREDOC_END, line);
     }
+#endif
 
     RUBY_SET_YYLLOC_FROM_STRTERM_HEREDOC(*p->yylloc);
     lex_goto_eol(p);
     token_flush(p);
 }
-#endif
 
 static enum yytokentype
 here_document(struct parser_params *p, rb_strterm_heredoc_t *here)
