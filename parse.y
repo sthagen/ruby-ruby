@@ -1512,6 +1512,7 @@ YYLTYPE *rb_parser_set_location(struct parser_params *p, YYLTYPE *yylloc);
 void ruby_show_error_line(struct parser_params *p, VALUE errbuf, const YYLTYPE *yylloc, int lineno, rb_parser_string_t *str);
 RUBY_SYMBOL_EXPORT_END
 
+static void flush_string_content(struct parser_params *p, rb_encoding *enc, size_t back);
 static void error_duplicate_pattern_variable(struct parser_params *p, ID id, const YYLTYPE *loc);
 static void error_duplicate_pattern_key(struct parser_params *p, ID id, const YYLTYPE *loc);
 static VALUE formal_argument_error(struct parser_params*, ID);
@@ -7703,12 +7704,11 @@ new_heredoc(struct parser_params *p)
 #define peekc(p) peekc_n(p, 0)
 #define peekc_n(p,n) (lex_eol_n_p(p, n) ? -1 : (unsigned char)(p)->lex.pcur[n])
 
+#define add_delayed_token(p, tok, end) parser_add_delayed_token(p, tok, end, __LINE__)
 static void
-add_delayed_token(struct parser_params *p, const char *tok, const char *end, int line)
+parser_add_delayed_token(struct parser_params *p, const char *tok, const char *end, int line)
 {
-#ifndef RIPPER
     debug_token_line(p, "add_delayed_token", line);
-#endif
 
     if (tok < end) {
         if (has_delayed_token(p)) {
@@ -7772,7 +7772,7 @@ nextline(struct parser_params *p, int set_encoding)
         /* after here-document without terminator */
         goto end_of_input;
     }
-    add_delayed_token(p, p->lex.ptok, p->lex.pend, __LINE__);
+    add_delayed_token(p, p->lex.ptok, p->lex.pend);
     if (p->heredoc_end > 0) {
         p->ruby_sourceline = p->heredoc_end;
         p->heredoc_end = 0;
@@ -7885,6 +7885,7 @@ tok_hex(struct parser_params *p, size_t *numlen)
 
     c = (int)ruby_scan_hex(p->lex.pcur, 2, numlen);
     if (!*numlen) {
+        flush_string_content(p, p->enc, rb_strlen_lit("\\x"));
         yyerror0("invalid hex escape");
         dispatch_scan_event(p, tSTRING_CONTENT);
         return 0;
@@ -7927,27 +7928,33 @@ escaped_control_code(int c)
 
 static int
 tokadd_codepoint(struct parser_params *p, rb_encoding **encp,
-                 int regexp_literal, int wide)
+                 int regexp_literal, const char *begin)
 {
+    const int wide = !begin;
     size_t numlen;
     int codepoint = (int)ruby_scan_hex(p->lex.pcur, wide ? p->lex.pend - p->lex.pcur : 4, &numlen);
+
     p->lex.pcur += numlen;
     if (p->lex.strterm == NULL ||
         strterm_is_heredoc(p->lex.strterm) ||
         (p->lex.strterm->u.literal.func != str_regexp)) {
+        if (!begin) begin = p->lex.pcur;
         if (wide ? (numlen == 0 || numlen > 6) : (numlen < 4))  {
-            literal_flush(p, p->lex.pcur);
+            flush_string_content(p, rb_utf8_encoding(), p->lex.pcur - begin);
             yyerror0("invalid Unicode escape");
+            dispatch_scan_event(p, tSTRING_CONTENT);
             return wide && numlen > 0;
         }
         if (codepoint > 0x10ffff) {
-            literal_flush(p, p->lex.pcur);
+            flush_string_content(p, rb_utf8_encoding(), p->lex.pcur - begin);
             yyerror0("invalid Unicode codepoint (too large)");
+            dispatch_scan_event(p, tSTRING_CONTENT);
             return wide;
         }
         if ((codepoint & 0xfffff800) == 0xd800) {
-            literal_flush(p, p->lex.pcur);
+            flush_string_content(p, rb_utf8_encoding(), p->lex.pcur - begin);
             yyerror0("invalid Unicode codepoint");
+            dispatch_scan_event(p, tSTRING_CONTENT);
             return wide;
         }
     }
@@ -8035,7 +8042,7 @@ tokadd_utf8(struct parser_params *p, rb_encoding **encp,
                 if (second == multiple_codepoints)
                     second = p->lex.pcur;
                 if (regexp_literal) tokadd(p, last);
-                if (!tokadd_codepoint(p, encp, regexp_literal, TRUE)) {
+                if (!tokadd_codepoint(p, encp, regexp_literal, NULL)) {
                     break;
                 }
                 while (ISSPACE(c = peekc(p))) {
@@ -8048,8 +8055,9 @@ tokadd_utf8(struct parser_params *p, rb_encoding **encp,
 
             if (c != close_brace) {
               unterminated:
-                token_flush(p);
+                flush_string_content(p, rb_utf8_encoding(), 0);
                 yyerror0("unterminated Unicode escape");
+                dispatch_scan_event(p, tSTRING_CONTENT);
                 return;
             }
             if (second && second != multiple_codepoints) {
@@ -8067,7 +8075,7 @@ tokadd_utf8(struct parser_params *p, rb_encoding **encp,
         }
     }
     else {			/* handle \uxxxx form */
-        if (!tokadd_codepoint(p, encp, regexp_literal, FALSE)) {
+        if (!tokadd_codepoint(p, encp, regexp_literal, p->lex.pcur - rb_strlen_lit("\\u"))) {
             token_flush(p);
             return;
         }
@@ -8078,7 +8086,7 @@ tokadd_utf8(struct parser_params *p, rb_encoding **encp,
 #define ESCAPE_META    2
 
 static int
-read_escape(struct parser_params *p, int flags)
+read_escape(struct parser_params *p, int flags, const char *begin)
 {
     int c;
     size_t numlen;
@@ -8137,7 +8145,7 @@ read_escape(struct parser_params *p, int flags)
                 nextc(p);
                 goto eof;
             }
-            return read_escape(p, flags|ESCAPE_META) | 0x80;
+            return read_escape(p, flags|ESCAPE_META, begin) | 0x80;
         }
         else if (c == -1) goto eof;
         else if (!ISASCII(c)) {
@@ -8170,7 +8178,7 @@ read_escape(struct parser_params *p, int flags)
                 nextc(p);
                 goto eof;
             }
-            c = read_escape(p, flags|ESCAPE_CONTROL);
+            c = read_escape(p, flags|ESCAPE_CONTROL, begin);
         }
         else if (c == '?')
             return 0177;
@@ -8205,6 +8213,7 @@ read_escape(struct parser_params *p, int flags)
 
       eof:
       case -1:
+        flush_string_content(p, p->enc, p->lex.pcur - begin);
         yyerror0("Invalid escape character syntax");
         dispatch_scan_event(p, tSTRING_CONTENT);
         return '\0';
@@ -8226,6 +8235,7 @@ tokadd_escape(struct parser_params *p)
 {
     int c;
     size_t numlen;
+    const char *begin = p->lex.pcur;
 
     switch (c = nextc(p)) {
       case '\n':
@@ -8251,6 +8261,7 @@ tokadd_escape(struct parser_params *p)
 
       eof:
       case -1:
+        flush_string_content(p, p->enc, p->lex.pcur - begin);
         yyerror0("Invalid escape character syntax");
         token_flush(p);
         return -1;
@@ -8521,7 +8532,7 @@ tokadd_string(struct parser_params *p,
                       case 'C':
                       case 'M': {
                         pushback(p, c);
-                        c = read_escape(p, 0);
+                        c = read_escape(p, 0, p->lex.pcur - 1);
 
                         char *t = tokspace(p, rb_strlen_lit("\\x00"));
                         *t++ = '\\';
@@ -8547,7 +8558,7 @@ tokadd_string(struct parser_params *p,
                 else if (func & STR_FUNC_EXPAND) {
                     pushback(p, c);
                     if (func & STR_FUNC_ESCAPE) tokadd(p, '\\');
-                    c = read_escape(p, 0);
+                    c = read_escape(p, 0, p->lex.pcur - 1);
                 }
                 else if ((func & STR_FUNC_QWORDS) && ISSPACE(c)) {
                     /* ignore backslashed spaces in %w */
@@ -8597,8 +8608,9 @@ tokadd_string(struct parser_params *p,
 #define NEW_STRTERM(func, term, paren) new_strterm(p, func, term, paren)
 
 static void
-flush_string_content(struct parser_params *p, rb_encoding *enc)
+flush_string_content(struct parser_params *p, rb_encoding *enc, size_t back)
 {
+    p->lex.pcur -= back;
     if (has_delayed_token(p)) {
         ptrdiff_t len = p->lex.pcur - p->lex.ptok;
         if (len > 0) {
@@ -8610,6 +8622,7 @@ flush_string_content(struct parser_params *p, rb_encoding *enc)
         p->lex.ptok = p->lex.pcur;
     }
     dispatch_scan_event(p, tSTRING_CONTENT);
+    p->lex.pcur += back;
 }
 
 /* this can be shared with ripper, since it's independent from struct
@@ -8730,14 +8743,14 @@ parse_string(struct parser_params *p, rb_strterm_literal_t *quote)
         if (func & STR_FUNC_QWORDS) {
             quote->func |= STR_FUNC_TERM;
             pushback(p, c); /* dispatch the term at tSTRING_END */
-            add_delayed_token(p, p->lex.ptok, p->lex.pcur, __LINE__);
+            add_delayed_token(p, p->lex.ptok, p->lex.pcur);
             return ' ';
         }
         return parser_string_term(p, func);
     }
     if (space) {
         if (!ISSPACE(c)) pushback(p, c);
-        add_delayed_token(p, p->lex.ptok, p->lex.pcur, __LINE__);
+        add_delayed_token(p, p->lex.ptok, p->lex.pcur);
         return ' ';
     }
     newtok(p);
@@ -8777,7 +8790,7 @@ parse_string(struct parser_params *p, rb_strterm_literal_t *quote)
     tokfix(p);
     lit = STR_NEW3(tok(p), toklen(p), enc, func);
     set_yylval_str(lit);
-    flush_string_content(p, enc);
+    flush_string_content(p, enc, 0);
 
     return tSTRING_CONTENT;
 }
@@ -9246,7 +9259,7 @@ here_document(struct parser_params *p, rb_strterm_heredoc_t *here)
 #ifndef RIPPER
                 if (bol) nd_set_fl_newline(yylval.node);
 #endif
-                flush_string_content(p, enc);
+                flush_string_content(p, enc, 0);
                 return tSTRING_CONTENT;
             }
             tokadd(p, nextc(p));
@@ -10064,7 +10077,7 @@ parse_qmark(struct parser_params *p, int space_seen)
             if (tokadd_mbchar(p, c) == -1) return 0;
         }
         else {
-            c = read_escape(p, 0);
+            c = read_escape(p, 0, p->lex.pcur - rb_strlen_lit("?\\"));
             tokadd(p, c);
         }
     }
@@ -10671,6 +10684,9 @@ parser_yylex(struct parser_params *p)
                 p->lex.nextline = p->lex.lastline;
                 set_lastline(p, prevline);
               case -1:		/* EOF no decrement*/
+                if (c == -1 && space_seen) {
+                    dispatch_scan_event(p, tSP);
+                }
                 lex_goto_eol(p);
                 if (c != -1) {
                     token_flush(p);

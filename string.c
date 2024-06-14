@@ -376,9 +376,8 @@ str_precompute_hash(VALUE str)
     RUBY_ASSERT(free_bytes >= sizeof(st_index_t));
 #endif
 
-    typedef struct {char bytes[sizeof(st_index_t)];} unaligned_index;
-    union {st_index_t i; unaligned_index b;} u = {.i = str_do_hash(str)};
-    *(unaligned_index *)(RSTRING_END(str) + TERM_LEN(str)) = u.b;
+    st_index_t hash = str_do_hash(str);
+    memcpy(RSTRING_END(str) + TERM_LEN(str), &hash, sizeof(hash));
 
     FL_SET(str, STR_PRECOMPUTED_HASH);
 
@@ -3237,14 +3236,14 @@ rb_str_resize(VALUE str, long len)
 
     int independent = str_independent(str);
     long slen = RSTRING_LEN(str);
+    const int termlen = TERM_LEN(str);
 
-    if (slen > len && ENC_CODERANGE(str) != ENC_CODERANGE_7BIT) {
+    if (slen > len || (termlen != 1 && slen < len)) {
         ENC_CODERANGE_CLEAR(str);
     }
 
     {
         long capa;
-        const int termlen = TERM_LEN(str);
         if (STR_EMBED_P(str)) {
             if (len == slen) return str;
             if (str_embed_capa(str) >= len + termlen) {
@@ -3735,8 +3734,8 @@ st_index_t
 rb_str_hash(VALUE str)
 {
     if (FL_TEST_RAW(str, STR_PRECOMPUTED_HASH)) {
-        typedef struct {char bytes[sizeof(st_index_t)];} unaligned_index;
-        st_index_t precomputed_hash = ((union {st_index_t i; unaligned_index b;} *)(RSTRING_END(str) + TERM_LEN(str)))->i;
+        st_index_t precomputed_hash;
+        memcpy(&precomputed_hash, RSTRING_END(str) + TERM_LEN(str), sizeof(precomputed_hash));
 
         RUBY_ASSERT(precomputed_hash == str_do_hash(str));
         return precomputed_hash;
