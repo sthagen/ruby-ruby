@@ -14039,16 +14039,12 @@ reduce_nodes(struct parser_params *p, NODE **body)
      (reduce_nodes(p, &type(node)->n1), body = &type(node)->n2, 1))
 
     while (node) {
-        int newline = (int)(nd_fl_newline(node));
+        int newline = (int)nd_fl_newline(node);
         switch (nd_type(node)) {
           end:
           case NODE_NIL:
             *body = 0;
             return;
-          case NODE_RETURN:
-            *body = node = RNODE_RETURN(node)->nd_stts;
-            if (newline && node) nd_set_fl_newline(node);
-            continue;
           case NODE_BEGIN:
             *body = node = RNODE_BEGIN(node)->nd_body;
             if (newline && node) nd_set_fl_newline(node);
