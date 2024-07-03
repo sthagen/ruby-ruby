@@ -12,6 +12,10 @@
 
 #include <math.h>
 
+#ifdef HAVE_STDATOMIC_H
+  #include <stdatomic.h>
+#endif
+
 #include "constant.h"
 #include "debug_counter.h"
 #include "internal.h"
@@ -415,6 +419,14 @@ vm_push_frame(rb_execution_context_t *ec,
         .jit_return = NULL
     };
 
+    /* Ensure the initialization of `*cfp` above never gets reordered with the update of `ec->cfp` below.
+    This is a no-op in all cases we've looked at (https://godbolt.org/z/3oxd1446K), but should guarantee it for all
+    future/untested compilers/platforms. */
+
+    #ifdef HAVE_DECL_ATOMIC_SIGNAL_FENCE
+    atomic_signal_fence(memory_order_seq_cst);
+    #endif
+
     ec->cfp = cfp;
 
     if (VMDEBUG == 2) {
@@ -428,7 +440,6 @@ rb_vm_pop_frame_no_int(rb_execution_context_t *ec)
 {
     rb_control_frame_t *cfp = ec->cfp;
 
-    if (VM_CHECK_MODE >= 4) rb_gc_verify_internal_consistency();
     if (VMDEBUG == 2)       SDR();
 
     ec->cfp = RUBY_VM_PREVIOUS_CONTROL_FRAME(cfp);
@@ -440,7 +451,6 @@ vm_pop_frame(rb_execution_context_t *ec, rb_control_frame_t *cfp, const VALUE *e
 {
     VALUE flags = ep[VM_ENV_DATA_INDEX_FLAGS];
 
-    if (VM_CHECK_MODE >= 4) rb_gc_verify_internal_consistency();
     if (VMDEBUG == 2)       SDR();
 
     RUBY_VM_CHECK_INTS(ec);

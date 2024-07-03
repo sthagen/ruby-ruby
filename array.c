@@ -149,7 +149,6 @@ should_be_T_ARRAY(VALUE ary)
 #define ARY_SET_CAPA(ary, n) do { \
     RUBY_ASSERT(!ARY_EMBED_P(ary)); \
     RUBY_ASSERT(!ARY_SHARED_P(ary)); \
-    RUBY_ASSERT(!OBJ_FROZEN(ary)); \
     RARRAY(ary)->as.heap.aux.capa = (n); \
 } while (0)
 
@@ -370,7 +369,6 @@ ary_heap_free(VALUE ary)
 static size_t
 ary_heap_realloc(VALUE ary, size_t new_capa)
 {
-    RUBY_ASSERT(!OBJ_FROZEN(ary));
     SIZED_REALLOC_N(RARRAY(ary)->as.heap.ptr, VALUE, new_capa, ARY_HEAP_CAPA(ary));
     ary_verify(ary);
 
@@ -3632,41 +3630,6 @@ rb_ary_sort_by_bang(VALUE ary)
     return ary;
 }
 
-
-/*
- *  call-seq:
- *    array.map {|element| ... } -> new_array
- *    array.map -> new_enumerator
- *
- *  Calls the block, if given, with each element of +self+;
- *  returns a new +Array+ whose elements are the return values from the block:
- *
- *    a = [:foo, 'bar', 2]
- *    a1 = a.map {|element| element.class }
- *    a1 # => [Symbol, String, Integer]
- *
- *  Returns a new Enumerator if no block given:
- *    a = [:foo, 'bar', 2]
- *    a1 = a.map
- *    a1 # => #<Enumerator: [:foo, "bar", 2]:map>
- *
- */
-
-static VALUE
-rb_ary_collect(VALUE ary)
-{
-    long i;
-    VALUE collect;
-
-    RETURN_SIZED_ENUMERATOR(ary, 0, 0, ary_enum_length);
-    collect = rb_ary_new2(RARRAY_LEN(ary));
-    for (i = 0; i < RARRAY_LEN(ary); i++) {
-        rb_ary_push(collect, rb_yield(RARRAY_AREF(ary, i)));
-    }
-    return collect;
-}
-
-
 /*
  *  call-seq:
  *    array.map! {|element| ... } -> self
@@ -3808,42 +3771,6 @@ rb_ary_values_at(int argc, VALUE *argv, VALUE ary)
     return result;
 }
 
-
-/*
- *  call-seq:
- *    array.select {|element| ... } -> new_array
- *    array.select -> new_enumerator
- *
- *  Calls the block, if given, with each element of +self+;
- *  returns a new +Array+ containing those elements of +self+
- *  for which the block returns a truthy value:
- *
- *    a = [:foo, 'bar', 2, :bam]
- *    a1 = a.select {|element| element.to_s.start_with?('b') }
- *    a1 # => ["bar", :bam]
- *
- *  Returns a new Enumerator if no block given:
- *
- *    a = [:foo, 'bar', 2, :bam]
- *    a.select # => #<Enumerator: [:foo, "bar", 2, :bam]:select>
- *
- */
-
-static VALUE
-rb_ary_select(VALUE ary)
-{
-    VALUE result;
-    long i;
-
-    RETURN_SIZED_ENUMERATOR(ary, 0, 0, ary_enum_length);
-    result = rb_ary_new2(RARRAY_LEN(ary));
-    for (i = 0; i < RARRAY_LEN(ary); i++) {
-        if (RTEST(rb_yield(RARRAY_AREF(ary, i)))) {
-            rb_ary_push(result, rb_ary_elt(ary, i));
-        }
-    }
-    return result;
-}
 
 struct select_bang_arg {
     VALUE ary;
@@ -6699,6 +6626,12 @@ ary_sample(rb_execution_context_t *ec, VALUE ary, VALUE randgen, VALUE nv, VALUE
 }
 
 static VALUE
+ary_sized_alloc(rb_execution_context_t *ec, VALUE self)
+{
+    return rb_ary_new2(RARRAY_LEN(self));
+}
+
+static VALUE
 ary_sample0(rb_execution_context_t *ec, VALUE ary)
 {
     return ary_sample(ec, ary, rb_cRandom, Qfalse, Qfalse);
@@ -8700,13 +8633,9 @@ Init_Array(void)
     rb_define_method(rb_cArray, "sort", rb_ary_sort, 0);
     rb_define_method(rb_cArray, "sort!", rb_ary_sort_bang, 0);
     rb_define_method(rb_cArray, "sort_by!", rb_ary_sort_by_bang, 0);
-    rb_define_method(rb_cArray, "collect", rb_ary_collect, 0);
     rb_define_method(rb_cArray, "collect!", rb_ary_collect_bang, 0);
-    rb_define_method(rb_cArray, "map", rb_ary_collect, 0);
     rb_define_method(rb_cArray, "map!", rb_ary_collect_bang, 0);
-    rb_define_method(rb_cArray, "select", rb_ary_select, 0);
     rb_define_method(rb_cArray, "select!", rb_ary_select_bang, 0);
-    rb_define_method(rb_cArray, "filter", rb_ary_select, 0);
     rb_define_method(rb_cArray, "filter!", rb_ary_select_bang, 0);
     rb_define_method(rb_cArray, "keep_if", rb_ary_keep_if, 0);
     rb_define_method(rb_cArray, "values_at", rb_ary_values_at, -1);
