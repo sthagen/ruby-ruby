@@ -748,26 +748,44 @@ typedef struct gc_function_map {
 
 static rb_gc_function_map_t rb_gc_functions;
 
-# define RUBY_GC_LIBRARY_ARG "--gc-library="
+# define RUBY_GC_LIBRARY "RUBY_GC_LIBRARY"
 
-void
-ruby_load_external_gc_from_argv(int argc, char **argv)
+static void
+ruby_external_gc_init(void)
 {
+    // Assert that the directory path ends with a /
+    GC_ASSERT(SHARED_GC_DIR[strlen(SHARED_GC_DIR) - 2] == '/');
+
+    char *gc_so_file = getenv(RUBY_GC_LIBRARY);
+
     char *gc_so_path = NULL;
-
-    for (int i = 0; i < argc; i++) {
-        if (strncmp(argv[i], RUBY_GC_LIBRARY_ARG, sizeof(RUBY_GC_LIBRARY_ARG) - 1) == 0) {
-            gc_so_path = argv[i] + sizeof(RUBY_GC_LIBRARY_ARG) - 1;
-        }
-    }
-
     void *handle = NULL;
-    if (gc_so_path && dln_supported_p()) {
+    if (gc_so_file && dln_supported_p()) {
+        /* Check to make sure that gc_so_file matches /[\w-_.]+/ so that it does
+         * not load a shared object outside of the directory. */
+        for (size_t i = 0; i < strlen(gc_so_file); i++) {
+            char c = gc_so_file[i];
+            if (isalnum(c)) continue;
+            switch (c) {
+              case '-':
+              case '_':
+              case '.':
+                break;
+              default:
+                rb_bug("Only alphanumeric, dash, underscore, and period is allowed in "RUBY_GC_LIBRARY"");
+            }
+        }
+
+        gc_so_path = alloca(strlen(SHARED_GC_DIR) + strlen(gc_so_file) + 1);
+        strcpy(gc_so_path, SHARED_GC_DIR);
+        strcpy(gc_so_path + strlen(SHARED_GC_DIR), gc_so_file);
+        gc_so_path[strlen(SHARED_GC_DIR) + strlen(gc_so_file)] = '\0';
+
         char error[1024];
         handle = dln_open(gc_so_path, error, sizeof(error));
         if (!handle) {
             fprintf(stderr, "%s", error);
-            rb_bug("ruby_load_external_gc_from_argv: Shared library %s cannot be opened", gc_so_path);
+            rb_bug("ruby_external_gc_init: Shared library %s cannot be opened", gc_so_path);
         }
     }
 
@@ -775,7 +793,7 @@ ruby_load_external_gc_from_argv(int argc, char **argv)
     if (handle) { \
         rb_gc_functions.name = dln_symbol(handle, "rb_gc_impl_" #name); \
         if (!rb_gc_functions.name) { \
-            rb_bug("ruby_load_external_gc_from_argv: " #name " func not exported by library %s", gc_so_path); \
+            rb_bug("ruby_external_gc_init: " #name " func not exported by library %s", gc_so_path); \
         } \
     } \
     else { \
@@ -938,6 +956,10 @@ ruby_load_external_gc_from_argv(int argc, char **argv)
 void *
 rb_objspace_alloc(void)
 {
+#if USE_SHARED_GC
+    ruby_external_gc_init();
+#endif
+
     void *objspace = rb_gc_impl_objspace_alloc();
     ruby_current_vm_ptr->objspace = objspace;
 
@@ -4627,6 +4649,12 @@ rb_obj_info_dump_loc(VALUE obj, const char *file, int line, const char *func)
 void
 Init_GC(void)
 {
+#if USE_SHARED_GC
+    if (getenv(RUBY_GC_LIBRARY) != NULL && !dln_supported_p()) {
+        rb_warn(RUBY_GC_LIBRARY " is ignored because this executable file can't load extension libraries");
+    }
+#endif
+
 #undef rb_intern
     malloc_offset = gc_compute_malloc_offset();
 
