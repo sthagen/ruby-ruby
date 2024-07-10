@@ -679,7 +679,8 @@ struct rvalue_overhead {
         VALUE value; \
     }; \
 }))
-# define GET_RVALUE_OVERHEAD(obj) ((struct rvalue_overhead *)((uintptr_t)obj + rb_gc_obj_slot_size(obj)))
+size_t rb_gc_impl_obj_slot_size(VALUE obj);
+# define GET_RVALUE_OVERHEAD(obj) ((struct rvalue_overhead *)((uintptr_t)obj + rb_gc_impl_obj_slot_size(obj)))
 #else
 # define RVALUE_OVERHEAD 0
 #endif
@@ -2336,6 +2337,24 @@ newobj_fill(VALUE obj, VALUE v1, VALUE v2, VALUE v3)
     return obj;
 }
 
+#if GC_DEBUG
+static inline const char*
+rb_gc_impl_source_location_cstr(int *ptr)
+{
+    /* We could directly refer `rb_source_location_cstr()` before, but not any
+     * longer.  We have to heavy lift using our debugging API. */
+    if (! ptr) {
+        return NULL;
+    }
+    else if (! (*ptr = rb_sourceline())) {
+        return NULL;
+    }
+    else {
+        return rb_sourcefile();
+    }
+}
+#endif
+
 static inline VALUE
 newobj_init(VALUE klass, VALUE flags, int wb_protected, rb_objspace_t *objspace, VALUE obj)
 {
@@ -2393,7 +2412,7 @@ newobj_init(VALUE klass, VALUE flags, int wb_protected, rb_objspace_t *objspace,
 #endif
 
 #if GC_DEBUG
-    GET_RVALUE_OVERHEAD(obj)->file = rb_source_location_cstr(&GET_RVALUE_OVERHEAD(obj)->line);
+    GET_RVALUE_OVERHEAD(obj)->file = rb_gc_impl_source_location_cstr(&GET_RVALUE_OVERHEAD(obj)->line);
     GC_ASSERT(!SPECIAL_CONST_P(obj)); /* check alignment */
 #endif
 
