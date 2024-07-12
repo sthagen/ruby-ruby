@@ -82,6 +82,7 @@
 #include "darray.h"
 #include "debug_counter.h"
 #include "eval_intern.h"
+#include "gc/gc_impl.h"
 #include "id_table.h"
 #include "internal.h"
 #include "internal/class.h"
@@ -353,81 +354,6 @@ rb_gc_rebuild_shape(VALUE obj, size_t size_pool_id)
 }
 RUBY_SYMBOL_EXPORT_END
 
-/* Headers from gc_impl.c */
-// Bootup
-void *rb_gc_impl_objspace_alloc(void);
-void rb_gc_impl_objspace_init(void *objspace_ptr);
-void rb_gc_impl_objspace_free(void *objspace_ptr);
-void *rb_gc_impl_ractor_cache_alloc(void *objspace_ptr);
-void rb_gc_impl_ractor_cache_free(void *objspace_ptr, void *cache);
-void rb_gc_impl_set_params(void *objspace_ptr);
-void rb_gc_impl_init(void);
-void rb_gc_impl_initial_stress_set(VALUE flag);
-size_t *rb_gc_impl_size_pool_sizes(void *objspace_ptr);
-// Shutdown
-void rb_gc_impl_shutdown_free_objects(void *objspace_ptr);
-// GC
-void rb_gc_impl_start(void *objspace_ptr, bool full_mark, bool immediate_mark, bool immediate_sweep, bool compact);
-bool rb_gc_impl_during_gc_p(void *objspace_ptr);
-void rb_gc_impl_prepare_heap(void *objspace_ptr);
-void rb_gc_impl_gc_enable(void *objspace_ptr);
-void rb_gc_impl_gc_disable(void *objspace_ptr, bool finish_current_gc);
-bool rb_gc_impl_gc_enabled_p(void *objspace_ptr);
-void rb_gc_impl_stress_set(void *objspace_ptr, VALUE flag);
-VALUE rb_gc_impl_stress_get(void *objspace_ptr);
-// Object allocation
-VALUE rb_gc_impl_new_obj(void *objspace_ptr, void *cache_ptr, VALUE klass, VALUE flags, VALUE v1, VALUE v2, VALUE v3, bool wb_protected, size_t alloc_size);
-size_t rb_gc_impl_obj_slot_size(VALUE obj);
-size_t rb_gc_impl_size_pool_id_for_size(void *objspace_ptr, size_t size);
-bool rb_gc_impl_size_allocatable_p(size_t size);
-// Malloc
-void *rb_gc_impl_malloc(void *objspace_ptr, size_t size);
-void *rb_gc_impl_calloc(void *objspace_ptr, size_t size);
-void *rb_gc_impl_realloc(void *objspace_ptr, void *ptr, size_t new_size, size_t old_size);
-void rb_gc_impl_free(void *objspace_ptr, void *ptr, size_t old_size);
-void rb_gc_impl_adjust_memory_usage(void *objspace_ptr, ssize_t diff);
-// Marking
-void rb_gc_impl_mark(void *objspace_ptr, VALUE obj);
-void rb_gc_impl_mark_and_move(void *objspace_ptr, VALUE *ptr);
-void rb_gc_impl_mark_and_pin(void *objspace_ptr, VALUE obj);
-void rb_gc_impl_mark_maybe(void *objspace_ptr, VALUE obj);
-void rb_gc_impl_mark_weak(void *objspace_ptr, VALUE *ptr);
-void rb_gc_impl_remove_weak(void *objspace_ptr, VALUE parent_obj, VALUE *ptr);
-void rb_gc_impl_objspace_mark(void *objspace_ptr);
-// Compaction
-bool rb_gc_impl_object_moved_p(void *objspace_ptr, VALUE obj);
-VALUE rb_gc_impl_location(void *objspace_ptr, VALUE value);
-// Write barriers
-void rb_gc_impl_writebarrier(void *objspace_ptr, VALUE a, VALUE b);
-void rb_gc_impl_writebarrier_unprotect(void *objspace_ptr, VALUE obj);
-void rb_gc_impl_writebarrier_remember(void *objspace_ptr, VALUE obj);
-// Heap walking
-void rb_gc_impl_each_objects(void *objspace_ptr, int (*callback)(void *, void *, size_t, void *), void *data);
-void rb_gc_impl_each_object(void *objspace_ptr, void (*func)(VALUE obj, void *data), void *data);
-// Finalizers
-void rb_gc_impl_make_zombie(void *objspace_ptr, VALUE obj, void (*dfree)(void *), void *data);
-VALUE rb_gc_impl_define_finalizer(void *objspace_ptr, VALUE obj, VALUE block);
-VALUE rb_gc_impl_undefine_finalizer(void *objspace_ptr, VALUE obj);
-void rb_gc_impl_copy_finalizer(void *objspace_ptr, VALUE dest, VALUE obj);
-void rb_gc_impl_shutdown_call_finalizer(void *objspace_ptr);
-// Object ID
-VALUE rb_gc_impl_object_id(void *objspace_ptr, VALUE obj);
-VALUE rb_gc_impl_object_id_to_ref(void *objspace_ptr, VALUE object_id);
-// Statistics
-VALUE rb_gc_impl_set_measure_total_time(void *objspace_ptr, VALUE flag);
-VALUE rb_gc_impl_get_measure_total_time(void *objspace_ptr);
-VALUE rb_gc_impl_get_profile_total_time(void *objspace_ptr);
-size_t rb_gc_impl_gc_count(void *objspace_ptr);
-VALUE rb_gc_impl_latest_gc_info(void *objspace_ptr, VALUE key);
-size_t rb_gc_impl_stat(void *objspace_ptr, VALUE hash_or_sym);
-size_t rb_gc_impl_stat_heap(void *objspace_ptr, VALUE heap_name, VALUE hash_or_sym);
-// Miscellaneous
-size_t rb_gc_impl_obj_flags(void *objspace_ptr, VALUE obj, ID* flags, size_t max);
-bool rb_gc_impl_pointer_to_heap_p(void *objspace_ptr, const void *ptr);
-bool rb_gc_impl_garbage_object_p(void *objspace_ptr, VALUE obj);
-void rb_gc_impl_set_event_hook(void *objspace_ptr, const rb_event_flag_t event);
-void rb_gc_impl_copy_attributes(void *objspace_ptr, VALUE dest, VALUE obj);
-
 void rb_vm_update_references(void *ptr);
 
 #define rb_setjmp(env) RUBY_SETJMP(env)
@@ -692,6 +618,8 @@ typedef struct gc_function_map {
     void (*gc_enable)(void *objspace_ptr);
     void (*gc_disable)(void *objspace_ptr, bool finish_current_gc);
     bool (*gc_enabled_p)(void *objspace_ptr);
+    VALUE (*config_get)(void *objpace_ptr);
+    VALUE (*config_set)(void *objspace_ptr, VALUE hash);
     void (*stress_set)(void *objspace_ptr, VALUE flag);
     VALUE (*stress_get)(void *objspace_ptr);
     // Object allocation
@@ -821,6 +749,8 @@ ruby_external_gc_init(void)
     load_external_gc_func(gc_enable);
     load_external_gc_func(gc_disable);
     load_external_gc_func(gc_enabled_p);
+    load_external_gc_func(config_set);
+    load_external_gc_func(config_get);
     load_external_gc_func(stress_set);
     load_external_gc_func(stress_get);
     // Object allocation
@@ -898,6 +828,8 @@ ruby_external_gc_init(void)
 # define rb_gc_impl_gc_enable rb_gc_functions.gc_enable
 # define rb_gc_impl_gc_disable rb_gc_functions.gc_disable
 # define rb_gc_impl_gc_enabled_p rb_gc_functions.gc_enabled_p
+# define rb_gc_impl_config_get rb_gc_functions.config_get
+# define rb_gc_impl_config_set rb_gc_functions.config_set
 # define rb_gc_impl_stress_set rb_gc_functions.stress_set
 # define rb_gc_impl_stress_get rb_gc_functions.stress_get
 // Object allocation
@@ -3639,6 +3571,18 @@ gc_stat_heap(rb_execution_context_t *ec, VALUE self, VALUE heap_name, VALUE arg)
     else {
         return arg;
     }
+}
+
+static VALUE
+gc_config_get(rb_execution_context_t *ec, VALUE self)
+{
+    return rb_gc_impl_config_get(rb_gc_get_objspace());
+}
+
+static VALUE
+gc_config_set(rb_execution_context_t *ec, VALUE self, VALUE hash)
+{
+    return rb_gc_impl_config_set(rb_gc_get_objspace(), hash);
 }
 
 static VALUE

@@ -25,6 +25,12 @@ Note that each entry is kept to a minimum, see links for details.
 * Keyword arguments are no longer allowed in index assignment
   (e.g. `a[0, kw: 1] = 2`).  [[Bug #20218]]
 
+* `GC.config` added to allow setting configuration variables on the Garbage
+  Collector. [[Feature #20443]]
+
+* GC configuration parameter `rgengc_allow_full_mark` introduced. When `false`
+  GC will only mark young objects. Default is `true`. [[Feature #20443]]
+
 ## Core classes updates
 
 Note: We're only listing outstanding class updates.
@@ -152,4 +158,5 @@ See GitHub releases like [GitHub Releases of Logger](https://github.com/ruby/log
 [Bug #20218]:     https://bugs.ruby-lang.org/issues/20218
 [Feature #20265]: https://bugs.ruby-lang.org/issues/20265
 [Feature #20429]: https://bugs.ruby-lang.org/issues/20429
+[Feature #20443]: https://bugs.ruby-lang.org/issues/20443
 [Feature #20497]: https://bugs.ruby-lang.org/issues/20497
