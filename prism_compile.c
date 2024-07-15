@@ -1325,7 +1325,7 @@ pm_compile_call_and_or_write_node(rb_iseq_t *iseq, bool and_node, const pm_node_
  * contents of the hash are not popped.
  */
 static void
-pm_compile_hash_elements(rb_iseq_t *iseq, const pm_node_t *node, const pm_node_list_t *elements, LINK_ANCHOR *const ret, pm_scope_node_t *scope_node)
+pm_compile_hash_elements(rb_iseq_t *iseq, const pm_node_t *node, const pm_node_list_t *elements, bool argument, LINK_ANCHOR *const ret, pm_scope_node_t *scope_node)
 {
     const pm_node_location_t location = PM_NODE_START_LOCATION(scope_node->parser, node);
 
@@ -1333,66 +1333,163 @@ pm_compile_hash_elements(rb_iseq_t *iseq, const pm_node_t *node, const pm_node_l
     // stack. Neighboring plain assoc nodes should be grouped together (either
     // by newhash or hash merge). Double splat nodes should be merged using the
     // merge_kwd method call.
-    int assoc_length = 0;
-    bool made_hash = false;
+    const int max_stack_length = 0x100;
+    const int min_tmp_hash_length = 0x800;
+
+    int stack_length = 0;
+    bool first_chunk = true;
+
+    // This is an optimization wherein we keep track of whether or not the
+    // previous element was a static literal. If it was, then we do not attempt
+    // to check if we have a subhash that can be optimized. If it was not, then
+    // we do check.
+    bool static_literal = false;
+
+    DECL_ANCHOR(anchor);
+    INIT_ANCHOR(anchor);
+
+    // Convert pushed elements to a hash, and merge if needed.
+#define FLUSH_CHUNK                                                                         \
+    if (stack_length) {                                                                     \
+        if (first_chunk) {                                                                  \
+            PUSH_SEQ(ret, anchor);                                                          \
+            PUSH_INSN1(ret, location, newhash, INT2FIX(stack_length));                      \
+            first_chunk = false;                                                            \
+        }                                                                                   \
+        else {                                                                              \
+            PUSH_INSN1(ret, location, putspecialobject, INT2FIX(VM_SPECIAL_OBJECT_VMCORE)); \
+            PUSH_INSN(ret, location, swap);                                                 \
+            PUSH_SEQ(ret, anchor);                                                          \
+            PUSH_SEND(ret, location, id_core_hash_merge_ptr, INT2FIX(stack_length + 1));    \
+        }                                                                                   \
+        INIT_ANCHOR(anchor);                                                                \
+        stack_length = 0;                                                                   \
+    }
 
     for (size_t index = 0; index < elements->size; index++) {
         const pm_node_t *element = elements->nodes[index];
 
         switch (PM_NODE_TYPE(element)) {
           case PM_ASSOC_NODE: {
+            // Pre-allocation check (this branch can be omitted).
+            if (PM_NODE_FLAG_P(element, PM_NODE_FLAG_STATIC_LITERAL) && !static_literal && ((index + min_tmp_hash_length) < elements->size)) {
+                // Count the elements that are statically-known.
+                size_t count = 1;
+                while (index + count < elements->size && PM_NODE_FLAG_P(elements->nodes[index + count], PM_NODE_FLAG_STATIC_LITERAL)) count++;
+
+                if (count >= min_tmp_hash_length) {
+                    // The subsequence of elements in this hash is long enough
+                    // to merit its own hash.
+                    VALUE ary = rb_ary_hidden_new(count);
+
+                    // Create a hidden hash.
+                    for (size_t tmp_end = index + count; index < tmp_end; index++) {
+                        const pm_assoc_node_t *assoc = (const pm_assoc_node_t *) elements->nodes[index];
+
+                        VALUE elem[2] = {
+                            pm_static_literal_value(iseq, assoc->key, scope_node),
+                            pm_static_literal_value(iseq, assoc->value, scope_node)
+                        };
+
+                        rb_ary_cat(ary, elem, 2);
+                    }
+
+                    VALUE hash = rb_hash_new_with_size(RARRAY_LEN(ary) / 2);
+                    rb_hash_bulk_insert(RARRAY_LEN(ary), RARRAY_CONST_PTR(ary), hash);
+                    hash = rb_obj_hide(hash);
+                    OBJ_FREEZE(hash);
+
+                    // Emit optimized code.
+                    FLUSH_CHUNK;
+                    if (first_chunk) {
+                        PUSH_INSN1(ret, location, duphash, hash);
+                        first_chunk = false;
+                    }
+                    else {
+                        PUSH_INSN1(ret, location, putspecialobject, INT2FIX(VM_SPECIAL_OBJECT_VMCORE));
+                        PUSH_INSN(ret, location, swap);
+                        PUSH_INSN1(ret, location, putobject, hash);
+                        PUSH_SEND(ret, location, id_core_hash_merge_kwd, INT2FIX(2));
+                    }
+
+                    break;
+                }
+                else {
+                    static_literal = true;
+                }
+            }
+            else {
+                static_literal = false;
+            }
+
             // If this is a plain assoc node, then we can compile it directly
-            // and then add to the number of assoc nodes we've seen so far.
-            PM_COMPILE_NOT_POPPED(element);
-            assoc_length++;
+            // and then add the total number of values on the stack.
+            pm_compile_node(iseq, element, anchor, false, scope_node);
+            if ((stack_length += 2) >= max_stack_length) FLUSH_CHUNK;
             break;
           }
           case PM_ASSOC_SPLAT_NODE: {
-            // If we are at a splat and we have already compiled some elements
-            // of the hash, then we need to either create the first hash or
-            // merge the current elements into the existing hash.
-            if (assoc_length > 0) {
-                if (!made_hash) {
-                    PUSH_INSN1(ret, location, newhash, INT2FIX(assoc_length * 2));
-                    PUSH_INSN1(ret, location, putspecialobject, INT2FIX(VM_SPECIAL_OBJECT_VMCORE));
-                    PUSH_INSN(ret, location, swap);
-                    made_hash = true;
+            FLUSH_CHUNK;
+
+            const pm_assoc_splat_node_t *assoc_splat = (const pm_assoc_splat_node_t *) element;
+            bool empty_hash = assoc_splat->value != NULL && (
+                (PM_NODE_TYPE_P(assoc_splat->value, PM_HASH_NODE) && ((const pm_hash_node_t *) assoc_splat->value)->elements.size == 0) ||
+                PM_NODE_TYPE_P(assoc_splat->value, PM_NIL_NODE)
+            );
+
+            bool first_element = first_chunk && stack_length == 0;
+            bool last_element = index == elements->size - 1;
+            bool only_element = first_element && last_element;
+
+            if (empty_hash) {
+                if (only_element && argument) {
+                    // **{} appears at the only keyword argument in method call,
+                    // so it won't be modified.
+                    //
+                    // This is only done for method calls and not for literal
+                    // hashes, because literal hashes should always result in a
+                    // new hash.
+                    PUSH_INSN1(ret, location, putobject, rb_hash_new());
+                }
+                else if (first_element) {
+                    // **{} appears as the first keyword argument, so it may be
+                    // modified. We need to create a fresh hash object.
+                    PUSH_INSN1(ret, location, newhash, INT2FIX(0));
+                }
+                // Any empty keyword splats that are not the first can be
+                // ignored since merging an empty hash into the existing hash is
+                // the same as not merging it.
+            }
+            else {
+                if (only_element && argument) {
+                    // ** is only keyword argument in the method call. Use it
+                    // directly. This will be not be flagged as mutable. This is
+                    // only done for method calls and not for literal hashes,
+                    // because literal hashes should always result in a new
+                    // hash.
+                    PM_COMPILE_NOT_POPPED(element);
                 }
                 else {
-                    // Here we are merging plain assoc nodes into the hash on
-                    // the stack.
-                    PUSH_SEND(ret, location, id_core_hash_merge_ptr, INT2FIX(assoc_length * 2 + 1));
-
-                    // Since we already have a hash on the stack, we need to set
-                    // up the method call for the next merge that will occur.
+                    // There is more than one keyword argument, or this is not a
+                    // method call. In that case, we need to add an empty hash
+                    // (if first keyword), or merge the hash to the accumulated
+                    // hash (if not the first keyword).
                     PUSH_INSN1(ret, location, putspecialobject, INT2FIX(VM_SPECIAL_OBJECT_VMCORE));
-                    PUSH_INSN(ret, location, swap);
+
+                    if (first_element) {
+                        PUSH_INSN1(ret, location, newhash, INT2FIX(0));
+                    }
+                    else {
+                        PUSH_INSN(ret, location, swap);
+                    }
+
+                    PM_COMPILE_NOT_POPPED(element);
+                    PUSH_SEND(ret, location, id_core_hash_merge_kwd, INT2FIX(2));
                 }
-
-                assoc_length = 0;
             }
 
-            // If this is the first time we've seen a splat, then we need to
-            // create a hash that we can merge into.
-            if (!made_hash) {
-                PUSH_INSN1(ret, location, putspecialobject, INT2FIX(VM_SPECIAL_OBJECT_VMCORE));
-                PUSH_INSN1(ret, location, newhash, INT2FIX(0));
-                made_hash = true;
-            }
-
-            // Now compile the splat node itself and merge it into the hash.
-            PM_COMPILE_NOT_POPPED(element);
-            PUSH_SEND(ret, location, id_core_hash_merge_kwd, INT2FIX(2));
-
-            // We know that any subsequent elements will need to be merged in
-            // using one of the special core methods. So here we will put the
-            // receiver of the merge and then swap it with the hash that is
-            // going to be the first argument.
-            if (index != elements->size - 1) {
-                PUSH_INSN1(ret, location, putspecialobject, INT2FIX(VM_SPECIAL_OBJECT_VMCORE));
-                PUSH_INSN(ret, location, swap);
-            }
-
+            first_chunk = false;
+            static_literal = false;
             break;
           }
           default:
@@ -1401,17 +1498,8 @@ pm_compile_hash_elements(rb_iseq_t *iseq, const pm_node_t *node, const pm_node_l
         }
     }
 
-    if (!made_hash) {
-        // If we haven't already made the hash, then this means we only saw
-        // plain assoc nodes. In this case, we can just create the hash
-        // directly.
-        PUSH_INSN1(ret, location, newhash, INT2FIX(assoc_length * 2));
-    }
-    else if (assoc_length > 0) {
-        // If we have already made the hash, then we need to merge the remaining
-        // assoc nodes into the hash on the stack.
-        PUSH_SEND(ret, location, id_core_hash_merge_ptr, INT2FIX(assoc_length * 2 + 1));
-    }
+    FLUSH_CHUNK;
+#undef FLUSH_CHUNK
 }
 
 // This is details. Users should call pm_setup_args() instead.
@@ -1448,7 +1536,7 @@ pm_setup_args_core(const pm_arguments_node_t *arguments_node, const pm_node_t *b
                 if (has_keyword_splat || has_splat) {
                     *flags |= VM_CALL_KW_SPLAT;
                     has_keyword_splat = true;
-                    pm_compile_hash_elements(iseq, argument, elements, ret, scope_node);
+                    pm_compile_hash_elements(iseq, argument, elements, true, ret, scope_node);
                 }
                 else {
                     // We need to first figure out if all elements of the
@@ -5561,29 +5649,34 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
             // We treat all sequences of non-splat elements as their
             // own arrays, followed by a newarray, and then continually
             // concat the arrays with the SplatNode nodes.
-            int new_array_size = 0;
+            const int max_new_array_size = 0x100;
+            const int min_tmp_array_size = 0x40;
 
-            bool need_to_concat_array = false;
-            bool has_kw_splat = false;
+            int new_array_size = 0;
+            bool first_chunk = true;
+
+            // This is an optimization wherein we keep track of whether or not
+            // the previous element was a static literal. If it was, then we do
+            // not attempt to check if we have a subarray that can be optimized.
+            // If it was not, then we do check.
+            bool static_literal = false;
+
+            // Either create a new array, or push to the existing array.
+#define FLUSH_CHUNK \
+            if (new_array_size) {                                                              \
+                if (first_chunk) PUSH_INSN1(ret, location, newarray, INT2FIX(new_array_size)); \
+                else PUSH_INSN1(ret, location, pushtoarray, INT2FIX(new_array_size));          \
+                first_chunk = false;                                                           \
+                new_array_size = 0;                                                            \
+            }
 
             for (size_t index = 0; index < elements->size; index++) {
                 const pm_node_t *element = elements->nodes[index];
 
                 if (PM_NODE_TYPE_P(element, PM_SPLAT_NODE)) {
+                    FLUSH_CHUNK;
+
                     const pm_splat_node_t *splat_element = (const pm_splat_node_t *) element;
-
-                    // If we already have non-splat elements, we need to emit a
-                    // newarray instruction.
-                    if (new_array_size > 0) {
-                        PUSH_INSN1(ret, location, newarray, INT2FIX(new_array_size));
-                        new_array_size = 0;
-
-                        // We don't want to emit a concat array in the case
-                        // where we're seeing our first splat, and already have
-                        // elements.
-                        if (need_to_concat_array) PUSH_INSN(ret, location, concatarray);
-                    }
-
                     if (splat_element->expression) {
                         PM_COMPILE_NOT_POPPED(splat_element->expression);
                     }
@@ -5592,43 +5685,96 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
                         PUSH_GETLOCAL(ret, location, index.index, index.level);
                     }
 
-                    if (index > 0) {
-                        PUSH_INSN(ret, location, concatarray);
-                    }
-                    else {
+                    if (first_chunk) {
                         // If this is the first element of the array then we
                         // need to splatarray the elements into the list.
                         PUSH_INSN1(ret, location, splatarray, Qtrue);
+                        first_chunk = false;
+                    }
+                    else {
+                        PUSH_INSN(ret, location, concattoarray);
                     }
 
-                    // Since we have now seen a splat and are concat-ing arrays,
-                    // all subsequent splats will need to concat as well.
-                    need_to_concat_array = true;
+                    static_literal = false;
                 }
                 else if (PM_NODE_TYPE_P(element, PM_KEYWORD_HASH_NODE)) {
-                    new_array_size++;
-                    has_kw_splat = true;
-                    pm_compile_hash_elements(iseq, element, &((const pm_keyword_hash_node_t *) element)->elements, ret, scope_node);
+                    if (new_array_size == 0 && first_chunk) {
+                        PUSH_INSN1(ret, location, newarray, INT2FIX(0));
+                        first_chunk = false;
+                    }
+                    else {
+                        FLUSH_CHUNK;
+                    }
+
+                    // If we get here, then this is the last element of the
+                    // array/arguments, because it cannot be followed by
+                    // anything else without a syntax error. This looks like:
+                    //
+                    //     [foo, bar, baz: qux]
+                    //                ^^^^^^^^
+                    //
+                    //     [foo, bar, **baz]
+                    //                ^^^^^
+                    //
+                    const pm_keyword_hash_node_t *keyword_hash = (const pm_keyword_hash_node_t *) element;
+                    pm_compile_hash_elements(iseq, element, &keyword_hash->elements, false, ret, scope_node);
+
+                    // This boolean controls the manner in which we push the
+                    // hash onto the array. If it's all keyword splats, then we
+                    // can use the very specialized pushtoarraykwsplat
+                    // instruction to check if it's empty before we push it.
+                    size_t splats = 0;
+                    while (splats < keyword_hash->elements.size && PM_NODE_TYPE_P(keyword_hash->elements.nodes[splats], PM_ASSOC_SPLAT_NODE)) splats++;
+
+                    if (keyword_hash->elements.size == splats) {
+                        PUSH_INSN(ret, location, pushtoarraykwsplat);
+                    }
+                    else {
+                        new_array_size++;
+                    }
                 }
-                else {
-                    new_array_size++;
+                else if (PM_NODE_FLAG_P(element, PM_NODE_FLAG_STATIC_LITERAL) && !static_literal && ((index + min_tmp_array_size) < elements->size)) {
+                    // If we have a static literal, then there's the potential
+                    // to group a bunch of them together with a literal array
+                    // and then concat them together.
+                    size_t right_index = index + 1;
+                    while (right_index < elements->size && PM_NODE_FLAG_P(elements->nodes[right_index], PM_NODE_FLAG_STATIC_LITERAL)) right_index++;
+
+                    size_t tmp_array_size = right_index - index;
+                    if (tmp_array_size >= min_tmp_array_size) {
+                        VALUE tmp_array = rb_ary_hidden_new(tmp_array_size);
+
+                        // Create the temporary array.
+                        for (; tmp_array_size; tmp_array_size--)
+                            rb_ary_push(tmp_array, pm_static_literal_value(iseq, elements->nodes[index++], scope_node));
+                        OBJ_FREEZE(tmp_array);
+
+                        // Emit the optimized code.
+                        FLUSH_CHUNK;
+                        if (first_chunk) {
+                            PUSH_INSN1(ret, location, duparray, tmp_array);
+                            first_chunk = false;
+                        }
+                        else {
+                            PUSH_INSN1(ret, location, putobject, tmp_array);
+                            PUSH_INSN(ret, location, concattoarray);
+                        }
+                    }
+                    else {
+                        static_literal = true;
+                    }
+                } else {
                     PM_COMPILE_NOT_POPPED(element);
+                    if (++new_array_size >= max_new_array_size) FLUSH_CHUNK;
+                    static_literal = false;
                 }
             }
 
-            if (new_array_size) {
-                if (has_kw_splat) {
-                    PUSH_INSN1(ret, location, newarraykwsplat, INT2FIX(new_array_size));
-                }
-                else {
-                    PUSH_INSN1(ret, location, newarray, INT2FIX(new_array_size));
-                }
-
-                if (need_to_concat_array) PUSH_INSN(ret, location, concatarray);
-            }
-
+            FLUSH_CHUNK;
             if (popped) PUSH_INSN(ret, location, pop);
         }
+
+#undef FLUSH_CHUNK
         return;
       }
       case PM_ASSOC_NODE: {
@@ -7025,7 +7171,7 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
                 }
             }
             else {
-                pm_compile_hash_elements(iseq, node, elements, ret, scope_node);
+                pm_compile_hash_elements(iseq, node, elements, false, ret, scope_node);
             }
         }
 
