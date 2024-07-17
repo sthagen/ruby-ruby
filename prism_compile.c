@@ -989,7 +989,26 @@ again:
         break;
       }
       default: {
-        pm_compile_node(iseq, cond, ret, false, scope_node);
+        DECL_ANCHOR(cond_seq);
+        INIT_ANCHOR(cond_seq);
+        pm_compile_node(iseq, cond, cond_seq, false, scope_node);
+
+        if (LIST_INSN_SIZE_ONE(cond_seq)) {
+            INSN *insn = (INSN *)ELEM_FIRST_INSN(FIRST_ELEMENT(cond_seq));
+            if (insn->insn_id == BIN(putobject)) {
+                if (RTEST(insn->operands[0])) {
+                    ADD_INSNL(ret, cond, jump, then_label);
+                    // maybe unreachable
+                    return;
+                }
+                else {
+                    ADD_INSNL(ret, cond, jump, else_label);
+                    return;
+                }
+            }
+        }
+
+        PUSH_SEQ(ret, cond_seq);
         break;
       }
     }
@@ -1114,7 +1133,6 @@ pm_compile_loop(rb_iseq_t *iseq, const pm_node_location_t *node_location, pm_nod
     LABEL *prev_end_label = ISEQ_COMPILE_DATA(iseq)->end_label;
     LABEL *prev_redo_label = ISEQ_COMPILE_DATA(iseq)->redo_label;
 
-    // TODO: Deal with ensures in here
     LABEL *next_label = ISEQ_COMPILE_DATA(iseq)->start_label = NEW_LABEL(location.line); /* next  */
     LABEL *redo_label = ISEQ_COMPILE_DATA(iseq)->redo_label = NEW_LABEL(location.line);  /* redo  */
     LABEL *break_label = ISEQ_COMPILE_DATA(iseq)->end_label = NEW_LABEL(location.line);  /* break */
@@ -1123,6 +1141,12 @@ pm_compile_loop(rb_iseq_t *iseq, const pm_node_location_t *node_location, pm_nod
 
     LABEL *next_catch_label = NEW_LABEL(location.line);
     LABEL *tmp_label = NULL;
+
+    // We're pushing onto the ensure stack because breaks need to break out of
+    // this loop and not break into the ensure statements within the same
+    // lexical scope.
+    struct iseq_compile_data_ensure_node_stack enl;
+    push_ensure_entry(iseq, &enl, NULL, NULL);
 
     // begin; end while true
     if (flags & PM_LOOP_FLAGS_BEGIN_MODIFIER) {
@@ -1176,6 +1200,8 @@ pm_compile_loop(rb_iseq_t *iseq, const pm_node_location_t *node_location, pm_nod
     ISEQ_COMPILE_DATA(iseq)->start_label = prev_start_label;
     ISEQ_COMPILE_DATA(iseq)->end_label = prev_end_label;
     ISEQ_COMPILE_DATA(iseq)->redo_label = prev_redo_label;
+    ISEQ_COMPILE_DATA(iseq)->ensure_node_stack = ISEQ_COMPILE_DATA(iseq)->ensure_node_stack->prev;
+
     return;
 }
 
