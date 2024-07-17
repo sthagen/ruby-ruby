@@ -1629,7 +1629,7 @@ object_id_hash(st_data_t n)
     return FIX2LONG(rb_hash((VALUE)n));
 }
 
-#define OBJ_ID_INCREMENT (BASE_SLOT_SIZE)
+#define OBJ_ID_INCREMENT (RUBY_IMMEDIATE_MASK + 1)
 #define OBJ_ID_INITIAL (OBJ_ID_INCREMENT)
 
 static const struct st_hash_type object_id_hash_type = {
@@ -1691,11 +1691,8 @@ rb_gc_impl_object_id(void *objspace_ptr, VALUE obj)
         id = ULL2NUM(objspace->next_object_id);
         objspace->next_object_id += OBJ_ID_INCREMENT;
 
-        bool prev_enabled = rb_gc_impl_gc_enabled_p(objspace);
-        rb_gc_impl_gc_disable(objspace, false);
         st_insert(objspace->obj_to_id_tbl, (st_data_t)obj, (st_data_t)id);
         st_insert(objspace->id_to_obj_tbl, (st_data_t)id, (st_data_t)obj);
-        if (prev_enabled) rb_gc_impl_gc_enable(objspace);
         FL_SET(obj, FL_SEEN_OBJ_ID);
     }
     rb_gc_vm_unlock(lev);
@@ -5746,7 +5743,6 @@ gc_compact_move(rb_objspace_t *objspace, rb_heap_t *heap, rb_size_pool_t *size_p
             new_shape = rb_gc_rebuild_shape(src, dest_pool - size_pools);
 
             if (new_shape == 0) {
-                dest_pool = size_pool;
                 dheap = heap;
             }
         }
