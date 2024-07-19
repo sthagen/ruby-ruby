@@ -2970,6 +2970,8 @@ rb_gc_impl_define_finalizer(void *objspace_ptr, VALUE obj, VALUE block)
     VALUE table;
     st_data_t data;
 
+    GC_ASSERT(!OBJ_FROZEN(obj));
+
     RBASIC(obj)->flags |= FL_FINALIZE;
 
     if (st_lookup(finalizer_table, obj, &data)) {
@@ -2983,8 +2985,7 @@ rb_gc_impl_define_finalizer(void *objspace_ptr, VALUE obj, VALUE block)
             for (i = 0; i < len; i++) {
                 VALUE recv = RARRAY_AREF(table, i);
                 if (rb_equal(recv, block)) {
-                    block = recv;
-                    goto end;
+                    return recv;
                 }
             }
         }
@@ -2996,21 +2997,20 @@ rb_gc_impl_define_finalizer(void *objspace_ptr, VALUE obj, VALUE block)
         rb_obj_hide(table);
         st_add_direct(finalizer_table, obj, table);
     }
-  end:
-    block = rb_ary_new3(2, INT2FIX(0), block);
-    OBJ_FREEZE(block);
+
     return block;
 }
 
-VALUE
+void
 rb_gc_impl_undefine_finalizer(void *objspace_ptr, VALUE obj)
 {
     rb_objspace_t *objspace = objspace_ptr;
+
+    GC_ASSERT(!OBJ_FROZEN(obj));
+
     st_data_t data = obj;
-    rb_check_frozen(obj);
     st_delete(finalizer_table, &data, 0);
     FL_UNSET(obj, FL_FINALIZE);
-    return obj;
 }
 
 VALUE
