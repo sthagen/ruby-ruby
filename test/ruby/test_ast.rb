@@ -1297,6 +1297,13 @@ dummy
     end;
   end
 
+  def test_locations
+    node = RubyVM::AbstractSyntaxTree.parse("1 + 2")
+    locations = node.locations
+
+    assert_equal(RubyVM::AbstractSyntaxTree::Location, locations[0].class)
+  end
+
   private
 
   def assert_error_tolerant(src, expected, keep_tokens: false)
@@ -1315,5 +1322,27 @@ dummy
     PP.pp(node, str, 80)
     assert_equal(expected, str)
     node
+  end
+
+  class TestLocation < Test::Unit::TestCase
+    def test_lineno_and_column
+      node = RubyVM::AbstractSyntaxTree.parse("1 + 2")
+      assert_locations(node.locations, [[1, 0, 1, 5]])
+    end
+
+    def test_unless_locations
+      node = RubyVM::AbstractSyntaxTree.parse("unless cond then 1 else 2 end")
+      assert_locations(node.children[-1].locations, [[1, 0, 1, 29], [1, 0, 1, 6], [1, 12, 1, 16], [1, 26, 1, 29]])
+
+      node = RubyVM::AbstractSyntaxTree.parse("1 unless 2")
+      assert_locations(node.children[-1].locations, [[1, 0, 1, 10], [1, 2, 1, 8], nil, nil])
+    end
+
+    private
+    def assert_locations(locations, expected)
+      ary = locations.map {|loc| loc && [loc.first_lineno, loc.first_column, loc.last_lineno, loc.last_column] }
+
+      assert_equal(ary, expected)
+    end
   end
 end
