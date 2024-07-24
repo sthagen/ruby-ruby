@@ -1475,7 +1475,7 @@ pm_compile_hash_elements(rb_iseq_t *iseq, const pm_node_t *node, const pm_node_l
                     // This is only done for method calls and not for literal
                     // hashes, because literal hashes should always result in a
                     // new hash.
-                    PUSH_INSN1(ret, location, putobject, rb_hash_new());
+                    PUSH_INSN(ret, location, putnil);
                 }
                 else if (first_element) {
                     // **{} appears as the first keyword argument, so it may be
@@ -6049,7 +6049,21 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
             PUSH_INSN(ret, location, putself);
         }
         else {
-            PM_COMPILE_NOT_POPPED(cast->receiver);
+          if (method_id == idCall && PM_NODE_TYPE_P(cast->receiver, PM_LOCAL_VARIABLE_READ_NODE)) {
+              const pm_local_variable_read_node_t *read_node_cast = (const pm_local_variable_read_node_t *) cast->receiver;
+              uint32_t node_id = cast->receiver->node_id;
+              int idx, level;
+
+              if (iseq_block_param_id_p(iseq, pm_constant_id_lookup(scope_node, read_node_cast->name), &idx, &level)) {
+                  ADD_ELEM(ret, (LINK_ELEMENT *) new_insn_body(iseq, location.line, node_id, BIN(getblockparamproxy), 2, INT2FIX((idx) + VM_ENV_DATA_SIZE - 1), INT2FIX(level)));
+              }
+              else {
+                  PM_COMPILE_NOT_POPPED(cast->receiver);
+              }
+          }
+          else {
+              PM_COMPILE_NOT_POPPED(cast->receiver);
+          }
         }
 
         pm_compile_call(iseq, cast, ret, popped, scope_node, method_id, start);
