@@ -18,7 +18,18 @@ class TestStringMemory < Test::Unit::TestCase
       end
     end
 
-    return allocations
+    return allocations.map do |instance|
+      [
+        ObjectSpace.allocation_sourcefile(instance),
+        ObjectSpace.allocation_sourceline(instance),
+        instance.class,
+        instance,
+      ]
+    end.select do |path,|
+      # drop strings not created in this file
+      # (the parallel testing framework may create strings in a separate thread)
+      path == __FILE__
+    end
   ensure
     GC.enable
   end
