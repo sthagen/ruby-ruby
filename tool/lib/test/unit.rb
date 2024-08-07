@@ -282,7 +282,7 @@ module Test
             options[:parallel] ||= 256 # number of tokens to acquire first
           end
         end
-        @worker_timeout = EnvUtil.apply_timeout_scale(options[:worker_timeout] || 180)
+        @worker_timeout = EnvUtil.apply_timeout_scale(options[:worker_timeout] || 1200)
         super
       end
 
@@ -415,8 +415,8 @@ module Test
         end
 
         def kill
-          Process.kill(:KILL, @pid)
-          warn "worker #{to_s} does not respond; SIGKILL is sent"
+          Process.kill(:SEGV, @pid)
+          warn "worker #{to_s} does not respond; SIGSEGV is sent"
         rescue Errno::ESRCH
         end
 
