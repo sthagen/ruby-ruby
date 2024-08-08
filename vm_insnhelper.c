@@ -3751,7 +3751,7 @@ vm_method_cfunc_entry(const rb_callable_method_entry_t *me)
     return UNALIGNED_MEMBER_PTR(me->def, body.cfunc);
 }
 
-static inline VALUE
+static VALUE
 vm_call_cfunc_with_frame_(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp, struct rb_calling_info *calling,
                           int argc, VALUE *argv, VALUE *stack_bottom)
 {
@@ -4002,7 +4002,7 @@ vm_call_bmethod_body(rb_execution_context_t *ec, struct rb_calling_info *calling
 
     /* control block frame */
     GetProcPtr(procv, proc);
-    val = rb_vm_invoke_bmethod(ec, proc, calling->recv, CALLING_ARGC(calling), argv, calling->kw_splat, calling->block_handler, vm_cc_cme(cc));
+    val = vm_invoke_bmethod(ec, proc, calling->recv, CALLING_ARGC(calling), argv, calling->kw_splat, calling->block_handler, vm_cc_cme(cc));
 
     return val;
 }
