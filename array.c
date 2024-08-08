@@ -1745,35 +1745,42 @@ static VALUE rb_ary_aref2(VALUE ary, VALUE b, VALUE e);
 
 /*
  *  call-seq:
- *    array[index] -> object or nil
- *    array[start, length] -> object or nil
- *    array[range] -> object or nil
- *    array[aseq] -> object or nil
- *    array.slice(index) -> object or nil
- *    array.slice(start, length) -> object or nil
- *    array.slice(range) -> object or nil
- *    array.slice(aseq) -> object or nil
+ *    self[index] -> object or nil
+ *    self[start, length] -> object or nil
+ *    self[range] -> object or nil
+ *    self[aseq] -> object or nil
+ *    slice(index) -> object or nil
+ *    slice(start, length) -> object or nil
+ *    slice(range) -> object or nil
+ *    slice(aseq) -> object or nil
  *
  *  Returns elements from +self+; does not modify +self+.
  *
  *  In brief:
  *
  *    a = [:foo, 'bar', 2]
- *    a[0]     # => :foo
- *    a[-1]    # => 2
- *    a[1, 2]  # => ["bar", 2]
- *    a[0..1]  # => [:foo, "bar"]
- *    a[0..-2] # => [:foo, "bar"]
- *    a[-2..2] # => ["bar", 2]
  *
- *  When a single Integer argument +index+ is given, returns the element at offset +index+:
+ *    # Single argument index: returns one element.
+ *    a[0]     # => :foo          # Zero-based index.
+ *    a[-1]    # => 2             # Negative index counts backwards from end.
+ *
+ *    # Arguments start and length: returns an array.
+ *    a[1, 2]  # => ["bar", 2]
+ *    a[-2, 2] # => ["bar", 2]    # Negative start counts backwards from end.
+ *
+ *    # Single argument range: returns an array.
+ *    a[0..1]  # => [:foo, "bar"]
+ *    a[0..-2] # => [:foo, "bar"] # Negative range-begin counts backwards from end.
+ *    a[-2..2] # => ["bar", 2]    # Negative range-end counts backwards from end.
+ *
+ *  When a single integer argument +index+ is given, returns the element at offset +index+:
  *
  *    a = [:foo, 'bar', 2]
  *    a[0] # => :foo
  *    a[2] # => 2
  *    a # => [:foo, "bar", 2]
  *
- *  If +index+ is negative, counts relative to the end of +self+:
+ *  If +index+ is negative, counts backwards from the end of +self+:
  *
  *    a = [:foo, 'bar', 2]
  *    a[-1] # => 2
@@ -2311,15 +2318,16 @@ ary_aset_by_rb_ary_splice(VALUE ary, long beg, long len, VALUE val)
 
 /*
  *  call-seq:
- *    array[index] = object -> object
- *    array[start, length] = object -> object
- *    array[range] = object -> object
+ *    self[index] = object -> object
+ *    self[start, length] = object -> object
+ *    self[range] = object -> object
  *
- *  Assigns elements in +self+; returns the given +object+.
+ *  Assigns elements in +self+, based on the given +object+; returns +object+.
  *
  *  In brief:
  *
  *      a_orig = [:foo, 'bar', 2]
+ *
  *      # With argument index.
  *      a = a_orig.dup
  *      a[0] = 'foo' # => "foo"
@@ -2327,6 +2335,7 @@ ary_aset_by_rb_ary_splice(VALUE ary, long beg, long len, VALUE val)
  *      a = a_orig.dup
  *      a[7] = 'foo' # => "foo"
  *      a # => [:foo, "bar", 2, nil, nil, nil, nil, "foo"]
+ *
  *      # With arguments start and length.
  *      a = a_orig.dup
  *      a[0, 2] = 'foo' # => "foo"
@@ -2334,6 +2343,7 @@ ary_aset_by_rb_ary_splice(VALUE ary, long beg, long len, VALUE val)
  *      a = a_orig.dup
  *      a[6, 50] = 'foo' # => "foo"
  *      a # => [:foo, "bar", 2, nil, nil, nil, "foo"]
+ *
  *      # With argument range.
  *      a = a_orig.dup
  *      a[0..1] = 'foo' # => "foo"
@@ -5136,17 +5146,21 @@ recursive_equal(VALUE ary1, VALUE ary2, int recur)
 
 /*
  *  call-seq:
- *    array == other_array -> true or false
+ *    self == other_array -> true or false
  *
- *  Returns +true+ if both <tt>array.size == other_array.size</tt>
- *  and for each index +i+ in +array+, <tt>array[i] == other_array[i]</tt>:
+ *  Returns whether both:
  *
- *    a0 = [:foo, 'bar', 2]
- *    a1 = [:foo, 'bar', 2.0]
- *    a1 == a0 # => true
- *    [] == [] # => true
+ *  - +self+ and +other_array+ are the same size.
+ *  - Their corresponding elements are the same;
+ *    that is, for each index +i+ in <tt>(0...self.size)</tt>,
+ *    <tt>self[i] == other_array[i]</tt>.
  *
- *  Otherwise, returns +false+.
+ *  Examples:
+ *
+ *    [:foo, 'bar', 2] == [:foo, 'bar', 2]   # => true
+ *    [:foo, 'bar', 2] == [:foo, 'bar', 2.0] # => true
+ *    [:foo, 'bar', 2] == [:foo, 'bar']      # => false # Different sizes.
+ *    [:foo, 'bar', 2] == [:foo, 'bar', 3]   # => false # Different elements.
  *
  *  This method is different from method Array#eql?,
  *  which compares elements using <tt>Object#eql?</tt>.
