@@ -2189,7 +2189,7 @@ rb_vm_search_method_slowpath(const struct rb_callinfo *ci, VALUE klass)
 {
     const struct rb_callcache *cc;
 
-    VM_ASSERT(RB_TYPE_P(klass, T_CLASS) || RB_TYPE_P(klass, T_ICLASS));
+    VM_ASSERT(RB_TYPE_P(klass, T_CLASS) || RB_TYPE_P(klass, T_ICLASS), "klass=%"PRIxVALUE", type=%d", klass, TYPE(klass));
 
     RB_VM_LOCK_ENTER();
     {
@@ -2739,9 +2739,11 @@ vm_caller_setup_keyword_hash(const struct rb_callinfo *ci, VALUE keyword_hash)
             keyword_hash = rb_hash_dup(rb_to_hash_type(keyword_hash));
         }
     }
-    else if (!IS_ARGS_KW_SPLAT_MUT(ci)) {
+    else if (!IS_ARGS_KW_SPLAT_MUT(ci) && !RHASH_EMPTY_P(keyword_hash)) {
         /* Convert a hash keyword splat to a new hash unless
          * a mutable keyword splat was passed.
+         * Skip allocating new hash for empty keyword splat, as empty
+         * keyword splat will be ignored by both callers.
          */
         keyword_hash = rb_hash_dup(keyword_hash);
     }
