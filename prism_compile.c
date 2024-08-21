@@ -3825,6 +3825,7 @@ pm_compile_defined_expr0(rb_iseq_t *iseq, const pm_node_t *node, const pm_node_l
       case PM_YIELD_NODE:
         PUSH_INSN(ret, location, putnil);
         PUSH_INSN3(ret, location, defined, INT2FIX(DEFINED_YIELD), 0, PUSH_VAL(DEFINED_YIELD));
+        iseq_set_use_block(ISEQ_BODY(iseq)->local_iseq);
         return;
       case PM_SUPER_NODE:
       case PM_FORWARDING_SUPER_NODE:
@@ -5792,6 +5793,8 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
                         }
                     }
                     else {
+                        PM_COMPILE_NOT_POPPED(element);
+                        if (++new_array_size >= max_new_array_size) FLUSH_CHUNK;
                         static_literal = true;
                     }
                 } else {
@@ -6961,6 +6964,9 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
             retry_end_l = NEW_LABEL(location.line);
 
             PUSH_LABEL(ret, retry_label);
+        }
+        else {
+            iseq_set_use_block(ISEQ_BODY(iseq)->local_iseq);
         }
 
         PUSH_INSN(ret, location, putself);
@@ -8994,6 +9000,7 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
             if (parameters_node->block) {
                 body->param.block_start = local_index;
                 body->param.flags.has_block = true;
+                iseq_set_use_block(iseq);
 
                 pm_constant_id_t name = ((const pm_block_parameter_node_t *) parameters_node->block)->name;
 
@@ -9549,6 +9556,10 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
             pm_scope_node_destroy(&next_scope_node);
         }
 
+        if (!cast->block) {
+            iseq_set_use_block(ISEQ_BODY(iseq)->local_iseq);
+        }
+
         if ((flags & VM_CALL_ARGS_BLOCKARG) && (flags & VM_CALL_KW_SPLAT) && !(flags & VM_CALL_KW_SPLAT_MUT)) {
             PUSH_INSN(args, location, splatkw);
         }
@@ -9681,6 +9692,7 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
         }
 
         PUSH_INSN1(ret, location, invokeblock, new_callinfo(iseq, 0, argc, flags, keywords, FALSE));
+        iseq_set_use_block(ISEQ_BODY(iseq)->local_iseq);
         if (popped) PUSH_INSN(ret, location, pop);
 
         int level = 0;
@@ -10522,6 +10534,9 @@ pm_parse_stdin_fgets(char *string, int size, void *stream)
     return string;
 }
 
+// We need access to this function when we're done parsing stdin.
+void rb_reset_argf_lineno(long n);
+
 /**
  * Parse the source off STDIN and store the resulting scope node in the given
  * parse result struct. It is assumed that the parse result object is zeroed
@@ -10539,6 +10554,10 @@ pm_parse_stdin(pm_parse_result_t *result)
     // freed. At this point we've handed over ownership, so we don't need to
     // free the buffer itself.
     pm_string_owned_init(&result->input, (uint8_t *) pm_buffer_value(&buffer), pm_buffer_length(&buffer));
+
+    // When we're done parsing, we reset $. because we don't want the fact that
+    // we went through an IO object to be visible to the user.
+    rb_reset_argf_lineno(0);
 
     return pm_parse_process(result, node);
 }

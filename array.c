@@ -3542,10 +3542,11 @@ static VALUE rb_ary_bsearch_index(VALUE ary);
 
 /*
  *  call-seq:
- *    array.bsearch {|element| ... } -> object
- *    array.bsearch -> new_enumerator
+ *    bsearch {|element| ... } -> found_element or nil
+ *    bsearch -> new_enumerator
  *
- *  Returns an element from +self+ selected by a binary search.
+ *  Returns the element from +self+ found by a binary search,
+ *  or +nil+ if the search found no suitable element.
  *
  *  See {Binary Searching}[rdoc-ref:bsearch.rdoc].
  */
@@ -3563,11 +3564,13 @@ rb_ary_bsearch(VALUE ary)
 
 /*
  *  call-seq:
- *    array.bsearch_index {|element| ... } -> integer or nil
- *    array.bsearch_index -> new_enumerator
+ *    bsearch_index {|element| ... } -> integer or nil
+ *    bsearch_index -> new_enumerator
  *
- *  Searches +self+ as described at method #bsearch,
- *  but returns the _index_ of the found element instead of the element itself.
+ *  Returns the integer index of the element from +self+ found by a binary search,
+ *  or +nil+ if the search found no suitable element.
+ *
+ *  See {Binary Searching}[rdoc-ref:bsearch.rdoc].
  */
 
 static VALUE
@@ -3665,21 +3668,19 @@ rb_ary_sort_by_bang(VALUE ary)
 
 /*
  *  call-seq:
- *    array.map {|element| ... } -> new_array
- *    array.map -> new_enumerator
+ *    collect {|element| ... } -> new_array
+ *    collect -> new_enumerator
+ *    map {|element| ... } -> new_array
+ *    map -> new_enumerator
  *
- *  Calls the block, if given, with each element of +self+;
- *  returns a new +Array+ whose elements are the return values from the block:
+ *  With a block given, calls the block with each element of +self+;
+ *  returns a new array whose elements are the return values from the block:
  *
  *    a = [:foo, 'bar', 2]
  *    a1 = a.map {|element| element.class }
  *    a1 # => [Symbol, String, Integer]
  *
- *  Returns a new Enumerator if no block given:
- *    a = [:foo, 'bar', 2]
- *    a1 = a.map
- *    a1 # => #<Enumerator: [:foo, "bar", 2]:map>
- *
+ *  With no block given, returns a new Enumerator.
  */
 
 static VALUE
@@ -4640,9 +4641,9 @@ rb_ary_replace(VALUE copy, VALUE orig)
 
 /*
  *  call-seq:
- *     array.clear -> self
+ *    clear -> self
  *
- *  Removes all elements from +self+:
+ *  Removes all elements from +self+; returns +self+:
  *
  *    a = [:foo, 'bar', 2]
  *    a.clear # => []
