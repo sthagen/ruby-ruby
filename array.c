@@ -4973,12 +4973,14 @@ ary_append(VALUE x, VALUE y)
 
 /*
  *  call-seq:
- *    array.concat(*other_arrays) -> self
+ *    concat(*other_arrays) -> self
  *
- *  Adds to +array+ all elements from each +Array+ in +other_arrays+; returns +self+:
+ *  Adds to +self+ all elements from each array in +other_arrays+; returns +self+:
  *
  *    a = [0, 1]
- *    a.concat([2, 3], [4, 5]) # => [0, 1, 2, 3, 4, 5]
+ *    a.concat(['two', 'three'], [:four, :five], a)
+ *    # => [0, 1, "two", "three", :four, :five, 0, 1]
+ *
  */
 
 static VALUE
@@ -6285,11 +6287,17 @@ rb_ary_uniq(VALUE ary)
 
 /*
  *  call-seq:
- *    array.compact! -> self or nil
+ *    compact! -> self or nil
  *
- *  Removes all +nil+ elements from +self+.
+ *  Removes all +nil+ elements from +self+;
+ *  Returns +self+ if any elements are removed, +nil+ otherwise:
  *
- *  Returns +self+ if any elements removed, otherwise +nil+.
+ *    a = [nil, 0, nil, false, nil, '', nil, [], nil, {}]
+ *    a.compact! # => [0, false, "", [], {}]
+ *    a          # => [0, false, "", [], {}]
+ *    a.compact! # => nil
+ *
+ *  Related: Array#compact.
  */
 
 static VALUE
@@ -6338,29 +6346,27 @@ rb_ary_compact(VALUE ary)
 
 /*
  *  call-seq:
- *    array.count -> an_integer
- *    array.count(obj) -> an_integer
- *    array.count {|element| ... } -> an_integer
+ *    count -> integer
+ *    count(object) -> integer
+ *    count {|element| ... } -> integer
  *
  *  Returns a count of specified elements.
  *
  *  With no argument and no block, returns the count of all elements:
  *
- *    [0, 1, 2].count # => 3
- *    [].count # => 0
+ *    [0, :one, 'two', 3, 3.0].count # => 5
  *
- *  With argument +obj+, returns the count of elements <tt>==</tt> to +obj+:
+ *  With argument +object+ given, returns the count of elements <tt>==</tt> to +object+:
  *
- *    [0, 1, 2, 0.0].count(0) # => 2
- *    [0, 1, 2].count(3) # => 0
+ *    [0, :one, 'two', 3, 3.0].count(3) # => 2
  *
  *  With no argument and a block given, calls the block with each element;
  *  returns the count of elements for which the block returns a truthy value:
  *
  *    [0, 1, 2, 3].count {|element| element > 1} # => 2
  *
- *  With argument +obj+ and a block given, issues a warning, ignores the block,
- *  and returns the count of elements <tt>==</tt> to +obj+.
+ *  With argument +object+ and a block given, issues a warning, ignores the block,
+ *  and returns the count of elements <tt>==</tt> to +object+.
  */
 
 static VALUE
@@ -7097,56 +7103,45 @@ rb_ary_combination_size(VALUE ary, VALUE args, VALUE eobj)
 
 /*
  *  call-seq:
- *    array.combination(n) {|element| ... } -> self
- *    array.combination(n) -> new_enumerator
+ *    combination(n) {|element| ... } -> self
+ *    combination(n) -> new_enumerator
  *
- *  Calls the block, if given, with combinations of elements of +self+;
- *  returns +self+. The order of combinations is indeterminate.
+ *  When a block and a positive
+ *  {integer-convertible object}[rdoc-ref:implicit_conversion.rdoc@Integer-Convertible+Objects]
+ *  argument +n+ (<tt>0 < n <= self.size</tt>)
+ *  are given, calls the block with all +n+-tuple combinations of +self+;
+ *  returns +self+:
  *
- *  When a block and an in-range positive Integer argument +n+ (<tt>0 < n <= self.size</tt>)
- *  are given, calls the block with all +n+-tuple combinations of +self+.
- *
- *  Example:
- *
- *    a = [0, 1, 2]
- *    a.combination(2) {|combination| p combination }
+ *    a = %w[a b c]                                   # => ["a", "b", "c"]
+ *    a.combination(2) {|combination| p combination } # => ["a", "b", "c"]
  *
  *  Output:
  *
- *    [0, 1]
- *    [0, 2]
- *    [1, 2]
+ *    ["a", "b"]
+ *    ["a", "c"]
+ *    ["b", "c"]
  *
- *  Another example:
+ *  The order of the yielded combinations is not guaranteed.
  *
- *    a = [0, 1, 2]
- *    a.combination(3) {|combination| p combination }
+ *  When +n+ is zero, calls the block once with a new empty array:
  *
- *  Output:
- *
- *    [0, 1, 2]
- *
- *  When +n+ is zero, calls the block once with a new empty +Array+:
- *
- *    a = [0, 1, 2]
- *    a1 = a.combination(0) {|combination| p combination }
+ *    a.combination(0) {|combination| p combination }
+ *    [].combination(0) {|combination| p combination }
  *
  *  Output:
  *
  *    []
+ *    []
  *
- *  When +n+ is out of range (negative or larger than <tt>self.size</tt>),
+ *  When +n+ is negative or larger than +self.size+ and +self+ is non-empty,
  *  does not call the block:
  *
- *    a = [0, 1, 2]
- *    a.combination(-1) {|combination| fail 'Cannot happen' }
- *    a.combination(4) {|combination| fail 'Cannot happen' }
+ *    a.combination(-1) {|combination| fail 'Cannot happen' } # => ["a", "b", "c"]
+ *    a.combination(4)  {|combination| fail 'Cannot happen' } # => ["a", "b", "c"]
  *
- *  Returns a new Enumerator if no block given:
+ *  With no block given, returns a new Enumerator.
  *
- *    a = [0, 1, 2]
- *    a.combination(2) # => #<Enumerator: [0, 1, 2]:combination(2)>
- *
+ *  Related: Array#permutation.
  */
 
 static VALUE
