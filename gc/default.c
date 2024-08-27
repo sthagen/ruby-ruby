@@ -443,6 +443,7 @@ typedef struct rb_size_pool_struct {
     size_t force_incremental_marking_finish_count;
     size_t total_allocated_objects;
     size_t total_freed_objects;
+    size_t final_slots_count;
 
     /* Sweeping statistics */
     size_t freed_slots;
@@ -516,7 +517,6 @@ typedef struct rb_objspace {
         size_t freeable_pages;
 
         /* final */
-        size_t final_slots;
         VALUE deferred_final;
     } heap_pages;
 
@@ -623,7 +623,6 @@ typedef struct rb_objspace {
     rb_postponed_job_handle_t finalize_deferred_pjob;
 
     unsigned long live_ractor_cache_count;
-    bool multi_ractor_p;
 } rb_objspace_t;
 
 #ifndef HEAP_PAGE_ALIGN_LOG
@@ -841,7 +840,6 @@ RVALUE_AGE_SET(VALUE obj, int age)
 #define heap_pages_lomem	objspace->heap_pages.range[0]
 #define heap_pages_himem	objspace->heap_pages.range[1]
 #define heap_pages_freeable_pages	objspace->heap_pages.freeable_pages
-#define heap_pages_final_slots		objspace->heap_pages.final_slots
 #define heap_pages_deferred_final	objspace->heap_pages.deferred_final
 #define size_pools              objspace->size_pools
 #define during_gc		objspace->flags.during_gc
@@ -1004,6 +1002,17 @@ total_freed_objects(rb_objspace_t *objspace)
     for (int i = 0; i < SIZE_POOL_COUNT; i++) {
         rb_size_pool_t *size_pool = &size_pools[i];
         count += size_pool->total_freed_objects;
+    }
+    return count;
+}
+
+static inline size_t
+total_final_slots_count(rb_objspace_t *objspace)
+{
+    size_t count = 0;
+    for (int i = 0; i < SIZE_POOL_COUNT; i++) {
+        rb_size_pool_t *size_pool = &size_pools[i];
+        count += size_pool->final_slots_count;
     }
     return count;
 }
@@ -2626,7 +2635,11 @@ newobj_alloc(rb_objspace_t *objspace, rb_ractor_newobj_cache_t *cache, size_t si
         obj = newobj_cache_miss(objspace, cache, size_pool_idx, vm_locked);
     }
 
-    size_pools[size_pool_idx].total_allocated_objects++;
+    rb_size_pool_t *size_pool = &size_pools[size_pool_idx];
+    size_pool->total_allocated_objects++;
+    GC_ASSERT(rb_gc_multi_ractor_p() ||
+        SIZE_POOL_EDEN_HEAP(size_pool)->total_slots + SIZE_POOL_TOMB_HEAP(size_pool)->total_slots >=
+            (size_pool->total_allocated_objects - size_pool->total_freed_objects - size_pool->final_slots_count));
 
     return obj;
 }
@@ -2810,7 +2823,7 @@ rb_gc_impl_make_zombie(void *objspace_ptr, VALUE obj, void (*dfree)(void *), voi
 
     struct heap_page *page = GET_HEAP_PAGE(obj);
     page->final_slots++;
-    heap_pages_final_slots++;
+    page->size_pool->final_slots_count++;
 }
 
 static void
@@ -3112,10 +3125,10 @@ finalize_list(rb_objspace_t *objspace, VALUE zombie)
                 obj_free_object_id(objspace, zombie);
             }
 
-            GC_ASSERT(heap_pages_final_slots > 0);
+            GC_ASSERT(page->size_pool->final_slots_count > 0);
             GC_ASSERT(page->final_slots > 0);
 
-            heap_pages_final_slots--;
+            page->size_pool->final_slots_count--;
             page->final_slots--;
             page->free_slots++;
             heap_page_add_freeobj(objspace, page, zombie);
@@ -3353,13 +3366,13 @@ objspace_available_slots(rb_objspace_t *objspace)
 static size_t
 objspace_live_slots(rb_objspace_t *objspace)
 {
-    return total_allocated_objects(objspace) - total_freed_objects(objspace) - heap_pages_final_slots;
+    return total_allocated_objects(objspace) - total_freed_objects(objspace) - total_final_slots_count(objspace);
 }
 
 static size_t
 objspace_free_slots(rb_objspace_t *objspace)
 {
-    return objspace_available_slots(objspace) - objspace_live_slots(objspace) - heap_pages_final_slots;
+    return objspace_available_slots(objspace) - objspace_live_slots(objspace) - total_final_slots_count(objspace);
 }
 
 static void
@@ -5433,10 +5446,10 @@ gc_verify_internal_consistency_(rb_objspace_t *objspace)
 
     if (!is_lazy_sweeping(objspace) &&
             !finalizing &&
-            !objspace->multi_ractor_p) {
+            !rb_gc_multi_ractor_p()) {
         if (objspace_live_slots(objspace) != data.live_object_count) {
             fprintf(stderr, "heap_pages_final_slots: %"PRIdSIZE", total_freed_objects: %"PRIdSIZE"\n",
-                    heap_pages_final_slots, total_freed_objects(objspace));
+                    total_final_slots_count(objspace), total_freed_objects(objspace));
             rb_bug("inconsistent live slot number: expect %"PRIuSIZE", but %"PRIuSIZE".",
                    objspace_live_slots(objspace), data.live_object_count);
         }
@@ -5464,14 +5477,14 @@ gc_verify_internal_consistency_(rb_objspace_t *objspace)
             }
         }
 
-        if (heap_pages_final_slots != data.zombie_object_count ||
-            heap_pages_final_slots != list_count) {
+        if (total_final_slots_count(objspace) != data.zombie_object_count ||
+            total_final_slots_count(objspace) != list_count) {
 
             rb_bug("inconsistent finalizing object count:\n"
                     "  expect %"PRIuSIZE"\n"
                     "  but    %"PRIuSIZE" zombies\n"
                     "  heap_pages_deferred_final list has %"PRIuSIZE" items.",
-                    heap_pages_final_slots,
+                    total_final_slots_count(objspace),
                     data.zombie_object_count,
                     list_count);
         }
@@ -6456,10 +6469,6 @@ rb_gc_impl_ractor_cache_alloc(void *objspace_ptr)
 
     objspace->live_ractor_cache_count++;
 
-    if (objspace->live_ractor_cache_count > 1) {
-        objspace->multi_ractor_p = true;
-    }
-
     return calloc1(sizeof(rb_ractor_newobj_cache_t));
 }
 
@@ -7274,6 +7283,9 @@ gc_move(rb_objspace_t *objspace, VALUE src, VALUE dest, size_t src_slot_size, si
     RMOVED(src)->destination = dest;
     GC_ASSERT(BUILTIN_TYPE(dest) != T_NONE);
 
+    GET_HEAP_PAGE(src)->size_pool->total_freed_objects++;
+    GET_HEAP_PAGE(dest)->size_pool->total_allocated_objects++;
+
     return src;
 }
 
@@ -7840,7 +7852,7 @@ rb_gc_impl_stat(void *objspace_ptr, VALUE hash_or_sym)
     SET(heap_available_slots, objspace_available_slots(objspace));
     SET(heap_live_slots, objspace_live_slots(objspace));
     SET(heap_free_slots, objspace_free_slots(objspace));
-    SET(heap_final_slots, heap_pages_final_slots);
+    SET(heap_final_slots, total_final_slots_count(objspace));
     SET(heap_marked_slots, objspace->marked_slots);
     SET(heap_eden_pages, heap_eden_total_pages(objspace));
     SET(heap_tomb_pages, heap_tomb_total_pages(objspace));
