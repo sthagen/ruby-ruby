@@ -4374,20 +4374,17 @@ rb_ary_reject(VALUE ary)
 
 /*
  *  call-seq:
- *    array.delete_if {|element| ... } -> self
- *    array.delete_if -> Enumerator
+ *    delete_if {|element| ... } -> self
+ *    delete_if -> new_numerator
  *
- *  Removes each element in +self+ for which the block returns a truthy value;
+ *  With a block given, calls the block with each element of +self+;
+ *  removes the element if the block returns a truthy value;
  *  returns +self+:
  *
  *    a = [:foo, 'bar', 2, 'bat']
  *    a.delete_if {|element| element.to_s.start_with?('b') } # => [:foo, 2]
  *
- *  Returns a new Enumerator if no block given:
- *
- *    a = [:foo, 'bar', 2]
- *    a.delete_if # => #<Enumerator: [:foo, "bar", 2]:delete_if>
- *
+ *  With no block given, returns a new Enumerator.
  */
 
 static VALUE
@@ -4657,11 +4654,9 @@ rb_ary_clear(VALUE ary)
 {
     rb_ary_modify_check(ary);
     if (ARY_SHARED_P(ary)) {
-        if (!ARY_EMBED_P(ary)) {
-            rb_ary_unshare(ary);
-            FL_SET_EMBED(ary);
-            ARY_SET_EMBED_LEN(ary, 0);
-        }
+        rb_ary_unshare(ary);
+        FL_SET_EMBED(ary);
+        ARY_SET_EMBED_LEN(ary, 0);
     }
     else {
         ARY_SET_LEN(ary, 0);
@@ -6235,7 +6230,7 @@ rb_ary_uniq_bang(VALUE ary)
     }
     rb_ary_modify_check(ary);
     ARY_SET_LEN(ary, 0);
-    if (ARY_SHARED_P(ary) && !ARY_EMBED_P(ary)) {
+    if (ARY_SHARED_P(ary)) {
         rb_ary_unshare(ary);
         FL_SET_EMBED(ary);
     }
@@ -6786,13 +6781,16 @@ rb_ary_cycle_size(VALUE self, VALUE args, VALUE eobj)
 
 /*
  *  call-seq:
- *    array.cycle {|element| ... } -> nil
- *    array.cycle(count) {|element| ... } -> nil
- *    array.cycle -> new_enumerator
- *    array.cycle(count) -> new_enumerator
+ *    cycle(count = nil) {|element| ... } -> nil
+ *    cycle(count = nil) -> new_enumerator
  *
- *  When called with positive Integer argument +count+ and a block,
- *  calls the block with each element, then does so again,
+ *  With a block given, may call the block, depending on the value of argument +count+;
+ *  +count+ must be an
+ *  {integer-convertible object}[rdoc-ref:implicit_conversion.rdoc@Integer-Convertible+Objects],
+ *  or +nil+.
+ *
+ *  If +count+ is positive,
+ *  calls the block with each element, then does so repeatedly,
  *  until it has done so +count+ times; returns +nil+:
  *
  *    output = []
@@ -6801,21 +6799,16 @@ rb_ary_cycle_size(VALUE self, VALUE args, VALUE eobj)
  *
  *  If +count+ is zero or negative, does not call the block:
  *
- *    [0, 1].cycle(0) {|element| fail 'Cannot happen' } # => nil
+ *    [0, 1].cycle(0) {|element| fail 'Cannot happen' }  # => nil
  *    [0, 1].cycle(-1) {|element| fail 'Cannot happen' } # => nil
  *
- *  When a block is given, and argument is omitted or +nil+, cycles forever:
+ *  If +count+ is +nil+, cycles forever:
  *
  *    # Prints 0 and 1 forever.
  *    [0, 1].cycle {|element| puts element }
  *    [0, 1].cycle(nil) {|element| puts element }
  *
- *  When no block is given, returns a new Enumerator:
- *
- *    [0, 1].cycle(2) # => #<Enumerator: [0, 1]:cycle(2)>
- *    [0, 1].cycle # => # => #<Enumerator: [0, 1]:cycle>
- *    [0, 1].cycle.first(5) # => [0, 1, 0, 1, 0]
- *
+ *  With no block given, returns a new Enumerator.
  */
 static VALUE
 rb_ary_cycle(int argc, VALUE *argv, VALUE ary)
