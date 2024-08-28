@@ -77,7 +77,7 @@ The following default gems are updated.
 * json 2.7.2
 * net-http 0.4.1
 * optparse 0.5.0
-* prism 0.30.0
+* prism 1.0.0
 * rdoc 6.7.0
 * reline 0.5.9
 * resolv 0.4.0
@@ -92,7 +92,7 @@ The following bundled gems are updated.
 * rexml 3.3.6
 * rss 0.3.1
 * net-ftp 0.3.7
-* net-imap 0.4.14
+* net-imap 0.4.15
 * net-smtp 0.5.0
 * rbs 3.5.3
 * typeprof 0.21.11

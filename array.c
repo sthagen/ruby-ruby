@@ -1038,6 +1038,8 @@ rb_to_array(VALUE ary)
  *  if not, raises TypeError.
  *
  *  Otherwise returns +nil+.
+ *
+ *  Related: see {Methods for Creating an Array}[rdoc-ref:Array@Methods+for+Creating+an+Array].
  */
 
 static VALUE
@@ -1117,6 +1119,8 @@ rb_ary_s_new(int argc, VALUE *argv, VALUE klass)
  *  Raises TypeError if the first argument is not either an array
  *  or an {integer-convertible object}[rdoc-ref:implicit_conversion.rdoc@Integer-Convertible+Objects]).
  *  Raises ArgumentError if the first argument is a negative integer.
+ *
+ *  Related: see {Methods for Creating an Array}[rdoc-ref:Array@Methods+for+Creating+an+Array].
  */
 
 static VALUE
@@ -1180,6 +1184,7 @@ rb_ary_initialize(int argc, VALUE *argv, VALUE ary)
  *   Array[]                # => []
  *   Array.[](1, 'a', /^A/) # => [1, "a", /^A/]
  *
+ * Related: see {Methods for Creating an Array}[rdoc-ref:Array@Methods+for+Creating+an+Array].
  */
 
 static VALUE
@@ -4026,6 +4031,8 @@ ary_resize_smaller(VALUE ary, long len)
  *
  *    a.delete(2) {|element| "Element #{element} not found." }
  *    # => "Element 2 not found."
+ *
+ *  Related: see {Methods for Deleting}[rdoc-ref:Array@Methods+for+Deleting].
  *
  */
 
@@ -8540,6 +8547,8 @@ rb_ary_deconstruct(VALUE ary)
  *  - ::new: Returns a new array.
  *  - ::try_convert: Returns a new array created from a given object.
  *
+ *  See also {Creating Arrays}[rdoc-ref:Array@Creating+Arrays].
+ *
  *  === Methods for Querying
  *
  *  - #length, #size: Returns the count of elements.
@@ -8692,7 +8701,6 @@ rb_ary_deconstruct(VALUE ary)
  *    - With string argument +field_separator+, a new string that is equivalent to
  *      <tt>join(field_separator)</tt>.
  *
- *  - #abbrev: Returns a hash of unambiguous abbreviations for elements.
  *  - #pack: Packs the elements into a binary sequence.
  *  - #sum: Returns a sum of elements according to either <tt>+</tt> or a given block.
  */
