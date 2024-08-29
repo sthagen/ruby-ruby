@@ -1373,6 +1373,7 @@ ary_take_first_or_last(int argc, const VALUE *argv, VALUE ary, enum ary_take_pos
  *
  *    [:foo, 'bar', 2] << [3, 4] # => [:foo, "bar", 2, [3, 4]]
  *
+ *  Related: see {Methods for Assigning}[rdoc-ref:Array@Methods+for+Assigning].
  */
 
 VALUE
@@ -5193,6 +5194,8 @@ recursive_equal(VALUE ary1, VALUE ary2, int recur)
  *
  *  This method is different from method Array#eql?,
  *  which compares elements using <tt>Object#eql?</tt>.
+ *
+ *  Related: see {Methods for Comparing}[rdoc-ref:Array@Methods+for+Comparing].
  */
 
 static VALUE
@@ -5382,6 +5385,7 @@ recursive_cmp(VALUE ary1, VALUE ary2, int recur)
  *    [0, 1, 2] <=> [0, 1, 2, 0]  # => -1
  *    [0, 1, 2] <=> [0, 1, 2, 3]  # => -1
  *
+ *  Related: see {Methods for Comparing}[rdoc-ref:Array@Methods+for+Comparing].
  */
 
 VALUE
@@ -8565,7 +8569,7 @@ rb_ary_deconstruct(VALUE ary)
  *
  *  === Methods for Comparing
  *
- *  - #<=>: Returns -1, 0, or 1 * as +self+ is less than, equal to, or
+ *  - #<=>: Returns -1, 0, or 1, as +self+ is less than, equal to, or
  *    greater than a given object.
  *  - #==: Returns whether each element in +self+ is <tt>==</tt> to the corresponding element
  *    in a given object.
@@ -8617,7 +8621,8 @@ rb_ary_deconstruct(VALUE ary)
  *  These methods add, replace, or reorder elements in +self+.
  *
  *  - #[]=: Assigns specified elements with a given object.
- *  - #push, #append, #<<: Appends trailing elements.
+ *  - #<<: Appends an element.
+ *  - #push (and its alias #append): Appends elements.
  *  - #unshift, #prepend: Prepends leading elements.
  *  - #insert: Inserts given objects at a given offset; does not replace elements.
  *  - #concat: Appends all elements from given arrays.
