@@ -2155,7 +2155,11 @@ prism_script(ruby_cmdline_options_t *opt, pm_parse_result_t *result)
 
     pm_options_t *options = &result->options;
     pm_options_line_set(options, 1);
+    const bool read_stdin = (strcmp(opt->script, "-") == 0);
 
+    if (read_stdin) {
+        pm_options_encoding_set(options, rb_enc_name(rb_locale_encoding()));
+    }
     if (opt->src.enc.name != 0) {
         pm_options_encoding_set(options, StringValueCStr(opt->src.enc.name));
     }
@@ -2163,7 +2167,7 @@ prism_script(ruby_cmdline_options_t *opt, pm_parse_result_t *result)
     uint8_t command_line = prism_script_command_line(opt);
     VALUE error;
 
-    if (strcmp(opt->script, "-") == 0) {
+    if (read_stdin) {
         pm_options_command_line_set(options, command_line);
         pm_options_filepath_set(options, "-");
         pm_options_shebang_callback_set(options, prism_script_shebang_callback, (void *) opt);
@@ -2184,7 +2188,7 @@ prism_script(ruby_cmdline_options_t *opt, pm_parse_result_t *result)
 
         ruby_opt_init(opt);
         result->node.coverage_enabled = 0;
-        error = pm_parse_string(result, opt->e_script, rb_str_new2("-e"));
+        error = pm_parse_string(result, opt->e_script, rb_str_new2("-e"), NULL);
     }
     else {
         pm_options_command_line_set(options, command_line);
@@ -2197,7 +2201,7 @@ prism_script(ruby_cmdline_options_t *opt, pm_parse_result_t *result)
         // to load, it doesn't require files required by -r.
         if (NIL_P(error)) {
             ruby_opt_init(opt);
-            error = pm_parse_file(result, opt->script_name);
+            error = pm_parse_file(result, opt->script_name, NULL);
         }
 
         // Check if (after requiring all of the files through -r flags) we have

@@ -505,7 +505,7 @@ parse_regexp_flags(const pm_node_t *node)
 static rb_encoding *
 parse_regexp_encoding(const pm_scope_node_t *scope_node, const pm_node_t *node)
 {
-    if (PM_NODE_FLAG_P(node, PM_REGULAR_EXPRESSION_FLAGS_ASCII_8BIT)) {
+    if (PM_NODE_FLAG_P(node, PM_REGULAR_EXPRESSION_FLAGS_FORCED_BINARY_ENCODING) || PM_NODE_FLAG_P(node, PM_REGULAR_EXPRESSION_FLAGS_ASCII_8BIT)) {
         return rb_ascii8bit_encoding();
     }
     else if (PM_NODE_FLAG_P(node, PM_REGULAR_EXPRESSION_FLAGS_UTF_8)) {
@@ -1801,61 +1801,99 @@ pm_setup_args_core(const pm_arguments_node_t *arguments_node, const pm_node_t *b
     return orig_argc;
 }
 
-static bool
-pm_setup_args_dup_rest_p(const pm_node_t *node) {
-    switch(PM_NODE_TYPE(node)) {
-      case PM_CALL_NODE:
-        return true;
-      default:
+/**
+ * True if the given kind of node could potentially mutate the array that is
+ * being splatted in a set of call arguments.
+ */
+static inline bool
+pm_setup_args_dup_rest_p(const pm_node_t *node)
+{
+    switch (PM_NODE_TYPE(node)) {
+      case PM_BACK_REFERENCE_READ_NODE:
+      case PM_CLASS_VARIABLE_READ_NODE:
+      case PM_CONSTANT_PATH_NODE:
+      case PM_CONSTANT_READ_NODE:
+      case PM_FALSE_NODE:
+      case PM_FLOAT_NODE:
+      case PM_GLOBAL_VARIABLE_READ_NODE:
+      case PM_IMAGINARY_NODE:
+      case PM_INSTANCE_VARIABLE_READ_NODE:
+      case PM_INTEGER_NODE:
+      case PM_LAMBDA_NODE:
+      case PM_LOCAL_VARIABLE_READ_NODE:
+      case PM_NIL_NODE:
+      case PM_NUMBERED_REFERENCE_READ_NODE:
+      case PM_RATIONAL_NODE:
+      case PM_REGULAR_EXPRESSION_NODE:
+      case PM_SELF_NODE:
+      case PM_STRING_NODE:
+      case PM_SYMBOL_NODE:
+      case PM_TRUE_NODE:
         return false;
+      case PM_IMPLICIT_NODE:
+        return pm_setup_args_dup_rest_p(((const pm_implicit_node_t *) node)->value);
+      default:
+        return true;
     }
 }
 
-// Compile the argument parts of a call
+/**
+ * Compile the argument parts of a call.
+ */
 static int
 pm_setup_args(const pm_arguments_node_t *arguments_node, const pm_node_t *block, int *flags, struct rb_callinfo_kwarg **kw_arg, rb_iseq_t *iseq, LINK_ANCHOR *const ret, pm_scope_node_t *scope_node, const pm_node_location_t *node_location)
 {
     VALUE dup_rest = Qtrue;
 
-    if (arguments_node != NULL) {
-        size_t arg_size = arguments_node->arguments.size;
-        const pm_node_list_t *args = &arguments_node->arguments;
-        // Calls like foo(1, *f, **hash) that use splat and kwsplat
-        // could be eligible for eliding duping the rest array (dup_reset=false).
-        if (arg_size >= 2
-                && PM_NODE_FLAG_P(arguments_node, PM_ARGUMENTS_NODE_FLAGS_CONTAINS_SPLAT)
-                && !PM_NODE_FLAG_P(arguments_node, PM_ARGUMENTS_NODE_FLAGS_CONTAINS_MULTIPLE_SPLATS)
-                && PM_NODE_TYPE_P(args->nodes[arg_size - 1], PM_KEYWORD_HASH_NODE)) {
-            dup_rest = Qfalse;
+    const pm_node_list_t *arguments;
+    size_t arguments_size;
 
-            const pm_keyword_hash_node_t *keyword_arg = (const pm_keyword_hash_node_t *) args->nodes[arg_size - 1];
-            const pm_node_list_t *elements = &keyword_arg->elements;
+    // Calls like foo(1, *f, **hash) that use splat and kwsplat could be
+    // eligible for eliding duping the rest array (dup_reset=false).
+    if (
+        arguments_node != NULL &&
+        (arguments = &arguments_node->arguments, arguments_size = arguments->size) >= 2 &&
+        PM_NODE_FLAG_P(arguments_node, PM_ARGUMENTS_NODE_FLAGS_CONTAINS_SPLAT) &&
+        !PM_NODE_FLAG_P(arguments_node, PM_ARGUMENTS_NODE_FLAGS_CONTAINS_MULTIPLE_SPLATS) &&
+        PM_NODE_TYPE_P(arguments->nodes[arguments_size - 1], PM_KEYWORD_HASH_NODE)
+    ) {
+        // Start by assuming that dup_rest=false, then check each element of the
+        // hash to ensure we don't need to flip it back to true (in case one of
+        // the elements could potentially mutate the array).
+        dup_rest = Qfalse;
 
-            if (PM_NODE_TYPE_P(elements->nodes[0], PM_ASSOC_NODE)) {
-                const pm_assoc_node_t *assoc = (const pm_assoc_node_t *) elements->nodes[0];
+        const pm_keyword_hash_node_t *keyword_hash = (const pm_keyword_hash_node_t *) arguments->nodes[arguments_size - 1];
+        const pm_node_list_t *elements = &keyword_hash->elements;
 
-                if (pm_setup_args_dup_rest_p(assoc->value)) {
-                    dup_rest = Qtrue;
-                }
-            }
+        for (size_t index = 0; dup_rest == Qfalse && index < elements->size; index++) {
+            const pm_node_t *element = elements->nodes[index];
 
-            if (PM_NODE_TYPE_P(elements->nodes[0], PM_ASSOC_SPLAT_NODE)) {
-                const pm_assoc_splat_node_t *assoc = (const pm_assoc_splat_node_t *) elements->nodes[0];
-
-                if (assoc->value && pm_setup_args_dup_rest_p(assoc->value)) {
-                    dup_rest = Qtrue;
-                }
+            switch (PM_NODE_TYPE(element)) {
+              case PM_ASSOC_NODE: {
+                const pm_assoc_node_t *assoc = (const pm_assoc_node_t *) element;
+                if (pm_setup_args_dup_rest_p(assoc->key) || pm_setup_args_dup_rest_p(assoc->value)) dup_rest = Qtrue;
+                break;
+              }
+              case PM_ASSOC_SPLAT_NODE: {
+                const pm_assoc_splat_node_t *assoc = (const pm_assoc_splat_node_t *) element;
+                if (assoc->value != NULL && pm_setup_args_dup_rest_p(assoc->value)) dup_rest = Qtrue;
+                break;
+              }
+              default:
+                break;
             }
         }
     }
 
     VALUE initial_dup_rest = dup_rest;
+    int argc;
 
     if (block && PM_NODE_TYPE_P(block, PM_BLOCK_ARGUMENT_NODE)) {
         // We compile the `&block_arg` expression first and stitch it later
         // since the nature of the expression influences whether splat should
         // duplicate the array.
         bool regular_block_arg = true;
+
         DECL_ANCHOR(block_arg);
         INIT_ANCHOR(block_arg);
         pm_compile_node(iseq, block, block_arg, false, scope_node);
@@ -1869,26 +1907,26 @@ pm_setup_args(const pm_arguments_node_t *arguments_node, const pm_node_t *block,
                 if (iobj->insn_id == BIN(getblockparam)) {
                     iobj->insn_id = BIN(getblockparamproxy);
                 }
+
                 // Allow splat without duplication for simple one-instruction
-                // block arguments like `&arg`. It is known that this optimization
-                // can be too aggressive in some cases. See [Bug #16504].
+                // block arguments like `&arg`. It is known that this
+                // optimization can be too aggressive in some cases. See
+                // [Bug #16504].
                 regular_block_arg = false;
             }
         }
 
-        int argc = pm_setup_args_core(arguments_node, block, flags, regular_block_arg, kw_arg, &dup_rest, iseq, ret, scope_node, node_location);
-
-        if (*flags & VM_CALL_ARGS_SPLAT && dup_rest != initial_dup_rest) {
-            *flags |= VM_CALL_ARGS_SPLAT_MUT;
-        }
-
+        argc = pm_setup_args_core(arguments_node, block, flags, regular_block_arg, kw_arg, &dup_rest, iseq, ret, scope_node, node_location);
         PUSH_SEQ(ret, block_arg);
-
-        return argc;
+    }
+    else {
+        argc = pm_setup_args_core(arguments_node, block, flags, false, kw_arg, &dup_rest, iseq, ret, scope_node, node_location);
     }
 
-    int argc = pm_setup_args_core(arguments_node, block, flags, false, kw_arg, &dup_rest, iseq, ret, scope_node, node_location);
-
+    // If the dup_rest flag was consumed while compiling the arguments (which
+    // effectively means we found the splat node), then it would have changed
+    // during the call to pm_setup_args_core. In this case, we want to add the
+    // VM_CALL_ARGS_SPLAT_MUT flag.
     if (*flags & VM_CALL_ARGS_SPLAT && dup_rest != initial_dup_rest) {
         *flags |= VM_CALL_ARGS_SPLAT_MUT;
     }
@@ -3069,6 +3107,7 @@ pm_scope_node_init(const pm_node_t *node, pm_scope_node_t *scope, pm_scope_node_
         scope->filepath_encoding = previous->filepath_encoding;
         scope->constants = previous->constants;
         scope->coverage_enabled = previous->coverage_enabled;
+        scope->script_lines = previous->script_lines;
     }
 
     switch (PM_NODE_TYPE(node)) {
@@ -10341,7 +10380,7 @@ pm_parse_process_error(const pm_parse_result_t *result)
  * result object is zeroed out.
  */
 static VALUE
-pm_parse_process(pm_parse_result_t *result, pm_node_t *node)
+pm_parse_process(pm_parse_result_t *result, pm_node_t *node, VALUE *script_lines)
 {
     pm_parser_t *parser = &result->parser;
 
@@ -10358,6 +10397,20 @@ pm_parse_process(pm_parse_result_t *result, pm_node_t *node)
     if (!scope_node->encoding) rb_bug("Encoding not found %s!", parser->encoding->name);
 
     scope_node->coverage_enabled = coverage_enabled;
+
+    // If RubyVM.keep_script_lines is set to true, then we need to create that
+    // array of script lines here.
+    if (script_lines != NULL) {
+        *script_lines = rb_ary_new_capa(parser->newline_list.size);
+
+        for (size_t index = 0; index < parser->newline_list.size; index++) {
+            size_t offset = parser->newline_list.offsets[index];
+            size_t length = index == parser->newline_list.size - 1 ? (parser->end - (parser->start + offset)) : (parser->newline_list.offsets[index + 1] - offset);
+            rb_ary_push(*script_lines, rb_enc_str_new((const char *) parser->start + offset, length, scope_node->encoding));
+        }
+
+        scope_node->script_lines = script_lines;
+    }
 
     // Emit all of the various warnings from the parse.
     const pm_diagnostic_t *warning;
@@ -10578,6 +10631,8 @@ read_entire_file(pm_string_t *string, const char *filepath)
     close(fd);
     *string = (pm_string_t) { .type = PM_STRING_MAPPED, .source = source, .length = size };
     return true;
+#else
+    return pm_string_file_init(string, filepath);
 #endif
 }
 
@@ -10623,7 +10678,7 @@ pm_load_file(pm_parse_result_t *result, VALUE filepath, bool load_error)
  * is zeroed out.
  */
 VALUE
-pm_parse_file(pm_parse_result_t *result, VALUE filepath)
+pm_parse_file(pm_parse_result_t *result, VALUE filepath, VALUE *script_lines)
 {
     result->node.filepath_encoding = rb_enc_get(filepath);
     pm_options_filepath_set(&result->options, RSTRING_PTR(filepath));
@@ -10632,7 +10687,7 @@ pm_parse_file(pm_parse_result_t *result, VALUE filepath)
     pm_parser_init(&result->parser, pm_string_source(&result->input), pm_string_length(&result->input), &result->options);
     pm_node_t *node = pm_parse(&result->parser);
 
-    VALUE error = pm_parse_process(result, node);
+    VALUE error = pm_parse_process(result, node, script_lines);
 
     // If we're parsing a filepath, then we need to potentially support the
     // SCRIPT_LINES__ constant, which can be a hash that has an array of lines
@@ -10640,10 +10695,10 @@ pm_parse_file(pm_parse_result_t *result, VALUE filepath)
     ID id_script_lines = rb_intern("SCRIPT_LINES__");
 
     if (rb_const_defined_at(rb_cObject, id_script_lines)) {
-        VALUE script_lines = rb_const_get_at(rb_cObject, id_script_lines);
+        VALUE constant_script_lines = rb_const_get_at(rb_cObject, id_script_lines);
 
-        if (RB_TYPE_P(script_lines, T_HASH)) {
-            rb_hash_aset(script_lines, filepath, pm_parse_file_script_lines(&result->node, &result->parser));
+        if (RB_TYPE_P(constant_script_lines, T_HASH)) {
+            rb_hash_aset(constant_script_lines, filepath, pm_parse_file_script_lines(&result->node, &result->parser));
         }
     }
 
@@ -10655,11 +10710,11 @@ pm_parse_file(pm_parse_result_t *result, VALUE filepath)
  * cannot be read or if it cannot be parsed properly.
  */
 VALUE
-pm_load_parse_file(pm_parse_result_t *result, VALUE filepath)
+pm_load_parse_file(pm_parse_result_t *result, VALUE filepath, VALUE *script_lines)
 {
     VALUE error = pm_load_file(result, filepath, false);
     if (NIL_P(error)) {
-        error = pm_parse_file(result, filepath);
+        error = pm_parse_file(result, filepath, script_lines);
     }
 
     return error;
@@ -10672,7 +10727,7 @@ pm_load_parse_file(pm_parse_result_t *result, VALUE filepath)
  * error is returned.
  */
 VALUE
-pm_parse_string(pm_parse_result_t *result, VALUE source, VALUE filepath)
+pm_parse_string(pm_parse_result_t *result, VALUE source, VALUE filepath, VALUE *script_lines)
 {
     rb_encoding *encoding = rb_enc_get(source);
     if (!rb_enc_asciicompat(encoding)) {
@@ -10690,7 +10745,7 @@ pm_parse_string(pm_parse_result_t *result, VALUE source, VALUE filepath)
     pm_parser_init(&result->parser, pm_string_source(&result->input), pm_string_length(&result->input), &result->options);
     pm_node_t *node = pm_parse(&result->parser);
 
-    return pm_parse_process(result, node);
+    return pm_parse_process(result, node, script_lines);
 }
 
 /**
@@ -10740,7 +10795,7 @@ pm_parse_stdin(pm_parse_result_t *result)
     // we went through an IO object to be visible to the user.
     rb_reset_argf_lineno(0);
 
-    return pm_parse_process(result, node);
+    return pm_parse_process(result, node, NULL);
 }
 
 #undef NEW_ISEQ
