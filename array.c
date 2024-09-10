@@ -1415,7 +1415,7 @@ rb_ary_cat(VALUE ary, const VALUE *argv, long len)
  *    a = [:foo, 'bar', 2]               # => [:foo, "bar", 2]
       a.push([:baz, :bat], [:bam, :bad]) # => [:foo, "bar", 2, [:baz, :bat], [:bam, :bad]]
  *
- *  Related: Array#pop, Array#shift, Array#unshift.
+ *  Related: see {Methods for Assigning}[rdoc-ref:Array@Methods+for+Assigning].
  */
 
 static VALUE
@@ -1945,7 +1945,8 @@ rb_ary_aref1(VALUE ary, VALUE arg)
  *
  *    a.at(-2) # => "bar"
  *
- *  Related: Array#[].
+ *  Related: Array#[];
+ *  see also {Methods for Fetching}[rdoc-ref:Array@Methods+for+Fetching].
  */
 
 VALUE
@@ -3558,6 +3559,8 @@ static VALUE rb_ary_bsearch_index(VALUE ary);
  *  or +nil+ if the search found no suitable element.
  *
  *  See {Binary Searching}[rdoc-ref:bsearch.rdoc].
+ *
+ *  Related: see {Methods for Fetching}[rdoc-ref:Array@Methods+for+Fetching].
  */
 
 static VALUE
@@ -3580,6 +3583,8 @@ rb_ary_bsearch(VALUE ary)
  *  or +nil+ if the search found no suitable element.
  *
  *  See {Binary Searching}[rdoc-ref:bsearch.rdoc].
+ *
+ *  Related: see {Methods for Fetching}[rdoc-ref:Array@Methods+for+Fetching].
  */
 
 static VALUE
@@ -3690,6 +3695,9 @@ rb_ary_sort_by_bang(VALUE ary)
  *    a1 # => [Symbol, String, Integer]
  *
  *  With no block given, returns a new Enumerator.
+ *
+ *  Related: #collect!;
+ *  see also {Methods for Converting}[rdoc-ref:Array@Methods+for+Converting].
  */
 
 static VALUE
@@ -3722,6 +3730,9 @@ rb_ary_collect(VALUE ary)
  *    a.map! { |element| element.class } # => [Symbol, String, Integer]
  *
  *  With no block given, returns a new Enumerator.
+ *
+ *  Related: #collect;
+ *  see also {Methods for Converting}[rdoc-ref:Array@Methods+for+Converting].
  */
 
 static VALUE
@@ -4004,14 +4015,14 @@ ary_resize_smaller(VALUE ary, long len)
 
 /*
  *  call-seq:
- *    delete(object) -> last_deleted_object
- *    delete(object) {|element| ... } -> last_deleted_object or block_return
+ *    delete(object) -> last_removed_object
+ *    delete(object) {|element| ... } -> last_removed_object or block_return
  *
  *  Removes zero or more elements from +self+.
  *
  *  With no block given,
  *  removes from +self+ each element +ele+ such that <tt>ele == object</tt>;
- *  returns the last deleted element:
+ *  returns the last removed element:
  *
  *    a = [0, 1, 2, 2.0]
  *    a.delete(2) # => 2.0
@@ -4025,7 +4036,7 @@ ary_resize_smaller(VALUE ary, long len)
  *  removes from +self+ each element +ele+ such that <tt>ele == object</tt>.
  *
  *  If any such elements are found, ignores the block
- *  and returns the last deleted element:
+ *  and returns the last removed element:
  *
  *    a = [0, 1, 2, 2.0]
  *    a.delete(2) {|element| fail 'Cannot happen' } # => 2.0
@@ -4037,7 +4048,6 @@ ary_resize_smaller(VALUE ary, long len)
  *    # => "Element 2 not found."
  *
  *  Related: see {Methods for Deleting}[rdoc-ref:Array@Methods+for+Deleting].
- *
  */
 
 VALUE
@@ -4658,6 +4668,7 @@ rb_ary_replace(VALUE copy, VALUE orig)
  *    a = [:foo, 'bar', 2]
  *    a.clear # => []
  *
+ *  Related: see {Methods for Deleting}[rdoc-ref:Array@Methods+for+Deleting].
  */
 
 VALUE
@@ -4991,6 +5002,7 @@ ary_append(VALUE x, VALUE y)
  *    a.concat(['two', 'three'], [:four, :five], a)
  *    # => [0, 1, "two", "three", :four, :five, 0, 1]
  *
+ *  Related: see {Methods for Assigning}[rdoc-ref:Array@Methods+for+Assigning].
  */
 
 static VALUE
@@ -5094,7 +5106,8 @@ rb_ary_times(VALUE ary, VALUE times)
  *
  *  Returns +nil+ if no such element is found.
  *
- *  Related: Array#rassoc.
+ *  Related: Array#rassoc;
+ *  see also {Methods for Fetching}[rdoc-ref:Array@Methods+for+Fetching].
  */
 
 VALUE
@@ -6305,7 +6318,8 @@ rb_ary_uniq(VALUE ary)
  *    a          # => [0, false, "", [], {}]
  *    a.compact! # => nil
  *
- *  Related: Array#compact.
+ *  Related: Array#compact;
+ *  see also {Methods for Deleting}[rdoc-ref:Array@Methods+for+Deleting].
  */
 
 static VALUE
@@ -6371,10 +6385,12 @@ rb_ary_compact(VALUE ary)
  *  With no argument and a block given, calls the block with each element;
  *  returns the count of elements for which the block returns a truthy value:
  *
- *    [0, 1, 2, 3].count {|element| element > 1} # => 2
+ *    [0, 1, 2, 3].count {|element| element > 1 } # => 2
  *
  *  With argument +object+ and a block given, issues a warning, ignores the block,
  *  and returns the count of elements <tt>==</tt> to +object+.
+ *
+ *  Related: see {Methods for Querying}[rdoc-ref:Array@Methods+for+Querying].
  */
 
 static VALUE
@@ -6798,7 +6814,7 @@ rb_ary_cycle_size(VALUE self, VALUE args, VALUE eobj)
  *  {integer-convertible object}[rdoc-ref:implicit_conversion.rdoc@Integer-Convertible+Objects],
  *  or +nil+.
  *
- *  If +count+ is positive,
+ *  When +count+ is positive,
  *  calls the block with each element, then does so repeatedly,
  *  until it has done so +count+ times; returns +nil+:
  *
@@ -6806,18 +6822,20 @@ rb_ary_cycle_size(VALUE self, VALUE args, VALUE eobj)
  *    [0, 1].cycle(2) {|element| output.push(element) } # => nil
  *    output # => [0, 1, 0, 1]
  *
- *  If +count+ is zero or negative, does not call the block:
+ *  When +count+ is zero or negative, does not call the block:
  *
  *    [0, 1].cycle(0) {|element| fail 'Cannot happen' }  # => nil
  *    [0, 1].cycle(-1) {|element| fail 'Cannot happen' } # => nil
  *
- *  If +count+ is +nil+, cycles forever:
+ *  When +count+ is +nil+, cycles forever:
  *
  *    # Prints 0 and 1 forever.
  *    [0, 1].cycle {|element| puts element }
  *    [0, 1].cycle(nil) {|element| puts element }
  *
  *  With no block given, returns a new Enumerator.
+ *
+ *  Related: see {Methods for Iterating}[rdoc-ref:Array@Methods+for+Iterating].
  */
 static VALUE
 rb_ary_cycle(int argc, VALUE *argv, VALUE ary)
@@ -7147,7 +7165,8 @@ rb_ary_combination_size(VALUE ary, VALUE args, VALUE eobj)
  *
  *  With no block given, returns a new Enumerator.
  *
- *  Related: Array#permutation.
+ *  Related: Array#permutation;
+ *  see also {Methods for Iterating}[rdoc-ref:Array@Methods+for+Iterating].
  */
 
 static VALUE
@@ -8642,6 +8661,7 @@ rb_ary_deconstruct(VALUE ary)
  *  - #delete: Removes elements equal to a given object.
  *  - #delete_at: Removes the element at a given offset.
  *  - #delete_if: Removes elements specified by a given block.
+ *  - #clear: Removes all elements.
  *  - #keep_if: Removes elements not specified by a given block.
  *  - #reject!: Removes elements specified by a given block.
  *  - #select! (aliased as #filter!): Removes elements not specified by a given block.
