@@ -1343,12 +1343,27 @@ dummy
       assert_locations(node.children[-1].locations, [[1, 0, 1, 6], [1, 2, 1, 4]])
     end
 
+    def test_break_locations
+      node = RubyVM::AbstractSyntaxTree.parse("loop { break 1 }")
+      assert_locations(node.children[-1].children[-1].children[-1].locations, [[1, 7, 1, 14], [1, 7, 1, 12]])
+    end
+
+    def test_next_locations
+      node = RubyVM::AbstractSyntaxTree.parse("loop { next 1 }")
+      assert_locations(node.children[-1].children[-1].children[-1].locations, [[1, 7, 1, 13], [1, 7, 1, 11]])
+    end
+
     def test_or_locations
       node = RubyVM::AbstractSyntaxTree.parse("1 or 2")
       assert_locations(node.children[-1].locations, [[1, 0, 1, 6], [1, 2, 1, 4]])
 
       node = RubyVM::AbstractSyntaxTree.parse("1 || 2")
       assert_locations(node.children[-1].locations, [[1, 0, 1, 6], [1, 2, 1, 4]])
+    end
+
+    def test_redo_locations
+      node = RubyVM::AbstractSyntaxTree.parse("loop { redo }")
+      assert_locations(node.children[-1].children[-1].children[-1].locations, [[1, 7, 1, 11], [1, 7, 1, 11]])
     end
 
     def test_unless_locations
@@ -1378,6 +1393,22 @@ dummy
     def test_when_locations
       node = RubyVM::AbstractSyntaxTree.parse("case a; when 1 then 2; end")
       assert_locations(node.children[-1].children[1].locations, [[1, 8, 1, 22], [1, 8, 1, 12], [1, 15, 1, 19]])
+    end
+
+    def test_while_locations
+      node = RubyVM::AbstractSyntaxTree.parse("while cond do 1 end")
+      assert_locations(node.children[-1].locations, [[1, 0, 1, 19], [1, 0, 1, 5], [1, 16, 1, 19]])
+
+      node = RubyVM::AbstractSyntaxTree.parse("1 while 2")
+      assert_locations(node.children[-1].locations, [[1, 0, 1, 9], [1, 2, 1, 7], nil])
+    end
+
+    def test_until_locations
+      node = RubyVM::AbstractSyntaxTree.parse("until cond do 1 end")
+      assert_locations(node.children[-1].locations, [[1, 0, 1, 19], [1, 0, 1, 5], [1, 16, 1, 19]])
+
+      node = RubyVM::AbstractSyntaxTree.parse("1 until 2")
+      assert_locations(node.children[-1].locations, [[1, 0, 1, 9], [1, 2, 1, 7], nil])
     end
 
     private

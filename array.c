@@ -4128,9 +4128,9 @@ rb_ary_delete_at(VALUE ary, long pos)
 
 /*
  *  call-seq:
- *    delete_at(index) -> deleted_object or nil
+ *    delete_at(index) -> removed_object or nil
  *
- *  Deletes the element of +self+ at the given +index+, which must be an
+ *  Removes the element of +self+ at the given +index+, which must be an
  *  {integer-convertible object}[rdoc-ref:implicit_conversion.rdoc@Integer-Convertible+Objects].
  *
  *  When +index+ is non-negative, deletes the element at offset +index+:
@@ -4151,6 +4151,7 @@ rb_ary_delete_at(VALUE ary, long pos)
  *    a.delete_at(3)  # => nil
  *    a.delete_at(-4) # => nil
  *
+ *  Related: see {Methods for Deleting}[rdoc-ref:Array@Methods+for+Deleting].
  */
 
 static VALUE
@@ -4406,6 +4407,8 @@ rb_ary_reject(VALUE ary)
  *    a.delete_if {|element| element.to_s.start_with?('b') } # => [:foo, 2]
  *
  *  With no block given, returns a new Enumerator.
+ *
+ *  Related: see {Methods for Deleting}[rdoc-ref:Array@Methods+for+Deleting].
  */
 
 static VALUE
@@ -6355,7 +6358,8 @@ rb_ary_compact_bang(VALUE ary)
  *    a = [nil, 0, nil, false, nil, '', nil, [], nil, {}]
  *    a.compact # => [0, false, "", [], {}]
  *
- *  Related: Array#compact!.
+ *  Related: Array#compact!;
+ *  see also {Methods for Deleting}[rdoc-ref:Array@Methods+for+Deleting].
  */
 
 static VALUE
@@ -7694,9 +7698,9 @@ rb_ary_take_while(VALUE ary)
 
 /*
  *  call-seq:
- *    array.drop(n) -> new_array
+ *    drop(n) -> new_array
  *
- *  Returns a new +Array+ containing all but the first +n+ element of +self+,
+ *  Returns a new array containing all but the first +n+ element of +self+,
  *  where +n+ is a non-negative Integer;
  *  does not modify +self+.
  *
@@ -7706,7 +7710,9 @@ rb_ary_take_while(VALUE ary)
  *    a.drop(0) # => [0, 1, 2, 3, 4, 5]
  *    a.drop(1) # => [1, 2, 3, 4, 5]
  *    a.drop(2) # => [2, 3, 4, 5]
+ *    a.drop(9) # => []
  *
+ *  Related: see {Methods for Fetching}[rdoc-ref:Array@Methods+for+Fetching].
  */
 
 static VALUE
@@ -8028,9 +8034,9 @@ rb_ary_one_p(int argc, VALUE *argv, VALUE ary)
  *  call-seq:
  *    array.dig(index, *identifiers) -> object
  *
- *  Finds and returns the object in nested objects
- *  that is specified by +index+ and +identifiers+.
- *  The nested objects may be instances of various classes.
+ *  Finds and returns the object in nested object
+ *  specified by +index+ and +identifiers+;
+ *  the nested objects may be instances of various classes.
  *  See {Dig Methods}[rdoc-ref:dig_methods.rdoc].
  *
  *  Examples:
@@ -8041,6 +8047,7 @@ rb_ary_one_p(int argc, VALUE *argv, VALUE ary)
  *    a.dig(1, 2, 0) # => :bat
  *    a.dig(1, 2, 3) # => nil
  *
+ *  Related: see {Methods for Fetching}[rdoc-ref:Array@Methods+for+Fetching].
  */
 
 static VALUE

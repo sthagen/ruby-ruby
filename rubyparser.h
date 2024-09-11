@@ -323,6 +323,8 @@ typedef struct RNode_LOOP {
     struct RNode *nd_cond;
     struct RNode *nd_body;
     long nd_state;
+    rb_code_location_t keyword_loc;
+    rb_code_location_t closing_loc;
 } rb_node_while_t, rb_node_until_t;
 
 typedef struct RNode_ITER {
@@ -343,6 +345,7 @@ typedef struct RNode_EXITS {
 
     struct RNode *nd_chain;
     struct RNode *nd_stts;
+    rb_code_location_t keyword_loc;
 } rb_node_exits_t, rb_node_break_t, rb_node_next_t, rb_node_redo_t;
 
 typedef struct RNode_RETRY {
