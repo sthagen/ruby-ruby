@@ -1995,17 +1995,19 @@ rb_ary_last(int argc, const VALUE *argv, VALUE ary) // used by parse.y
 
 /*
  *  call-seq:
- *    array.fetch(index) -> element
- *    array.fetch(index, default_value) -> element
- *    array.fetch(index) {|index| ... } -> element
+ *    fetch(index) -> element
+ *    fetch(index, default_value) -> element or default_value
+ *    fetch(index) {|index| ... } -> element or block_return_value
  *
- *  Returns the element at offset  +index+.
+ *  Returns the element of +self+ at offset +index+ if +index+ is in range; +index+ must be an
+ *  {integer-convertible object}[rdoc-ref:implicit_conversion.rdoc@Integer-Convertible+Objects].
  *
- *  With the single Integer argument +index+,
+ *  With the single argument +index+ and no block,
  *  returns the element at offset +index+:
  *
  *    a = [:foo, 'bar', 2]
- *    a.fetch(1) # => "bar"
+ *    a.fetch(1)   # => "bar"
+ *    a.fetch(1.1) # => "bar"
  *
  *  If +index+ is negative, counts from the end of the array:
  *
@@ -2013,12 +2015,12 @@ rb_ary_last(int argc, const VALUE *argv, VALUE ary) // used by parse.y
  *    a.fetch(-1) # => 2
  *    a.fetch(-2) # => "bar"
  *
- *  With arguments +index+ and +default_value+,
- *  returns the element at offset +index+ if index is in range,
- *  otherwise returns +default_value+:
+ *  With arguments +index+ and +default_value+ (which may be any object) and no block,
+ *  returns +default_value+ if +index+ is out-of-range:
  *
  *    a = [:foo, 'bar', 2]
- *    a.fetch(1, nil) # => "bar"
+ *    a.fetch(1, nil)  # => "bar"
+ *    a.fetch(3, :foo) # => :foo
  *
  *  With argument +index+ and a block,
  *  returns the element at offset +index+ if index is in range
@@ -2028,6 +2030,7 @@ rb_ary_last(int argc, const VALUE *argv, VALUE ary) // used by parse.y
  *    a.fetch(1) {|index| raise 'Cannot happen' } # => "bar"
  *    a.fetch(50) {|index| "Value for #{index}" } # => "Value for 50"
  *
+ *  Related: see {Methods for Fetching}[rdoc-ref:Array@Methods+for+Fetching].
  */
 
 static VALUE
@@ -2613,12 +2616,11 @@ rb_ary_each(VALUE ary)
 
 /*
  *  call-seq:
- *    array.each_index {|index| ... } -> self
- *    array.each_index -> Enumerator
+ *    each_index {|index| ... } -> self
+ *    each_index -> new_enumerator
  *
- *  Iterates over array indexes.
- *
- *  When a block given, passes each successive array index to the block;
+ *  With a block given, iterates over the elements of +self+,
+ *  passing each <i>array index</i> to the block;
  *  returns +self+:
  *
  *    a = [:foo, 'bar', 2]
@@ -2640,20 +2642,9 @@ rb_ary_each(VALUE ary)
  *    0
  *    1
  *
- *  When no block given, returns a new Enumerator:
+ *  With no block given, returns a new Enumerator.
  *
- *    a = [:foo, 'bar', 2]
- *    e = a.each_index
- *    e # => #<Enumerator: [:foo, "bar", 2]:each_index>
- *    a1 = e.each {|index|  puts "#{index} #{a[index]}"}
- *
- *  Output:
- *
- *    0 foo
- *    1 bar
- *    2 2
- *
- *  Related: #each, #reverse_each.
+ *  Related: see {Methods for Iterating}[rdoc-ref:Array@Methods+for+Iterating].
  */
 
 static VALUE
@@ -2751,6 +2742,8 @@ rb_ary_length(VALUE ary)
  *
  *  Returns +true+ if the count of elements in +self+ is zero,
  *  +false+ otherwise.
+ *
+ *  Related: see {Methods for Querying}[rdoc-ref:Array@Methods+for+Querying].
  */
 
 static VALUE
@@ -5247,7 +5240,7 @@ recursive_eql(VALUE ary1, VALUE ary2, int recur)
 
 /*
  *  call-seq:
- *    array.eql?(other_array) -> true or false
+ *    eql?(other_array) -> true or false
  *
  *  Returns +true+ if +self+ and +other_array+ are the same size,
  *  and if, for each index +i+ in +self+, <tt>self[i].eql?(other_array[i])</tt>:
@@ -5260,6 +5253,8 @@ recursive_eql(VALUE ary1, VALUE ary2, int recur)
  *
  *  This method is different from method Array#==,
  *  which compares using method <tt>Object#==</tt>.
+ *
+ *  Related: see {Methods for Querying}[rdoc-ref:Array@Methods+for+Querying].
  */
 
 static VALUE
@@ -5521,19 +5516,21 @@ rb_ary_diff(VALUE ary1, VALUE ary2)
 
 /*
  *  call-seq:
- *    array.difference(*other_arrays) -> new_array
+ *    difference(*other_arrays = []) -> new_array
  *
- *  Returns a new +Array+ containing only those elements from +self+
- *  that are not found in any of the Arrays +other_arrays+;
+ *  Returns a new array containing only those elements from +self+
+ *  that are not found in any of the given +other_arrays+;
  *  items are compared using <tt>eql?</tt>;  order from +self+ is preserved:
  *
  *    [0, 1, 1, 2, 1, 1, 3, 1, 1].difference([1]) # => [0, 2, 3]
- *    [0, 1, 2, 3].difference([3, 0], [1, 3]) # => [2]
- *    [0, 1, 2].difference([4]) # => [0, 1, 2]
+ *    [0, 1, 2, 3].difference([3, 0], [1, 3])     # => [2]
+ *    [0, 1, 2].difference([4])                   # => [0, 1, 2]
+ *    [0, 1, 2].difference                        # => [0, 1, 2]
  *
- *  Returns a copy of +self+ if no arguments given.
+ *  Returns a copy of +self+ if no arguments are given.
  *
- *  Related: Array#-.
+ *  Related: Array#-;
+ *  see also {Methods for Combining}[rdoc-ref:Array@Methods+for+Combining].
  */
 
 static VALUE
@@ -7731,23 +7728,20 @@ rb_ary_drop(VALUE ary, VALUE n)
 
 /*
  *  call-seq:
- *    array.drop_while {|element| ... } -> new_array
- *    array.drop_while -> new_enumerator
-
- *  Returns a new +Array+ containing zero or more trailing elements of +self+;
- *  does not modify +self+.
+ *    drop_while {|element| ... } -> new_array
+ *    drop_while -> new_enumerator
  *
  *  With a block given, calls the block with each successive element of +self+;
  *  stops if the block returns +false+ or +nil+;
- *  returns a new +Array+ _omitting_ those elements for which the block returned a truthy value:
+ *  returns a new array _omitting_ those elements for which the block returned a truthy value;
+ *  does not modify +self+:
  *
  *    a = [0, 1, 2, 3, 4, 5]
  *    a.drop_while {|element| element < 3 } # => [3, 4, 5]
  *
- *  With no block given, returns a new Enumerator:
+ *  With no block given, returns a new Enumerator.
  *
- *    [0, 1].drop_while # => # => #<Enumerator: [0, 1]:drop_while>
- *
+ *  Related: see {Methods for Fetching}[rdoc-ref:Array@Methods+for+Fetching].
  */
 
 static VALUE
@@ -8606,6 +8600,7 @@ rb_ary_deconstruct(VALUE ary)
  *
  *  - #[] (aliased as #slice): Returns consecutive elements as determined by a given argument.
  *  - #fetch: Returns the element at a given offset.
+ *  - #fetch_values: Returns elements at given offsets.
  *  - #first: Returns one or more leading elements.
  *  - #last: Returns one or more trailing elements.
  *  - #max: Returns one or more maximum-valued elements,

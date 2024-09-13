@@ -61,6 +61,36 @@ module Prism
       end
     end
 
+    def test_parse_tempfile
+      Tempfile.create(["test_parse_tempfile", ".rb"]) do |t|
+        t.puts ["begin\n", " end\n"]
+        t.flush
+        Prism.parse_file(t.path)
+      end
+    end
+
+    if RUBY_ENGINE != "truffleruby"
+      def test_parse_nonascii
+        Dir.mktmpdir do |dir|
+          path = File.join(dir, "\u{3042 3044 3046 3048 304a}.rb".encode(Encoding::Windows_31J))
+          File.write(path, "ok")
+          Prism.parse_file(path)
+        end
+      end
+    end
+
+    def test_parse_directory
+      error = nil
+
+      begin
+        Prism.parse_file(__dir__)
+      rescue SystemCallError => error
+      end
+
+      return if error.nil? || error.is_a?(Errno::ENOMEM)
+      assert_kind_of Errno::EISDIR, error
+    end
+
     private
 
     def find_source_file_node(program)
