@@ -563,9 +563,9 @@ typedef struct rb_objspace {
 
         /* basic statistics */
         size_t count;
-        uint64_t marking_time_ns;
+        unsigned long long marking_time_ns;
         struct timespec marking_start_time;
-        uint64_t sweeping_time_ns;
+        unsigned long long sweeping_time_ns;
         struct timespec sweeping_start_time;
 
         /* Weak references */
@@ -1522,25 +1522,23 @@ rb_gc_impl_set_event_hook(void *objspace_ptr, const rb_event_flag_t event)
     objspace->flags.has_newobj_hook = !!(objspace->hook_events & RUBY_INTERNAL_EVENT_NEWOBJ);
 }
 
-VALUE
-rb_gc_impl_get_profile_total_time(void *objspace_ptr)
+unsigned long long
+rb_gc_impl_get_total_time(void *objspace_ptr)
 {
     rb_objspace_t *objspace = objspace_ptr;
 
-    uint64_t marking_time = objspace->profile.marking_time_ns;
-    uint64_t sweeping_time = objspace->profile.sweeping_time_ns;
+    unsigned long long marking_time = objspace->profile.marking_time_ns;
+    unsigned long long sweeping_time = objspace->profile.sweeping_time_ns;
 
-    return ULL2NUM(marking_time + sweeping_time);
+    return marking_time + sweeping_time;
 }
 
-VALUE
+void
 rb_gc_impl_set_measure_total_time(void *objspace_ptr, VALUE flag)
 {
     rb_objspace_t *objspace = objspace_ptr;
 
     objspace->flags.measure_gc = RTEST(flag) ? TRUE : FALSE;
-
-    return flag;
 }
 
 VALUE
@@ -6671,7 +6669,7 @@ gc_clock_start(struct timespec *ts)
     }
 }
 
-static uint64_t
+static unsigned long long
 gc_clock_end(struct timespec *ts)
 {
     struct timespec end_time;
@@ -6679,7 +6677,7 @@ gc_clock_end(struct timespec *ts)
     if ((ts->tv_sec > 0 || ts->tv_nsec > 0) &&
             current_process_time(&end_time) &&
             end_time.tv_sec >= ts->tv_sec) {
-        return (uint64_t)(end_time.tv_sec - ts->tv_sec) * (1000 * 1000 * 1000) +
+        return (unsigned long long)(end_time.tv_sec - ts->tv_sec) * (1000 * 1000 * 1000) +
                     (end_time.tv_nsec - ts->tv_nsec);
     }
 
