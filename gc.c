@@ -635,7 +635,7 @@ typedef struct gc_function_map {
     VALUE (*object_id_to_ref)(void *objspace_ptr, VALUE object_id);
     // Statistics
     void (*set_measure_total_time)(void *objspace_ptr, VALUE flag);
-    VALUE (*get_measure_total_time)(void *objspace_ptr);
+    bool (*get_measure_total_time)(void *objspace_ptr);
     unsigned long long (*get_total_time)(void *objspace_ptr);
     size_t (*gc_count)(void *objspace_ptr);
     VALUE (*latest_gc_info)(void *objspace_ptr, VALUE key);
@@ -3373,19 +3373,6 @@ VALUE
 rb_gc_latest_gc_info(VALUE key)
 {
     return rb_gc_impl_latest_gc_info(rb_gc_get_objspace(), key);
-}
-
-static VALUE
-gc_latest_gc_info(rb_execution_context_t *ec, VALUE self, VALUE arg)
-{
-    if (NIL_P(arg)) {
-        arg = rb_hash_new();
-    }
-    else if (!SYMBOL_P(arg) && !RB_TYPE_P(arg, T_HASH)) {
-        rb_raise(rb_eTypeError, "non-hash or symbol given");
-    }
-
-    return rb_gc_latest_gc_info(arg);
 }
 
 static VALUE
