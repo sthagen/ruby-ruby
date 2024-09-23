@@ -261,24 +261,30 @@ dump_node(VALUE buf, VALUE indent, int comment, const NODE * node)
         ANN("format: case [nd_head]; [nd_body]; end");
         ANN("example: case x; when 1; foo; when 2; bar; else baz; end");
         F_NODE(nd_head, RNODE_CASE, "case expr");
-        LAST_NODE;
         F_NODE(nd_body, RNODE_CASE, "when clauses");
+        F_LOC(case_keyword_loc, RNODE_CASE);
+        LAST_NODE;
+        F_LOC(end_keyword_loc, RNODE_CASE);
         return;
       case NODE_CASE2:
         ANN("case statement with no head");
         ANN("format: case; [nd_body]; end");
         ANN("example: case; when 1; foo; when 2; bar; else baz; end");
         F_NODE(nd_head, RNODE_CASE2, "case expr");
-        LAST_NODE;
         F_NODE(nd_body, RNODE_CASE2, "when clauses");
+        F_LOC(case_keyword_loc, RNODE_CASE2);
+        LAST_NODE;
+        F_LOC(end_keyword_loc, RNODE_CASE2);
         return;
       case NODE_CASE3:
         ANN("case statement (pattern matching)");
         ANN("format: case [nd_head]; [nd_body]; end");
         ANN("example: case x; in 1; foo; in 2; bar; else baz; end");
         F_NODE(nd_head, RNODE_CASE3, "case expr");
-        LAST_NODE;
         F_NODE(nd_body, RNODE_CASE3, "in clauses");
+        F_LOC(case_keyword_loc, RNODE_CASE3);
+        LAST_NODE;
+        F_LOC(end_keyword_loc, RNODE_CASE3);
         return;
 
       case NODE_WHEN:
