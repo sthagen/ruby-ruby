@@ -573,6 +573,7 @@ typedef struct RNode_RETURN {
     NODE node;
 
     struct RNode *nd_stts;
+    rb_code_location_t keyword_loc;
 } rb_node_return_t;
 
 typedef struct RNode_YIELD {
@@ -810,6 +811,7 @@ typedef struct RNode_BLOCK_PASS {
     struct RNode *nd_head;
     struct RNode *nd_body;
     unsigned int forwarding: 1;
+    rb_code_location_t operator_loc;
 } rb_node_block_pass_t;
 
 typedef struct RNode_DEFN {

@@ -374,8 +374,9 @@ dump_node(VALUE buf, VALUE indent, int comment, const NODE * node)
         ANN("return statement");
         ANN("format: return [nd_stts]");
         ANN("example: return 1");
-        LAST_NODE;
         F_NODE(nd_stts, RNODE_RETURN, "value");
+        LAST_NODE;
+        F_LOC(keyword_loc, RNODE_RETURN);
         return;
 
       case NODE_REDO:
@@ -909,8 +910,9 @@ dump_node(VALUE buf, VALUE indent, int comment, const NODE * node)
             }
         }
         F_NODE(nd_head, RNODE_BLOCK_PASS, "other arguments");
-        LAST_NODE;
         F_NODE(nd_body, RNODE_BLOCK_PASS, "block argument");
+        LAST_NODE;
+        F_LOC(operator_loc, RNODE_BLOCK_PASS);
         return;
 
       case NODE_DEFN:

@@ -1348,6 +1348,14 @@ dummy
       assert_locations(node.children[-1].locations, [[1, 0, 1, 6], [1, 2, 1, 4]])
     end
 
+    def test_block_pass_locations
+      node = ast_parse("foo(&bar)")
+      assert_locations(node.children[-1].children[-1].locations, [[1, 4, 1, 8], [1, 4, 1, 5]])
+
+      node = ast_parse("def a(&); b(&) end")
+      assert_locations(node.children[-1].children[-1].children[-1].children[-1].children[-1].locations, [[1, 12, 1, 13], [1, 12, 1, 13]])
+    end
+
     def test_break_locations
       node = ast_parse("loop { break 1 }")
       assert_locations(node.children[-1].children[-1].children[-1].locations, [[1, 7, 1, 14], [1, 7, 1, 12]])
@@ -1384,6 +1392,14 @@ dummy
     def test_redo_locations
       node = ast_parse("loop { redo }")
       assert_locations(node.children[-1].children[-1].children[-1].locations, [[1, 7, 1, 11], [1, 7, 1, 11]])
+    end
+
+    def test_return_locations
+      node = ast_parse("return 1")
+      assert_locations(node.children[-1].locations, [[1, 0, 1, 8], [1, 0, 1, 6]])
+
+      node = ast_parse("return")
+      assert_locations(node.children[-1].locations, [[1, 0, 1, 6], [1, 0, 1, 6]])
     end
 
     def test_unless_locations
