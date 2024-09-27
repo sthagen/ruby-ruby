@@ -101,7 +101,7 @@ runs:
     - if: steps.which.outputs.autoreconf
       shell: bash
       working-directory: ${{ inputs.srcdir }}
-      run: ./autogen.sh
+      run: ./autogen.sh --install
 
     # This is for MinGW.
     - if: runner.os == 'Windows'
@@ -138,7 +138,9 @@ runs:
       run: |
         sudo chmod -R go-w /usr/share
         chmod -v go-w $HOME $HOME/.config || :
-        sudo bash -c 'IFS=:; for d in '"$PATH"'; do chmod -v go-w $d; done' || :
+        SAVE_IFS="$IFS" IFS=:; set $PATH; dirs=() IFS="$SAVE_IFS"
+        for d do [ ! -d "$d" ] || dirs+=("$d"); done
+        sudo chmod -v go-w "${dirs[@]}" || :
 
     - if: inputs.dummy-files == 'true'
       shell: bash

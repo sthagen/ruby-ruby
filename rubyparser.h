@@ -455,6 +455,10 @@ typedef struct RNode_OP_ASGN1 {
     ID nd_mid;
     struct RNode *nd_index;
     struct RNode *nd_rvalue;
+    rb_code_location_t call_operator_loc;
+    rb_code_location_t opening_loc;
+    rb_code_location_t closing_loc;
+    rb_code_location_t binary_operator_loc;
 } rb_node_op_asgn1_t;
 
 typedef struct RNode_OP_ASGN2 {
@@ -1217,7 +1221,6 @@ typedef struct rb_parser_config_struct {
     VALUE (*str_new)(const char *ptr, long len);
     VALUE (*str_new_cstr)(const char *ptr);
     VALUE (*str_to_interned_str)(VALUE);
-    int (*is_ascii_string)(VALUE str);
     VALUE (*enc_str_new)(const char *ptr, long len, rb_encoding *enc);
     RBIMPL_ATTR_FORMAT(RBIMPL_PRINTF_FORMAT, 2, 0)
     VALUE (*str_vcatf)(VALUE str, const char *fmt, va_list ap);
