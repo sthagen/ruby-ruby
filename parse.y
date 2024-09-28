@@ -709,10 +709,11 @@ after_pop_stack(int len, struct parser_params *p)
 #define VALID_SYMNAME_P(s, l, enc, type) (rb_enc_symname_type(s, l, enc, (1U<<(type))) == (int)(type))
 
 #ifndef RIPPER
-static inline bool
-end_with_newline_p(struct parser_params *p, VALUE str)
+static inline int
+char_at_end(struct parser_params *p, VALUE str, int when_empty)
 {
-    return RSTRING_LEN(str) > 0 && RSTRING_END(str)[-1] == '\n';
+    long len = RSTRING_LEN(str);
+    return len > 0 ? (unsigned char)RSTRING_PTR(str)[len-1] : when_empty;
 }
 #endif
 
@@ -2002,10 +2003,10 @@ parser_memhash(const void *ptr, long len)
     ((ptrvar) = str->ptr,                            \
      (lenvar) = str->len)
 
-static inline bool
-parser_string_end_with_newline_p(struct parser_params *p, rb_parser_string_t *str)
+static inline int
+parser_string_char_at_end(struct parser_params *p, rb_parser_string_t *str, int when_empty)
 {
-    return PARSER_STRING_LEN(str) > 0 && PARSER_STRING_END(str)[-1] == '\n';
+    return PARSER_STRING_LEN(str) > 0 ? (unsigned char)PARSER_STRING_END(str)[-1] : when_empty;
 }
 
 static rb_parser_string_t *
@@ -2342,6 +2343,9 @@ rb_parser_str_buf_cat(struct parser_params *p, rb_parser_string_t *str, const ch
     return str;
 }
 
+#define parser_str_cat(str, ptr, len) rb_parser_str_buf_cat(p, str, ptr, len)
+#define parser_str_cat_cstr(str, lit) rb_parser_str_buf_cat(p, str, lit, strlen(lit))
+
 static rb_parser_string_t *
 rb_parser_enc_cr_str_buf_cat(struct parser_params *p, rb_parser_string_t *str, const char *ptr, long len,
     rb_encoding *ptr_enc, int ptr_cr, int *ptr_cr_ret)
@@ -2407,7 +2411,7 @@ rb_parser_enc_cr_str_buf_cat(struct parser_params *p, rb_parser_string_t *str, c
     if (len < 0) {
         compile_error(p, "negative string size (or size too big)");
     }
-    rb_parser_str_buf_cat(p, str, ptr, len);
+    parser_str_cat(str, ptr, len);
     PARSER_ENCODING_CODERANGE_SET(str, res_enc, res_cr);
     return str;
 
@@ -6923,8 +6927,8 @@ static enum yytokentype here_document(struct parser_params*,rb_strterm_heredoc_t
 }
 # define set_yylval_str(x) \
 do { \
-  set_yylval_node(NEW_STR(rb_str_to_parser_string(p, x), &_cur_loc)); \
-  set_parser_s_value(x); \
+  set_yylval_node(NEW_STR(x, &_cur_loc)); \
+  set_parser_s_value(rb_str_new_mutable_parser_string(x)); \
 } while(0)
 # define set_yylval_num(x) { \
   yylval.num = (x); \
@@ -6992,7 +6996,7 @@ rb_parser_str_escape(struct parser_params *p, rb_parser_string_t *str)
         const char *cc;
         int n = rb_enc_precise_mbclen(ptr, pend, enc);
         if (!MBCLEN_CHARFOUND_P(n)) {
-            if (ptr > prev) rb_parser_str_buf_cat(p, result, prev, ptr - prev);
+            if (ptr > prev) parser_str_cat(result, prev, ptr - prev);
             n = rb_enc_mbminlen(enc);
             if (pend < ptr + n)
                 n = (int)(pend - ptr);
@@ -7001,7 +7005,7 @@ rb_parser_str_escape(struct parser_params *p, rb_parser_string_t *str)
                 charbuf[2] = (c < 10) ? '0' + c : 'A' + c - 10;
                 c = *ptr & 0x0f;
                 charbuf[3] = (c < 10) ? '0' + c : 'A' + c - 10;
-                rb_parser_str_buf_cat(p, result, charbuf, 4);
+                parser_str_cat(result, charbuf, 4);
                 prev = ++ptr;
             }
             continue;
@@ -7011,22 +7015,22 @@ rb_parser_str_escape(struct parser_params *p, rb_parser_string_t *str)
         ptr += n;
         cc = escaped_char(c);
         if (cc) {
-            if (ptr - n > prev) rb_parser_str_buf_cat(p, result, prev, ptr - n - prev);
-            rb_parser_str_buf_cat(p, result, cc, strlen(cc));
+            if (ptr - n > prev) parser_str_cat(result, prev, ptr - n - prev);
+            parser_str_cat_cstr(result, cc);
             prev = ptr;
         }
         else if (asciicompat && rb_enc_isascii(c, enc) && ISPRINT(c)) {
         }
         else {
             if (ptr - n > prev) {
-                rb_parser_str_buf_cat(p, result, prev, ptr - n - prev);
+                parser_str_cat(result, prev, ptr - n - prev);
                 prev = ptr - n;
             }
-            rb_parser_str_buf_cat(p, result, prev, ptr - prev);
+            parser_str_cat(result, prev, ptr - prev);
             prev = ptr;
         }
     }
-    if (ptr > prev) rb_parser_str_buf_cat(p, result, prev, ptr - prev);
+    if (ptr > prev) parser_str_cat(result, prev, ptr - prev);
 
     return result;
 }
@@ -7351,7 +7355,7 @@ ruby_show_error_line(struct parser_params *p, VALUE errbuf, const YYLTYPE *yyllo
     }
     if (RTEST(errbuf)) {
         mesg = rb_attr_get(errbuf, idMesg);
-        if (RSTRING_LEN(mesg) > 0 && *(RSTRING_END(mesg)-1) != '\n')
+        if (char_at_end(p, mesg, '\n') != '\n')
             rb_str_cat_cstr(mesg, "\n");
     }
     else {
@@ -7690,26 +7694,24 @@ enum string_type {
     str_dsym   = (STR_FUNC_SYMBOL|STR_FUNC_EXPAND)
 };
 
-static VALUE
+static rb_parser_string_t *
 parser_str_new(struct parser_params *p, const char *ptr, long len, rb_encoding *enc, int func, rb_encoding *enc0)
 {
-    VALUE str;
     rb_parser_string_t *pstr;
 
     pstr = rb_parser_encoding_string_new(p, ptr, len, enc);
-    str = rb_str_new_mutable_parser_string(pstr);
 
     if (!(func & STR_FUNC_REGEXP) && rb_enc_asciicompat(enc)) {
         if (rb_parser_is_ascii_string(p, pstr)) {
         }
         else if (rb_is_usascii_enc((void *)enc0) && enc != rb_utf8_encoding()) {
-            rb_enc_associate(str, rb_ascii8bit_encoding());
+            /* everything is valid in ASCII-8BIT */
+            enc = rb_ascii8bit_encoding();
+            PARSER_ENCODING_CODERANGE_SET(pstr, enc, RB_PARSER_ENC_CODERANGE_VALID);
         }
     }
 
-    rb_parser_string_free(p, pstr);
-
-    return str;
+    return pstr;
 }
 
 static int
@@ -7749,7 +7751,7 @@ parser_add_delayed_token(struct parser_params *p, const char *tok, const char *e
 
     if (tok < end) {
         if (has_delayed_token(p)) {
-            bool next_line = parser_string_end_with_newline_p(p, p->delayed.token);
+            bool next_line = parser_string_char_at_end(p, p->delayed.token, 0) == '\n';
             int end_line = (next_line ? 1 : 0) + p->delayed.end_line;
             int end_col = (next_line ? 0 : p->delayed.end_col);
             if (end_line != p->ruby_sourceline || end_col != tok - p->lex.pbeg) {
@@ -7762,7 +7764,7 @@ parser_add_delayed_token(struct parser_params *p, const char *tok, const char *e
             p->delayed.beg_line = p->ruby_sourceline;
             p->delayed.beg_col = rb_long2int(tok - p->lex.pbeg);
         }
-        rb_parser_str_buf_cat(p, p->delayed.token, tok, end - tok);
+        parser_str_cat(p->delayed.token, tok, end - tok);
         p->delayed.end_line = p->ruby_sourceline;
         p->delayed.end_col = rb_long2int(end - p->lex.pbeg);
         p->lex.ptok = end;
@@ -8758,7 +8760,7 @@ parse_string(struct parser_params *p, rb_strterm_literal_t *quote)
     int c, space = 0;
     rb_encoding *enc = p->enc;
     rb_encoding *base_enc = 0;
-    VALUE lit;
+    rb_parser_string_t *lit;
 
     if (func & STR_FUNC_TERM) {
         if (func & STR_FUNC_QWORDS) nextc(p); /* delayed term */
@@ -9163,7 +9165,7 @@ here_document(struct parser_params *p, rb_strterm_heredoc_t *here)
     int c, func, indent = 0;
     const char *eos, *ptr, *ptr_end;
     long len;
-    VALUE str = 0;
+    rb_parser_string_t *str = 0;
     rb_encoding *enc = p->enc;
     rb_encoding *base_enc = 0;
     int bol;
@@ -9249,16 +9251,17 @@ here_document(struct parser_params *p, rb_strterm_heredoc_t *here)
             }
 
             if (str)
-                rb_str_cat(str, ptr, ptr_end - ptr);
+                parser_str_cat(str, ptr, ptr_end - ptr);
             else
-                str = STR_NEW(ptr, ptr_end - ptr);
-            if (!lex_eol_ptr_p(p, ptr_end)) rb_str_cat(str, "\n", 1);
+                str = rb_parser_encoding_string_new(p, ptr, ptr_end - ptr, enc);
+            if (!lex_eol_ptr_p(p, ptr_end)) parser_str_cat_cstr(str, "\n");
             lex_goto_eol(p);
             if (p->heredoc_indent > 0) {
                 goto flush_str;
             }
             if (nextc(p) == -1) {
                 if (str) {
+                    rb_parser_string_free(p, str);
                     str = 0;
                 }
                 goto error;
@@ -10064,7 +10067,7 @@ parse_qmark(struct parser_params *p, int space_seen)
 {
     rb_encoding *enc;
     register int c;
-    VALUE lit;
+    rb_parser_string_t *lit;
 
     if (IS_END()) {
         SET_LEX_STATE(EXPR_VALUE);
@@ -15959,7 +15962,7 @@ rb_parser_printf(struct parser_params *p, const char *fmt, ...)
     va_start(ap, fmt);
     rb_str_vcatf(mesg, fmt, ap);
     va_end(ap);
-    if (end_with_newline_p(p, mesg)) {
+    if (char_at_end(p, mesg, 0) == '\n') {
         rb_io_write(p->debug_output, mesg);
         p->debug_buffer = Qnil;
     }
