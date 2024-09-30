@@ -1683,9 +1683,6 @@ heap_page_add_freeobj(rb_objspace_t *objspace, struct heap_page *page, VALUE obj
     gc_report(3, objspace, "heap_page_add_freeobj: add %p to freelist\n", (void *)obj);
 }
 
-static size_t
-objspace_available_slots(rb_objspace_t *objspace);
-
 static void
 size_pool_allocatable_slots_expand(rb_objspace_t *objspace,
         rb_size_pool_t *size_pool, size_t free_slots, size_t total_slots)
@@ -3567,6 +3564,8 @@ gc_sweep_plane(rb_objspace_t *objspace, rb_heap_t *heap, uintptr_t p, bits_t bit
                 CHECK(RVALUE_UNCOLLECTIBLE);
 #undef CHECK
 #endif
+
+                rb_gc_event_hook(vp, RUBY_INTERNAL_EVENT_FREEOBJ);
 
                 bool has_object_id = FL_TEST(vp, FL_SEEN_OBJ_ID);
                 if (rb_gc_obj_free(objspace, vp)) {

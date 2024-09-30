@@ -658,7 +658,7 @@ static void
 ruby_external_gc_init(void)
 {
     // Assert that the directory path ends with a /
-    GC_ASSERT(SHARED_GC_DIR[strlen(SHARED_GC_DIR) - 2] == '/');
+    RUBY_ASSERT_ALWAYS(SHARED_GC_DIR[sizeof(SHARED_GC_DIR) - 2] == '/');
 
     char *gc_so_file = getenv(RUBY_GC_LIBRARY);
 
@@ -1086,8 +1086,6 @@ bool
 rb_gc_obj_free(void *objspace, VALUE obj)
 {
     RB_DEBUG_COUNTER_INC(obj_free);
-
-    rb_gc_event_hook(obj, RUBY_INTERNAL_EVENT_FREEOBJ);
 
     switch (BUILTIN_TYPE(obj)) {
       case T_NIL:
