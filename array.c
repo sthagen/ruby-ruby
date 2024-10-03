@@ -2725,9 +2725,15 @@ rb_ary_reverse_each(VALUE ary)
 
 /*
  *  call-seq:
- *    array.length -> an_integer
+ *    length -> integer
+ *    size -> integer
  *
- *  Returns the count of elements in +self+.
+ *  Returns the count of elements in +self+:
+ *
+ *    [0, 1, 2].length # => 3
+ *    [].length        # => 0
+ *
+ *  Related: see {Methods for Querying}[rdoc-ref:Array@Methods+for+Querying].
  */
 
 static VALUE
@@ -2970,14 +2976,15 @@ inspect_ary(VALUE ary, VALUE dummy, int recur)
 
 /*
  *  call-seq:
- *    array.inspect -> new_string
+ *    inspect -> new_string
  *
- *  Returns the new String formed by calling method <tt>#inspect</tt>
+ *  Returns the new string formed by calling method <tt>#inspect</tt>
  *  on each array element:
  *
  *    a = [:foo, 'bar', 2]
  *    a.inspect # => "[:foo, \"bar\", 2]"
  *
+ *  Related: see {Methods for Querying}[rdoc-ref:Array@Methods+for+Querying].
  */
 
 static VALUE
@@ -4482,10 +4489,10 @@ take_items(VALUE obj, long n)
  *
  *  If an argument is not an array, it extracts the values by calling #each:
  *
- *  a = [:a0, :a1, :a2, :a2]
- *  b = 1..4
- *  c = a.zip(b)
- *  c # => [[:a0, 1], [:a1, 2], [:a2, 3], [:a2, 4]]
+ *    a = [:a0, :a1, :a2, :a2]
+ *    b = 1..4
+ *    c = a.zip(b)
+ *    c # => [[:a0, 1], [:a1, 2], [:a2, 3], [:a2, 4]]
  *
  *  When a block is given, calls the block with each of the sub-arrays (formed as above); returns +nil+:
  *
@@ -5623,23 +5630,23 @@ rb_ary_and(VALUE ary1, VALUE ary2)
 
 /*
  *  call-seq:
- *    array.intersection(*other_arrays) -> new_array
+ *    intersection(*other_arrays) -> new_array
  *
- *  Returns a new +Array+ containing each element found both in +self+
- *  and in all of the given Arrays +other_arrays+;
- *  duplicates are omitted; items are compared using <tt>eql?</tt>
- *  (items must also implement +hash+ correctly):
+ *  Returns a new array containing each element in +self+ that is +#eql?+
+ *  to at least one element in each of the given +other_arrays+;
+ *  duplicates are omitted:
  *
- *    [0, 1, 2, 3].intersection([0, 1, 2], [0, 1, 3]) # => [0, 1]
  *    [0, 0, 1, 1, 2, 3].intersection([0, 1, 2], [0, 1, 3]) # => [0, 1]
  *
- *  Preserves order from +self+:
+ *  Each element must correctly implement method <tt>#hash</tt>.
+ *
+ *  Order from +self+ is preserved:
  *
  *    [0, 1, 2].intersection([2, 1, 0]) # => [0, 1, 2]
  *
- *  Returns a copy of +self+ if no arguments given.
+ *  Returns a copy of +self+ if no arguments are given.
  *
- *  Related: Array#&.
+ *  Related: see {Methods for Combining}[rdoc-ref:Array@Methods+for+Combining].
  */
 
 static VALUE
@@ -5766,19 +5773,16 @@ rb_ary_union_multi(int argc, VALUE *argv, VALUE ary)
 
 /*
  *  call-seq:
- *     ary.intersect?(other_ary)   -> true or false
+ *    intersect?(other_array) -> true or false
  *
- *  Returns +true+ if the array and +other_ary+ have at least one element in
- *  common, otherwise returns +false+:
+ *  Returns whether +other_array+ has at least one element that is +#eql?+ to some element of +self+:
  *
- *     a = [ 1, 2, 3 ]
- *     b = [ 3, 4, 5 ]
- *     c = [ 5, 6, 7 ]
- *     a.intersect?(b)   #=> true
- *     a.intersect?(c)   #=> false
+ *    [1, 2, 3].intersect?([3, 4, 5]) # => true
+ *    [1, 2, 3].intersect?([4, 5, 6]) # => false
  *
- *  +Array+ elements are compared using <tt>eql?</tt>
- *  (items must also implement +hash+ correctly).
+ *  Each element must correctly implement method <tt>#hash</tt>.
+ *
+ *  Related: see {Methods for Querying}[rdoc-ref:Array@Methods+for+Querying].
  */
 
 static VALUE
@@ -5912,42 +5916,51 @@ ary_max_opt_string(VALUE ary, long i, VALUE vmax)
 
 /*
  *  call-seq:
- *    array.max -> element
- *    array.max {|a, b| ... } -> element
- *    array.max(n) -> new_array
- *    array.max(n) {|a, b| ... } -> new_array
+ *    max -> element
+ *    max(n) -> new_array
+ *    max {|a, b| ... } -> element
+ *    max(n) {|a, b| ... } -> new_array
  *
  *  Returns one of the following:
  *
  *  - The maximum-valued element from +self+.
- *  - A new +Array+ of maximum-valued elements selected from +self+.
+ *  - A new array of maximum-valued elements from +self+.
  *
- *  When no block is given, each element in +self+ must respond to method <tt><=></tt>
- *  with an Integer.
+ *  Does not modify +self+.
+ *
+ *  With no block given, each element in +self+ must respond to method <tt>#<=></tt>
+ *  with a numeric.
  *
  *  With no argument and no block, returns the element in +self+
  *  having the maximum value per method <tt><=></tt>:
  *
- *    [0, 1, 2].max # => 2
+ *    [1, 0, 3, 2].max # => 3
  *
- *  With an argument Integer +n+ and no block, returns a new +Array+ with at most +n+ elements,
- *  in descending order per method <tt><=></tt>:
+ *  With non-negative numeric argument +n+ and no block,
+ *  returns a new array with at most +n+ elements,
+ *  in descending order, per method <tt><=></tt>:
  *
- *    [0, 1, 2, 3].max(3) # => [3, 2, 1]
- *    [0, 1, 2, 3].max(6) # => [3, 2, 1, 0]
+ *    [1, 0, 3, 2].max(3)   # => [3, 2, 1]
+ *    [1, 0, 3, 2].max(3.0) # => [3, 2, 1]
+ *    [1, 0, 3, 2].max(9)   # => [3, 2, 1, 0]
+ *    [1, 0, 3, 2].max(0)   # => []
  *
- *  When a block is given, the block must return an Integer.
+ *  With a block given, the block must return a numeric.
  *
- *  With a block and no argument, calls the block <tt>self.size-1</tt> times to compare elements;
- *  returns the element having the maximum value per the block:
+ *  With a block and no argument, calls the block <tt>self.size - 1</tt> times to compare elements;
+ *  returns the element having the maximum return value from the block:
  *
- *    ['0', '00', '000'].max {|a, b| a.size <=> b.size } # => "000"
+ *    ['0', '', '000', '00'].max {|a, b| a.size <=> b.size }
+ *    # => "000"
  *
- *  With an argument +n+ and a block, returns a new +Array+ with at most +n+ elements,
- *  in descending order per the block:
+ *  With non-negative numeric argument +n+ and a block,
+ *  returns a new array with at most +n+ elements,
+ *  in descending order, per the block:
  *
- *    ['0', '00', '000'].max(2) {|a, b| a.size <=> b.size } # => ["000", "00"]
+ *    ['0', '', '000', '00'].max(2) {|a, b| a.size <=> b.size }
+ *    # => ["000", "00"]
  *
+ *  Related: see {Methods for Fetching}[rdoc-ref:Array@Methods+for+Fetching].
  */
 static VALUE
 rb_ary_max(int argc, VALUE *argv, VALUE ary)
