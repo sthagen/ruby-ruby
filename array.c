@@ -5948,7 +5948,7 @@ ary_max_opt_string(VALUE ary, long i, VALUE vmax)
  *  With a block given, the block must return a numeric.
  *
  *  With a block and no argument, calls the block <tt>self.size - 1</tt> times to compare elements;
- *  returns the element having the maximum return value per the block:
+ *  returns the element having the maximum value per the block:
  *
  *    ['0', '', '000', '00'].max {|a, b| a.size <=> b.size }
  *    # => "000"
@@ -6125,7 +6125,7 @@ ary_min_opt_string(VALUE ary, long i, VALUE vmin)
  *  With a block given, the block must return a numeric.
  *
  *  With a block and no argument, calls the block <tt>self.size - 1</tt> times to compare elements;
- *  returns the element having the minimum return value per the block:
+ *  returns the element having the minimum value per the block:
  *
  *    ['0', '', '000', '00'].min {|a, b| a.size <=> b.size }
  *    # => ""
@@ -6181,26 +6181,25 @@ rb_ary_min(int argc, VALUE *argv, VALUE ary)
 
 /*
  *  call-seq:
- *    array.minmax -> [min_val, max_val]
- *    array.minmax {|a, b| ... } -> [min_val, max_val]
+ *    minmax -> array
+ *    minmax {|a, b| ... } -> array
  *
- *  Returns a new 2-element +Array+ containing the minimum and maximum values
- *  from +self+, either per method <tt>#<=></tt> or per a given block:.
+ *  Returns a 2-element array containing the minimum-valued and maximum-valued
+ *  elements from +self+;
+ *  does not modify +self+.
  *
- *  When no block is given, each element in +self+ must respond to method <tt>#<=></tt>
- *  with an Integer;
- *  returns a new 2-element +Array+ containing the minimum and maximum values
- *  from +self+, per method <tt>#<=></tt>:
+ *  With no block given, the minimum and maximum values are determined using method <tt>#<=></tt>:
  *
- *    [0, 1, 2].minmax # => [0, 2]
+ *    [1, 0, 3, 2].minmax # => [0, 3]
  *
- *  When a block is given, the block must return an Integer;
- *  the block is called <tt>self.size-1</tt> times to compare elements;
- *  returns a new 2-element +Array+ containing the minimum and maximum values
- *  from +self+, per the block:
+ *  With a block given, the block must return a numeric;
+ *  the block is called <tt>self.size - 1</tt> times to compare elements;
+ *  returns the elements having the minimum and maximum values per the block:
  *
- *    ['0', '00', '000'].minmax {|a, b| a.size <=> b.size } # => ["0", "000"]
+ *    ['0', '', '000', '00'].minmax {|a, b| a.size <=> b.size }
+ *    # => ["", "000"]
  *
+ *  Related: see {Methods for Fetching}[rdoc-ref:Array@Methods+for+Fetching].
  */
 static VALUE
 rb_ary_minmax(VALUE ary)
@@ -7913,34 +7912,35 @@ rb_ary_all_p(int argc, VALUE *argv, VALUE ary)
 
 /*
  *  call-seq:
- *    array.none? -> true or false
- *    array.none? {|element| ... } -> true or false
- *    array.none?(obj) -> true or false
+ *    none? -> true or false
+ *    none?(object) -> true or false
+ *    none? {|element| ... } -> true or false
  *
- *  Returns +true+ if no element of +self+ meet a given criterion.
+ *  Returns +true+ if no element of +self+ meets a given criterion, +false+ otherwise.
  *
  *  With no block given and no argument, returns +true+ if +self+ has no truthy elements,
  *  +false+ otherwise:
  *
- *    [nil, false].none? # => true
+ *    [nil, false].none?    # => true
  *    [nil, 0, false].none? # => false
- *    [].none? # => true
+ *    [].none?              # => true
  *
- *  With a block given and no argument, calls the block with each element in +self+;
+ *  With argument +object+ given, returns +false+ if for any element +element+,
+ *  <tt>object === element</tt>; +true+ otherwise:
+ *
+ *    ['food', 'drink'].none?(/bar/) # => true
+ *    ['food', 'drink'].none?(/foo/) # => false
+ *    [].none?(/foo/)                # => true
+ *    [0, 1, 2].none?(3)             # => true
+ *    [0, 1, 2].none?(1)             # => false
+ *
+ *  With a block given, calls the block with each element in +self+;
  *  returns +true+ if the block returns no truthy value, +false+ otherwise:
  *
  *    [0, 1, 2].none? {|element| element > 3 } # => true
  *    [0, 1, 2].none? {|element| element > 1 } # => false
  *
- *  If argument +obj+ is given, returns +true+ if <tt>obj.===</tt> no element, +false+ otherwise:
- *
- *    ['food', 'drink'].none?(/bar/) # => true
- *    ['food', 'drink'].none?(/foo/) # => false
- *    [].none?(/foo/) # => true
- *    [0, 1, 2].none?(3) # => true
- *    [0, 1, 2].none?(1) # => false
- *
- *  Related: Enumerable#none?
+ *  Related: see {Methods for Querying}[rdoc-ref:Array@Methods+for+Querying].
  */
 
 static VALUE
@@ -7973,9 +7973,9 @@ rb_ary_none_p(int argc, VALUE *argv, VALUE ary)
 
 /*
  *  call-seq:
- *    array.one? -> true or false
- *    array.one? {|element| ... } -> true or false
- *    array.one?(obj) -> true or false
+ *    one? -> true or false
+ *    one? {|element| ... } -> true or false
+ *    one?(object) -> true or false
  *
  *  Returns +true+ if exactly one element of +self+ meets a given criterion.
  *
@@ -7987,14 +7987,14 @@ rb_ary_none_p(int argc, VALUE *argv, VALUE ary)
  *    [nil, nil].one? # => false
  *    [].one? # => false
  *
- *  With a block given and no argument, calls the block with each element in +self+;
+ *  With a block given, calls the block with each element in +self+;
  *  returns +true+ if the block a truthy value for exactly one element, +false+ otherwise:
  *
  *    [0, 1, 2].one? {|element| element > 0 } # => false
  *    [0, 1, 2].one? {|element| element > 1 } # => true
  *    [0, 1, 2].one? {|element| element > 2 } # => false
  *
- *  If argument +obj+ is given, returns +true+ if <tt>obj.===</tt> exactly one element,
+ *  With argument +object+ given, returns +true+ if for exactly one element +element+, <tt>object === element</tt>;
  *  +false+ otherwise:
  *
  *    [0, 1, 2].one?(0) # => true
@@ -8004,7 +8004,7 @@ rb_ary_none_p(int argc, VALUE *argv, VALUE ary)
  *    ['food', 'drink'].one?(/foo/) # => true
  *    [].one?(/foo/) # => false
  *
- *  Related: Enumerable#one?
+ *  Related: see {Methods for Querying}[rdoc-ref:Array@Methods+for+Querying].
  */
 
 static VALUE
