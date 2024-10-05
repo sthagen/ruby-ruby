@@ -2202,8 +2202,7 @@ rb_parser_enc_associate(struct parser_params *p, rb_parser_string_t *str, rb_enc
 {
     if (rb_parser_str_get_encoding(str) == enc)
         return str;
-    if (!PARSER_ENC_CODERANGE_ASCIIONLY(str) ||
-        !rb_enc_asciicompat(enc)) {
+    if (!PARSER_ENC_CODERANGE_ASCIIONLY(str)) {
         PARSER_ENC_CODERANGE_CLEAR(str);
     }
     rb_parser_string_set_encoding(str, enc);
@@ -2216,30 +2215,25 @@ rb_parser_is_ascii_string(struct parser_params *p, rb_parser_string_t *str)
     return rb_parser_enc_str_coderange(p, str) == RB_PARSER_ENC_CODERANGE_7BIT;
 }
 
-static int
-rb_parser_enc_str_asciionly_p(struct parser_params *p, rb_parser_string_t *str)
-{
-    rb_encoding *enc = rb_parser_str_get_encoding(str);
-
-    if (!rb_enc_asciicompat(enc))
-        return FALSE;
-    else if (rb_parser_is_ascii_string(p, str))
-        return TRUE;
-    return FALSE;
-}
-
 static rb_encoding *
-rb_parser_enc_compatible_latter(struct parser_params *p, rb_parser_string_t *str1, rb_parser_string_t *str2, rb_encoding *enc1, rb_encoding *enc2)
+rb_parser_enc_compatible(struct parser_params *p, rb_parser_string_t *str1, rb_parser_string_t *str2)
 {
-    int cr1, cr2;
+    rb_encoding *enc1 = rb_parser_str_get_encoding(str1);
+    rb_encoding *enc2 = rb_parser_str_get_encoding(str2);
+
+    if (enc1 == NULL || enc2 == NULL)
+        return 0;
+
+    if (enc1 == enc2) {
+        return enc1;
+    }
 
     if (PARSER_STRING_LEN(str2) == 0)
         return enc1;
     if (PARSER_STRING_LEN(str1) == 0)
-        return (rb_enc_asciicompat(enc1) && rb_parser_enc_str_asciionly_p(p, str2)) ? enc1 : enc2;
-    if (!rb_enc_asciicompat(enc1) || !rb_enc_asciicompat(enc2)) {
-        return 0;
-    }
+        return rb_parser_is_ascii_string(p, str2) ? enc1 : enc2;
+
+    int cr1, cr2;
 
     cr1 = rb_parser_enc_str_coderange(p, str1);
     cr2 = rb_parser_enc_str_coderange(p, str2);
@@ -2258,22 +2252,6 @@ rb_parser_enc_compatible_latter(struct parser_params *p, rb_parser_string_t *str
     }
 
     return 0;
-}
-
-static rb_encoding *
-rb_parser_enc_compatible(struct parser_params *p, rb_parser_string_t *str1, rb_parser_string_t *str2)
-{
-    rb_encoding *enc1 = rb_parser_str_get_encoding(str1);
-    rb_encoding *enc2 = rb_parser_str_get_encoding(str2);
-
-    if (enc1 == NULL || enc2 == NULL)
-        return 0;
-
-    if (enc1 == enc2) {
-        return enc1;
-    }
-
-    return rb_parser_enc_compatible_latter(p, str1, str2, enc1, enc2);
 }
 
 static void
@@ -6991,7 +6969,6 @@ rb_parser_str_escape(struct parser_params *p, rb_parser_string_t *str)
     const char *prev = ptr;
     char charbuf[5] = {'\\', 'x', 0, 0, 0};
     rb_parser_string_t * result = rb_parser_string_new(p, 0, 0);
-    int asciicompat = rb_enc_asciicompat(enc);
 
     while (ptr < pend) {
         unsigned int c;
@@ -7021,7 +6998,7 @@ rb_parser_str_escape(struct parser_params *p, rb_parser_string_t *str)
             parser_str_cat_cstr(result, cc);
             prev = ptr;
         }
-        else if (asciicompat && rb_enc_isascii(c, enc) && ISPRINT(c)) {
+        else if (rb_enc_isascii(c, enc) && ISPRINT(c)) {
         }
         else {
             if (ptr - n > prev) {
@@ -7703,7 +7680,7 @@ parser_str_new(struct parser_params *p, const char *ptr, long len, rb_encoding *
 
     pstr = rb_parser_encoding_string_new(p, ptr, len, enc);
 
-    if (!(func & STR_FUNC_REGEXP) && rb_enc_asciicompat(enc)) {
+    if (!(func & STR_FUNC_REGEXP)) {
         if (rb_parser_is_ascii_string(p, pstr)) {
         }
         else if (rb_is_usascii_enc((void *)enc0) && enc != rb_utf8_encoding()) {
@@ -9187,7 +9164,7 @@ here_document(struct parser_params *p, rb_strterm_heredoc_t *here)
         }
         else {
             if ((len = p->lex.pcur - p->lex.ptok) > 0) {
-                if (!(func & STR_FUNC_REGEXP) && rb_enc_asciicompat(enc)) {
+                if (!(func & STR_FUNC_REGEXP)) {
                     int cr = ENC_CODERANGE_UNKNOWN;
                     rb_str_coderange_scan_restartable(p->lex.ptok, p->lex.pcur, enc, &cr);
                     if (cr != ENC_CODERANGE_7BIT &&
@@ -10118,7 +10095,7 @@ parse_qmark(struct parser_params *p, int space_seen)
             enc = rb_utf8_encoding();
             tokadd_utf8(p, &enc, -1, 0, 0);
         }
-        else if (!ISASCII(c = peekc(p))) {
+        else if (!ISASCII(c = peekc(p)) && c != -1) {
             nextc(p);
             if (tokadd_mbchar(p, c) == -1) return 0;
         }
