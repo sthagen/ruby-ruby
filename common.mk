@@ -70,7 +70,6 @@ HTMLOUT       = $(EXTOUT)/html
 CAPIOUT       = doc/capi
 INSTALL_DOC_OPTS = --rdoc-output="$(RDOCOUT)" --html-output="$(HTMLOUT)"
 RDOC_GEN_OPTS = --no-force-update \
-	--title "Documentation for Ruby $(RUBY_API_VERSION)" \
 	$(empty)
 
 INITOBJS      = dmyext.$(OBJEXT) dmyenc.$(OBJEXT)
@@ -15743,6 +15742,7 @@ rjit_c.$(OBJEXT): $(hdrdir)/ruby/ruby.h
 rjit_c.$(OBJEXT): $(srcdir)/rjit_c.rb
 rjit_c.$(OBJEXT): $(top_srcdir)/internal/array.h
 rjit_c.$(OBJEXT): $(top_srcdir)/internal/basic_operators.h
+rjit_c.$(OBJEXT): $(top_srcdir)/internal/bits.h
 rjit_c.$(OBJEXT): $(top_srcdir)/internal/class.h
 rjit_c.$(OBJEXT): $(top_srcdir)/internal/compile.h
 rjit_c.$(OBJEXT): $(top_srcdir)/internal/compilers.h
