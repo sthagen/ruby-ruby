@@ -2129,20 +2129,20 @@ rb_ary_index(int argc, VALUE *argv, VALUE ary)
 
 /*
  *  call-seq:
- *    array.rindex(object) -> integer or nil
- *    array.rindex {|element| ... } -> integer or nil
- *    array.rindex -> new_enumerator
+ *    rindex(object) -> integer or nil
+ *    rindex {|element| ... } -> integer or nil
+ *    rindex -> new_enumerator
  *
  *  Returns the index of the last element for which <tt>object == element</tt>.
  *
- *  When argument +object+ is given but no block, returns the index of the last such element found:
+ *  With argument +object+ given, returns the index of the last such element found:
  *
  *    a = [:foo, 'bar', 2, 'bar']
  *    a.rindex('bar') # => 3
  *
  *  Returns +nil+ if no such object found.
  *
- *  When a block is given but no argument, calls the block with each successive element;
+ *  With a block given, calls the block with each successive element;
  *  returns the index of the last element for which the block returns a truthy value:
  *
  *    a = [:foo, 'bar', 2, 'bar']
@@ -2150,14 +2150,9 @@ rb_ary_index(int argc, VALUE *argv, VALUE ary)
  *
  *  Returns +nil+ if the block never returns a truthy value.
  *
- *  When neither an argument nor a block is given, returns a new Enumerator:
+ *  When neither an argument nor a block is given, returns a new Enumerator.
  *
- *    a = [:foo, 'bar', 2, 'bar']
- *    e = a.rindex
- *    e # => #<Enumerator: [:foo, "bar", 2, "bar"]:rindex>
- *    e.each {|element| element == 'bar' } # => 3
- *
- *  Related: #index.
+ *  Related: see {Methods for Querying}[rdoc-ref:Array@Methods+for+Querying].
  */
 
 static VALUE
@@ -3123,13 +3118,16 @@ rb_ary_reverse(VALUE ary)
 
 /*
  *  call-seq:
- *    array.reverse! -> self
+ *    reverse! -> self
  *
- *  Reverses +self+ in place:
+ *  Reverses the order of the elements of +self+;
+ *  returns +self+:
  *
- *    a = ['foo', 'bar', 'two']
- *    a.reverse! # => ["two", "bar", "foo"]
+ *    a = [0, 1, 2]
+ *    a.reverse! # => [2, 1, 0]
+ *    a          # => [2, 1, 0]
  *
+ *  Related: see {Methods for Assigning}[rdoc-ref:Array@Methods+for+Assigning].
  */
 
 static VALUE
@@ -3140,14 +3138,13 @@ rb_ary_reverse_bang(VALUE ary)
 
 /*
  *  call-seq:
- *    array.reverse -> new_array
+ *    reverse -> new_array
  *
- *  Returns a new +Array+ with the elements of +self+ in reverse order:
+ *  Returns a new array containing the elements of +self+ in reverse order:
  *
- *    a = ['foo', 'bar', 'two']
- *    a1 = a.reverse
- *    a1 # => ["two", "bar", "foo"]
+ *    [0, 1, 2].reverse # => [2, 1, 0]
  *
+ *  Related: see {Methods for Combining}[rdoc-ref:Array@Methods+for+Combining].
  */
 
 static VALUE
@@ -8662,6 +8659,7 @@ rb_ary_deconstruct(VALUE ary)
  *  - #difference: Returns an array containing all elements of +self+ that are not found
  *    in any of the given arrays..
  *  - #product: Returns or yields all combinations of elements from +self+ and given arrays.
+ *  - #reverse: Returns an array containing all elements of +self+ in reverse order.
  *
  *  === Methods for Iterating
  *
