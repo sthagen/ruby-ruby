@@ -2633,6 +2633,7 @@ rb_ary_each(VALUE ary)
  *
  *    a = [:foo, 'bar', 2]
  *    a.each_index {|index| puts index; a.clear if index > 0 }
+ *    a # => []
  *
  *  Output:
  *
@@ -2658,47 +2659,26 @@ rb_ary_each_index(VALUE ary)
 
 /*
  *  call-seq:
- *    array.reverse_each {|element| ... } -> self
- *    array.reverse_each -> Enumerator
+ *    reverse_each {|element| ... } -> self
+ *    reverse_each -> Enumerator
  *
- *  Iterates backwards over array elements.
- *
- *  When a block given, passes, in reverse order, each element to the block;
+ *  When a block given, iterates backwards over the elements of +self+,
+ *  passing, in reverse order, each element to the block;
  *  returns +self+:
  *
- *    a = [:foo, 'bar', 2]
- *    a.reverse_each {|element|  puts "#{element.class} #{element}" }
- *
- *  Output:
- *
- *    Integer 2
- *    String bar
- *    Symbol foo
+ *    a = []
+ *    [0, 1, 2].reverse_each {|element| a.push(element) }
+ *    a # => [2, 1, 0]
  *
  *  Allows the array to be modified during iteration:
  *
- *    a = [:foo, 'bar', 2]
- *    a.reverse_each {|element| puts element; a.clear if element.to_s.start_with?('b') }
+ *    a = ['a', 'b', 'c']
+ *    a.reverse_each {|element| a.clear if element.start_with?('b') }
+ *    a # => []
  *
- *  Output:
+ *  When no block given, returns a new Enumerator.
  *
- *    2
- *    bar
- *
- *  When no block given, returns a new Enumerator:
- *
- *    a = [:foo, 'bar', 2]
- *    e = a.reverse_each
- *    e # => #<Enumerator: [:foo, "bar", 2]:reverse_each>
- *    a1 = e.each {|element|  puts "#{element.class} #{element}" }
- *
- *  Output:
- *
- *    Integer 2
- *    String bar
- *    Symbol foo
- *
- *  Related: #each, #each_index.
+ *  Related: see {Methods for Iterating}[rdoc-ref:Array@Methods+for+Iterating].
  */
 
 static VALUE
@@ -7365,65 +7345,41 @@ rb_ary_repeated_combination_size(VALUE ary, VALUE args, VALUE eobj)
 
 /*
  *  call-seq:
- *    array.repeated_combination(n) {|combination| ... } -> self
- *    array.repeated_combination(n) -> new_enumerator
+ *    repeated_combination(size) {|combination| ... } -> self
+ *    repeated_combination(size) -> new_enumerator
  *
- *  Calls the block with each repeated combination of length +n+ of the elements of +self+;
- *  each combination is an +Array+;
+ *  With a block given, calls the block with each repeated combination of length +size+
+ *  of the elements of +self+;
+ *  each combination is an array;
  *  returns +self+. The order of the combinations is indeterminate.
  *
- *  When a block and a positive Integer argument +n+ are given, calls the block with each
- *  +n+-tuple repeated combination of the elements of +self+.
- *  The number of combinations is <tt>(n+1)(n+2)/2</tt>.
+ *  If a positive integer argument +size+ is given,
+ *  calls the block with each +size+-tuple repeated combination of the elements of +self+.
+ *  The number of combinations is <tt>(size+1)(size+2)/2</tt>.
  *
- *  +n+ = 1:
+ *  Examples:
  *
- *    a = [0, 1, 2]
- *    a.repeated_combination(1) {|combination| p combination }
+ *  - +size+ is 1:
  *
- *  Output:
+ *      c = []
+ *      [0, 1, 2].repeated_combination(1) {|combination| c.push(combination) }
+ *      c # => [[0], [1], [2]]
  *
- *    [0]
- *    [1]
- *    [2]
+ *  - +size+ is 2:
  *
- *  +n+ = 2:
+ *      c = []
+ *      [0, 1, 2].repeated_combination(2) {|combination| c.push(combination) }
+ *      c # => [[0, 0], [0, 1], [0, 2], [1, 1], [1, 2], [2, 2]]
  *
- *    a.repeated_combination(2) {|combination| p combination }
+ *  If +size+ is zero, calls the block once with an empty array.
  *
- *  Output:
+ *  If +size+ is negative, does not call the block:
  *
- *    [0, 0]
- *    [0, 1]
- *    [0, 2]
- *    [1, 1]
- *    [1, 2]
- *    [2, 2]
+ *    [0, 1, 2].repeated_combination(-1) {|combination| fail 'Cannot happen' }
  *
- *  If +n+ is zero, calls the block once with an empty +Array+.
+ *  With no block given, returns a new Enumerator.
  *
- *  If +n+ is negative, does not call the block:
- *
- *    a.repeated_combination(-1) {|combination| fail 'Cannot happen' }
- *
- *  Returns a new Enumerator if no block given:
- *
- *    a = [0, 1, 2]
- *    a.repeated_combination(2) # => #<Enumerator: [0, 1, 2]:combination(2)>
- *
- *  Using Enumerators, it's convenient to show the combinations and counts
- *  for some values of +n+:
- *
- *    e = a.repeated_combination(0)
- *    e.size # => 1
- *    e.to_a # => [[]]
- *    e = a.repeated_combination(1)
- *    e.size # => 3
- *    e.to_a # => [[0], [1], [2]]
- *    e = a.repeated_combination(2)
- *    e.size # => 6
- *    e.to_a # => [[0, 0], [0, 1], [0, 2], [1, 1], [1, 2], [2, 2]]
- *
+ *  Related: see {Methods for Combining}[rdoc-ref:Array@Methods+for+Combining].
  */
 
 static VALUE
