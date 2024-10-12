@@ -3186,48 +3186,34 @@ rb_ary_rotate(VALUE ary, long cnt)
 
 /*
  *  call-seq:
- *    array.rotate! -> self
- *    array.rotate!(count) -> self
+ *    rotate!(count = 1) -> self
  *
  *  Rotates +self+ in place by moving elements from one end to the other; returns +self+.
  *
- *  When no argument given, rotates the first element to the last position:
- *
- *    a = [:foo, 'bar', 2, 'bar']
- *    a.rotate! # => ["bar", 2, "bar", :foo]
- *
- *  When given a non-negative Integer +count+,
+ *  With non-negative numeric +count+,
  *  rotates +count+ elements from the beginning to the end:
  *
- *    a = [:foo, 'bar', 2]
- *    a.rotate!(2)
- *    a # => [2, :foo, "bar"]
+ *    [0, 1, 2, 3].rotate!(2)   # => [2, 3, 0, 1]
+      [0, 1, 2, 3].rotate!(2.1) # => [2, 3, 0, 1]
  *
  *  If +count+ is large, uses <tt>count % array.size</tt> as the count:
  *
- *    a = [:foo, 'bar', 2]
- *    a.rotate!(20)
- *    a # => [2, :foo, "bar"]
+ *    [0, 1, 2, 3].rotate!(21) # => [1, 2, 3, 0]
  *
- *  If +count+ is zero, returns +self+ unmodified:
+ *  If +count+ is zero, rotates no elements:
  *
- *    a = [:foo, 'bar', 2]
- *    a.rotate!(0)
- *    a # => [:foo, "bar", 2]
+ *    [0, 1, 2, 3].rotate!(0) # => [0, 1, 2, 3]
  *
- *  When given a negative Integer +count+, rotates in the opposite direction,
+ *  With a negative numeric +count+, rotates in the opposite direction,
  *  from end to beginning:
  *
- *    a = [:foo, 'bar', 2]
- *    a.rotate!(-2)
- *    a # => ["bar", 2, :foo]
+ *    [0, 1, 2, 3].rotate!(-1) # => [3, 0, 1, 2]
  *
  *  If +count+ is small (far from zero), uses <tt>count % array.size</tt> as the count:
  *
- *    a = [:foo, 'bar', 2]
- *    a.rotate!(-5)
- *    a # => ["bar", 2, :foo]
+ *    [0, 1, 2, 3].rotate!(-21) # => [3, 0, 1, 2]
  *
+ *  Related: see {Methods for Assigning}[rdoc-ref:Array@Methods+for+Assigning].
  */
 
 static VALUE
@@ -3240,51 +3226,35 @@ rb_ary_rotate_bang(int argc, VALUE *argv, VALUE ary)
 
 /*
  *  call-seq:
- *    array.rotate -> new_array
- *    array.rotate(count) -> new_array
+ *    rotate(count = 1) -> new_array
  *
- *  Returns a new +Array+ formed from +self+ with elements
+ *  Returns a new array formed from +self+ with elements
  *  rotated from one end to the other.
  *
- *  When no argument given, returns a new +Array+ that is like +self+,
- *  except that the first element has been rotated to the last position:
+ *  With non-negative numeric +count+,
+ *  rotates elements from the beginning to the end:
  *
- *    a = [:foo, 'bar', 2, 'bar']
- *    a1 = a.rotate
- *    a1 # => ["bar", 2, "bar", :foo]
- *
- *  When given a non-negative Integer +count+,
- *  returns a new +Array+ with +count+ elements rotated from the beginning to the end:
- *
- *    a = [:foo, 'bar', 2]
- *    a1 = a.rotate(2)
- *    a1 # => [2, :foo, "bar"]
+ *    [0, 1, 2, 3].rotate(2)   # => [2, 3, 0, 1]
+ *    [0, 1, 2, 3].rotate(2.1) # => [2, 3, 0, 1]
  *
  *  If +count+ is large, uses <tt>count % array.size</tt> as the count:
  *
- *    a = [:foo, 'bar', 2]
- *    a1 = a.rotate(20)
- *    a1 # => [2, :foo, "bar"]
+ *    [0, 1, 2, 3].rotate(22) # => [2, 3, 0, 1]
  *
- *  If +count+ is zero, returns a copy of +self+, unmodified:
+ *  With a +count+ of zero, rotates no elements:
  *
- *    a = [:foo, 'bar', 2]
- *    a1 = a.rotate(0)
- *    a1 # => [:foo, "bar", 2]
+ *    [0, 1, 2, 3].rotate(0) # => [0, 1, 2, 3]
  *
- *  When given a negative Integer +count+, rotates in the opposite direction,
- *  from end to beginning:
+ *  With negative numeric +count+, rotates in the opposite direction,
+ *  from the end to the beginning:
  *
- *    a = [:foo, 'bar', 2]
- *    a1 = a.rotate(-2)
- *    a1 # => ["bar", 2, :foo]
+ *    [0, 1, 2, 3].rotate(-1) # => [3, 0, 1, 2]
  *
  *  If +count+ is small (far from zero), uses <tt>count % array.size</tt> as the count:
  *
- *    a = [:foo, 'bar', 2]
- *    a1 = a.rotate(-5)
- *    a1 # => ["bar", 2, :foo]
+ *    [0, 1, 2, 3].rotate(-21) # => [3, 0, 1, 2]
  *
+ *  Related: see {Methods for Fetching}[rdoc-ref:Array@Methods+for+Fetching].
  */
 
 static VALUE
@@ -7213,68 +7183,41 @@ rb_ary_repeated_permutation_size(VALUE ary, VALUE args, VALUE eobj)
 
 /*
  *  call-seq:
- *    array.repeated_permutation(n) {|permutation| ... } -> self
- *    array.repeated_permutation(n) -> new_enumerator
+ *    repeated_permutation(size) {|permutation| ... } -> self
+ *    repeated_permutation(size) -> new_enumerator
  *
- *  Calls the block with each repeated permutation of length +n+ of the elements of +self+;
- *  each permutation is an +Array+;
+ *  With a block given, calls the block with each repeated permutation of length +size+
+ *  of the elements of +self+;
+ *  each permutation is an array;
  *  returns +self+. The order of the permutations is indeterminate.
  *
- *  When a block and a positive Integer argument +n+ are given, calls the block with each
- *  +n+-tuple repeated permutation of the elements of +self+.
- *  The number of permutations is <tt>self.size**n</tt>.
+ *  If a positive integer argument +size+ is given,
+ *  calls the block with each +size+-tuple repeated permutation of the elements of +self+.
+ *  The number of permutations is <tt>self.size**size</tt>.
  *
- *  +n+ = 1:
+ *  Examples:
  *
- *    a = [0, 1, 2]
- *    a.repeated_permutation(1) {|permutation| p permutation }
+ *  - +size+ is 1:
  *
- *  Output:
+ *      p = []
+ *      [0, 1, 2].repeated_permutation(1) {|permutation| p.push(permutation) }
+ *      p # => [[0], [1], [2]]
  *
- *    [0]
- *    [1]
- *    [2]
+ *  - +size+ is 2:
  *
- *  +n+ = 2:
+ *      p = []
+ *      [0, 1, 2].repeated_permutation(2) {|permutation| p.push(permutation) }
+ *      p # => [[0, 0], [0, 1], [0, 2], [1, 0], [1, 1], [1, 2], [2, 0], [2, 1], [2, 2]]
  *
- *    a.repeated_permutation(2) {|permutation| p permutation }
+ *  If +size+ is zero, calls the block once with an empty array.
  *
- *  Output:
+ *  If +size+ is negative, does not call the block:
  *
- *    [0, 0]
- *    [0, 1]
- *    [0, 2]
- *    [1, 0]
- *    [1, 1]
- *    [1, 2]
- *    [2, 0]
- *    [2, 1]
- *    [2, 2]
+ *    [0, 1, 2].repeated_permutation(-1) {|permutation| fail 'Cannot happen' }
  *
- *  If +n+ is zero, calls the block once with an empty +Array+.
+ *  With no block given, returns a new Enumerator.
  *
- *  If +n+ is negative, does not call the block:
- *
- *    a.repeated_permutation(-1) {|permutation| fail 'Cannot happen' }
- *
- *  Returns a new Enumerator if no block given:
- *
- *    a = [0, 1, 2]
- *    a.repeated_permutation(2) # => #<Enumerator: [0, 1, 2]:permutation(2)>
- *
- *  Using Enumerators, it's convenient to show the permutations and counts
- *  for some values of +n+:
- *
- *    e = a.repeated_permutation(0)
- *    e.size # => 1
- *    e.to_a # => [[]]
- *    e = a.repeated_permutation(1)
- *    e.size # => 3
- *    e.to_a # => [[0], [1], [2]]
- *    e = a.repeated_permutation(2)
- *    e.size # => 9
- *    e.to_a # => [[0, 0], [0, 1], [0, 2], [1, 0], [1, 1], [1, 2], [2, 0], [2, 1], [2, 2]]
- *
+ *  Related: see {Methods for Combining}[rdoc-ref:Array@Methods+for+Combining].
  */
 static VALUE
 rb_ary_repeated_permutation(VALUE ary, VALUE num)

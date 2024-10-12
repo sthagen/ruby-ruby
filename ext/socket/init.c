@@ -473,10 +473,11 @@ rsock_socket(int domain, int type, int proto)
 
 /* emulate blocking connect behavior on EINTR or non-blocking socket */
 static int
-wait_connectable(int fd, struct timeval *timeout)
+wait_connectable(VALUE self, VALUE timeout)
 {
-    int sockerr, revents;
+    int sockerr;
     socklen_t sockerrlen;
+    int fd = rb_io_descriptor(self);
 
     sockerrlen = (socklen_t)sizeof(sockerr);
     if (getsockopt(fd, SOL_SOCKET, SO_ERROR, (void *)&sockerr, &sockerrlen) < 0)
@@ -510,7 +511,13 @@ wait_connectable(int fd, struct timeval *timeout)
      *
      * Note: rb_wait_for_single_fd already retries on EINTR/ERESTART
      */
-    revents = rb_wait_for_single_fd(fd, RB_WAITFD_IN|RB_WAITFD_OUT, timeout);
+    VALUE result = rb_io_wait(self, RB_INT2NUM(RUBY_IO_READABLE|RUBY_IO_WRITABLE), timeout);
+
+    if (result == Qfalse) {
+        rb_raise(rb_eIOTimeoutError, "Connect timed out!");
+    }
+
+    int revents = RB_NUM2INT(result);
 
     if (revents < 0)
         return -1;
@@ -525,12 +532,6 @@ wait_connectable(int fd, struct timeval *timeout)
          * be defensive in case some platforms set SO_ERROR on the original,
          * interrupted connect()
          */
-
-        /* when the connection timed out, no errno is set and revents is 0. */
-        if (timeout && revents == 0) {
-            errno = ETIMEDOUT;
-            return -1;
-        }
       case EINTR:
 #ifdef ERESTART
       case ERESTART:
@@ -578,19 +579,19 @@ socks_connect_blocking(void *data)
 #endif
 
 int
-rsock_connect(int fd, const struct sockaddr *sockaddr, int len, int socks, struct timeval *timeout)
+rsock_connect(VALUE self, const struct sockaddr *sockaddr, int len, int socks, VALUE timeout)
 {
-    int status;
+    int descriptor = rb_io_descriptor(self);
     rb_blocking_function_t *func = connect_blocking;
-    struct connect_arg arg;
+    struct connect_arg arg = {.fd = descriptor, .sockaddr = sockaddr, .len = len};
 
-    arg.fd = fd;
-    arg.sockaddr = sockaddr;
-    arg.len = len;
+    rb_io_t *fptr;
+    RB_IO_POINTER(self, fptr);
+
 #if defined(SOCKS) && !defined(SOCKS5)
     if (socks) func = socks_connect_blocking;
 #endif
-    status = (int)BLOCKING_REGION_FD(func, &arg);
+    int status = (int)rb_io_blocking_region(fptr, func, &arg);
 
     if (status < 0) {
         switch (errno) {
@@ -602,7 +603,7 @@ rsock_connect(int fd, const struct sockaddr *sockaddr, int len, int socks, struc
 #ifdef EINPROGRESS
           case EINPROGRESS:
 #endif
-            return wait_connectable(fd, timeout);
+            return wait_connectable(self, timeout);
         }
     }
     return status;
