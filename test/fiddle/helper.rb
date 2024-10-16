@@ -183,11 +183,20 @@ module Fiddle
       end
     end
 
+    def ffi_backend?
+      RUBY_ENGINE != 'ruby'
+    end
+
     def under_gc_stress
       stress, GC.stress = GC.stress, true
       yield
     ensure
       GC.stress = stress
+    end
+
+    def assert_ractor_shareable(object)
+      Ractor.make_shareable(object)
+      assert_operator(Ractor, :shareable?, object)
     end
   end
 end

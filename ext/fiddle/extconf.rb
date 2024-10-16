@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 require 'mkmf'
 
-if RUBY_ENGINE == "jruby"
+unless RUBY_ENGINE == "ruby"
   File.write('Makefile', dummy_makefile("").join)
   return
 end
@@ -223,6 +223,8 @@ if libffi
   $LOCAL_LIBS.prepend("#{libffi.a} ").strip! # to exts.mk
   $INCFLAGS.gsub!(/-I#{libffi.dir}/, '-I$(LIBFFI_DIR)')
 end
+
+have_func("rb_str_to_interned_str")
 create_makefile 'fiddle' do |conf|
   if !libffi
     next conf << "LIBFFI_CLEAN = none\n"
