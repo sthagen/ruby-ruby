@@ -23,22 +23,6 @@ typedef unsigned char _Bool;
 #endif
 #endif
 
-#ifdef HAVE_RUBY_RE_H
-#include "ruby/re.h"
-#else
-#include "re.h"
-#endif
-
-#ifndef rb_intern_str
-#define rb_intern_str(string) SYM2ID(rb_str_intern(string))
-#endif
-
-#ifndef rb_obj_instance_variables
-#define rb_obj_instance_variables(object) rb_funcall(object, rb_intern("instance_variables"), 0)
-#endif
-
-#define option_given_p(opts, key) RTEST(rb_funcall(opts, i_key_p, 1, key))
-
 static void convert_UTF8_to_JSON(FBuffer *out_buffer, VALUE in_string, bool out_ascii_only, bool out_script_safe);
 static char *fstrndup(const char *ptr, unsigned long len);
 
@@ -55,9 +39,6 @@ typedef struct JSON_Generator_StateStruct {
     long object_nl_len;
     char *array_nl;
     long array_nl_len;
-    FBuffer *array_delim;
-    FBuffer *object_delim;
-    FBuffer *object_delim2;
     long max_nesting;
     char allow_nan;
     char ascii_only;
@@ -106,8 +87,6 @@ static VALUE mNilClass_to_json(int argc, VALUE *argv, VALUE self);
 static VALUE mObject_to_json(int argc, VALUE *argv, VALUE self);
 static void State_free(void *state);
 static VALUE cState_s_allocate(VALUE klass);
-static VALUE cState_configure(VALUE self, VALUE opts);
-static VALUE cState_to_h(VALUE self);
 static void generate_json(FBuffer *buffer, VALUE Vstate, JSON_Generator_State *state, VALUE obj);
 static void generate_json_object(FBuffer *buffer, VALUE Vstate, JSON_Generator_State *state, VALUE obj);
 static void generate_json_array(FBuffer *buffer, VALUE Vstate, JSON_Generator_State *state, VALUE obj);
@@ -123,7 +102,6 @@ static void generate_json_bignum(FBuffer *buffer, VALUE Vstate, JSON_Generator_S
 static void generate_json_float(FBuffer *buffer, VALUE Vstate, JSON_Generator_State *state, VALUE obj);
 static VALUE cState_partial_generate(VALUE self, VALUE obj);
 static VALUE cState_generate(VALUE self, VALUE obj);
-static VALUE cState_initialize(int argc, VALUE *argv, VALUE self);
 static VALUE cState_from_state_s(VALUE self, VALUE opts);
 static VALUE cState_indent(VALUE self);
 static VALUE cState_indent_set(VALUE self, VALUE indent);
@@ -146,15 +124,6 @@ static VALUE cState_script_safe_set(VALUE self, VALUE depth);
 static VALUE cState_strict(VALUE self);
 static VALUE cState_strict_set(VALUE self, VALUE strict);
 static FBuffer *cState_prepare_buffer(VALUE self);
-#ifndef ZALLOC
-#define ZALLOC(type) ((type *)ruby_zalloc(sizeof(type)))
-static inline void *ruby_zalloc(size_t n)
-{
-    void *p = ruby_xmalloc(n);
-    memset(p, 0, n);
-    return p;
-}
-#endif
 
 static const rb_data_type_t JSON_Generator_State_type;
 
