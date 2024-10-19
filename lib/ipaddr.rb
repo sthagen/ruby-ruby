@@ -40,7 +40,7 @@ require 'socket'
 #   p ipaddr3                   #=> #<IPAddr: IPv4:192.168.2.0/255.255.255.0>
 
 class IPAddr
-  VERSION = "1.2.6"
+  VERSION = "1.2.7"
 
   # 32 bit mask for IPv4
   IN4MASK = 0xffffffff
@@ -239,8 +239,8 @@ class IPAddr
   end
 
   # Returns a json string containing the IP address representation.
-  def to_json(*)
-    format("\"%s\"", as_json)
+  def to_json(*a)
+    %Q{"#{as_json(*a)}"}
   end
 
   # Returns a string containing the IP address representation in
