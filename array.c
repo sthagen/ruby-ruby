@@ -3352,43 +3352,12 @@ sort_2(const void *ap, const void *bp, void *dummy)
 
 /*
  *  call-seq:
- *    array.sort! -> self
- *    array.sort! {|a, b| ... } -> self
+ *    sort! -> self
+ *    sort! {|a, b| ... } -> self
  *
- *  Returns +self+ with its elements sorted in place.
+ *  Like Array#sort, but returns +self+ with its elements sorted in place.
  *
- *  With no block, compares elements using operator <tt>#<=></tt>
- *  (see Comparable):
- *
- *    a = 'abcde'.split('').shuffle
- *    a # => ["e", "b", "d", "a", "c"]
- *    a.sort!
- *    a # => ["a", "b", "c", "d", "e"]
- *
- *  With a block, calls the block with each element pair;
- *  for each element pair +a+ and +b+, the block should return an integer:
- *
- *  - Negative when +b+ is to follow +a+.
- *  - Zero when +a+ and +b+ are equivalent.
- *  - Positive when +a+ is to follow +b+.
- *
- *  Example:
- *
- *    a = 'abcde'.split('').shuffle
- *    a # => ["e", "b", "d", "a", "c"]
- *    a.sort! {|a, b| a <=> b }
- *    a # => ["a", "b", "c", "d", "e"]
- *    a.sort! {|a, b| b <=> a }
- *    a # => ["e", "d", "c", "b", "a"]
- *
- *  When the block returns zero, the order for +a+ and +b+ is indeterminate,
- *  and may be unstable:
- *
- *    a = 'abcde'.split('').shuffle
- *    a # => ["e", "b", "d", "a", "c"]
- *    a.sort! {|a, b| 0 }
- *    a # => ["d", "e", "c", "a", "b"]
- *
+ *  Related: see {Methods for Assigning}[rdoc-ref:Array@Methods+for+Assigning].
  */
 
 VALUE
@@ -3455,21 +3424,18 @@ rb_ary_sort_bang(VALUE ary)
 
 /*
  *  call-seq:
- *    array.sort -> new_array
- *    array.sort {|a, b| ... } -> new_array
+ *    sort -> new_array
+ *    sort {|a, b| ... } -> new_array
  *
- *  Returns a new +Array+ whose elements are those from +self+, sorted.
+ *  Returns a new array containing the elements of +self+, sorted.
  *
- *  With no block, compares elements using operator <tt>#<=></tt>
- *  (see Comparable):
+ *  With no block given, compares elements using operator <tt>#<=></tt>
+ *  (see Object#<=>):
  *
- *    a = 'abcde'.split('').shuffle
- *    a # => ["e", "b", "d", "a", "c"]
- *    a1 = a.sort
- *    a1 # => ["a", "b", "c", "d", "e"]
+ *    [0, 2, 3, 1].sort # => [0, 1, 2, 3]
  *
- *  With a block, calls the block with each element pair;
- *  for each element pair +a+ and +b+, the block should return an integer:
+ *  With a block given, calls the block with each combination of pairs of elements from +self+;
+ *  for each pair +a+ and +b+, the block should return a numeric:
  *
  *  - Negative when +b+ is to follow +a+.
  *  - Zero when +a+ and +b+ are equivalent.
@@ -3477,22 +3443,14 @@ rb_ary_sort_bang(VALUE ary)
  *
  *  Example:
  *
- *    a = 'abcde'.split('').shuffle
- *    a # => ["e", "b", "d", "a", "c"]
- *    a1 = a.sort {|a, b| a <=> b }
- *    a1 # => ["a", "b", "c", "d", "e"]
- *    a2 = a.sort {|a, b| b <=> a }
- *    a2 # => ["e", "d", "c", "b", "a"]
+ *    a = [3, 2, 0, 1]
+ *    a.sort {|a, b| a <=> b } # => [0, 1, 2, 3]
+ *    a.sort {|a, b| b <=> a } # => [3, 2, 1, 0]
  *
  *  When the block returns zero, the order for +a+ and +b+ is indeterminate,
- *  and may be unstable:
+ *  and may be unstable.
  *
- *    a = 'abcde'.split('').shuffle
- *    a # => ["e", "b", "d", "a", "c"]
- *    a1 = a.sort {|a, b| 0 }
- *    a1 # =>  ["c", "e", "b", "d", "a"]
- *
- *  Related: Enumerable#sort_by.
+ *  Related: see {Methods for Fetching}[rdoc-ref:Array@Methods+for+Fetching].
  */
 
 VALUE
@@ -3598,28 +3556,24 @@ sort_by_i(RB_BLOCK_CALL_FUNC_ARGLIST(i, dummy))
 
 /*
  *  call-seq:
- *    array.sort_by! {|element| ... } -> self
- *    array.sort_by! -> new_enumerator
+ *    sort_by! {|element| ... } -> self
+ *    sort_by! -> new_enumerator
  *
- *  Sorts the elements of +self+ in place,
- *  using an ordering determined by the block; returns self.
+ *  With a block given, sorts the elements of +self+ in place;
+ *  returns self.
  *
  *  Calls the block with each successive element;
- *  sorts elements based on the values returned from the block.
- *
- *  For duplicates returned by the block, the ordering is indeterminate, and may be unstable.
- *
- *  This example sorts strings based on their sizes:
+ *  sorts elements based on the values returned from the block:
  *
  *    a = ['aaaa', 'bbb', 'cc', 'd']
  *    a.sort_by! {|element| element.size }
  *    a # => ["d", "cc", "bbb", "aaaa"]
  *
- *  Returns a new Enumerator if no block given:
+ *  For duplicate values returned by the block, the ordering is indeterminate, and may be unstable.
  *
- *    a = ['aaaa', 'bbb', 'cc', 'd']
- *    a.sort_by! # => #<Enumerator: ["aaaa", "bbb", "cc", "d"]:sort_by!>
+ *  With no block given, returns a new Enumerator.
  *
+ *  Related: see {Methods for Assigning}[rdoc-ref:Array@Methods+for+Assigning].
  */
 
 static VALUE
@@ -7970,40 +7924,41 @@ finish_exact_sum(long n, VALUE r, VALUE v, int z)
 
 /*
  * call-seq:
- *   array.sum(init = 0) -> object
- *   array.sum(init = 0) {|element| ... } -> object
+ *   sum(init = 0) -> object
+ *   sum(init = 0) {|element| ... } -> object
  *
- *  When no block is given, returns the object equivalent to:
+ *  With no block given, returns the sum of +init+ and all elements of +self+;
+ *  for array +array+ and value +init+, equivalent to:
  *
  *    sum = init
  *    array.each {|element| sum += element }
  *    sum
  *
- *  For example, <tt>[e1, e2, e3].sum</tt> returns <tt>init + e1 + e2 + e3</tt>.
+ *  For example, <tt>[e0, e1, e2].sum</tt> returns <tt>init + e0 + e1 + e2</tt>.
  *
  *  Examples:
  *
- *    a = [0, 1, 2, 3]
- *    a.sum # => 6
- *    a.sum(100) # => 106
+ *    [0, 1, 2, 3].sum                 # => 6
+ *    [0, 1, 2, 3].sum(100)            # => 106
+ *    ['abc', 'def', 'ghi'].sum('jkl') # => "jklabcdefghi"
+ *    [[:foo, :bar], ['foo', 'bar']].sum([2, 3])
+ *    # => [2, 3, :foo, :bar, "foo", "bar"]
  *
- *  The elements need not be numeric, but must be <tt>+</tt>-compatible
- *  with each other and with +init+:
+ *  The +init+ value and elements need not be numeric, but must all be <tt>+</tt>-compatible:
  *
- *    a = ['abc', 'def', 'ghi']
- *    a.sum('jkl') # => "jklabcdefghi"
+ *    # Raises TypeError: Array can't be coerced into Integer.
+ *    [[:foo, :bar], ['foo', 'bar']].sum(2)
  *
- *  When a block is given, it is called with each element
- *  and the block's return value (instead of the element itself) is used as the addend:
+ *  With a block given, calls the block with each element of +self+;
+ *  the block's return value (instead of the element itself) is used as the addend:
  *
- *    a = ['zero', 1, :two]
- *    s = a.sum('Coerced and concatenated: ') {|element| element.to_s }
- *    s # => "Coerced and concatenated: zero1two"
+ *    ['zero', 1, :two].sum('Coerced and concatenated: ') {|element| element.to_s }
+ *    # => "Coerced and concatenated: zero1two"
  *
  *  Notes:
  *
  *  - Array#join and Array#flatten may be faster than Array#sum
- *    for an +Array+ of Strings or an +Array+ of Arrays.
+ *    for an array of strings or an array of arrays.
  *  - Array#sum method may not respect method redefinition of "+" methods such as Integer#+.
  *
  */

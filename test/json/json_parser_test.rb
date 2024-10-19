@@ -24,7 +24,13 @@ class JSONParserTest < Test::Unit::TestCase
     source = "{}".encode("UTF-16")
     JSON::Parser.new(source)
     assert_equal Encoding::UTF_16, source.encoding
-  end if defined?(Encoding::UTF_16)
+  end
+
+  def test_argument_encoding_for_binary
+    source = "{}".encode("ASCII-8BIT")
+    JSON::Parser.new(source)
+    assert_equal Encoding::ASCII_8BIT, source.encoding
+  end
 
   def test_error_message_encoding
     pend if RUBY_ENGINE == 'truffleruby'
@@ -36,7 +42,7 @@ class JSONParserTest < Test::Unit::TestCase
     }
     assert_equal(Encoding::UTF_8, e.message.encoding, bug10705)
     assert_include(e.message, json, bug10705)
-  end if defined?(Encoding::UTF_8) and defined?(JSON::Ext::Parser)
+  end if defined?(JSON::Ext::Parser)
 
   def test_parsing
     parser = JSON::Parser.new('"test"')
@@ -265,6 +271,14 @@ EOT
 }
 EOT
     assert_raise(ParserError) { parse(json) }
+    json = <<EOT
+{
+  "key1":"value1"  /* multi line
+                    // nested eol comment
+                    /* legal nested multi line comment start sequence */
+}
+EOT
+    assert_equal({ "key1" => "value1" }, parse(json))
     json = <<EOT
 {
   "key1":"value1"  /* multi line

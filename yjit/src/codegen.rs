@@ -458,6 +458,7 @@ macro_rules! perf_call {
 }
 
 use crate::codegen::JCCKinds::*;
+use crate::log::Log;
 
 #[allow(non_camel_case_types, unused)]
 pub enum JCCKinds {
@@ -1222,6 +1223,8 @@ pub fn gen_single_block(
         asm_comment!(asm, "Block: {} {}", iseq_get_location(blockid.iseq, blockid_idx), chain_depth);
         asm_comment!(asm, "reg_mapping: {:?}", asm.ctx.get_reg_mapping());
     }
+
+    Log::add_block_with_chain_depth(blockid, asm.ctx.get_chain_depth());
 
     // Mark the start of an ISEQ for --yjit-perf
     jit_perf_symbol_push!(jit, &mut asm, &get_iseq_name(iseq), PerfMap::ISEQ);
@@ -6868,8 +6871,8 @@ fn gen_send_cfunc(
     // We also do this after the C call to minimize the impact of spill_temps() on asm.ccall().
     if get_option!(gen_stats) {
         // Assemble the method name string
-        let mid = unsafe { vm_ci_mid(ci) };
-        let name_str = get_method_name(recv_known_class, mid);
+        let mid = unsafe { rb_get_def_original_id((*cme).def) };
+        let name_str = get_method_name(Some(unsafe { (*cme).owner }), mid);
 
         // Get an index for this cfunc name
         let cfunc_idx = get_cfunc_idx(&name_str);
@@ -9096,7 +9099,10 @@ fn gen_send_general(
 
 /// Get class name from a class pointer.
 fn get_class_name(class: Option<VALUE>) -> String {
-    class.and_then(|class| unsafe {
+    class.filter(|&class| {
+        // type checks for rb_class2name()
+        unsafe { RB_TYPE_P(class, RUBY_T_MODULE) || RB_TYPE_P(class, RUBY_T_CLASS) }
+    }).and_then(|class| unsafe {
         cstr_to_rust_string(rb_class2name(class))
     }).unwrap_or_else(|| "Unknown".to_string())
 }
@@ -9909,11 +9915,16 @@ fn gen_opt_getconstant_path(
         return Some(EndBlock);
     }
 
-    if !unsafe { (*ice).ic_cref }.is_null() {
+    let cref_sensitive = !unsafe { (*ice).ic_cref }.is_null();
+    let is_shareable = unsafe { rb_yjit_constcache_shareable(ice) };
+    let needs_checks = cref_sensitive || (!is_shareable && !assume_single_ractor_mode(jit, asm));
+
+    if needs_checks {
         // Cache is keyed on a certain lexical scope. Use the interpreter's cache.
         let inline_cache = asm.load(Opnd::const_ptr(ic as *const u8));
 
         // Call function to verify the cache. It doesn't allocate or call methods.
+        // This includes a check for Ractor safety
         let ret_val = asm.ccall(
             rb_vm_ic_hit_p as *const u8,
             vec![inline_cache, Opnd::mem(64, CFP, RUBY_OFFSET_CFP_EP)]
@@ -9942,12 +9953,6 @@ fn gen_opt_getconstant_path(
         let stack_top = asm.stack_push(Type::Unknown);
         asm.store(stack_top, ic_entry_val);
     } else {
-        // Optimize for single ractor mode.
-        if !assume_single_ractor_mode(jit, asm) {
-            gen_counter_incr(jit, asm, Counter::opt_getconstant_path_multi_ractor);
-            return None;
-        }
-
         // Invalidate output code on any constant writes associated with
         // constants referenced within the current block.
         jit.assume_stable_constant_names(asm, idlist);
