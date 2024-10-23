@@ -634,8 +634,8 @@ typedef struct gc_function_map {
     unsigned long long (*get_total_time)(void *objspace_ptr);
     size_t (*gc_count)(void *objspace_ptr);
     VALUE (*latest_gc_info)(void *objspace_ptr, VALUE key);
-    size_t (*stat)(void *objspace_ptr, VALUE hash_or_sym);
-    size_t (*stat_heap)(void *objspace_ptr, VALUE heap_name, VALUE hash_or_sym);
+    VALUE (*stat)(void *objspace_ptr, VALUE hash_or_sym);
+    VALUE (*stat_heap)(void *objspace_ptr, VALUE heap_name, VALUE hash_or_sym);
     // Miscellaneous
     size_t (*obj_flags)(void *objspace_ptr, VALUE obj, ID* flags, size_t max);
     bool (*pointer_to_heap_p)(void *objspace_ptr, const void *ptr);
@@ -3397,7 +3397,17 @@ gc_count(rb_execution_context_t *ec, VALUE self)
 VALUE
 rb_gc_latest_gc_info(VALUE key)
 {
-    return rb_gc_impl_latest_gc_info(rb_gc_get_objspace(), key);
+    if (!SYMBOL_P(key) && !RB_TYPE_P(key, T_HASH)) {
+        rb_raise(rb_eTypeError, "non-hash or symbol given");
+    }
+
+    VALUE val = rb_gc_impl_latest_gc_info(rb_gc_get_objspace(), key);
+
+    if (val == Qundef) {
+        rb_raise(rb_eArgError, "unknown key: %"PRIsVALUE, rb_sym2str(key));
+    }
+
+    return val;
 }
 
 static VALUE
@@ -3406,25 +3416,40 @@ gc_stat(rb_execution_context_t *ec, VALUE self, VALUE arg) // arg is (nil || has
     if (NIL_P(arg)) {
         arg = rb_hash_new();
     }
-
-    size_t val = rb_gc_impl_stat(rb_gc_get_objspace(), arg);
-
-    if (SYMBOL_P(arg)) {
-        return SIZET2NUM(val);
+    else if (!RB_TYPE_P(arg, T_HASH) && !SYMBOL_P(arg)) {
+        rb_raise(rb_eTypeError, "non-hash or symbol given");
     }
-    else {
-        return arg;
+
+    VALUE ret = rb_gc_impl_stat(rb_gc_get_objspace(), arg);
+
+    if (ret == Qundef) {
+        GC_ASSERT(SYMBOL_P(arg));
+
+        rb_raise(rb_eArgError, "unknown key: %"PRIsVALUE, rb_sym2str(arg));
     }
+
+    return ret;
 }
 
 size_t
-rb_gc_stat(VALUE key)
+rb_gc_stat(VALUE arg)
 {
-    if (SYMBOL_P(key)) {
-        return rb_gc_impl_stat(rb_gc_get_objspace(), key);
+    if (!RB_TYPE_P(arg, T_HASH) && !SYMBOL_P(arg)) {
+        rb_raise(rb_eTypeError, "non-hash or symbol given");
+    }
+
+    VALUE ret = rb_gc_impl_stat(rb_gc_get_objspace(), arg);
+
+    if (ret == Qundef) {
+        GC_ASSERT(SYMBOL_P(arg));
+
+        rb_raise(rb_eArgError, "unknown key: %"PRIsVALUE, rb_sym2str(arg));
+    }
+
+    if (SYMBOL_P(arg)) {
+        return NUM2SIZET(ret);
     }
     else {
-        rb_gc_impl_stat(rb_gc_get_objspace(), key);
         return 0;
     }
 }
@@ -3436,14 +3461,29 @@ gc_stat_heap(rb_execution_context_t *ec, VALUE self, VALUE heap_name, VALUE arg)
         arg = rb_hash_new();
     }
 
-    size_t val = rb_gc_impl_stat_heap(rb_gc_get_objspace(), heap_name, arg);
-
-    if (SYMBOL_P(arg)) {
-        return SIZET2NUM(val);
+    if (NIL_P(heap_name)) {
+        if (!RB_TYPE_P(arg, T_HASH)) {
+            rb_raise(rb_eTypeError, "non-hash given");
+        }
+    }
+    else if (FIXNUM_P(heap_name)) {
+        if (!SYMBOL_P(arg) && !RB_TYPE_P(arg, T_HASH)) {
+            rb_raise(rb_eTypeError, "non-hash or symbol given");
+        }
     }
     else {
-        return arg;
+        rb_raise(rb_eTypeError, "heap_name must be nil or an Integer");
     }
+
+    VALUE ret = rb_gc_impl_stat_heap(rb_gc_get_objspace(), heap_name, arg);
+
+    if (ret == Qundef) {
+        GC_ASSERT(SYMBOL_P(arg));
+
+        rb_raise(rb_eArgError, "unknown key: %"PRIsVALUE, rb_sym2str(arg));
+    }
+
+    return ret;
 }
 
 static VALUE

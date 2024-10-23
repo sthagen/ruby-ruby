@@ -7291,7 +7291,7 @@ gc_info_decode(rb_objspace_t *objspace, const VALUE hash_or_key, const unsigned 
         hash = hash_or_key;
     }
     else {
-        rb_raise(rb_eTypeError, "non-hash or symbol given");
+        rb_bug("gc_info_decode: non-hash or symbol given");
     }
 
     if (NIL_P(sym_major_by)) {
@@ -7377,8 +7377,9 @@ gc_info_decode(rb_objspace_t *objspace, const VALUE hash_or_key, const unsigned 
     SET(retained_weak_references_count, LONG2FIX(objspace->profile.retained_weak_references_count));
 #undef SET
 
-    if (!NIL_P(key)) {/* matched key should return above */
-        rb_raise(rb_eArgError, "unknown key: %"PRIsVALUE, rb_sym2str(key));
+    if (!NIL_P(key)) {
+        // Matched key should return above
+        return Qundef;
     }
 
     return hash;
@@ -7496,7 +7497,7 @@ ns_to_ms(uint64_t ns)
     return ns / (1000 * 1000);
 }
 
-size_t
+VALUE
 rb_gc_impl_stat(void *objspace_ptr, VALUE hash_or_sym)
 {
     rb_objspace_t *objspace = objspace_ptr;
@@ -7511,12 +7512,12 @@ rb_gc_impl_stat(void *objspace_ptr, VALUE hash_or_sym)
         key = hash_or_sym;
     }
     else {
-        rb_raise(rb_eTypeError, "non-hash or symbol given");
+        rb_bug("non-hash or symbol given");
     }
 
 #define SET(name, attr) \
     if (key == gc_stat_symbols[gc_stat_sym_##name]) \
-        return attr; \
+        return SIZET2NUM(attr); \
     else if (hash != Qnil) \
         rb_hash_aset(hash, gc_stat_symbols[gc_stat_sym_##name], SIZET2NUM(attr));
 
@@ -7565,8 +7566,9 @@ rb_gc_impl_stat(void *objspace_ptr, VALUE hash_or_sym)
 #endif /* RGENGC_PROFILE */
 #undef SET
 
-    if (!NIL_P(key)) { /* matched key should return above */
-        rb_raise(rb_eArgError, "unknown key: %"PRIsVALUE, rb_sym2str(key));
+    if (!NIL_P(key)) {
+        // Matched key should return above
+        return Qundef;
     }
 
 #if defined(RGENGC_PROFILE) && RGENGC_PROFILE >= 2
@@ -7580,7 +7582,7 @@ rb_gc_impl_stat(void *objspace_ptr, VALUE hash_or_sym)
     }
 #endif
 
-    return 0;
+    return hash;
 }
 
 enum gc_stat_heap_sym {
@@ -7614,12 +7616,12 @@ setup_gc_stat_heap_symbols(void)
     }
 }
 
-static size_t
+static VALUE
 stat_one_heap(rb_heap_t *heap, VALUE hash, VALUE key)
 {
 #define SET(name, attr) \
     if (key == gc_stat_heap_symbols[gc_stat_heap_sym_##name]) \
-        return attr; \
+        return SIZET2NUM(attr); \
     else if (hash != Qnil) \
         rb_hash_aset(hash, gc_stat_heap_symbols[gc_stat_heap_sym_##name], SIZET2NUM(attr));
 
@@ -7633,14 +7635,15 @@ stat_one_heap(rb_heap_t *heap, VALUE hash, VALUE key)
     SET(total_freed_objects, heap->total_freed_objects);
 #undef SET
 
-    if (!NIL_P(key)) { /* matched key should return above */
-        rb_raise(rb_eArgError, "unknown key: %"PRIsVALUE, rb_sym2str(key));
+    if (!NIL_P(key)) {
+        // Matched key should return above
+        return Qundef;
     }
 
-    return 0;
+    return hash;
 }
 
-size_t
+VALUE
 rb_gc_impl_stat_heap(void *objspace_ptr, VALUE heap_name, VALUE hash_or_sym)
 {
     rb_objspace_t *objspace = objspace_ptr;
@@ -7649,7 +7652,7 @@ rb_gc_impl_stat_heap(void *objspace_ptr, VALUE heap_name, VALUE hash_or_sym)
 
     if (NIL_P(heap_name)) {
         if (!RB_TYPE_P(hash_or_sym, T_HASH)) {
-            rb_raise(rb_eTypeError, "non-hash given");
+            rb_bug("non-hash given");
         }
 
         for (int i = 0; i < HEAP_COUNT; i++) {
@@ -7676,14 +7679,14 @@ rb_gc_impl_stat_heap(void *objspace_ptr, VALUE heap_name, VALUE hash_or_sym)
             return stat_one_heap(&heaps[heap_idx], hash_or_sym, Qnil);
         }
         else {
-            rb_raise(rb_eTypeError, "non-hash or symbol given");
+            rb_bug("non-hash or symbol given");
         }
     }
     else {
-        rb_raise(rb_eTypeError, "heap_name must be nil or an Integer");
+        rb_bug("heap_name must be nil or an Integer");
     }
 
-    return 0;
+    return hash_or_sym;
 }
 
 /* I could include internal.h for this, but doing so undefines some Array macros
