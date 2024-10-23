@@ -5,6 +5,8 @@ require "did_you_mean"
 require "tempfile"
 
 class ErrorHighlightTest < Test::Unit::TestCase
+  ErrorHighlight::DefaultFormatter.snippet_max_width = 80
+
   class DummyFormatter
     def self.message_for(corrections)
       ""
@@ -1282,6 +1284,136 @@ undefined method `time' for #{ ONE_RECV_MESSAGE }
 
         load tmp.path
       end
+    end
+  end
+
+  def test_errors_on_small_terminal_window_at_the_end
+    assert_error_message(NoMethodError, <<~END) do
+undefined method `time' for #{ ONE_RECV_MESSAGE }
+
+...0000000000000000000000000000000000000000000000000000000000000000 + 1.time {}
+                                                                       ^^^^^
+    END
+
+    100000000000000000000000000000000000000000000000000000000000000000000000000000 + 1.time {}
+    end
+  end
+
+  def test_errors_on_small_terminal_window_at_the_beginning
+    assert_error_message(NoMethodError, <<~END) do
+undefined method `time' for #{ ONE_RECV_MESSAGE }
+
+      1.time { 10000000000000000000000000000000000000000000000000000000000000...
+       ^^^^^
+    END
+
+      1.time { 100000000000000000000000000000000000000000000000000000000000000000000000000000 }
+
+    end
+  end
+
+  def test_errors_on_small_terminal_window_at_the_middle_near_beginning
+    assert_error_message(NoMethodError, <<~END) do
+undefined method `time' for #{ ONE_RECV_MESSAGE }
+
+    100000000000000000000000000000000000000 + 1.time { 1000000000000000000000...
+                                               ^^^^^
+    END
+
+    100000000000000000000000000000000000000 + 1.time { 100000000000000000000000000000000000000 }
+    end
+  end
+
+  def test_errors_on_small_terminal_window_at_the_middle
+    assert_error_message(NoMethodError, <<~END) do
+undefined method `time' for #{ ONE_RECV_MESSAGE }
+
+...000000000000000000000000000000000 + 1.time { 10000000000000000000000000000...
+                                        ^^^^^
+    END
+
+    10000000000000000000000000000000000000000000000000000000000000000000000 + 1.time { 1000000000000000000000000000000 }
+    end
+  end
+
+  def test_errors_on_extremely_small_terminal_window
+    custom_max_width = 30
+    original_max_width = ErrorHighlight::DefaultFormatter.snippet_max_width
+
+    ErrorHighlight::DefaultFormatter.snippet_max_width = custom_max_width
+
+    assert_error_message(NoMethodError, <<~END) do
+undefined method `time' for #{ ONE_RECV_MESSAGE }
+
+...00000000 + 1.time { 1000...
+               ^^^^^
+    END
+
+      100000000000000 + 1.time { 100000000000000 }
+    end
+  ensure
+    ErrorHighlight::DefaultFormatter.snippet_max_width = original_max_width
+  end
+
+  def test_errors_on_terminal_window_smaller_than_min_width
+    custom_max_width = 5
+    original_max_width = ErrorHighlight::DefaultFormatter.snippet_max_width
+
+    ErrorHighlight::DefaultFormatter.snippet_max_width = custom_max_width
+
+    assert_error_message(NoMethodError, <<~END) do
+undefined method `time' for #{ ONE_RECV_MESSAGE }
+
+...000 + 1.time {...
+          ^^^^^
+    END
+
+    100000000000000 + 1.time { 100000000000000 }
+    end
+  ensure
+    ErrorHighlight::DefaultFormatter.snippet_max_width = original_max_width
+  end
+
+  def test_errors_on_terminal_window_when_truncation_is_disabled
+    custom_max_width = nil
+    original_max_width = ErrorHighlight::DefaultFormatter.snippet_max_width
+
+    ErrorHighlight::DefaultFormatter.snippet_max_width = custom_max_width
+
+    assert_error_message(NoMethodError, <<~END) do
+undefined method `time' for #{ ONE_RECV_MESSAGE }
+
+      10000000000000000000000000000000000000000000000000000000000000000000000 + 1.time { 1000000000000000000000000000000 }
+                                                                                 ^^^^^
+    END
+
+      10000000000000000000000000000000000000000000000000000000000000000000000 + 1.time { 1000000000000000000000000000000 }
+    end
+  ensure
+    ErrorHighlight::DefaultFormatter.snippet_max_width = original_max_width
+  end
+
+  def test_errors_on_small_terminal_window_when_larger_than_viewport
+    assert_error_message(NoMethodError, <<~END) do
+undefined method `timessssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss!' for #{ ONE_RECV_MESSAGE }
+
+      1.timesssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss...
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    END
+
+      1.timessssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss!
+    end
+  end
+
+  def test_errors_on_small_terminal_window_when_exact_size_of_viewport
+    assert_error_message(NoMethodError, <<~END) do
+undefined method `timessssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss!' for #{ ONE_RECV_MESSAGE }
+
+      1.timessssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss!...
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    END
+
+      1.timessssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss! * 1000
     end
   end
 

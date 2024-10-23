@@ -6347,6 +6347,27 @@ fn jit_thread_s_current(
     true
 }
 
+/// Specialization for rb_obj_dup() (Kernel#dup)
+fn jit_rb_obj_dup(
+    _jit: &mut JITState,
+    asm: &mut Assembler,
+    _ci: *const rb_callinfo,
+    _cme: *const rb_callable_method_entry_t,
+    _block: Option<BlockHandler>,
+    _argc: i32,
+    _known_recv_class: Option<VALUE>,
+) -> bool {
+    // Kernel#dup has arity=0, and caller already did argument count check.
+    let self_type = asm.ctx.get_opnd_type(StackOpnd(0));
+
+    if self_type.is_imm() {
+        // Method is no-op when receiver is an immediate value.
+        true
+    } else {
+        false
+    }
+}
+
 /// Check if we know how to codegen for a particular cfunc method
 /// See also: [reg_method_codegen].
 fn lookup_cfunc_codegen(def: *const rb_method_definition_t) -> Option<MethodGenFn> {
@@ -10449,6 +10470,7 @@ pub fn yjit_reg_method_codegen_fns() {
 
         reg_method_codegen(rb_mKernel, "respond_to?", jit_obj_respond_to);
         reg_method_codegen(rb_mKernel, "block_given?", jit_rb_f_block_given_p);
+        reg_method_codegen(rb_mKernel, "dup", jit_rb_obj_dup);
 
         reg_method_codegen(rb_cClass, "superclass", jit_rb_class_superclass);
 
