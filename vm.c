@@ -171,7 +171,7 @@ vm_ep_in_heap_p_(const rb_execution_context_t *ec, const VALUE *ep)
         if (!UNDEF_P(envval)) {
             const rb_env_t *env = (const rb_env_t *)envval;
 
-            VM_ASSERT(vm_assert_env(envval));
+            VM_ASSERT(imemo_type_p(envval, imemo_env));
             VM_ASSERT(VM_ENV_FLAGS(ep, VM_ENV_FLAG_ESCAPED));
             VM_ASSERT(env->ep == ep);
         }
@@ -517,6 +517,18 @@ jit_exec_exception(rb_execution_context_t *ec)
 #endif
 
 static void add_opt_method_entry(const rb_method_entry_t *me);
+
+#define RB_TYPE_2_P(obj, type1, type2) \
+    (RB_TYPE_P(obj, type1) || RB_TYPE_P(obj, type2))
+#define RB_TYPE_3_P(obj, type1, type2, type3) \
+    (RB_TYPE_P(obj, type1) || RB_TYPE_P(obj, type2) || RB_TYPE_P(obj, type3))
+
+#define VM_ASSERT_TYPE(obj, type) \
+    VM_ASSERT(RB_TYPE_P(obj, type), #obj ": %s", rb_obj_info(obj))
+#define VM_ASSERT_TYPE2(obj, type1, type2) \
+    VM_ASSERT(RB_TYPE_2_P(obj, type1, type2), #obj ": %s", rb_obj_info(obj))
+#define VM_ASSERT_TYPE3(obj, type1, type2, type3) \
+    VM_ASSERT(RB_TYPE_3_P(obj, type1, type2, type3), #obj ": %s", rb_obj_info(obj))
 
 #include "vm_insnhelper.c"
 

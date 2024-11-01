@@ -87,14 +87,14 @@ static void raise_parse_error(const char *format, const char *start)
     rb_enc_raise(rb_utf8_encoding(), rb_path2class("JSON::ParserError"), format, ptr);
 }
 
-static VALUE mJSON, mExt, cParser, eNestingError;
+static VALUE mJSON, mExt, cParser, eNestingError, Encoding_UTF_8;
 static VALUE CNaN, CInfinity, CMinusInfinity;
 
 static ID i_json_creatable_p, i_json_create, i_create_id, i_create_additions,
           i_chr, i_max_nesting, i_allow_nan, i_symbolize_names,
           i_object_class, i_array_class, i_decimal_class,
           i_deep_const_get, i_match, i_match_string, i_aset, i_aref,
-          i_leftshift, i_new, i_try_convert, i_freeze, i_uminus;
+          i_leftshift, i_new, i_try_convert, i_freeze, i_uminus, i_encode;
 
 static int binary_encindex;
 static int utf8_encindex;
@@ -196,6 +196,9 @@ static char *JSON_parse_object(JSON_Parser *json, char *p, char *pe, VALUE *resu
             if (!NIL_P(klassname)) {
                 VALUE klass = rb_funcall(mJSON, i_deep_const_get, 1, klassname);
                 if (RTEST(rb_funcall(klass, i_json_creatable_p, 0))) {
+                    if (json->deprecated_create_additions) {
+                        rb_warn("JSON.load implicit support for `create_additions: true` is deprecated and will be removed in 3.0, use JSON.unsafe_load or explicitly pass `create_additions: true`");
+                    }
                     *result = rb_funcall(klass, i_json_create, 1, *result);
                 }
             }
@@ -458,28 +461,47 @@ static char *JSON_parse_array(JSON_Parser *json, char *p, char *pe, VALUE *resul
     }
 }
 
-static const size_t MAX_STACK_BUFFER_SIZE = 128;
-static VALUE json_string_unescape(char *string, char *stringEnd, int intern, int symbolize)
+static inline VALUE build_string(const char *start, const char *end, bool intern, bool symbolize)
 {
-    VALUE result = Qnil;
+    if (symbolize) {
+        intern = true;
+    }
+    VALUE result;
+# ifdef HAVE_RB_ENC_INTERNED_STR
+    if (intern) {
+      result = rb_enc_interned_str(start, (long)(end - start), rb_utf8_encoding());
+    } else {
+      result = rb_utf8_str_new(start, (long)(end - start));
+    }
+# else
+    result = rb_utf8_str_new(start, (long)(end - start));
+    if (intern) {
+        result = rb_funcall(rb_str_freeze(result), i_uminus, 0);
+    }
+# endif
+
+    if (symbolize) {
+      result = rb_str_intern(result);
+    }
+
+    return result;
+}
+
+static VALUE json_string_unescape(char *string, char *stringEnd, bool intern, bool symbolize)
+{
     size_t bufferSize = stringEnd - string;
     char *p = string, *pe = string, *unescape, *bufferStart, *buffer;
     int unescape_len;
     char buf[4];
 
-    if (bufferSize > MAX_STACK_BUFFER_SIZE) {
-# ifdef HAVE_RB_ENC_INTERNED_STR
-      bufferStart = buffer = ALLOC_N(char, bufferSize ? bufferSize : 1);
-# else
-      bufferStart = buffer = ALLOC_N(char, bufferSize);
-# endif
-    } else {
-# ifdef HAVE_RB_ENC_INTERNED_STR
-      bufferStart = buffer = ALLOCA_N(char, bufferSize ? bufferSize : 1);
-# else
-      bufferStart = buffer = ALLOCA_N(char, bufferSize);
-# endif
+    pe = memchr(p, '\\', bufferSize);
+    if (RB_LIKELY(pe == NULL)) {
+        return build_string(string, stringEnd, intern, symbolize);
     }
+
+    VALUE result = rb_str_buf_new(bufferSize);
+    rb_enc_associate_index(result, utf8_encindex);
+    buffer = bufferStart = RSTRING_PTR(result);
 
     while (pe < stringEnd) {
         if (*pe == '\\') {
@@ -513,9 +535,6 @@ static VALUE json_string_unescape(char *string, char *stringEnd, int intern, int
                     break;
                 case 'u':
                     if (pe > stringEnd - 4) {
-                      if (bufferSize > MAX_STACK_BUFFER_SIZE) {
-                        ruby_xfree(bufferStart);
-                      }
                       raise_parse_error("incomplete unicode character escape sequence at '%s'", p);
                     } else {
                         uint32_t ch = unescape_unicode((unsigned char *) ++pe);
@@ -533,9 +552,6 @@ static VALUE json_string_unescape(char *string, char *stringEnd, int intern, int
                         if ((ch & 0xFC00) == 0xD800) {
                             pe++;
                             if (pe > stringEnd - 6) {
-                              if (bufferSize > MAX_STACK_BUFFER_SIZE) {
-                                ruby_xfree(bufferStart);
-                              }
                               raise_parse_error("incomplete surrogate pair at '%s'", p);
                             }
                             if (pe[0] == '\\' && pe[1] == 'u') {
@@ -568,41 +584,12 @@ static VALUE json_string_unescape(char *string, char *stringEnd, int intern, int
       MEMCPY(buffer, p, char, pe - p);
       buffer += pe - p;
     }
-
-# ifdef HAVE_RB_ENC_INTERNED_STR
-      if (intern) {
-        result = rb_enc_interned_str(bufferStart, (long)(buffer - bufferStart), rb_utf8_encoding());
-      } else {
-        result = rb_utf8_str_new(bufferStart, (long)(buffer - bufferStart));
-      }
-      if (bufferSize > MAX_STACK_BUFFER_SIZE) {
-        ruby_xfree(bufferStart);
-      }
-# else
-      result = rb_utf8_str_new(bufferStart, (long)(buffer - bufferStart));
-
-      if (bufferSize > MAX_STACK_BUFFER_SIZE) {
-        ruby_xfree(bufferStart);
-      }
-
-      if (intern) {
-  # if STR_UMINUS_DEDUPE_FROZEN
-        // Starting from MRI 2.8 it is preferable to freeze the string
-        // before deduplication so that it can be interned directly
-        // otherwise it would be duplicated first which is wasteful.
-        result = rb_funcall(rb_str_freeze(result), i_uminus, 0);
-  # elif STR_UMINUS_DEDUPE
-        // MRI 2.5 and older do not deduplicate strings that are already
-        // frozen.
-        result = rb_funcall(result, i_uminus, 0);
-  # else
-        result = rb_str_freeze(result);
-  # endif
-      }
-# endif
+    rb_str_set_len(result, buffer - bufferStart);
 
     if (symbolize) {
-      result = rb_str_intern(result);
+        result = rb_str_intern(result);
+    } else if (intern) {
+        result = rb_funcall(rb_str_freeze(result), i_uminus, 0);
     }
 
     return result;
@@ -689,13 +676,11 @@ static VALUE convert_encoding(VALUE source)
   }
 
  if (encindex == binary_encindex) {
-    // For historical reason, we silently reinterpret binary strings as UTF-8 if it would work.
-    // TODO: Deprecate in 2.8.0
-    // TODO: Remove in 3.0.0
+    // For historical reason, we silently reinterpret binary strings as UTF-8
     return rb_enc_associate_index(rb_str_dup(source), utf8_encindex);
   }
 
-  return rb_str_conv_enc(source, rb_enc_from_index(encindex), rb_utf8_encoding());
+  return rb_funcall(source, i_encode, 1, Encoding_UTF_8);
 }
 
 /*
@@ -783,10 +768,16 @@ static VALUE cParser_initialize(int argc, VALUE *argv, VALUE self)
         }
         tmp = ID2SYM(i_create_additions);
         if (option_given_p(opts, tmp)) {
-            json->create_additions = RTEST(rb_hash_aref(opts, tmp));
-        } else {
-            json->create_additions = 0;
+            tmp = rb_hash_aref(opts, tmp);
+            if (NIL_P(tmp)) {
+                json->create_additions = 1;
+                json->deprecated_create_additions = 1;
+            } else {
+                json->create_additions = RTEST(tmp);
+                json->deprecated_create_additions = 0;
+            }
         }
+
         if (json->symbolize_names && json->create_additions) {
             rb_raise(rb_eArgError,
                 "options :symbolize_names and :create_additions cannot be "
@@ -919,7 +910,7 @@ static VALUE cJSON_parser_s_allocate(VALUE klass)
 {
     JSON_Parser *json;
     VALUE obj = TypedData_Make_Struct(klass, JSON_Parser, &JSON_Parser_type, json);
-    fbuffer_init(&json->fbuffer, 0);
+    fbuffer_stack_init(&json->fbuffer, 0, NULL, 0);
     return obj;
 }
 
@@ -962,6 +953,9 @@ void Init_parser(void)
     CMinusInfinity = rb_const_get(mJSON, rb_intern("MinusInfinity"));
     rb_gc_register_mark_object(CMinusInfinity);
 
+    rb_global_variable(&Encoding_UTF_8);
+    Encoding_UTF_8 = rb_const_get(rb_path2class("Encoding"), rb_intern("UTF_8"));
+
     i_json_creatable_p = rb_intern("json_creatable?");
     i_json_create = rb_intern("json_create");
     i_create_id = rb_intern("create_id");
@@ -983,6 +977,7 @@ void Init_parser(void)
     i_try_convert = rb_intern("try_convert");
     i_freeze = rb_intern("freeze");
     i_uminus = rb_intern("-@");
+    i_encode = rb_intern("encode");
 
     binary_encindex = rb_ascii8bit_encindex();
     utf8_encindex = rb_utf8_encindex();
