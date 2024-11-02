@@ -159,13 +159,63 @@ class TestProc < Test::Unit::TestCase
     assert_equal(*m_nest{}, "[ruby-core:84583] Feature #14627")
   end
 
-  def test_hash
+  def test_hash_equal
+    # iseq backed proc
+    p1 = proc {}
+    p2 = p1.dup
+
+    assert_equal p1.hash, p2.hash
+
+    # ifunc backed proc
+    p1 = {}.to_proc
+    p2 = p1.dup
+
+    assert_equal p1.hash, p2.hash
+
+    # symbol backed proc
+    p1 = :hello.to_proc
+    p2 = :hello.to_proc
+
+    assert_equal p1.hash, p2.hash
+  end
+
+  def test_hash_uniqueness
     def self.capture(&block)
       block
     end
 
     procs = Array.new(1000){capture{:foo }}
     assert_operator(procs.map(&:hash).uniq.size, :>=, 500)
+
+    # iseq backed proc
+    unique_hashes = 1000.times.map { proc {}.hash }.uniq
+    assert_operator(unique_hashes.size, :>=, 500)
+
+    # ifunc backed proc
+    unique_hashes = 1000.times.map { {}.to_proc.hash }.uniq
+    assert_operator(unique_hashes.size, :>=, 500)
+
+    # symbol backed proc
+    unique_hashes = 1000.times.map { |i| :"test#{i}".to_proc.hash }.uniq
+    assert_operator(unique_hashes.size, :>=, 500)
+  end
+
+  def test_hash_does_not_change_after_compaction
+    # [Bug #20853]
+    [
+      "proc {}", # iseq backed proc
+      "{}.to_proc", # ifunc backed proc
+      ":hello.to_proc", # symbol backed proc
+    ].each do |proc|
+      assert_separately([], <<~RUBY)
+        p1 = #{proc}
+        hash = p1.hash
+
+        GC.verify_compaction_references(expand_heap: true, toward: :empty)
+
+        assert_equal(hash, p1.hash, "proc is `#{proc}`")
+      RUBY
+    end
   end
 
   def test_block_par
