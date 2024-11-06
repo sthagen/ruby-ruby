@@ -1,5 +1,27 @@
+#include "ruby.h"
 #include "../fbuffer/fbuffer.h"
-#include "generator.h"
+
+#include <math.h>
+#include <ctype.h>
+
+/* ruby api and some helpers */
+
+typedef struct JSON_Generator_StateStruct {
+    VALUE indent;
+    VALUE space;
+    VALUE space_before;
+    VALUE object_nl;
+    VALUE array_nl;
+
+    long max_nesting;
+    long depth;
+    long buffer_initial_length;
+
+    bool allow_nan;
+    bool ascii_only;
+    bool script_safe;
+    bool strict;
+} JSON_Generator_State;
 
 #ifndef RB_UNLIKELY
 #define RB_UNLIKELY(cond) (cond)
@@ -31,6 +53,7 @@ struct generate_json_data {
     generator_func func;
 };
 
+static VALUE cState_from_state_s(VALUE self, VALUE opts);
 static VALUE cState_partial_generate(VALUE self, VALUE obj, generator_func);
 static void generate_json(FBuffer *buffer, struct generate_json_data *data, JSON_Generator_State *state, VALUE obj);
 static void generate_json_object(FBuffer *buffer, struct generate_json_data *data, JSON_Generator_State *state, VALUE obj);
@@ -732,7 +755,11 @@ json_object_i(VALUE key, VALUE val, VALUE _arg)
     VALUE key_to_s;
     switch(rb_type(key)) {
         case T_STRING:
-            key_to_s = key;
+            if (RB_LIKELY(RBASIC_CLASS(key) == rb_cString)) {
+                key_to_s = key;
+            } else {
+                key_to_s = rb_funcall(key, i_to_s, 0);
+            }
             break;
         case T_SYMBOL:
             key_to_s = rb_sym2str(key);
@@ -1009,6 +1036,10 @@ static VALUE generate_json_rescue(VALUE d, VALUE exc)
     struct generate_json_data *data = (struct generate_json_data *)d;
     fbuffer_free(data->buffer);
 
+    if (RBASIC_CLASS(exc) == rb_path2class("Encoding::UndefinedConversionError")) {
+        exc = rb_exc_new_str(eGeneratorError, rb_funcall(exc, rb_intern("message"), 0));
+    }
+
     rb_exc_raise(exc);
 
     return Qundef;
@@ -1113,7 +1144,7 @@ static VALUE string_config(VALUE config)
     if (RTEST(config)) {
         Check_Type(config, T_STRING);
         if (RSTRING_LEN(config)) {
-            return RB_OBJ_FROZEN(config) ? config : rb_str_freeze(rb_str_dup(config));
+            return rb_str_new_frozen(config);
         }
     }
     return Qfalse;
