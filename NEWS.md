@@ -87,7 +87,7 @@ The following default gems are updated.
 * fcntl 1.2.0
 * fiddle 1.1.6.dev
 * fileutils 1.7.3
-* io-console 0.7.2
+* io-console 0.8.0.beta1
 * ipaddr 1.2.7
 * irb 1.14.1
 * json 2.8.1
@@ -97,6 +97,7 @@ The following default gems are updated.
 * optparse 0.6.0
 * ostruct 0.6.1
 * pathname 0.4.0
+* pp 0.6.0
 * prism 1.0.0
 * pstore 0.1.4
 * psych 5.2.0
@@ -116,7 +117,7 @@ The following default gems are updated.
 * uri 1.0.1
 * win32ole 1.9.0
 * yaml 0.4.0
-* zlib 3.1.1
+* zlib 3.2.0
 
 The following bundled gem is added.
 

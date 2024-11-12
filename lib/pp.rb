@@ -63,7 +63,7 @@ require 'prettyprint'
 
 class PP < PrettyPrint
 
-  VERSION = "0.5.0"
+  VERSION = "0.6.0"
 
   # Returns the usable width for +out+.
   # As the width of +out+:
@@ -189,7 +189,7 @@ class PP < PrettyPrint
     def pp(obj)
       # If obj is a Delegator then use the object being delegated to for cycle
       # detection
-      obj = obj.__getobj__ if defined?(::Delegator) and obj.is_a?(::Delegator)
+      obj = obj.__getobj__ if defined?(::Delegator) and ::Delegator === obj
 
       if check_inspect_key(obj)
         group {obj.pretty_print_cycle self}
@@ -198,7 +198,11 @@ class PP < PrettyPrint
 
       begin
         push_inspect_key(obj)
-        group {obj.pretty_print self}
+        group do
+          obj.pretty_print self
+        rescue NoMethodError
+          text Kernel.instance_method(:inspect).bind_call(obj)
+        end
       ensure
         pop_inspect_key(obj) unless PP.sharing_detection
       end
@@ -451,13 +455,25 @@ class Data # :nodoc:
     class_name = PP.mcall(self, Kernel, :class).name
     class_name = " #{class_name}" if class_name
     q.group(1, "#<data#{class_name}", '>') {
-      q.seplist(PP.mcall(self, Kernel, :class).members, lambda { q.text "," }) {|member|
+
+      members = PP.mcall(self, Kernel, :class).members
+      values = []
+      members.select! do |member|
+        begin
+          values << __send__(member)
+          true
+        rescue NoMethodError
+          false
+        end
+      end
+
+      q.seplist(members.zip(values), lambda { q.text "," }) {|(member, value)|
         q.breakable
         q.text member.to_s
         q.text '='
         q.group(1) {
           q.breakable ''
-          q.pp public_send(member)
+          q.pp value
         }
       }
     }

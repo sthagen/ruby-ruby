@@ -1,21 +1,7 @@
-define hook-run
-  set $color_type = 0
-  set $color_highlite = 0
-  set $color_end = 0
-end
-
 define ruby_gdb_init
-  if !$color_type
-    set $color_type = "\033[31m"
-  end
-  if !$color_highlite
-    set $color_highlite = "\033[36m"
-  end
-  if !$color_end
-    set $color_end = "\033[m"
-  end
-  if ruby_dummy_gdb_enums.special_consts
-  end
+  init-if-undefined $color_type = "\033[31m"
+  init-if-undefined $color_highlite = "\033[36m"
+  init-if-undefined $color_end = "\033[m"
 end
 
 # set prompt \033[36m(gdb)\033[m\040
@@ -97,13 +83,11 @@ define rp
     set $regsrc = ((struct RRegexp*)($arg0))->src
     set $rsflags = ((struct RBasic*)$regsrc)->flags
     printf "%sT_REGEXP%s: ", $color_type, $color_end
-    set $len = ($rsflags & RUBY_FL_USER1) ? \
-            ((struct RString*)$regsrc)->as.heap.len : \
-            (($rsflags & (RUBY_FL_USER2|RUBY_FL_USER3|RUBY_FL_USER4|RUBY_FL_USER5|RUBY_FL_USER6)) >> RUBY_FL_USHIFT+2)
+    set $len = ((struct RString*)($arg0))->len
     set print address off
     output *(char *)(($rsflags & RUBY_FL_USER1) ? \
             ((struct RString*)$regsrc)->as.heap.ptr : \
-            ((struct RString*)$regsrc)->as.ary) @ $len
+            ((struct RString*)$regsrc)->as.embed.ary) @ $len
     set print address on
     printf " len:%ld ", $len
     if $flags & RUBY_FL_USER6
@@ -438,13 +422,11 @@ end
 
 define output_string
   set $flags = ((struct RBasic*)($arg0))->flags
-  set $len = ($flags & RUBY_FL_USER1) ? \
-          ((struct RString*)($arg0))->as.heap.len : \
-          (($flags & (RUBY_FL_USER2|RUBY_FL_USER3|RUBY_FL_USER4|RUBY_FL_USER5|RUBY_FL_USER6)) >> RUBY_FL_USHIFT+2)
+  set $len = ((struct RString*)($arg0))->len
   if $len > 0
     output *(char *)(($flags & RUBY_FL_USER1) ? \
             ((struct RString*)($arg0))->as.heap.ptr : \
-            ((struct RString*)($arg0))->as.ary) @ $len
+            ((struct RString*)($arg0))->as.embed.ary) @ $len
   else
     output ""
   end
@@ -452,13 +434,11 @@ end
 
 define print_string
   set $flags = ((struct RBasic*)($arg0))->flags
-  set $len = ($flags & RUBY_FL_USER1) ? \
-          ((struct RString*)($arg0))->as.heap.len : \
-          (($flags & (RUBY_FL_USER2|RUBY_FL_USER3|RUBY_FL_USER4|RUBY_FL_USER5|RUBY_FL_USER6)) >> RUBY_FL_USHIFT+2)
+  set $len = ((struct RString*)($arg0))->len
   if $len > 0
     printf "%s", *(char *)(($flags & RUBY_FL_USER1) ? \
             ((struct RString*)($arg0))->as.heap.ptr : \
-            ((struct RString*)($arg0))->as.ary) @ $len
+            ((struct RString*)($arg0))->as.embed.ary) @ $len
   end
 end
 
@@ -1309,7 +1289,7 @@ define dump_node
   set $flags = ((struct RBasic*)($str))->flags
   printf "%s", (char *)(($flags & RUBY_FL_USER1) ? \
                         ((struct RString*)$str)->as.heap.ptr : \
-                        ((struct RString*)$str)->as.ary)
+                        ((struct RString*)$str)->as.embed.ary)
 end
 
 define print_flags
