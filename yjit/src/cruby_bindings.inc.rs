@@ -251,7 +251,7 @@ pub const RUBY_FL_USER16: ruby_fl_type = 268435456;
 pub const RUBY_FL_USER17: ruby_fl_type = 536870912;
 pub const RUBY_FL_USER18: ruby_fl_type = 1073741824;
 pub const RUBY_FL_USER19: ruby_fl_type = -2147483648;
-pub const RUBY_ELTS_SHARED: ruby_fl_type = 16384;
+pub const RUBY_ELTS_SHARED: ruby_fl_type = 4096;
 pub const RUBY_FL_SINGLETON: ruby_fl_type = 8192;
 pub type ruby_fl_type = i32;
 pub const RSTRING_NOEMBED: ruby_rstring_flags = 8192;
@@ -705,7 +705,7 @@ pub struct rb_call_data {
     pub ci: *const rb_callinfo,
     pub cc: *const rb_callcache,
 }
-pub const RSTRING_CHILLED: ruby_rstring_private_flags = 32768;
+pub const RSTRING_CHILLED: ruby_rstring_private_flags = 49152;
 pub type ruby_rstring_private_flags = u32;
 pub const RHASH_PASS_AS_KEYWORDS: ruby_rhash_flags = 8192;
 pub const RHASH_PROC_DEFAULT: ruby_rhash_flags = 16384;
@@ -1091,6 +1091,12 @@ extern "C" {
     pub fn rb_ensure_iv_list_size(obj: VALUE, len: u32, newsize: u32);
     pub fn rb_vm_barrier();
     pub fn rb_str_byte_substr(str_: VALUE, beg: VALUE, len: VALUE) -> VALUE;
+    pub fn rb_str_substr_two_fixnums(
+        str_: VALUE,
+        beg: VALUE,
+        len: VALUE,
+        empty: ::std::os::raw::c_int,
+    ) -> VALUE;
     pub fn rb_obj_as_string_result(str_: VALUE, obj: VALUE) -> VALUE;
     pub fn rb_str_concat_literals(num: usize, strary: *const VALUE) -> VALUE;
     pub fn rb_ec_str_resurrect(
