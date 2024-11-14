@@ -97,7 +97,7 @@ The following default gems are updated.
 * optparse 0.6.0
 * ostruct 0.6.1
 * pathname 0.4.0
-* pp 0.6.0
+* pp 0.6.1
 * prism 1.0.0
 * pstore 0.1.4
 * psych 5.2.0
@@ -114,7 +114,7 @@ The following default gems are updated.
 * time 0.4.1
 * timeout 0.4.2
 * tmpdir 0.3.0
-* uri 1.0.1
+* uri 1.0.2
 * win32ole 1.9.0
 * yaml 0.4.0
 * zlib 3.2.0

@@ -321,6 +321,29 @@ class Integer
   def denominator
     1
   end
+
+  with_yjit do
+    if Primitive.rb_builtin_basic_definition_p(:downto)
+      undef :downto
+
+      def downto(to) # :nodoc:
+        Primitive.attr! :inline_block, :c_trace
+
+        # When no block is given, return an Enumerator that enumerates from `self` to `to`.
+        # Not using `block_given?` and `to_enum` to keep them unaffected by redefinitions.
+        unless defined?(yield)
+          return Primitive.cexpr! 'SIZED_ENUMERATOR(self, 1, &to, int_downto_size)'
+        end
+
+        from = self
+        while from >= to
+          yield from
+          from = from.pred
+        end
+        self
+      end
+    end
+  end
 end
 
 class Float

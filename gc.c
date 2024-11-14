@@ -562,6 +562,8 @@ rb_gc_guarded_ptr_val(volatile VALUE *ptr, VALUE val)
 static const char *obj_type_name(VALUE obj);
 #define RB_AMALGAMATED_DEFAULT_GC
 #include "gc/default.c"
+static int external_gc_loaded = FALSE;
+
 
 #if USE_SHARED_GC && !defined(HAVE_DLOPEN)
 # error "Shared GC requires dlopen"
@@ -642,6 +644,8 @@ typedef struct gc_function_map {
     bool (*garbage_object_p)(void *objspace_ptr, VALUE obj);
     void (*set_event_hook)(void *objspace_ptr, const rb_event_flag_t event);
     void (*copy_attributes)(void *objspace_ptr, VALUE dest, VALUE obj);
+    // GC Identification
+    const char *(*active_gc_name)(void);
 } rb_gc_function_map_t;
 
 static rb_gc_function_map_t rb_gc_functions;
@@ -694,6 +698,7 @@ ruby_external_gc_init(void)
             fprintf(stderr, "ruby_external_gc_init: Shared library %s cannot be opened: %s\n", gc_so_path, dlerror());
             exit(1);
         }
+        external_gc_loaded = TRUE;
     }
 
     rb_gc_function_map_t gc_functions;
@@ -785,6 +790,8 @@ ruby_external_gc_init(void)
     load_external_gc_func(garbage_object_p);
     load_external_gc_func(set_event_hook);
     load_external_gc_func(copy_attributes);
+    //GC Identification
+    load_external_gc_func(active_gc_name);
 
 # undef load_external_gc_func
 
@@ -864,6 +871,8 @@ ruby_external_gc_init(void)
 # define rb_gc_impl_garbage_object_p rb_gc_functions.garbage_object_p
 # define rb_gc_impl_set_event_hook rb_gc_functions.set_event_hook
 # define rb_gc_impl_copy_attributes rb_gc_functions.copy_attributes
+// GC Identification
+# define rb_gc_impl_active_gc_name rb_gc_functions.active_gc_name
 #endif
 
 static VALUE initial_stress = Qfalse;
@@ -2761,6 +2770,23 @@ rb_gc_copy_attributes(VALUE dest, VALUE obj)
     rb_gc_impl_copy_attributes(rb_gc_get_objspace(), dest, obj);
 }
 
+int
+rb_gc_external_gc_loaded_p(void) {
+    return external_gc_loaded;
+}
+
+const char *
+rb_gc_active_gc_name(void)
+{
+    const char *gc_name = rb_gc_impl_active_gc_name();
+    if (strlen(gc_name) > RB_GC_MAX_NAME_LEN) {
+        rb_bug("GC should have a name shorter than %d chars. Currently: %lu (%s)\n",
+            RB_GC_MAX_NAME_LEN, strlen(gc_name), gc_name);
+    }
+    return gc_name;
+
+}
+
 // TODO: rearchitect this function to work for a generic GC
 size_t
 rb_obj_gc_flags(VALUE obj, ID* flags, size_t max)
@@ -3489,7 +3515,10 @@ gc_stat_heap(rb_execution_context_t *ec, VALUE self, VALUE heap_name, VALUE arg)
 static VALUE
 gc_config_get(rb_execution_context_t *ec, VALUE self)
 {
-    return rb_gc_impl_config_get(rb_gc_get_objspace());
+    VALUE cfg_hash = rb_gc_impl_config_get(rb_gc_get_objspace());
+    rb_hash_aset(cfg_hash, sym("implementation"), rb_fstring_cstr(rb_gc_impl_active_gc_name()));
+
+    return cfg_hash;
 }
 
 static VALUE
@@ -3581,8 +3610,6 @@ gc_disable(rb_execution_context_t *ec, VALUE _)
 {
     return rb_gc_disable();
 }
-
-
 
 // TODO: think about moving ruby_gc_set_params into Init_heap or Init_gc
 void
