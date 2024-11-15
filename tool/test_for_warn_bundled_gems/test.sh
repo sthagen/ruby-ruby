@@ -1,19 +1,11 @@
 #!/bin/bash
 
-echo "* Show warning require and LoadError"
-ruby test_warn_bundled_gems.rb
-echo
-
 echo "* Show warning when bundled gems called as dependency"
 ruby test_warn_dependency.rb
 echo
 
 echo "* Show warning sub-feature like bigdecimal/util"
 ruby test_warn_sub_feature.rb
-echo
-
-echo "* Show warning dash gem like net/smtp"
-ruby test_warn_dash_gem.rb
 echo
 
 echo "* Show warning when bundle exec with ruby and script"
@@ -50,10 +42,6 @@ echo
 
 echo "* Don't show warning bigdecimal/util when bigdecimal on Gemfile"
 ruby test_no_warn_sub_feature.rb
-echo
-
-echo "* Show warning when warn is not the standard one in the current scope"
-ruby test_warn_redefined.rb
 echo
 
 echo "* Show warning with bootsnap and some gem in Gemfile"
