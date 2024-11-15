@@ -47,6 +47,7 @@ module Gem::BUNDLED_GEMS
     "drb" => true,
     "rinda" => true,
     "syslog" => true,
+    "fiddle" => true,
   }.freeze
 
   WARNED = {}                   # unfrozen
@@ -54,10 +55,12 @@ module Gem::BUNDLED_GEMS
   conf = ::RbConfig::CONFIG
   if ENV["TEST_BUNDLED_GEMS"]
     LIBDIR = (File.expand_path(File.join(__dir__, "..", "lib")) + "/").freeze
+    rubyarchdir = $LOAD_PATH.find{|path| path.include?(".ext/common") }
+    ARCHDIR = (File.expand_path(rubyarchdir) + "/").freeze
   else
     LIBDIR = (conf["rubylibdir"] + "/").freeze
+    ARCHDIR = (conf["rubyarchdir"] + "/").freeze
   end
-  ARCHDIR = (conf["rubyarchdir"] + "/").freeze
   dlext = [conf["DLEXT"], "so"].uniq
   DLEXT = /\.#{Regexp.union(dlext)}\z/
   LIBEXT = /\.#{Regexp.union("rb", *dlext)}\z/
@@ -121,7 +124,7 @@ module Gem::BUNDLED_GEMS
     if !path
       return
     elsif path.start_with?(ARCHDIR)
-      n = path.delete_prefix(ARCHDIR).sub(DLEXT, "")
+      n = path.delete_prefix(ARCHDIR).sub(DLEXT, "").chomp(".rb")
     elsif path.start_with?(LIBDIR)
       n = path.delete_prefix(LIBDIR).chomp(".rb")
     else
