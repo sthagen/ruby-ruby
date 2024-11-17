@@ -106,11 +106,7 @@ class Exports::Mswin < Exports
     objs = objs.collect {|s| s.tr('/', '\\')}
     filetype = nil
     objdump(objs) do |l|
-      if filetype
-        if /^\f/ =~ l
-          filetype = nil
-          next
-        end
+      if (filetype = l[/^File Type: (.+)/, 1])..(/^\f/ =~ l)
         case filetype
         when /OBJECT/, /LIBRARY/
           l.chomp!
@@ -126,14 +122,13 @@ class Exports::Mswin < Exports
           elsif !l.sub!(/^(\S+) \([^@?\`\']*\)$/, '\1')
             next
           end
+          next if /\A_?ucrt_/ =~ l
         when /DLL/
           next unless l.sub!(/^\s*\d+\s+[[:xdigit:]]+\s+[[:xdigit:]]+\s+/, '')
         else
           next
         end
         yield l.strip, is_data
-      else
-        filetype = l[/^File Type: (.+)/, 1]
       end
     end
     yield "strcasecmp", "msvcrt.stricmp"
