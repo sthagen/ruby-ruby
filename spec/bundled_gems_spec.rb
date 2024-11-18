@@ -1,8 +1,62 @@
 require "bundled_gems"
 
-RSpec.describe "bundled_gems.rb" do
-  ENV["TEST_BUNDLED_GEMS"] = "true"
+require "bundler"
+require "fileutils"
 
+require_relative "bundler/support/builders"
+require_relative "bundler/support/build_metadata"
+require_relative "bundler/support/helpers"
+require_relative "bundler/support/path"
+
+module Gem
+  def self.ruby=(ruby)
+    @ruby = ruby
+  end
+end
+
+RSpec.configure do |config|
+  config.include Spec::Builders
+  config.include Spec::Helpers
+  config.include Spec::Path
+
+  config.before(:suite) do
+    Gem.ruby = ENV["RUBY"] if ENV["RUBY"]
+    ENV["TEST_BUNDLED_GEMS"] = "true"
+
+    require_relative "bundler/support/rubygems_ext"
+    Spec::Rubygems.test_setup
+    Spec::Helpers.install_dev_bundler
+  end
+
+  config.around(:each) do |example|
+    FileUtils.cp_r Spec::Path.pristine_system_gem_path, Spec::Path.system_gem_path
+    FileUtils.mkdir_p Spec::Path.base_system_gem_path.join("gems")
+    %w[sinatra rack tilt rack-protection rack-session rack-test mustermann base64 compact_index].each do |gem|
+      path = Dir[File.expand_path("../.bundle/gems/#{gem}-*", __dir__)].map(&:to_s).first
+      FileUtils.cp_r path, Spec::Path.base_system_gem_path.join("gems")
+    end
+
+    with_gem_path_as(system_gem_path) do
+      Bundler.ui.silence { example.run }
+
+      all_output = all_commands_output
+      if example.exception && !all_output.empty?
+        message = all_output + "\n" + example.exception.message
+        (class << example.exception; self; end).send(:define_method, :message) do
+          message
+        end
+      end
+    end
+  ensure
+    reset!
+  end
+
+  config.after :suite do
+    FileUtils.rm_rf Spec::Path.pristine_system_gem_path
+  end
+end
+
+RSpec.describe "bundled_gems.rb" do
   def script(code, options = {})
     options[:artifice] ||= "compact_index"
     ruby("require 'bundler/inline'\n\n" + code, options)
@@ -197,7 +251,7 @@ RSpec.describe "bundled_gems.rb" do
     build_lib "childprocess", "5.0.0" do |s|
       # bootsnap expand required feature to full path
       # require 'logger'
-      rubylibpath = File.expand_path(File.join(__dir__, "..", "..", "lib"))
+      rubylibpath = File.expand_path(File.join(__dir__, "..", "lib"))
       s.write "lib/childprocess.rb", "require '#{rubylibpath}/logger'"
     end
 
@@ -224,7 +278,7 @@ RSpec.describe "bundled_gems.rb" do
   end
 
   it "Show warning with zeitwerk" do
-    libpath = Dir[Spec::Path.base_system_gem_path.join("gems/{zeitwerk}-*/lib")].map(&:to_s).first
+    libpath = Dir[File.expand_path("../.bundle/gems/{zeitwerk}-*/lib", __dir__)].map(&:to_s).first
     code = <<-RUBY
       $LOAD_PATH.unshift("#{libpath}")
       require "zeitwerk"

@@ -1601,7 +1601,8 @@ no-install-for-test-bundled-gems: no-update-default-gemspecs
 yes-install-for-test-bundled-gems: yes-update-default-gemspecs
 	$(XRUBY) -C "$(srcdir)" -r./tool/lib/gem_env.rb bin/gem \
 		install --no-document --conservative \
-		"hoe" "json-schema" "test-unit-rr" "simplecov" "simplecov-html" "simplecov-json"
+		"hoe" "json-schema" "test-unit-rr" "simplecov" "simplecov-html" "simplecov-json" "rspec" "zeitwerk" \
+		"sinatra" "rack" "tilt" "mustermann" "base64" "compact_index" "rack-test"
 
 test-bundled-gems-fetch: yes-test-bundled-gems-fetch
 yes-test-bundled-gems-fetch:
@@ -1624,7 +1625,9 @@ yes-test-bundled-gems-fetch: Preparing-test-bundled-gems
 
 PREPARE_BUNDLED_GEMS = test-bundled-gems-prepare
 test-bundled-gems: $(TEST_RUNNABLE)-test-bundled-gems $(DOT_WAIT) $(TEST_RUNNABLE)-test-bundled-gems-spec
-yes-test-bundled-gems: test-bundled-gems-run
+bundled_gems_spec-run: install-for-test-bundled-gems
+	$(XRUBY) -C $(srcdir) .bundle/bin/rspec $(RSPECOPTS) spec/bundled_gems_spec.rb
+yes-test-bundled-gems: bundled_gems_spec-run $(DOT_WAIT) test-bundled-gems-run
 no-test-bundled-gems:
 
 # Override this to allow failure of specific gems on CI
