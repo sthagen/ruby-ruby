@@ -63,6 +63,7 @@ require 'prettyprint'
 
 class PP < PrettyPrint
 
+  # The version string
   VERSION = "0.6.1"
 
   # Returns the usable width for +out+.
@@ -138,6 +139,7 @@ class PP < PrettyPrint
     end
   end
 
+  # Module that defines helper methods for pretty_print.
   module PPMethods
 
     # Yields to a block
@@ -486,11 +488,13 @@ end if defined?(Data.define)
 
 class Range # :nodoc:
   def pretty_print(q) # :nodoc:
-    q.pp self.begin if self.begin
+    begin_nil = self.begin == nil
+    end_nil = self.end == nil
+    q.pp self.begin if !begin_nil || end_nil
     q.breakable ''
     q.text(self.exclude_end? ? '...' : '..')
     q.breakable ''
-    q.pp self.end if self.end
+    q.pp self.end if !end_nil || begin_nil
   end
 end
 
@@ -619,7 +623,7 @@ class MatchData # :nodoc:
 end
 
 if defined?(RubyVM::AbstractSyntaxTree)
-  class RubyVM::AbstractSyntaxTree::Node
+  class RubyVM::AbstractSyntaxTree::Node # :nodoc:
     def pretty_print_children(q, names = [])
       children.zip(names) do |c, n|
         if n
@@ -684,7 +688,7 @@ module Kernel
 
   # prints arguments in pretty form.
   #
-  # pp returns argument(s).
+  # +#pp+ returns argument(s).
   def pp(*objs)
     objs.each {|obj|
       PP.pp(obj)
