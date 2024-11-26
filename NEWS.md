@@ -40,6 +40,12 @@ Note: We're only listing outstanding class updates.
     * Exception#set_backtrace now accepts arrays of Thread::Backtrace::Location.
       Kernel#raise, Thread#raise and Fiber#raise also accept this new format. [[Feature #13557]]
 
+* Hash
+
+    * Hash.new now accepts an optional `capacity:` argument, to preallocate the hash with a given capacity.
+      This can improve performance when building large hashes incrementally by saving on reallocation and
+      rehashing of keys. [[Feature #19236]]
+
 * Fiber::Scheduler
 
     * An optional `Fiber::Scheduler#blocking_operation_wait` hook allows blocking operations to be moved out of the
@@ -235,6 +241,14 @@ details of the default gems or bundled gems.
   "1.E-1".to_f #=> 0.1 (previously, 1.0 was returned)
   ```
 
+* `Kernel#singleton_method` now returns methods in modules prepended to or included in the
+  receiver's singleton class. [[Bug #20620]]
+  ```
+  o = Object.new
+  o.extend(Module.new{def a = 1})
+  o.singleton_method(:a).call #=> 1
+  ```
+
 ## Stdlib compatibility issues
 
 ## C API updates
@@ -255,6 +269,17 @@ details of the default gems or bundled gems.
   (This entry is temporary. It should be merged with the above entry after it becomes settled)
   [[Feature #20782]]
 * Array#each is rewritten in Ruby for better performance [[Feature #20182]].
+
+* Alternative GC implementations can be loaded dynamically. Configure Ruby
+  `--with-shared-gc` to enable. Alternative GC modules can be loaded at runtime
+  using the environment variable `RUBY_GC_LIBRARY`.  [[Feature #20351]],
+  [[Feature #20470]]
+
+* An experimental GC module is provided based on MMTk. Configure Ruby
+  `--with-shared-gc`, build as normal, then build the GC library: `make
+  shared-gc SHARED_GC=mmtk`.  enable with `RUBY_GC_LIBRARY=mmtk`.  This
+  requires a working Rust compiler, and Cargo on the build machine.
+  [[Feature #20860]]
 
 ## JIT
 
@@ -277,6 +302,7 @@ details of the default gems or bundled gems.
 [Feature #18980]: https://bugs.ruby-lang.org/issues/18980
 [Misc #18984]:    https://bugs.ruby-lang.org/issues/18984
 [Feature #19117]: https://bugs.ruby-lang.org/issues/19117
+[Feature #19236]: https://bugs.ruby-lang.org/issues/19236
 [Feature #19714]: https://bugs.ruby-lang.org/issues/19714
 [Bug #19918]:     https://bugs.ruby-lang.org/issues/19918
 [Bug #20064]:     https://bugs.ruby-lang.org/issues/20064
@@ -286,15 +312,19 @@ details of the default gems or bundled gems.
 [Bug #20218]:     https://bugs.ruby-lang.org/issues/20218
 [Feature #20265]: https://bugs.ruby-lang.org/issues/20265
 [Feature #20293]: https://bugs.ruby-lang.org/issues/20293
+[Feature #20351]: https://bugs.ruby-lang.org/issues/20351
 [Feature #20429]: https://bugs.ruby-lang.org/issues/20429
 [Bug #20433]:     https://bugs.ruby-lang.org/issues/20433
 [Feature #20443]: https://bugs.ruby-lang.org/issues/20443
+[Feature #20470]: https://bugs.ruby-lang.org/issues/20470
 [Feature #20564]: https://bugs.ruby-lang.org/issues/20564
 [Feature #20497]: https://bugs.ruby-lang.org/issues/20497
+[Bug #20620]:     https://bugs.ruby-lang.org/issues/20620
 [Feature #20624]: https://bugs.ruby-lang.org/issues/20624
 [Feature #20705]: https://bugs.ruby-lang.org/issues/20705
 [Feature #20775]: https://bugs.ruby-lang.org/issues/20775
 [Feature #20782]: https://bugs.ruby-lang.org/issues/20782
 [Feature #20811]: https://bugs.ruby-lang.org/issues/20811
+[Feature #20860]: https://bugs.ruby-lang.org/issues/20860
 [Feature #20876]: https://bugs.ruby-lang.org/issues/20876
 [Feature #20902]: https://bugs.ruby-lang.org/issues/20902
