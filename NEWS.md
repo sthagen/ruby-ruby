@@ -40,6 +40,25 @@ Note: We're only listing outstanding class updates.
     * Exception#set_backtrace now accepts arrays of Thread::Backtrace::Location.
       Kernel#raise, Thread#raise and Fiber#raise also accept this new format. [[Feature #13557]]
 
+* Fiber::Scheduler
+
+    * An optional `Fiber::Scheduler#blocking_operation_wait` hook allows blocking operations to be moved out of the
+      event loop in order to reduce latency and improve multi-core processor utilization. [[Feature #20876]]
+
+* IO::Buffer
+
+    * `IO::Buffer#copy` can release the GVL, allowing other threads to run while copying data. [[Feature #20902]]
+
+* Integer
+
+    * `Integer#**` used to return `Float::INFINITY` when the return value is large, but now returns an Integer.
+      If the return value is extremely large, it raises an exception.
+      [[Feature #20811]]
+
+* MatchData
+
+    * MatchData#bytebegin and MatchData#byteend have been added. [[Feature #20576]]
+
 * Range
 
     * Range#size now raises TypeError if the range is not iterable. [[Misc #18984]]
@@ -51,6 +70,12 @@ Note: We're only listing outstanding class updates.
         #=> [2022-02-24 00:00:00 UTC, 2022-02-25 00:00:00 UTC, 2022-02-26 00:00:00 UTC]
         ```
 
+* Rational
+
+    * `Rational#**` used to return `Float::INFINITY` or `Float::NAN`
+      when the numerator of the return value is large, but now returns an Integer.
+      If it is extremely large, it raises an exception. [[Feature #20811]]
+
 * Refinement
 
     * Removed deprecated method Refinement#refined_class. [[Feature #19714]]
@@ -61,14 +86,10 @@ Note: We're only listing outstanding class updates.
       associated with the AST node. [[Feature #20624]]
     * Add RubyVM::AbstractSyntaxTree::Location class which holds location information. [[Feature #20624]]
 
-* Fiber::Scheduler
+* Warning
 
-    * An optional `Fiber::Scheduler#blocking_operation_wait` hook allows blocking operations to be moved out of the
-      event loop in order to reduce latency and improve multi-core processor utilization. [[Feature #20876]]
-
-* IO::Buffer
-
-    * `IO::Buffer#copy` can release the GVL, allowing other threads to run while copying data. [[Feature #20902]]
+    * Add Warning.categories method which returns a list of possible warning categories.
+      [[Feature #20293]]
 
 ## Stdlib updates
 
@@ -201,6 +222,19 @@ details of the default gems or bundled gems.
     * Symbol keys are displayed using the modern symbol key syntax: `"{user: 1}"`
     * Other keys now have spaces around `=>`: `'{"user" => 1}'`, while previously they didn't: `'{"user"=>1}'`
 
+* `Kernel#Float()` now accepts a decimal string with decimal part omitted. [[Feature #20705]]
+  ```
+  Float("1.")    #=> 1.0 (previously, an ArgumentError was raised)
+  Float("1.E-1") #=> 0.1 (previously, an ArgumentError was raised)
+  ```
+
+* `String#to_f` now accepts a decimal string with decimal part omitted. [[Feature #20705]]
+  Note that the result changes when an exponent is specified.
+  ```
+  "1.".to_f    #=> 1.0
+  "1.E-1".to_f #=> 0.1 (previously, 1.0 was returned)
+  ```
+
 ## Stdlib compatibility issues
 
 ## C API updates
@@ -210,6 +244,16 @@ details of the default gems or bundled gems.
 
 ## Implementation improvements
 
+* The default parser is now Prism.
+  To use the conventional parser, use the command-line argument `--parser=parse.y`.
+  [[Feature #20564]]
+* Happy Eyeballs version 2 (RFC8305) is used in Socket.tcp.
+  To disable it, use the keyword argument `fast_fallback: false`.
+  [[Feature #20108]]
+* Happy Eyeballs version 2 (RFC8305) is implemented in TCPSocket.new.
+  To enable it, use the keyword argument `fast_fallback: true`.
+  (This entry is temporary. It should be merged with the above entry after it becomes settled)
+  [[Feature #20782]]
 * Array#each is rewritten in Ruby for better performance [[Feature #20182]].
 
 ## JIT
@@ -236,15 +280,21 @@ details of the default gems or bundled gems.
 [Feature #19714]: https://bugs.ruby-lang.org/issues/19714
 [Bug #19918]:     https://bugs.ruby-lang.org/issues/19918
 [Bug #20064]:     https://bugs.ruby-lang.org/issues/20064
+[Feature #20108]: https://bugs.ruby-lang.org/issues/20108
 [Feature #20182]: https://bugs.ruby-lang.org/issues/20182
 [Feature #20205]: https://bugs.ruby-lang.org/issues/20205
 [Bug #20218]:     https://bugs.ruby-lang.org/issues/20218
 [Feature #20265]: https://bugs.ruby-lang.org/issues/20265
+[Feature #20293]: https://bugs.ruby-lang.org/issues/20293
 [Feature #20429]: https://bugs.ruby-lang.org/issues/20429
 [Bug #20433]:     https://bugs.ruby-lang.org/issues/20433
 [Feature #20443]: https://bugs.ruby-lang.org/issues/20443
+[Feature #20564]: https://bugs.ruby-lang.org/issues/20564
 [Feature #20497]: https://bugs.ruby-lang.org/issues/20497
 [Feature #20624]: https://bugs.ruby-lang.org/issues/20624
+[Feature #20705]: https://bugs.ruby-lang.org/issues/20705
 [Feature #20775]: https://bugs.ruby-lang.org/issues/20775
+[Feature #20782]: https://bugs.ruby-lang.org/issues/20782
+[Feature #20811]: https://bugs.ruby-lang.org/issues/20811
 [Feature #20876]: https://bugs.ruby-lang.org/issues/20876
 [Feature #20902]: https://bugs.ruby-lang.org/issues/20902

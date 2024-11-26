@@ -1676,17 +1676,6 @@ rb_str_tmp_new(long len)
 void
 rb_str_free(VALUE str)
 {
-    if (FL_TEST(str, RSTRING_FSTR)) {
-        st_data_t fstr = (st_data_t)str;
-
-        RB_VM_LOCK_ENTER();
-        {
-            st_delete(rb_vm_fstring_table(), &fstr, NULL);
-            RB_DEBUG_COUNTER_INC(obj_str_fstr);
-        }
-        RB_VM_LOCK_LEAVE();
-    }
-
     if (STR_EMBED_P(str)) {
         RB_DEBUG_COUNTER_INC(obj_str_embed);
     }
@@ -3064,11 +3053,12 @@ rb_str_subpos(VALUE str, long beg, long *lenp)
 {
     long len = *lenp;
     long slen = -1L;
-    long blen = RSTRING_LEN(str);
+    const long blen = RSTRING_LEN(str);
     rb_encoding *enc = STR_ENC_GET(str);
     char *p, *s = RSTRING_PTR(str), *e = s + blen;
 
     if (len < 0) return 0;
+    if (beg < 0 && -beg < 0) return 0;
     if (!blen) {
         len = 0;
     }
@@ -3086,7 +3076,8 @@ rb_str_subpos(VALUE str, long beg, long *lenp)
     }
     if (beg < 0) {
         if (len > -beg) len = -beg;
-        if (-beg * rb_enc_mbmaxlen(enc) < RSTRING_LEN(str) / 8) {
+        if ((ENC_CODERANGE(str) == ENC_CODERANGE_VALID) &&
+            (-beg * rb_enc_mbmaxlen(enc) < blen / 8)) {
             beg = -beg;
             while (beg-- > len && (e = rb_enc_prev_char(s, e, e, enc)) != 0);
             p = e;
@@ -3104,7 +3095,7 @@ rb_str_subpos(VALUE str, long beg, long *lenp)
             if (len == 0) goto end;
         }
     }
-    else if (beg > 0 && beg > RSTRING_LEN(str)) {
+    else if (beg > 0 && beg > blen) {
         return 0;
     }
     if (len == 0) {
