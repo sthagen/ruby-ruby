@@ -65,6 +65,19 @@ Note: We're only listing outstanding class updates.
 
     * MatchData#bytebegin and MatchData#byteend have been added. [[Feature #20576]]
 
+* Ractor
+
+    * `require` in Ractor is allowed. The requiring process will be run on
+      the main Ractor.
+      `Ractor._require(feature)` is added to run requiring process on the
+      main Ractor.
+      [[Feature #20627]]
+
+    * `Ractor.main?` is added. [[Feature #20627]]
+
+    * `Ractor.[key]` and Ractor.[val]=` is added to access the ractor local storage
+      of the current Ractor. [[Feature #20715]]
+
 * Range
 
     * Range#size now raises TypeError if the range is not iterable. [[Misc #18984]]
@@ -142,7 +155,7 @@ The following default gems are updated.
 * pstore 0.1.4
 * psych 5.2.0
 * rdoc 6.8.1
-* reline 0.5.11
+* reline 0.5.12
 * resolv 0.5.0
 * securerandom 0.3.2
 * shellwords 0.2.1
@@ -209,6 +222,7 @@ details of the default gems or bundled gems.
 
     * Use a single quote instead of a backtick as an opening quote. [[Feature #16495]]
     * Display a class name before a method name (only when the class has a permanent name). [[Feature #19117]]
+    * Extra rescue/ensure frames are no longer available on the backtrace. [[Feature #20275]]
     * Kernel#caller, Thread::Backtrace::Location’s methods, etc. are also changed accordingly.
 
         Old:
@@ -311,6 +325,7 @@ details of the default gems or bundled gems.
 [Feature #20205]: https://bugs.ruby-lang.org/issues/20205
 [Bug #20218]:     https://bugs.ruby-lang.org/issues/20218
 [Feature #20265]: https://bugs.ruby-lang.org/issues/20265
+[Feature #20275]: https://bugs.ruby-lang.org/issues/20275
 [Feature #20293]: https://bugs.ruby-lang.org/issues/20293
 [Feature #20351]: https://bugs.ruby-lang.org/issues/20351
 [Feature #20429]: https://bugs.ruby-lang.org/issues/20429
@@ -322,7 +337,9 @@ details of the default gems or bundled gems.
 [Feature #20576]: https://bugs.ruby-lang.org/issues/20576
 [Bug #20620]:     https://bugs.ruby-lang.org/issues/20620
 [Feature #20624]: https://bugs.ruby-lang.org/issues/20624
+[Feature #20627]: https://bugs.ruby-lang.org/issues/20627
 [Feature #20705]: https://bugs.ruby-lang.org/issues/20705
+[Feature #20715]: https://bugs.ruby-lang.org/issues/20715
 [Feature #20775]: https://bugs.ruby-lang.org/issues/20775
 [Feature #20782]: https://bugs.ruby-lang.org/issues/20782
 [Feature #20811]: https://bugs.ruby-lang.org/issues/20811

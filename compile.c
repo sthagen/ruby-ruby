@@ -436,12 +436,10 @@ do { \
 #define NO_CHECK(sub) (void)(sub)
 #define BEFORE_RETURN
 
-/* leave name uninitialized so that compiler warn if INIT_ANCHOR is
- * missing */
 #define DECL_ANCHOR(name) \
-    LINK_ANCHOR name[1] = {{{ISEQ_ELEMENT_ANCHOR,},}}
+    LINK_ANCHOR name[1] = {{{ISEQ_ELEMENT_ANCHOR,},&name[0].anchor}}
 #define INIT_ANCHOR(name) \
-    (name->last = &name->anchor)
+    ((name->last = &name->anchor)->next = NULL) /* re-initialize */
 
 static inline VALUE
 freeze_hide_obj(VALUE obj)
@@ -1290,9 +1288,14 @@ static void
 APPEND_LIST(ISEQ_ARG_DECLARE LINK_ANCHOR *const anc1, LINK_ANCHOR *const anc2)
 {
     if (anc2->anchor.next) {
+        /* LINK_ANCHOR must not loop */
+        RUBY_ASSERT(anc2->last != &anc2->anchor);
         anc1->last->next = anc2->anchor.next;
         anc2->anchor.next->prev = anc1->last;
         anc1->last = anc2->last;
+    }
+    else {
+        RUBY_ASSERT(anc2->last == &anc2->anchor);
     }
     verify_list("append", anc1);
 }
