@@ -133,7 +133,7 @@ The following default gems are updated.
 * RubyGems 3.6.0.dev
 * benchmark 0.4.0
 * bundler 2.6.0.dev
-* date 3.4.0
+* date 3.4.1
 * delegate 0.4.0
 * erb 4.0.4
 * etc 1.4.4
@@ -144,8 +144,8 @@ The following default gems are updated.
 * ipaddr 1.2.7
 * irb 1.14.1
 * json 2.8.2
-* logger 1.6.1
-* net-http 0.5.0
+* logger 1.6.2
+* net-http 0.6.0
 * open-uri 0.5.0
 * optparse 0.6.0
 * ostruct 0.6.1
@@ -157,7 +157,7 @@ The following default gems are updated.
 * rdoc 6.8.1
 * reline 0.5.12
 * resolv 0.5.0
-* securerandom 0.3.2
+* securerandom 0.4.0
 * set 1.1.1
 * shellwords 0.2.1
 * singleton 0.3.0
