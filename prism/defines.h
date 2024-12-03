@@ -137,14 +137,11 @@
 #endif
 
 /**
- * isinf on Windows is defined as accepting a float, but on POSIX systems it
- * accepts a float, a double, or a long double. We want to mirror this behavior
- * on windows.
+ * isinf on POSIX systems it accepts a float, a double, or a long double.
+ * But Windows didn't provide isinf, so we need to use _finite instead.
  */
 #ifdef _WIN32
 #   include <float.h>
-#   undef isinf
-#   define isinf(x) (sizeof(x) == sizeof(float) ? !_finitef(x) : !_finite(x))
 #endif
 
 /**
