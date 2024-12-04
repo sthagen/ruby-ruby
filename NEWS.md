@@ -112,12 +112,38 @@ Note: We're only listing outstanding class updates.
 
 ## Stdlib updates
 
+* Net::HTTP
+
+    * Removed the following deprecated constans:
+        Net::HTTP::ProxyMod
+        Net::NetPrivate::HTTPRequest
+        Net::HTTPInformationCode
+        Net::HTTPSuccessCode
+        Net::HTTPRedirectionCode
+        Net::HTTPRetriableCode
+        Net::HTTPClientErrorCode
+        Net::HTTPFatalErrorCode
+        Net::HTTPServerErrorCode
+        Net::HTTPResponseReceiver
+        Net::HTTPResponceReceiver
+
+      These constants were deprecated from 2012.
+
 * Tempfile
 
     * The keyword argument `anonymous: true` is implemented for Tempfile.create.
       `Tempfile.create(anonymous: true)` removes the created temporary file immediately.
       So applications don't need to remove the file.
       [[Feature #20497]]
+
+* Timeout
+
+    * Reject negative values for Timeout.timeout. [[Bug #20795]]
+
+* URI
+
+    * Switched default parser to RFC 3986 compliant from RFC 2396 compliant.
+      [[Bug #19266]]
 
 * win32/sspi.rb
 
@@ -135,12 +161,15 @@ The following default gems are updated.
 * bundler 2.6.0.dev
 * date 3.4.1
 * delegate 0.4.0
+* did_you_mean 2.0.0
 * erb 4.0.4
+* error_highlight 0.7.0
 * etc 1.4.4
 * fcntl 1.2.0
 * fiddle 1.1.6.dev
 * fileutils 1.7.3
-* io-console 0.8.0.beta1
+* io-console 0.8.0
+* io-nonblock 0.3.1
 * ipaddr 1.2.7
 * irb 1.14.1
 * json 2.8.2
@@ -150,7 +179,7 @@ The following default gems are updated.
 * optparse 0.6.0
 * ostruct 0.6.1
 * pathname 0.4.0
-* pp 0.6.1
+* pp 0.6.2
 * prism 1.0.0
 * pstore 0.1.4
 * psych 5.2.0
@@ -179,7 +208,7 @@ The following bundled gem is added.
 
 The following bundled gems are updated.
 
-* minitest 5.25.2
+* minitest 5.25.4
 * power_assert 2.0.4
 * rake 13.2.1
 * test-unit 3.6.4
@@ -286,11 +315,11 @@ details of the default gems or bundled gems.
 * Array#each is rewritten in Ruby for better performance [[Feature #20182]].
 
 * Alternative GC implementations can be loaded dynamically. Configure Ruby
-  `--with-shared-gc` to enable. Alternative GC modules can be loaded at runtime
+  `--with-shared-gc` to enable. Alternative GC libraries can be loaded at runtime
   using the environment variable `RUBY_GC_LIBRARY`.  [[Feature #20351]],
   [[Feature #20470]]
 
-* An experimental GC module is provided based on MMTk. Configure Ruby
+* An experimental GC library is provided based on MMTk. Configure Ruby
   `--with-shared-gc`, build as normal, then build the GC library: `make
   shared-gc SHARED_GC=mmtk`. Enable with `RUBY_GC_LIBRARY=mmtk`.  This
   requires a working Rust compiler, and Cargo on the build machine.
@@ -317,6 +346,7 @@ details of the default gems or bundled gems.
 [Feature #18980]: https://bugs.ruby-lang.org/issues/18980
 [Misc #18984]:    https://bugs.ruby-lang.org/issues/18984
 [Feature #19117]: https://bugs.ruby-lang.org/issues/19117
+[Bug #19266]:     https://bugs.ruby-lang.org/issues/19266
 [Feature #19236]: https://bugs.ruby-lang.org/issues/19236
 [Feature #19714]: https://bugs.ruby-lang.org/issues/19714
 [Bug #19918]:     https://bugs.ruby-lang.org/issues/19918
@@ -343,6 +373,7 @@ details of the default gems or bundled gems.
 [Feature #20715]: https://bugs.ruby-lang.org/issues/20715
 [Feature #20775]: https://bugs.ruby-lang.org/issues/20775
 [Feature #20782]: https://bugs.ruby-lang.org/issues/20782
+[Bug #20795]:     https://bugs.ruby-lang.org/issues/20795
 [Feature #20811]: https://bugs.ruby-lang.org/issues/20811
 [Feature #20860]: https://bugs.ruby-lang.org/issues/20860
 [Feature #20876]: https://bugs.ruby-lang.org/issues/20876

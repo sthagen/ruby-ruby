@@ -1630,7 +1630,7 @@ yes-test-bundled-gems-fetch: Preparing-test-bundled-gems
 PREPARE_BUNDLED_GEMS = test-bundled-gems-prepare
 test-bundled-gems: $(TEST_RUNNABLE)-test-bundled-gems $(DOT_WAIT) $(TEST_RUNNABLE)-test-bundled-gems-spec
 bundled_gems_spec-run: install-for-test-bundled-gems
-	$(XRUBY) -C $(srcdir) .bundle/bin/rspec $(RSPECOPTS) spec/bundled_gems_spec.rb
+	$(XRUBY) -C $(srcdir) .bundle/bin/rspec spec/bundled_gems_spec.rb
 yes-test-bundled-gems: bundled_gems_spec-run $(DOT_WAIT) test-bundled-gems-run
 no-test-bundled-gems:
 
@@ -1675,7 +1675,7 @@ yes-test-bundler-prepare: yes-test-bundler-precheck
 		-e 'load "spec/bundler/support/bundle.rb"' -- install --quiet --gemfile=tool/bundler/dev_gems.rb
 	$(ACTIONS_ENDGROUP)
 
-RSPECOPTS =
+RSPECOPTS = --require spec_helper --require formatter_overrides
 BUNDLER_SPECS =
 PREPARE_BUNDLER = $(TEST_RUNNABLE)-test-bundler-prepare
 test-bundler: $(TEST_RUNNABLE)-test-bundler
@@ -1684,7 +1684,7 @@ yes-test-bundler: $(PREPARE_BUNDLER)
 		-r./$(arch)-fake \
 		-e "exec(*ARGV)" -- \
 		$(XRUBY) -C $(srcdir) -Ispec/bundler:spec/lib .bundle/bin/rspec \
-		--require spec_helper --require formatter_overrides $(RSPECOPTS) spec/bundler/$(BUNDLER_SPECS)
+		$(RSPECOPTS) spec/bundler/$(BUNDLER_SPECS)
 no-test-bundler:
 
 PARALLELRSPECOPTS = --runtime-log $(srcdir)/tmp/parallel_runtime_rspec.log
@@ -1692,14 +1692,13 @@ test-bundler-parallel: $(TEST_RUNNABLE)-test-bundler-parallel
 yes-test-bundler-parallel: $(PREPARE_BUNDLER)
 	$(gnumake_recursive)$(XRUBY) \
 		-r./$(arch)-fake \
+		-I$(srcdir)/spec/bundler \
+		-e "ruby = ENV['RUBY']" \
 		-e "ARGV[-1] = File.expand_path(ARGV[-1])" \
-		-e "exec(*ARGV)" -- \
-		$(XRUBY) -I$(srcdir)/spec/bundler \
-		-e "ENV['PARALLEL_TESTS_EXECUTABLE'] = ARGV.shift" \
+		-e "ENV['PARALLEL_TESTS_EXECUTABLE'] = ruby + ARGV.shift" \
 		-e "load ARGV.shift" \
-		"$(XRUBY) -C $(srcdir) -Ispec/bundler:spec/lib .bundle/bin/rspec" \
+		" -C $(srcdir) -Ispec/bundler:spec/lib .bundle/bin/rspec $(RSPECOPTS)" \
 		$(srcdir)/.bundle/bin/parallel_rspec \
-		-o "--require spec_helper --require formatter_overrides" \
 		$(PARALLELRSPECOPTS) $(srcdir)/spec/bundler/$(BUNDLER_SPECS)
 no-test-bundler-parallel:
 
