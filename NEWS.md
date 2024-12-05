@@ -172,7 +172,7 @@ The following default gems are updated.
 * io-nonblock 0.3.1
 * ipaddr 1.2.7
 * irb 1.14.1
-* json 2.8.2
+* json 2.9.0
 * logger 1.6.2
 * net-http 0.6.0
 * open-uri 0.5.0
@@ -218,7 +218,7 @@ The following bundled gems are updated.
 * net-imap 0.5.1
 * net-smtp 0.5.0
 * prime 0.1.3
-* rbs 3.6.1
+* rbs 3.7.0
 * typeprof 0.21.11
 * debug 1.9.2
 * racc 1.8.1
