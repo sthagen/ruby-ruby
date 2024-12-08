@@ -35,7 +35,7 @@
 
 VALUE mSSL;
 static VALUE eSSLError;
-VALUE cSSLContext;
+static VALUE cSSLContext;
 VALUE cSSLSocket;
 
 static VALUE eSSLErrorWaitReadable;
@@ -557,52 +557,42 @@ ossl_sslctx_add_extra_chain_cert_i(RB_BLOCK_CALL_FUNC_ARGLIST(i, arg))
 static VALUE ossl_sslctx_setup(VALUE self);
 
 static VALUE
-ossl_call_servername_cb(VALUE ary)
+ossl_call_servername_cb(VALUE arg)
 {
-    VALUE ssl_obj, sslctx_obj, cb, ret_obj;
+    SSL *ssl = (void *)arg;
+    const char *servername = SSL_get_servername(ssl, TLSEXT_NAMETYPE_host_name);
+    if (!servername)
+        return Qnil;
 
-    Check_Type(ary, T_ARRAY);
-    ssl_obj = rb_ary_entry(ary, 0);
+    VALUE ssl_obj = (VALUE)SSL_get_ex_data(ssl, ossl_ssl_ex_ptr_idx);
+    VALUE sslctx_obj = rb_attr_get(ssl_obj, id_i_context);
+    VALUE cb = rb_attr_get(sslctx_obj, id_i_servername_cb);
+    VALUE ary = rb_assoc_new(ssl_obj, rb_str_new_cstr(servername));
 
-    sslctx_obj = rb_attr_get(ssl_obj, id_i_context);
-    cb = rb_attr_get(sslctx_obj, id_i_servername_cb);
-    if (NIL_P(cb)) return Qnil;
-
-    ret_obj = rb_funcallv(cb, id_call, 1, &ary);
+    VALUE ret_obj = rb_funcallv(cb, id_call, 1, &ary);
     if (rb_obj_is_kind_of(ret_obj, cSSLContext)) {
-        SSL *ssl;
         SSL_CTX *ctx2;
-
         ossl_sslctx_setup(ret_obj);
-        GetSSL(ssl_obj, ssl);
         GetSSLCTX(ret_obj, ctx2);
-        SSL_set_SSL_CTX(ssl, ctx2);
+        if (!SSL_set_SSL_CTX(ssl, ctx2))
+            ossl_raise(eSSLError, "SSL_set_SSL_CTX");
         rb_ivar_set(ssl_obj, id_i_context, ret_obj);
     } else if (!NIL_P(ret_obj)) {
 	ossl_raise(rb_eArgError, "servername_cb must return an "
 		   "OpenSSL::SSL::SSLContext object or nil");
     }
 
-    return ret_obj;
+    return Qnil;
 }
 
 static int
 ssl_servername_cb(SSL *ssl, int *ad, void *arg)
 {
-    VALUE ary, ssl_obj;
-    int state = 0;
-    const char *servername = SSL_get_servername(ssl, TLSEXT_NAMETYPE_host_name);
+    int state;
 
-    if (!servername)
-        return SSL_TLSEXT_ERR_OK;
-
-    ssl_obj = (VALUE)SSL_get_ex_data(ssl, ossl_ssl_ex_ptr_idx);
-    ary = rb_ary_new2(2);
-    rb_ary_push(ary, ssl_obj);
-    rb_ary_push(ary, rb_str_new2(servername));
-
-    rb_protect(ossl_call_servername_cb, ary, &state);
+    rb_protect(ossl_call_servername_cb, (VALUE)ssl, &state);
     if (state) {
+        VALUE ssl_obj = (VALUE)SSL_get_ex_data(ssl, ossl_ssl_ex_ptr_idx);
         rb_ivar_set(ssl_obj, ID_callback_state, INT2NUM(state));
         return SSL_TLSEXT_ERR_ALERT_FATAL;
     }
@@ -756,7 +746,10 @@ ssl_info_cb(const SSL *ssl, int where, int val)
 }
 
 /*
- * Gets various OpenSSL options.
+ * call-seq:
+ *    ctx.options -> integer
+ *
+ * Gets various \OpenSSL options.
  */
 static VALUE
 ossl_sslctx_get_options(VALUE self)
@@ -771,7 +764,17 @@ ossl_sslctx_get_options(VALUE self)
 }
 
 /*
- * Sets various OpenSSL options.
+ * call-seq:
+ *    ctx.options = integer
+ *
+ * Sets various \OpenSSL options. The options are a bit field and can be
+ * combined with the bitwise OR operator (<tt>|</tt>). Available options are
+ * defined as constants in OpenSSL::SSL that begin with +OP_+.
+ *
+ * For backwards compatibility, passing +nil+ has the same effect as passing
+ * OpenSSL::SSL::OP_ALL.
+ *
+ * See also man page SSL_CTX_set_options(3).
  */
 static VALUE
 ossl_sslctx_set_options(VALUE self, VALUE options)
@@ -1926,7 +1929,7 @@ ossl_ssl_read_internal(int argc, VALUE *argv, VALUE self, int nonblock)
 {
     SSL *ssl;
     int ilen;
-    VALUE len, str;
+    VALUE len, str, cb_state;
     VALUE opts = Qnil;
 
     if (nonblock) {
@@ -1959,6 +1962,14 @@ ossl_ssl_read_internal(int argc, VALUE *argv, VALUE self, int nonblock)
     rb_str_locktmp(str);
     for (;;) {
         int nread = SSL_read(ssl, RSTRING_PTR(str), ilen);
+
+        cb_state = rb_attr_get(self, ID_callback_state);
+        if (!NIL_P(cb_state)) {
+            rb_ivar_set(self, ID_callback_state, Qnil);
+            ossl_clear_error();
+            rb_jump_tag(NUM2INT(cb_state));
+        }
+
         switch (ssl_get_error(ssl, nread)) {
           case SSL_ERROR_NONE:
             rb_str_unlocktmp(str);
@@ -2048,7 +2059,7 @@ ossl_ssl_write_internal(VALUE self, VALUE str, VALUE opts)
     SSL *ssl;
     rb_io_t *fptr;
     int num, nonblock = opts != Qfalse;
-    VALUE tmp;
+    VALUE tmp, cb_state;
 
     GetSSL(self, ssl);
     if (!ssl_started(ssl))
@@ -2065,6 +2076,14 @@ ossl_ssl_write_internal(VALUE self, VALUE str, VALUE opts)
 
     for (;;) {
         int nwritten = SSL_write(ssl, RSTRING_PTR(tmp), num);
+
+        cb_state = rb_attr_get(self, ID_callback_state);
+        if (!NIL_P(cb_state)) {
+            rb_ivar_set(self, ID_callback_state, Qnil);
+            ossl_clear_error();
+            rb_jump_tag(NUM2INT(cb_state));
+        }
+
         switch (ssl_get_error(ssl, nwritten)) {
           case SSL_ERROR_NONE:
             return INT2NUM(nwritten);
