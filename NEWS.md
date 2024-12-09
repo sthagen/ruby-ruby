@@ -120,38 +120,12 @@ Note: We're only listing outstanding class updates.
 
 ## Stdlib updates
 
-* Net::HTTP
-
-    * Removed the following deprecated constants:
-        `Net::HTTP::ProxyMod`
-        `Net::NetPrivate::HTTPRequest`
-        `Net::HTTPInformationCode`
-        `Net::HTTPSuccessCode`
-        `Net::HTTPRedirectionCode`
-        `Net::HTTPRetriableCode`
-        `Net::HTTPClientErrorCode`
-        `Net::HTTPFatalErrorCode`
-        `Net::HTTPServerErrorCode`
-        `Net::HTTPResponseReceiver`
-        `Net::HTTPResponceReceiver`
-
-      These constants were deprecated from 2012.
-
 * Tempfile
 
     * The keyword argument `anonymous: true` is implemented for Tempfile.create.
       `Tempfile.create(anonymous: true)` removes the created temporary file immediately.
       So applications don't need to remove the file.
       [[Feature #20497]]
-
-* Timeout
-
-    * Reject negative values for Timeout.timeout. [[Bug #20795]]
-
-* URI
-
-    * Switched default parser to RFC 3986 compliant from RFC 2396 compliant.
-      [[Bug #19266]]
 
 * win32/sspi.rb
 
@@ -172,7 +146,7 @@ The following default gems are updated.
 * did_you_mean 2.0.0
 * erb 4.0.4
 * error_highlight 0.7.0
-* etc 1.4.4
+* etc 1.4.5
 * fcntl 1.2.0
 * fiddle 1.1.6.dev
 * fileutils 1.7.3
@@ -190,7 +164,7 @@ The following default gems are updated.
 * pp 0.6.2
 * prism 1.0.0
 * pstore 0.1.4
-* psych 5.2.0
+* psych 5.2.1
 * rdoc 6.8.1
 * reline 0.5.12
 * resolv 0.5.0
@@ -302,6 +276,36 @@ details of the default gems or bundled gems.
   ```
 
 ## Stdlib compatibility issues
+
+* DidYouMean
+
+    * `DidYouMean::SPELL_CHECKERS[]=` and `DidYouMean::SPELL_CHECKERS.merge!` are removed.
+
+* Net::HTTP
+
+    * Removed the following deprecated constants:
+        `Net::HTTP::ProxyMod`
+        `Net::NetPrivate::HTTPRequest`
+        `Net::HTTPInformationCode`
+        `Net::HTTPSuccessCode`
+        `Net::HTTPRedirectionCode`
+        `Net::HTTPRetriableCode`
+        `Net::HTTPClientErrorCode`
+        `Net::HTTPFatalErrorCode`
+        `Net::HTTPServerErrorCode`
+        `Net::HTTPResponseReceiver`
+        `Net::HTTPResponceReceiver`
+
+      These constants were deprecated from 2012.
+
+* Timeout
+
+    * Reject negative values for Timeout.timeout. [[Bug #20795]]
+
+* URI
+
+    * Switched default parser to RFC 3986 compliant from RFC 2396 compliant.
+      [[Bug #19266]]
 
 ## C API updates
 
