@@ -32,6 +32,11 @@ Note that each entry is kept to a minimum, see links for details.
 
 Note: We're only listing outstanding class updates.
 
+
+* Array
+
+    * `Array#fetch_values` was added. [[Feature #20702]]
+
 * Exception
 
     * Exception#set_backtrace now accepts arrays of Thread::Backtrace::Location.
@@ -83,6 +88,9 @@ Note: We're only listing outstanding class updates.
     * Ractor.[] and Ractor.[]= are added to access the ractor local storage
       of the current Ractor. [[Feature #20715]]
 
+    * `Ractor.store_if_absent(key){ init }` is added to initialize ractor local
+      variables in thread-safty. [[Feature #20875]]
+
 * Range
 
     * Range#size now raises TypeError if the range is not iterable. [[Misc #18984]]
@@ -110,11 +118,28 @@ Note: We're only listing outstanding class updates.
       associated with the AST node. [[Feature #20624]]
     * Add RubyVM::AbstractSyntaxTree::Location class which holds location information. [[Feature #20624]]
 
+
+* String
+
+    * `String#append_as_bytes` was added to more easily and efficiently work with binary buffers and protocols.
+      It directly concatenate the arguments into the string without any encoding validation or conversion.
+      [[Feature #20594]]
+
+* Symbol
+
+    * The string returned by `Symbol#to_s` now emits a deprecation warning when mutated, and will be
+      frozen in a future version of Ruby.
+      These warnings can be enabled with `-W:deprecated` or by setting `Warning[:deprecated] = true`.
+      [[Feature #20350]]
+
 * Time
 
     * On Windows, now Time#zone encodes the system timezone name in UTF-8
       instead of the active code page, if it contains non-ASCII characters.
       [[Bug #20929]]
+
+    * `Time#xmlschema`, and its `Time#iso8601` alias have been moved into the core Time
+       class while previously it was an extension provided by the `time` gem. [[Feature #20707]]
 
 * Warning
 
@@ -159,7 +184,7 @@ The following default gems are updated.
 * ipaddr 1.2.7
 * irb 1.14.2
 * json 2.9.0
-* logger 1.6.2
+* logger 1.6.3
 * net-http 0.6.0
 * open-uri 0.5.0
 * optparse 0.6.0
@@ -171,12 +196,12 @@ The following default gems are updated.
 * psych 5.2.1
 * rdoc 6.8.1
 * reline 0.5.12
-* resolv 0.5.0
+* resolv 0.6.0
 * securerandom 0.4.0
 * set 1.1.1
-* shellwords 0.2.1
+* shellwords 0.2.2
 * singleton 0.3.0
-* stringio 3.1.2.dev
+* stringio 3.1.2
 * strscan 3.1.1
 * syntax_suggest 2.0.2
 * tempfile 0.3.1
@@ -186,7 +211,7 @@ The following default gems are updated.
 * uri 1.0.2
 * win32ole 1.9.0
 * yaml 0.4.0
-* zlib 3.2.0
+* zlib 3.2.1
 
 The following bundled gem is added.
 
@@ -259,21 +284,24 @@ details of the default gems or bundled gems.
     * Other keys now have spaces around `=>`: `'{"user" => 1}'`, while previously they didn't: `'{"user"=>1}'`
 
 * Kernel#Float() now accepts a decimal string with decimal part omitted. [[Feature #20705]]
-  ```
+
+  ```rb
   Float("1.")    #=> 1.0 (previously, an ArgumentError was raised)
   Float("1.E-1") #=> 0.1 (previously, an ArgumentError was raised)
   ```
 
 * String#to_f now accepts a decimal string with decimal part omitted. [[Feature #20705]]
   Note that the result changes when an exponent is specified.
-  ```
+
+  ```rb
   "1.".to_f    #=> 1.0
   "1.E-1".to_f #=> 0.1 (previously, 1.0 was returned)
   ```
 
 * Object#singleton_method now returns methods in modules prepended to or included in the
   receiver's singleton class. [[Bug #20620]]
-  ```
+
+  ```rb
   o = Object.new
   o.extend(Module.new{def a = 1})
   o.singleton_method(:a).call #=> 1
@@ -288,17 +316,17 @@ details of the default gems or bundled gems.
 * Net::HTTP
 
     * Removed the following deprecated constants:
-        `Net::HTTP::ProxyMod`
-        `Net::NetPrivate::HTTPRequest`
-        `Net::HTTPInformationCode`
-        `Net::HTTPSuccessCode`
-        `Net::HTTPRedirectionCode`
-        `Net::HTTPRetriableCode`
-        `Net::HTTPClientErrorCode`
-        `Net::HTTPFatalErrorCode`
-        `Net::HTTPServerErrorCode`
-        `Net::HTTPResponseReceiver`
-        `Net::HTTPResponceReceiver`
+        * `Net::HTTP::ProxyMod`
+        * `Net::NetPrivate::HTTPRequest`
+        * `Net::HTTPInformationCode`
+        * `Net::HTTPSuccessCode`
+        * `Net::HTTPRedirectionCode`
+        * `Net::HTTPRetriableCode`
+        * `Net::HTTPClientErrorCode`
+        * `Net::HTTPFatalErrorCode`
+        * `Net::HTTPServerErrorCode`
+        * `Net::HTTPResponseReceiver`
+        * `Net::HTTPResponceReceiver`
 
       These constants were deprecated from 2012.
 
@@ -380,6 +408,7 @@ details of the default gems or bundled gems.
 [Feature #20265]: https://bugs.ruby-lang.org/issues/20265
 [Feature #20275]: https://bugs.ruby-lang.org/issues/20275
 [Feature #20293]: https://bugs.ruby-lang.org/issues/20293
+[Feature #20350]: https://bugs.ruby-lang.org/issues/20350
 [Feature #20351]: https://bugs.ruby-lang.org/issues/20351
 [Feature #20429]: https://bugs.ruby-lang.org/issues/20429
 [Bug #20433]:     https://bugs.ruby-lang.org/issues/20433
@@ -388,16 +417,20 @@ details of the default gems or bundled gems.
 [Feature #20497]: https://bugs.ruby-lang.org/issues/20497
 [Feature #20564]: https://bugs.ruby-lang.org/issues/20564
 [Feature #20576]: https://bugs.ruby-lang.org/issues/20576
+[Feature #20594]: https://bugs.ruby-lang.org/issues/20594
 [Bug #20620]:     https://bugs.ruby-lang.org/issues/20620
 [Feature #20624]: https://bugs.ruby-lang.org/issues/20624
 [Feature #20627]: https://bugs.ruby-lang.org/issues/20627
+[Feature #20702]: https://bugs.ruby-lang.org/issues/20702
 [Feature #20705]: https://bugs.ruby-lang.org/issues/20705
+[Feature #20707]: https://bugs.ruby-lang.org/issues/20707
 [Feature #20715]: https://bugs.ruby-lang.org/issues/20715
 [Feature #20775]: https://bugs.ruby-lang.org/issues/20775
 [Feature #20782]: https://bugs.ruby-lang.org/issues/20782
 [Bug #20795]:     https://bugs.ruby-lang.org/issues/20795
 [Feature #20811]: https://bugs.ruby-lang.org/issues/20811
 [Feature #20860]: https://bugs.ruby-lang.org/issues/20860
+[Feature #20875]: https://bugs.ruby-lang.org/issues/20875
 [Feature #20876]: https://bugs.ruby-lang.org/issues/20876
 [Feature #20884]: https://bugs.ruby-lang.org/issues/20884
 [Feature #20902]: https://bugs.ruby-lang.org/issues/20902
