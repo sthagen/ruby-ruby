@@ -46,6 +46,11 @@ Note: We're only listing outstanding class updates.
     * Exception#set_backtrace now accepts arrays of Thread::Backtrace::Location.
       Kernel#raise, Thread#raise and Fiber#raise also accept this new format. [[Feature #13557]]
 
+* Fiber::Scheduler
+
+    * An optional Fiber::Scheduler#blocking_operation_wait hook allows blocking operations to be moved out of the
+      event loop in order to reduce latency and improve multi-core processor utilization. [[Feature #20876]]
+
 * GC
 
     * GC.config added to allow setting configuration variables on the Garbage
@@ -59,11 +64,6 @@ Note: We're only listing outstanding class updates.
     * Hash.new now accepts an optional `capacity:` argument, to preallocate the hash with a given capacity.
       This can improve performance when building large hashes incrementally by saving on reallocation and
       rehashing of keys. [[Feature #19236]]
-
-* Fiber::Scheduler
-
-    * An optional Fiber::Scheduler#blocking_operation_wait hook allows blocking operations to be moved out of the
-      event loop in order to reduce latency and improve multi-core processor utilization. [[Feature #20876]]
 
 * IO::Buffer
 
@@ -143,7 +143,7 @@ Note: We're only listing outstanding class updates.
       [[Bug #20929]]
 
     * Time#xmlschema, and its Time#iso8601 alias have been moved into the core Time
-       class while previously it was an extension provided by the `time` gem. [[Feature #20707]]
+      class while previously it was an extension provided by the `time` gem. [[Feature #20707]]
 
 * Warning
 
@@ -353,13 +353,12 @@ details of the default gems or bundled gems.
 * The default parser is now Prism.
   To use the conventional parser, use the command-line argument `--parser=parse.y`.
   [[Feature #20564]]
-* Happy Eyeballs version 2 (RFC8305) is used in Socket.tcp.
-  To disable it, use the keyword argument `fast_fallback: false`.
-  [[Feature #20108]]
-* Happy Eyeballs version 2 (RFC8305) is implemented in TCPSocket.new.
-  To enable it, use the keyword argument `fast_fallback: true`.
-  (This entry is temporary. It should be merged with the above entry after it becomes settled)
-  [[Feature #20782]]
+* Happy Eyeballs version 2 (RFC8305), an algorithm that ensures faster and more reliable connections
+  by attempting IPv6 and IPv4 concurrently, is used in Socket.tcp and TCPSocket.new.
+  To disable it globally, set the environment variable `RUBY_TCP_NO_FAST_FALLBACK=1` or
+  call `Socket.tcp_fast_fallback=false`.
+  Or to disable it on a per-method basis, use the keyword argument `fast_fallback: false`.
+  [[Feature #20108]] [[Feature #20782]]
 * Array#each is rewritten in Ruby for better performance [[Feature #20182]].
 
 * Alternative garbage collector (GC) implementations can be loaded dynamically
