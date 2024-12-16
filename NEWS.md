@@ -176,12 +176,12 @@ The following default gems are updated.
 * date 3.4.1
 * delegate 0.4.0
 * did_you_mean 2.0.0
-* digest 3.2.0.pre0
+* digest 3.2.0
 * erb 4.0.4
 * error_highlight 0.7.0
 * etc 1.4.5
 * fcntl 1.2.0
-* fiddle 1.1.6.dev
+* fiddle 1.1.6
 * fileutils 1.7.3
 * io-console 0.8.0
 * io-nonblock 0.3.1
@@ -201,16 +201,16 @@ The following default gems are updated.
 * rdoc 6.9.0
 * reline 0.5.12
 * resolv 0.6.0
-* securerandom 0.4.0
+* securerandom 0.4.1
 * set 1.1.1
 * shellwords 0.2.2
 * singleton 0.3.0
 * stringio 3.1.2
-* strscan 3.1.1
+* strscan 3.1.2
 * syntax_suggest 2.0.2
 * tempfile 0.3.1
 * time 0.4.1
-* timeout 0.4.2
+* timeout 0.4.3
 * tmpdir 0.3.0
 * uri 1.0.2
 * win32ole 1.9.0
@@ -384,6 +384,8 @@ details of the default gems or bundled gems.
 
 * Passing a block to a method which doesn't use the passed block will show
   a warning on verbose mode (`-w`).
+  In connection with this, a new `strict_unused_block` warning category was introduced.
+  Turn them on with `-W:strict_unused_block` or `Warning[:strict_unused_block] = true`.
   [[Feature #15554]]
 
 * Redefining some core methods that are specially optimized by the interpreter
