@@ -112,10 +112,6 @@ Note: We're only listing outstanding class updates.
       when the numerator of the return value is large, but now returns an Integer.
       If it is extremely large, it raises an exception. [[Feature #20811]]
 
-* Refinement
-
-    * Removed deprecated method `Refinement#refined_class`. [[Feature #19714]]
-
 * RubyVM::AbstractSyntaxTree
 
     * Add RubyVM::AbstractSyntaxTree::Node#locations method which returns location objects
@@ -151,6 +147,17 @@ Note: We're only listing outstanding class updates.
       [[Feature #20293]]
 
 ## Stdlib updates
+
+* RubyGems
+    * Add --attestation option to gem push. It enabled to store signature of build artifact to sigstore.dev.
+
+* Bundler
+    * Add a lockfile_checksums configuration to include checksums in fresh lockfiles.
+    * Add bundle lock --add-checksums to add checksums to an existing lockfile.
+
+* JSON
+
+    * Performance improvements `JSON.parse` about 1.5 times faster than json-2.7.x.
 
 * Tempfile
 
@@ -211,9 +218,9 @@ The following default gems are updated.
 * tempfile 0.3.1
 * time 0.4.1
 * timeout 0.4.3
-* tmpdir 0.3.0
+* tmpdir 0.3.1
 * uri 1.0.2
-* win32ole 1.9.0
+* win32ole 1.9.1
 * yaml 0.4.0
 * zlib 3.2.1
 
@@ -226,7 +233,7 @@ The following bundled gems are updated.
 * minitest 5.25.4
 * power_assert 2.0.4
 * rake 13.2.1
-* test-unit 3.6.5
+* test-unit 3.6.7
 * rexml 3.4.0
 * rss 0.3.1
 * net-ftp 0.3.8
@@ -311,6 +318,8 @@ details of the default gems or bundled gems.
   o.singleton_method(:a).call #=> 1
   ```
 
+* Refinement#refined_class has been removed. [[Feature #19714]]
+
 ## Stdlib compatibility issues
 
 * DidYouMean
@@ -353,13 +362,13 @@ details of the default gems or bundled gems.
 * The default parser is now Prism.
   To use the conventional parser, use the command-line argument `--parser=parse.y`.
   [[Feature #20564]]
+
 * Happy Eyeballs version 2 (RFC8305), an algorithm that ensures faster and more reliable connections
   by attempting IPv6 and IPv4 concurrently, is used in Socket.tcp and TCPSocket.new.
   To disable it globally, set the environment variable `RUBY_TCP_NO_FAST_FALLBACK=1` or
   call `Socket.tcp_fast_fallback=false`.
   Or to disable it on a per-method basis, use the keyword argument `fast_fallback: false`.
   [[Feature #20108]] [[Feature #20782]]
-* Array#each is rewritten in Ruby for better performance [[Feature #20182]].
 
 * Alternative garbage collector (GC) implementations can be loaded dynamically
   through the modular garbage collector feature. To enable this feature,
@@ -378,7 +387,30 @@ details of the default gems or bundled gems.
   enabled using the environment variable `RUBY_GC_LIBRARY=mmtk`. This requires
   the Rust toolchain on the build machine. [[Feature #20860]]
 
-## JIT
+* New features of YJIT
+  * Add unified memory limit via `--yjit-mem-size` command-line option (default 128MiB)
+    which tracks total YJIT memory usage and is more intuitive than the
+    old `--yjit-exec-mem-size`.
+  * More statistics now always available via `RubyVM::YJIT.runtime_stats`
+  * Add compilation log to track what gets compiled via `--yjit-log`
+    * Tail of the log also available at run-time via `RubyVM::YJIT.log`
+  * Add support for shareable consts in multi-ractor mode
+  * Can now trace counted exits with `--yjit-trace-exits=COUNTER`
+  * Compressed context reduces memory needed to store YJIT metadata
+
+* New optimizations of YJIT
+  * Improved allocator with ability to allocate registers for local variables
+  * When YJIT is enabled, use more Core primitives written in Ruby:
+    * `Array#each`, `Array#select`, `Array#map` rewritten in Ruby for better performance [[Feature #20182]].
+  * Ability to inline small/trivial methods such as:
+    * Empty methods
+    * Methods returning a constant
+    * Methods returning `self`
+    * Methods directly returning an argument
+  * Specialized codegen for many more runtime methods
+  * Optimize `String#getbyte`, `String#setbyte` and other string methods
+  * Optimize bitwise operations to speed up low-level bit/byte manipulation
+  * Various other incremental optimizations
 
 ## Miscellaneous changes
 
