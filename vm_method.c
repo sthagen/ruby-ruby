@@ -314,8 +314,8 @@ invalidate_all_refinement_cc(void *vstart, void *vend, size_t stride, void *data
 {
     VALUE v = (VALUE)vstart;
     for (; v != (VALUE)vend; v += stride) {
-        void *ptr = asan_poisoned_object_p(v);
-        asan_unpoison_object(v, false);
+        void *ptr = rb_asan_poisoned_object_p(v);
+        rb_asan_unpoison_object(v, false);
 
         if (RBASIC(v)->flags) { // liveness check
             if (imemo_type_p(v, imemo_callcache)) {
@@ -327,7 +327,7 @@ invalidate_all_refinement_cc(void *vstart, void *vend, size_t stride, void *data
         }
 
         if (ptr) {
-            asan_poison_object(v);
+            rb_asan_poison_object(v);
         }
     }
     return 0; // continue to iteration
@@ -2605,7 +2605,7 @@ rb_mod_ruby2_keywords(int argc, VALUE *argv, VALUE module)
                     rb_clear_method_cache(module, name);
                 }
                 else {
-                    rb_warn("Skipping set of ruby2_keywords flag for %s (method accepts keywords or method does not accept argument splat)", rb_id2name(name));
+                    rb_warn("Skipping set of ruby2_keywords flag for %"PRIsVALUE" (method accepts keywords or method does not accept argument splat)", QUOTE_ID(name));
                 }
                 break;
               case VM_METHOD_TYPE_BMETHOD: {
@@ -2624,19 +2624,19 @@ rb_mod_ruby2_keywords(int argc, VALUE *argv, VALUE module)
                         rb_clear_method_cache(module, name);
                     }
                     else {
-                        rb_warn("Skipping set of ruby2_keywords flag for %s (method accepts keywords or method does not accept argument splat)", rb_id2name(name));
+                        rb_warn("Skipping set of ruby2_keywords flag for %"PRIsVALUE" (method accepts keywords or method does not accept argument splat)", QUOTE_ID(name));
                     }
                     break;
                 }
               }
               /* fallthrough */
               default:
-                rb_warn("Skipping set of ruby2_keywords flag for %s (method not defined in Ruby)", rb_id2name(name));
+                rb_warn("Skipping set of ruby2_keywords flag for %"PRIsVALUE" (method not defined in Ruby)", QUOTE_ID(name));
                 break;
             }
         }
         else {
-            rb_warn("Skipping set of ruby2_keywords flag for %s (can only set in method defining module)", rb_id2name(name));
+            rb_warn("Skipping set of ruby2_keywords flag for %"PRIsVALUE" (can only set in method defining module)", QUOTE_ID(name));
         }
     }
     return Qnil;
