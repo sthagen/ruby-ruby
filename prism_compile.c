@@ -3029,6 +3029,7 @@ pm_compile_pattern(rb_iseq_t *iseq, pm_scope_node_t *scope_node, const pm_node_t
       case PM_GLOBAL_VARIABLE_READ_NODE:
       case PM_IMAGINARY_NODE:
       case PM_INSTANCE_VARIABLE_READ_NODE:
+      case PM_IT_LOCAL_VARIABLE_READ_NODE:
       case PM_INTEGER_NODE:
       case PM_INTERPOLATED_REGULAR_EXPRESSION_NODE:
       case PM_INTERPOLATED_STRING_NODE:
@@ -6913,6 +6914,7 @@ pm_compile_call_node(rb_iseq_t *iseq, const pm_call_node_t *node, LINK_ANCHOR *c
             VALUE value = parse_static_literal_string(iseq, scope_node, node->receiver, &((const pm_string_node_t * ) node->receiver)->unescaped);
             const struct rb_callinfo *callinfo = new_callinfo(iseq, idUMinus, 0, 0, NULL, FALSE);
             PUSH_INSN2(ret, location, opt_str_uminus, value, callinfo);
+            if (popped) PUSH_INSN(ret, location, pop);
             return;
         }
         break;
@@ -6922,6 +6924,7 @@ pm_compile_call_node(rb_iseq_t *iseq, const pm_call_node_t *node, LINK_ANCHOR *c
             VALUE value = parse_static_literal_string(iseq, scope_node, node->receiver, &((const pm_string_node_t * ) node->receiver)->unescaped);
             const struct rb_callinfo *callinfo = new_callinfo(iseq, idFreeze, 0, 0, NULL, FALSE);
             PUSH_INSN2(ret, location, opt_str_freeze, value, callinfo);
+            if (popped) PUSH_INSN(ret, location, pop);
             return;
         }
         break;
