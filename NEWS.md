@@ -7,6 +7,8 @@ Note that each entry is kept to a minimum, see links for details.
 
 ## Language changes
 
+* `it` is added to reference a block parameter. [[Feature #18980]]
+
 * String literals in files without a `frozen_string_literal` comment now emit a deprecation warning
   when they are mutated.
   These warnings can be enabled with `-W:deprecated` or by setting `Warning[:deprecated] = true`.
@@ -16,8 +18,6 @@ Note that each entry is kept to a minimum, see links for details.
     * String#+@ now duplicates when mutating the string would emit
       a deprecation warning, offered as a replacement for the
       `str.dup if str.frozen?` pattern.
-
-* `it` is added to reference a block parameter. [[Feature #18980]]
 
 * Keyword splatting `nil` when calling methods is now supported.
   `**nil` is treated similarly to `**{}`, passing no keywords,
@@ -448,30 +448,34 @@ The following bundled gems are promoted from default gems.
   enabled using the environment variable `RUBY_GC_LIBRARY=mmtk`. This requires
   the Rust toolchain on the build machine. [[Feature #20860]]
 
-* New features of YJIT
-  * Add unified memory limit via `--yjit-mem-size` command-line option (default 128MiB)
-    which tracks total YJIT memory usage and is more intuitive than the
-    old `--yjit-exec-mem-size`.
-  * More statistics now always available via `RubyVM::YJIT.runtime_stats`
-  * Add compilation log to track what gets compiled via `--yjit-log`
-    * Tail of the log also available at run-time via `RubyVM::YJIT.log`
-  * Add support for shareable consts in multi-ractor mode
-  * Can now trace counted exits with `--yjit-trace-exits=COUNTER`
-  * Compressed context reduces memory needed to store YJIT metadata
+### YJIT
 
-* New optimizations of YJIT
-  * Improved allocator with ability to allocate registers for local variables
-  * When YJIT is enabled, use more Core primitives written in Ruby:
-    * `Array#each`, `Array#select`, `Array#map` rewritten in Ruby for better performance [[Feature #20182]].
-  * Ability to inline small/trivial methods such as:
-    * Empty methods
-    * Methods returning a constant
-    * Methods returning `self`
-    * Methods directly returning an argument
-  * Specialized codegen for many more runtime methods
-  * Optimize `String#getbyte`, `String#setbyte` and other string methods
-  * Optimize bitwise operations to speed up low-level bit/byte manipulation
-  * Various other incremental optimizations
+#### New features
+
+* Add unified memory limit via `--yjit-mem-size` command-line option (default 128MiB)
+  which tracks total YJIT memory usage and is more intuitive than the
+  old `--yjit-exec-mem-size`.
+* More statistics now always available via `RubyVM::YJIT.runtime_stats`
+* Add compilation log to track what gets compiled via `--yjit-log`
+  * Tail of the log also available at run-time via `RubyVM::YJIT.log`
+* Add support for shareable consts in multi-ractor mode
+* Can now trace counted exits with `--yjit-trace-exits=COUNTER`
+
+#### New optimizations
+
+* Compressed context reduces memory needed to store YJIT metadata
+* Improved allocator with ability to allocate registers for local variables
+* When YJIT is enabled, use more Core primitives written in Ruby:
+  * `Array#each`, `Array#select`, `Array#map` rewritten in Ruby for better performance [[Feature #20182]].
+* Ability to inline small/trivial methods such as:
+  * Empty methods
+  * Methods returning a constant
+  * Methods returning `self`
+  * Methods directly returning an argument
+* Specialized codegen for many more runtime methods
+* Optimize `String#getbyte`, `String#setbyte` and other string methods
+* Optimize bitwise operations to speed up low-level bit/byte manipulation
+* Various other incremental optimizations
 
 ## Miscellaneous changes
 
