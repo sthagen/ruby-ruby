@@ -98,11 +98,7 @@ jobs:
 
       - name: Setup Ruby GC Directory
         run: |
-          if [ "${{ contains(matrix.os, 'macos') }}" == "true" ]; then
-            echo "MODULAR_GC_DIR=/Users/runner/ruby_gc" >> $GITHUB_ENV
-          else
-            echo "MODULAR_GC_DIR=/home/runner/ruby_gc" >> $GITHUB_ENV
-          fi
+          echo "MODULAR_GC_DIR=$HOME/ruby_gc" >> $GITHUB_ENV
 
       - name: Run configure
         env:
@@ -132,20 +128,10 @@ jobs:
       - name: Build Modular  GC
         run: |
           echo "RUBY_GC_LIBRARY=${{ matrix.gc.name }}" >> $GITHUB_ENV
-          make modular-gc MODULAR_GC=${{ matrix.gc.name }} MMTK_BUILD=${{ matrix.gc.mmtk_build }}
+          make install-modular-gc MODULAR_GC=${{ matrix.gc.name }} MMTK_BUILD=${{ matrix.gc.mmtk_build }}
           make distclean-modular-gc MODULAR_GC=${{ matrix.gc.name }}
 
-      - run: |
-          $SETARCH make golf
-          case "${{ matrix.configure }}" in
-          *'--enable-shared'*)
-            $SETARCH make runnable
-            ./bin/goruby -veh
-            ;;
-          *)
-            ./goruby -veh
-            ;;
-          esac
+      - run: $SETARCH make hello
 
       - name: Set test options for skipped tests
         run: |
