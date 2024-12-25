@@ -189,6 +189,11 @@ We only list stdlib changes that are notable feature changes.
     * `Socket::ResolutionError` and `Socket::ResolutionError#error_code` was added.
       [[Feature #20018]]
 
+* IRB
+
+    * Interactive method completion is now improved with type information by default.
+      [[Feature #20778]]
+
 Other changes are listed in the following sections. we also listed release history from the previous bundled version that is Ruby 3.3.0 if it has GitHub releases.
 
 The following default gem is added.
@@ -201,7 +206,7 @@ The following default gems are updated.
     * 3.5.3 to [v3.5.4][RubyGems-v3.5.4], [v3.5.5][RubyGems-v3.5.5], [v3.5.6][RubyGems-v3.5.6], [v3.5.7][RubyGems-v3.5.7], [v3.5.8][RubyGems-v3.5.8], [v3.5.9][RubyGems-v3.5.9], [v3.5.10][RubyGems-v3.5.10], [v3.5.11][RubyGems-v3.5.11], [v3.5.12][RubyGems-v3.5.12], [v3.5.13][RubyGems-v3.5.13], [v3.5.14][RubyGems-v3.5.14], [v3.5.15][RubyGems-v3.5.15], [v3.5.16][RubyGems-v3.5.16], [v3.5.17][RubyGems-v3.5.17], [v3.5.18][RubyGems-v3.5.18], [v3.5.19][RubyGems-v3.5.19], [v3.5.20][RubyGems-v3.5.20], [v3.5.21][RubyGems-v3.5.21], [v3.5.22][RubyGems-v3.5.22], [v3.5.23][RubyGems-v3.5.23], [v3.6.0][RubyGems-v3.6.0], [v3.6.1][RubyGems-v3.6.1], [v3.6.2][RubyGems-v3.6.2]
 * [benchmark][benchmark] 0.4.0
     * 0.3.0 to [v0.4.0][benchmark-v0.4.0]
-* [bundler][bundler] 2.6.1
+* [bundler][bundler] 2.6.2
     * 2.5.3 to [v2.5.4][bundler-v2.5.4], [v2.5.5][bundler-v2.5.5], [v2.5.6][bundler-v2.5.6], [v2.5.7][bundler-v2.5.7], [v2.5.8][bundler-v2.5.8], [v2.5.9][bundler-v2.5.9], [v2.5.10][bundler-v2.5.10], [v2.5.11][bundler-v2.5.11], [v2.5.12][bundler-v2.5.12], [v2.5.13][bundler-v2.5.13], [v2.5.14][bundler-v2.5.14], [v2.5.15][bundler-v2.5.15], [v2.5.16][bundler-v2.5.16], [v2.5.17][bundler-v2.5.17], [v2.5.18][bundler-v2.5.18], [v2.5.19][bundler-v2.5.19], [v2.5.20][bundler-v2.5.20], [v2.5.21][bundler-v2.5.21], [v2.5.22][bundler-v2.5.22], [v2.5.23][bundler-v2.5.23], [v2.6.0][bundler-v2.6.0], [v2.6.1][bundler-v2.6.1], [v2.6.2][bundler-v2.6.2]
 * [date][date] 3.4.1
     * 3.3.4 to [v3.4.0][date-v3.4.0], [v3.4.1][date-v3.4.1]
@@ -297,7 +302,7 @@ The following bundled gem is added.
 The following bundled gems are updated.
 
 * [minitest][minitest] 5.25.4
-    * 5.20.0 to v5.25.4
+    * 5.20.0 to [v5.25.4][minitest-v5.25.4]
 * [power_assert][power_assert] 2.0.5
     * 2.0.3 to [v2.0.4][power_assert-v2.0.4], [v2.0.5][power_assert-v2.0.5]
 * [rake][rake] 13.2.1
@@ -319,7 +324,7 @@ The following bundled gems are updated.
 * [rbs][rbs] 3.8.0
     * 3.4.0 to [v3.4.1][rbs-v3.4.1], [v3.4.2][rbs-v3.4.2], [v3.4.3][rbs-v3.4.3], [v3.4.4][rbs-v3.4.4], [v3.5.0.pre.1][rbs-v3.5.0.pre.1], [v3.5.0.pre.2][rbs-v3.5.0.pre.2], [v3.5.0][rbs-v3.5.0], [v3.5.1][rbs-v3.5.1], [v3.5.2][rbs-v3.5.2], [v3.5.3][rbs-v3.5.3], [v3.6.0.dev.1][rbs-v3.6.0.dev.1], [v3.6.0.pre.1][rbs-v3.6.0.pre.1], [v3.6.0.pre.2][rbs-v3.6.0.pre.2], [v3.6.0.pre.3][rbs-v3.6.0.pre.3], [v3.6.0][rbs-v3.6.0], [v3.6.1][rbs-v3.6.1], [v3.7.0.dev.1][rbs-v3.7.0.dev.1], [v3.7.0.pre.1][rbs-v3.7.0.pre.1], [v3.7.0][rbs-v3.7.0], [v3.8.0.pre.1][rbs-v3.8.0.pre.1] [v3.8.0][rbs-v3.8.0]
 * [typeprof][typeprof] 0.30.1
-    * 0.21.9 to v0.30.1
+    * 0.21.9 to [v0.30.1][typeprof-v0.30.1]
 * [debug][debug] 1.10.0
     * 1.9.1 to [v1.9.2][debug-v1.9.2], [v1.10.0][debug-v1.10.0]
 * [racc][racc] 1.8.1
@@ -462,29 +467,35 @@ The following bundled gems are promoted from default gems.
 
 #### New features
 
-* Add unified memory limit via `--yjit-mem-size` command-line option (default 128MiB)
-  which tracks total YJIT memory usage and is more intuitive than the
-  old `--yjit-exec-mem-size`.
-* More statistics now always available via `RubyVM::YJIT.runtime_stats`
-* Add compilation log to track what gets compiled via `--yjit-log`
-  * Tail of the log also available at run-time via `RubyVM::YJIT.log`
-* Add support for shareable consts in multi-ractor mode
-* Can now trace counted exits with `--yjit-trace-exits=COUNTER`
+* Command-line options
+    * `--yjit-mem-size` introduces a unified memory limit (default 128MiB) to track total YJIT memory usage,
+      providing a more intuitive alternative to the old `--yjit-exec-mem-size` option.
+    * `--yjit-trace-exits=COUNTER` allows tracing of counted exits and fallbacks.
+    * `--yjit-log` enables a compilation log to track what gets compiled.
+* Ruby API
+    * `RubyVM::YJIT.enable(log: true)` also enables a compilation log.
+    * `RubyVM::YJIT.log` provides access to the tail of the compilation log at run-time.
+* YJIT stats
+    * `RubyVM::YJIT.runtime_stats` now always provides additional statistics on
+      invalidation, inlining, and metadata encoding.
+    * `RubyVM::YJIT.runtime_stats[:iseq_calls]` is added to profile non-inlined Ruby method calls.
+    * `RubyVM::YJIT.runtime_stats[:cfunc_calls]` is truncated to the top 20 entries for better performance.
 
 #### New optimizations
 
 * Compressed context reduces memory needed to store YJIT metadata
 * Improved allocator with ability to allocate registers for local variables
 * When YJIT is enabled, use more Core primitives written in Ruby:
-  * `Array#each`, `Array#select`, `Array#map` rewritten in Ruby for better performance [[Feature #20182]].
+    * `Array#each`, `Array#select`, `Array#map` rewritten in Ruby for better performance [[Feature #20182]].
 * Ability to inline small/trivial methods such as:
-  * Empty methods
-  * Methods returning a constant
-  * Methods returning `self`
-  * Methods directly returning an argument
+    * Empty methods
+    * Methods returning a constant
+    * Methods returning `self`
+    * Methods directly returning an argument
 * Specialized codegen for many more runtime methods
 * Optimize `String#getbyte`, `String#setbyte` and other string methods
 * Optimize bitwise operations to speed up low-level bit/byte manipulation
+* Support shareable constants in multi-ractor mode
 * Various other incremental optimizations
 
 ## Miscellaneous changes
@@ -539,6 +550,7 @@ The following bundled gems are promoted from default gems.
 [Feature #20707]: https://bugs.ruby-lang.org/issues/20707
 [Feature #20715]: https://bugs.ruby-lang.org/issues/20715
 [Feature #20775]: https://bugs.ruby-lang.org/issues/20775
+[Feature #20778]: https://bugs.ruby-lang.org/issues/20778
 [Feature #20782]: https://bugs.ruby-lang.org/issues/20782
 [Bug #20795]:     https://bugs.ruby-lang.org/issues/20795
 [Feature #20811]: https://bugs.ruby-lang.org/issues/20811
@@ -736,6 +748,7 @@ The following bundled gems are promoted from default gems.
 [zlib-v3.1.1]: https://github.com/ruby/zlib/releases/tag/v3.1.1
 [zlib-v3.2.0]: https://github.com/ruby/zlib/releases/tag/v3.2.0
 [zlib-v3.2.1]: https://github.com/ruby/zlib/releases/tag/v3.2.1
+[minitest-v5.25.4]: https://github.com/seattlerb/minitest/releases/tag/v5.25.4
 [power_assert-v2.0.4]:  https://github.com/ruby/power_assert/releases/tag/v2.0.4
 [power_assert-v2.0.5]:  https://github.com/ruby/power_assert/releases/tag/v2.0.5
 [rake-v13.2.0]: https://github.com/ruby/rake/releases/tag/v13.2.0
@@ -819,8 +832,9 @@ The following bundled gems are promoted from default gems.
 [csv-v3.2.9]: https://github.com/ruby/csv/releases/tag/v3.2.9
 [csv-v3.3.0]: https://github.com/ruby/csv/releases/tag/v3.3.0
 [csv-v3.3.1]: https://github.com/ruby/csv/releases/tag/v3.3.1
-[csv-v3.3.2]: https://github.com/ruby/csv/releases/tag/v3.3.1
+[csv-v3.3.2]: https://github.com/ruby/csv/releases/tag/v3.3.2
 [ruby/net-http-sspi]: https://github.com/ruby/net-http-sspi
+[typeprof-v0.30.1]: https://github.com/ruby/typeprof/releases/tag/v0.30.1
 
 [RubyGems]: https://github.com/rubygems/rubygems
 [benchmark]: https://github.com/ruby/benchmark
@@ -881,6 +895,7 @@ The following bundled gems are promoted from default gems.
 [net-smtp]: https://github.com/ruby/net-smtp
 [prime]: https://github.com/ruby/prime
 [rbs]: https://github.com/ruby/rbs
+[typeprof]: https://github.com/ruby/typeprof
 [debug]: https://github.com/ruby/debug
 [racc]: https://github.com/ruby/racc
 [mutex_m]: https://github.com/ruby/mutex_m
