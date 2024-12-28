@@ -1480,8 +1480,9 @@ static rb_ast_id_table_t *local_tbl(struct parser_params*);
 
 static VALUE reg_compile(struct parser_params*, rb_parser_string_t*, int);
 static void reg_fragment_setenc(struct parser_params*, rb_parser_string_t*, int);
-#define reg_fragment_check rb_parser_reg_fragment_check
-int reg_fragment_check(struct parser_params*, rb_parser_string_t*, int);
+int rb_parser_reg_fragment_check(struct parser_params*, rb_parser_string_t*, int, rb_parser_reg_fragment_error_func);
+static void reg_fragment_error(struct parser_params *, VALUE);
+#define reg_fragment_check(p, str, option) rb_parser_reg_fragment_check(p, str, option, reg_fragment_error)
 
 static int literal_concat0(struct parser_params *p, rb_parser_string_t *head, rb_parser_string_t *tail);
 static NODE *heredoc_dedent(struct parser_params*,NODE*);
@@ -8230,6 +8231,10 @@ read_escape(struct parser_params *p, int flags, const char *begin)
         return '\0';
 
       default:
+        if (!ISASCII(c)) {
+            tokskip_mbchar(p);
+            goto eof;
+        }
         return c;
     }
 }
@@ -13185,7 +13190,13 @@ new_regexp(struct parser_params *p, NODE *node, int options, const YYLTYPE *loc)
         nd_set_loc(node, loc);
         rb_node_dregx_t *const dreg = RNODE_DREGX(node);
         dreg->as.nd_cflag = options & RE_OPTION_MASK;
-        if (dreg->string) reg_fragment_check(p, dreg->string, options);
+        if (!dreg->nd_next) {
+            /* Check string is valid regex */
+            reg_compile(p, dreg->string, options);
+        }
+        else if (dreg->string) {
+            reg_fragment_check(p, dreg->string, options);
+        }
         prev = node;
         for (list = dreg->nd_next; list; list = RNODE_LIST(list->nd_next)) {
             NODE *frag = list->nd_head;
@@ -13210,10 +13221,6 @@ new_regexp(struct parser_params *p, NODE *node, int options, const YYLTYPE *loc)
             else {
                 prev = 0;
             }
-        }
-        if (!dreg->nd_next) {
-            /* Check string is valid regex */
-            reg_compile(p, dreg->string, options);
         }
         if (options & RE_OPTION_ONCE) {
             node = NEW_ONCE(node, loc);
@@ -15378,9 +15385,15 @@ reg_fragment_setenc(struct parser_params* p, rb_parser_string_t *str, int option
     if (c) reg_fragment_enc_error(p, str, c);
 }
 
+static void
+reg_fragment_error(struct parser_params* p, VALUE err)
+{
+    compile_error(p, "%"PRIsVALUE, err);
+}
+
 #ifndef RIPPER
 int
-reg_fragment_check(struct parser_params* p, rb_parser_string_t *str, int options)
+rb_parser_reg_fragment_check(struct parser_params* p, rb_parser_string_t *str, int options, rb_parser_reg_fragment_error_func error)
 {
     VALUE err, str2;
     reg_fragment_setenc(p, str, options);
@@ -15389,7 +15402,7 @@ reg_fragment_check(struct parser_params* p, rb_parser_string_t *str, int options
     err = rb_reg_check_preprocess(str2);
     if (err != Qnil) {
         err = rb_obj_as_string(err);
-        compile_error(p, "%"PRIsVALUE, err);
+        error(p, err);
         return 0;
     }
     return 1;
@@ -15494,7 +15507,7 @@ reg_compile(struct parser_params* p, rb_parser_string_t *str, int options)
     if (NIL_P(re)) {
         VALUE m = rb_attr_get(rb_errinfo(), idMesg);
         rb_set_errinfo(err);
-        compile_error(p, "%"PRIsVALUE, m);
+        reg_fragment_error(p, m);
         return Qnil;
     }
     return re;
