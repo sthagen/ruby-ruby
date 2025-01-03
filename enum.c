@@ -3912,7 +3912,7 @@ chunk_i(RB_BLOCK_CALL_FUNC_ARGLIST(yielder, enumerator))
  *    e.next # => [2, [6, 7, 8]]
  *    e.next # => [3, [9, 10]]
  *
- *  \Method +chunk+ is especially useful for an enumerable that is already sorted.
+ *  Method +chunk+ is especially useful for an enumerable that is already sorted.
  *  This example counts words for each initial letter in a large array of words:
  *
  *    # Get sorted words from a web page.
@@ -4939,7 +4939,7 @@ enum_compact(VALUE obj)
 /*
  * == What's Here
  *
- * \Module \Enumerable provides methods that are useful to a collection class for:
+ * Module \Enumerable provides methods that are useful to a collection class for:
  *
  * - {Querying}[rdoc-ref:Enumerable@Methods+for+Querying]
  * - {Fetching}[rdoc-ref:Enumerable@Methods+for+Fetching]

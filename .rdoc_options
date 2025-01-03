@@ -11,3 +11,12 @@ rdoc_include:
 exclude:
 - lib/irb
 - .gemspec
+
+autolink_excluded_words:
+- Class
+- Method
+- Module
+- Process
+- RDoc
+- Ruby
+- Set

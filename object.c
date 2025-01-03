@@ -4091,7 +4091,7 @@ rb_f_loop_size(VALUE self, VALUE args, VALUE eobj)
  *
  *    BasicObject.superclass # => nil
  *
- *  \Class +BasicObject+ can be used to create an object hierarchy
+ *  Class +BasicObject+ can be used to create an object hierarchy
  *  (e.g., class Delegator) that is independent of Ruby's object hierarchy.
  *  Such objects:
  *
@@ -4162,7 +4162,7 @@ rb_f_loop_size(VALUE self, VALUE args, VALUE eobj)
  *
  *  == What's Here
  *
- *  First, what's elsewhere. \Class \Object:
+ *  First, what's elsewhere. Class \Object:
  *
  *  - Inherits from {class BasicObject}[rdoc-ref:BasicObject@What-27s+Here].
  *  - Includes {module Kernel}[rdoc-ref:Kernel@What-27s+Here].
@@ -4186,7 +4186,7 @@ rb_f_loop_size(VALUE self, VALUE args, VALUE eobj)
  *  - #instance_of?: Returns whether +self+ is an instance of the given class.
  *  - #instance_variable_defined?: Returns whether the given instance variable
  *    is defined in +self+.
- *  - #method: Returns the Method object for the given method in +self+.
+ *  - #method: Returns the +Method+ object for the given method in +self+.
  *  - #methods: Returns an array of symbol names of public and protected methods
  *    in +self+.
  *  - #nil?: Returns +false+. (Only +nil+ responds +true+ to method <tt>nil?</tt>.)
@@ -4196,12 +4196,12 @@ rb_f_loop_size(VALUE self, VALUE args, VALUE eobj)
  *    of the private methods in +self+.
  *  - #protected_methods: Returns an array of the symbol names
  *    of the protected methods in +self+.
- *  - #public_method: Returns the Method object for the given public method in +self+.
+ *  - #public_method: Returns the +Method+ object for the given public method in +self+.
  *  - #public_methods: Returns an array of the symbol names
  *    of the public methods in +self+.
  *  - #respond_to?: Returns whether +self+ responds to the given method.
  *  - #singleton_class: Returns the singleton class of +self+.
- *  - #singleton_method: Returns the Method object for the given singleton method
+ *  - #singleton_method: Returns the +Method+ object for the given singleton method
  *    in +self+.
  *  - #singleton_methods: Returns an array of the symbol names
  *    of the singleton methods in +self+.
@@ -4282,7 +4282,7 @@ InitVM_Object(void)
      *
      * == What's Here
      *
-     * \Module \Kernel provides methods that are useful for:
+     * Module \Kernel provides methods that are useful for:
      *
      * - {Converting}[rdoc-ref:Kernel@Converting]
      * - {Querying}[rdoc-ref:Kernel@Querying]

@@ -8302,7 +8302,7 @@ rb_ary_deconstruct(VALUE ary)
  *      %i[foo bar baz] # => [:foo, :bar, :baz]
  *      %i[1 % *]       # => [:"1", :%, :*]
  *
- *  - \Method Kernel#Array:
+ *  - Method Kernel#Array:
  *
  *      Array(["a", "b"])             # => ["a", "b"]
  *      Array(1..5)                   # => [1, 2, 3, 4, 5]
@@ -8311,7 +8311,7 @@ rb_ary_deconstruct(VALUE ary)
  *      Array(1)                      # => [1]
  *      Array({:a => "a", :b => "b"}) # => [[:a, "a"], [:b, "b"]]
  *
- *  - \Method Array.new:
+ *  - Method Array.new:
  *
  *      Array.new               # => []
  *      Array.new(3)            # => [nil, nil, nil]
@@ -8557,7 +8557,7 @@ rb_ary_deconstruct(VALUE ary)
  *
  *  == What's Here
  *
- *  First, what's elsewhere. \Class +Array+:
+ *  First, what's elsewhere. Class +Array+:
  *
  *  - Inherits from {class Object}[rdoc-ref:Object@What-27s+Here].
  *  - Includes {module Enumerable}[rdoc-ref:Enumerable@What-27s+Here],

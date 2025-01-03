@@ -532,7 +532,7 @@ rb_struct_define_under(VALUE outer, const char *name, ...)
  *    Foo = Struct.new('Foo', :foo, :bar) # => Struct::Foo
  *    f = Foo.new(0, 1)                   # => #<struct Struct::Foo foo=0, bar=1>
  *
- *  <b>\Class Name</b>
+ *  <b>Class Name</b>
  *
  *  With string argument +class_name+,
  *  returns a new subclass of +Struct+ named <tt>Struct::<em>class_name</em></tt>:
@@ -587,7 +587,7 @@ rb_struct_define_under(VALUE outer, const char *name, ...)
  *
  *  A subclass returned by Struct.new has these singleton methods:
  *
- *  - \Method <tt>::new </tt> creates an instance of the subclass:
+ *  - Method <tt>::new </tt> creates an instance of the subclass:
  *
  *      Foo.new          # => #<struct Struct::Foo foo=nil, bar=nil>
  *      Foo.new(0)       # => #<struct Struct::Foo foo=0, bar=nil>
@@ -600,12 +600,12 @@ rb_struct_define_under(VALUE outer, const char *name, ...)
  *      Foo.new(foo: 0, bar: 1, baz: 2)
  *      # Raises ArgumentError: unknown keywords: baz
  *
- *  - \Method <tt>:inspect</tt> returns a string representation of the subclass:
+ *  - Method <tt>:inspect</tt> returns a string representation of the subclass:
  *
  *      Foo.inspect
  *      # => "Struct::Foo"
  *
- *  - \Method <tt>::members</tt> returns an array of the member names:
+ *  - Method <tt>::members</tt> returns an array of the member names:
  *
  *      Foo.members # => [:foo, :bar]
  *
@@ -1552,7 +1552,7 @@ rb_struct_dig(int argc, VALUE *argv, VALUE self)
 /*
  *  Document-class: Data
  *
- *  \Class \Data provides a convenient way to define simple classes
+ *  Class \Data provides a convenient way to define simple classes
  *  for value-alike objects.
  *
  *  The simplest example of usage:
@@ -2065,7 +2065,7 @@ rb_data_inspect(VALUE s)
 /*
  *  Document-class: Struct
  *
- *  \Class \Struct provides a convenient way to create a simple class
+ *  Class \Struct provides a convenient way to create a simple class
  *  that can store and fetch values.
  *
  *  This example creates a subclass of +Struct+, <tt>Struct::Customer</tt>;
@@ -2105,7 +2105,7 @@ rb_data_inspect(VALUE s)
  *
  *  == What's Here
  *
- *  First, what's elsewhere. \Class \Struct:
+ *  First, what's elsewhere. Class \Struct:
  *
  *  - Inherits from {class Object}[rdoc-ref:Object@What-27s+Here].
  *  - Includes {module Enumerable}[rdoc-ref:Enumerable@What-27s+Here],

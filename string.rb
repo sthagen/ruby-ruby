@@ -12,7 +12,7 @@
 #
 # You can convert certain objects to Strings with:
 #
-# - \Method #String.
+# - Method #String.
 #
 # Some +String+ methods modify +self+.
 # Typically, a method whose name ends with <tt>!</tt> modifies +self+
@@ -300,7 +300,7 @@
 #
 # == What's Here
 #
-# First, what's elsewhere. \Class +String+:
+# First, what's elsewhere. Class +String+:
 #
 # - Inherits from the {Object class}[rdoc-ref:Object@What-27s+Here].
 # - Includes the {Comparable module}[rdoc-ref:Comparable@What-27s+Here].

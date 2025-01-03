@@ -1480,9 +1480,6 @@ static rb_ast_id_table_t *local_tbl(struct parser_params*);
 
 static VALUE reg_compile(struct parser_params*, rb_parser_string_t*, int);
 static void reg_fragment_setenc(struct parser_params*, rb_parser_string_t*, int);
-int rb_parser_reg_fragment_check(struct parser_params*, rb_parser_string_t*, int, rb_parser_reg_fragment_error_func);
-static void reg_fragment_error(struct parser_params *, VALUE);
-#define reg_fragment_check(p, str, option) rb_parser_reg_fragment_check(p, str, option, reg_fragment_error)
 
 static int literal_concat0(struct parser_params *p, rb_parser_string_t *head, rb_parser_string_t *tail);
 static NODE *heredoc_dedent(struct parser_params*,NODE*);
@@ -2905,9 +2902,21 @@ rb_parser_ary_free(rb_parser_t *p, rb_parser_ary_t *ary)
                 | keyword_variable
                 ;
 
+%rule %inline inline_operation : ident_or_const
+                               | tFID
+                               ;
 /*
  *	parameterizing rules
  */
+%rule backref_with(value) <node>
+                : backref tOP_ASGN lex_ctxt value
+                    {
+                        VALUE MAYBE_UNUSED(e) = rb_backref_error(p, $1);
+                        $$ = NEW_ERROR(&@$);
+                    /*% ripper[error]: assign_error!(?e, opassign!(var_field!($:1), $:2, $:4)) %*/
+                    }
+                ;
+
 %rule f_opt(value) <node_opt_arg>
                 : f_arg_asgn f_eq value
                     {
@@ -3294,12 +3303,7 @@ command_asgn	: lhs '=' lex_ctxt command_rhs
                     /*% ripper: defs!(*$:head[0..2], $:args, $:$) %*/
                         local_pop(p);
                     }
-                | backref tOP_ASGN lex_ctxt command_rhs
-                    {
-                        VALUE MAYBE_UNUSED(e) = rb_backref_error(p, $1);
-                        $$ = NEW_ERROR(&@$);
-                    /*% ripper[error]: assign_error!(?e, opassign!(var_field!($:1), $:2, $:4)) %*/
-                    }
+                | backref_with(command_rhs)
                 ;
 
 endless_command : command
@@ -3753,8 +3757,7 @@ cpath		: tCOLON3 cname
                     }
                 ;
 
-fname		: ident_or_const
-                | tFID
+fname		: inline_operation
                 | op
                     {
                         SET_LEX_STATE(EXPR_ENDFN);
@@ -3872,12 +3875,7 @@ arg		: lhs '=' lex_ctxt arg_rhs
                         $$ = new_const_op_assign(p, NEW_COLON3($2, &loc), $3, $5, $4, &@$);
                     /*% ripper: opassign!(top_const_field!($:2), $:3, $:5) %*/
                     }
-                | backref tOP_ASGN lex_ctxt arg_rhs
-                    {
-                        VALUE MAYBE_UNUSED(e) = rb_backref_error(p, $1);
-                        $$ = NEW_ERROR(&@$);
-                    /*% ripper[error]: assign_error!(?e, opassign!(var_field!($:1), $:2, $:4)) %*/
-                    }
+                | backref_with(arg_rhs)
                 | arg tDOT2 arg
                     {
                         value_expr($1);
@@ -6824,8 +6822,7 @@ assoc		: arg_value tASSOC arg_value
                     }
                 ;
 
-operation	: ident_or_const
-                | tFID
+operation	: inline_operation
                 ;
 
 operation2	: operation
@@ -13161,12 +13158,26 @@ symbol_append(struct parser_params *p, NODE *symbols, NODE *symbol)
     return list_append(p, symbols, symbol);
 }
 
+static void
+dregex_fragment_setenc(struct parser_params *p, rb_node_dregx_t *const dreg, int options)
+{
+    if (dreg->string) {
+        reg_fragment_setenc(p, dreg->string, options);
+    }
+    for (struct RNode_LIST *list = dreg->nd_next; list; list = RNODE_LIST(list->nd_next)) {
+        NODE *frag = list->nd_head;
+        if (nd_type_p(frag, NODE_STR)) {
+            reg_fragment_setenc(p, RNODE_STR(frag)->string, options);
+        }
+        else if (nd_type_p(frag, NODE_DSTR)) {
+            dregex_fragment_setenc(p, RNODE_DSTR(frag), options);
+        }
+    }
+}
+
 static NODE *
 new_regexp(struct parser_params *p, NODE *node, int options, const YYLTYPE *loc)
 {
-    struct RNode_LIST *list;
-    NODE *prev;
-
     if (!node) {
         /* Check string is valid regex */
         rb_parser_string_t *str = STRING_NEW0();
@@ -13190,37 +13201,8 @@ new_regexp(struct parser_params *p, NODE *node, int options, const YYLTYPE *loc)
         nd_set_loc(node, loc);
         rb_node_dregx_t *const dreg = RNODE_DREGX(node);
         dreg->as.nd_cflag = options & RE_OPTION_MASK;
-        if (!dreg->nd_next) {
-            /* Check string is valid regex */
-            reg_compile(p, dreg->string, options);
-        }
-        else if (dreg->string) {
-            reg_fragment_check(p, dreg->string, options);
-        }
-        prev = node;
-        for (list = dreg->nd_next; list; list = RNODE_LIST(list->nd_next)) {
-            NODE *frag = list->nd_head;
-            enum node_type type = nd_type(frag);
-            if (type == NODE_STR || (type == NODE_DSTR && !RNODE_DSTR(frag)->nd_next)) {
-                rb_parser_string_t *tail = RNODE_STR(frag)->string;
-                if (reg_fragment_check(p, tail, options) && prev && RNODE_DREGX(prev)->string) {
-                    rb_parser_string_t *lit = prev == node ? dreg->string : RNODE_STR(RNODE_LIST(prev)->nd_head)->string;
-                    if (!literal_concat0(p, lit, tail)) {
-                        return NEW_NIL(loc); /* dummy node on error */
-                    }
-                    rb_parser_str_resize(p, tail, 0);
-                    RNODE_LIST(prev)->nd_next = list->nd_next;
-                    rb_discard_node(p, list->nd_head);
-                    rb_discard_node(p, (NODE *)list);
-                    list = RNODE_LIST(prev);
-                }
-                else {
-                    prev = (NODE *)list;
-                }
-            }
-            else {
-                prev = 0;
-            }
+        if (dreg->nd_next) {
+            dregex_fragment_setenc(p, dreg, options);
         }
         if (options & RE_OPTION_ONCE) {
             node = NEW_ONCE(node, loc);
@@ -15363,13 +15345,7 @@ rb_reg_fragment_setenc(struct parser_params* p, rb_parser_string_t *str, int opt
         rb_parser_enc_associate(p, str, rb_ascii8bit_encoding());
     }
     else if (rb_is_usascii_enc(p->enc)) {
-        if (!rb_parser_is_ascii_string(p, str)) {
-            /* raise in re.c */
-            rb_parser_enc_associate(p, str, rb_usascii_encoding());
-        }
-        else {
-            rb_parser_enc_associate(p, str, rb_ascii8bit_encoding());
-        }
+        rb_parser_enc_associate(p, str, rb_ascii8bit_encoding());
     }
     return 0;
 
@@ -15384,30 +15360,6 @@ reg_fragment_setenc(struct parser_params* p, rb_parser_string_t *str, int option
     int c = rb_reg_fragment_setenc(p, str, options);
     if (c) reg_fragment_enc_error(p, str, c);
 }
-
-static void
-reg_fragment_error(struct parser_params* p, VALUE err)
-{
-    compile_error(p, "%"PRIsVALUE, err);
-}
-
-#ifndef RIPPER
-int
-rb_parser_reg_fragment_check(struct parser_params* p, rb_parser_string_t *str, int options, rb_parser_reg_fragment_error_func error)
-{
-    VALUE err, str2;
-    reg_fragment_setenc(p, str, options);
-    /* TODO */
-    str2 = rb_str_new_parser_string(str);
-    err = rb_reg_check_preprocess(str2);
-    if (err != Qnil) {
-        err = rb_obj_as_string(err);
-        error(p, err);
-        return 0;
-    }
-    return 1;
-}
-#endif
 
 #ifndef UNIVERSAL_PARSER
 typedef struct {
@@ -15507,7 +15459,7 @@ reg_compile(struct parser_params* p, rb_parser_string_t *str, int options)
     if (NIL_P(re)) {
         VALUE m = rb_attr_get(rb_errinfo(), idMesg);
         rb_set_errinfo(err);
-        reg_fragment_error(p, m);
+        compile_error(p, "%"PRIsVALUE, m);
         return Qnil;
     }
     return re;
