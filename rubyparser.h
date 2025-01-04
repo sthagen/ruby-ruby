@@ -593,6 +593,9 @@ typedef struct RNode_YIELD {
     NODE node;
 
     struct RNode *nd_head;
+    rb_code_location_t keyword_loc;
+    rb_code_location_t lparen_loc;
+    rb_code_location_t rparen_loc;
 } rb_node_yield_t;
 
 typedef struct RNode_LVAR {
@@ -725,6 +728,8 @@ typedef struct RNode_EVSTR {
     NODE node;
 
     struct RNode *nd_body;
+    rb_code_location_t opening_loc;
+    rb_code_location_t closing_loc;
 } rb_node_evstr_t;
 
 typedef struct RNode_REGX {     /* also RNode_MATCH */
@@ -732,6 +737,9 @@ typedef struct RNode_REGX {     /* also RNode_MATCH */
 
     struct rb_parser_string *string;
     int options;
+    rb_code_location_t opening_loc;
+    rb_code_location_t content_loc;
+    rb_code_location_t closing_loc;
 } rb_node_regx_t, rb_node_match_t;
 
 typedef rb_node_dstr_t rb_node_dregx_t;
@@ -907,6 +915,7 @@ typedef struct RNode_DOTS {
 
     struct RNode *nd_beg;
     struct RNode *nd_end;
+    rb_code_location_t operator_loc;
 } rb_node_dot2_t, rb_node_dot3_t, rb_node_flip2_t, rb_node_flip3_t;
 
 typedef struct RNode_SELF {
@@ -963,6 +972,9 @@ typedef struct RNode_LAMBDA {
     NODE node;
 
     struct RNode *nd_body;
+    rb_code_location_t operator_loc;
+    rb_code_location_t opening_loc;
+    rb_code_location_t closing_loc;
 } rb_node_lambda_t;
 
 typedef struct RNode_ARYPTN {

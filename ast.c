@@ -807,6 +807,33 @@ node_locations(VALUE ast_value, const NODE *node)
                                     location_new(nd_code_loc(node)),
                                     location_new(&RNODE_CASE3(node)->case_keyword_loc),
                                     location_new(&RNODE_CASE3(node)->end_keyword_loc));
+      case NODE_DOT2:
+        return rb_ary_new_from_args(2,
+                                    location_new(nd_code_loc(node)),
+                                    location_new(&RNODE_DOT2(node)->operator_loc));
+      case NODE_DOT3:
+        return rb_ary_new_from_args(2,
+                                    location_new(nd_code_loc(node)),
+                                    location_new(&RNODE_DOT3(node)->operator_loc));
+      case NODE_EVSTR:
+        return rb_ary_new_from_args(3,
+                                    location_new(nd_code_loc(node)),
+                                    location_new(&RNODE_EVSTR(node)->opening_loc),
+                                    location_new(&RNODE_EVSTR(node)->closing_loc));
+      case NODE_FLIP2:
+        return rb_ary_new_from_args(2,
+                                    location_new(nd_code_loc(node)),
+                                    location_new(&RNODE_FLIP2(node)->operator_loc));
+      case NODE_FLIP3:
+        return rb_ary_new_from_args(2,
+                                    location_new(nd_code_loc(node)),
+                                    location_new(&RNODE_FLIP3(node)->operator_loc));
+      case NODE_LAMBDA:
+        return rb_ary_new_from_args(4,
+                                    location_new(nd_code_loc(node)),
+                                    location_new(&RNODE_LAMBDA(node)->operator_loc),
+                                    location_new(&RNODE_LAMBDA(node)->opening_loc),
+                                    location_new(&RNODE_LAMBDA(node)->closing_loc));
       case NODE_IF:
         return rb_ary_new_from_args(4,
                                     location_new(nd_code_loc(node)),
@@ -838,6 +865,12 @@ node_locations(VALUE ast_value, const NODE *node)
         return rb_ary_new_from_args(2,
                                     location_new(nd_code_loc(node)),
                                     location_new(&RNODE_REDO(node)->keyword_loc));
+      case NODE_REGX:
+        return rb_ary_new_from_args(4,
+                                    location_new(nd_code_loc(node)),
+                                    location_new(&RNODE_REGX(node)->opening_loc),
+                                    location_new(&RNODE_REGX(node)->content_loc),
+                                    location_new(&RNODE_REGX(node)->closing_loc));
       case NODE_RETURN:
         return rb_ary_new_from_args(2,
                                     location_new(nd_code_loc(node)),
@@ -881,6 +914,12 @@ node_locations(VALUE ast_value, const NODE *node)
                                     location_new(nd_code_loc(node)),
                                     location_new(&RNODE_UNTIL(node)->keyword_loc),
                                     location_new(&RNODE_UNTIL(node)->closing_loc));
+      case NODE_YIELD:
+        return rb_ary_new_from_args(4,
+                                    location_new(nd_code_loc(node)),
+                                    location_new(&RNODE_YIELD(node)->keyword_loc),
+                                    location_new(&RNODE_YIELD(node)->lparen_loc),
+                                    location_new(&RNODE_YIELD(node)->rparen_loc));
       case NODE_ARGS_AUX:
       case NODE_LAST:
         break;
