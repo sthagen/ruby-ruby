@@ -550,6 +550,14 @@ begin
         prompt>   3
         prompt> end
       EOC
+      write("\e[200~.tap do\r\t4\r\t5\rend\e[201~")
+      assert_screen(<<~EOC)
+        prompt>   3
+        prompt> end.tap do
+        prompt>   4
+        prompt>   5
+        prompt> end
+      EOC
       close
     end
 
@@ -563,7 +571,7 @@ begin
         Multiline REPL.
         prompt> abc
       EOC
-      write("\M-\C-_")
+      write("\e\C-_")
       assert_screen(<<~EOC)
         Multiline REPL.
         prompt> abcdef hoge
@@ -845,7 +853,7 @@ begin
 
     def test_meta_key
       start_terminal(30, 20, %W{ruby -I#{@pwd}/lib #{@pwd}/test/reline/yamatanooroti/multiline_repl}, startup_message: 'Multiline REPL.')
-      write("def ge\M-bho")
+      write("def ge\ebho")
       assert_screen(<<~EOC)
         Multiline REPL.
         prompt> def hoge
@@ -866,7 +874,7 @@ begin
     def test_force_enter
       start_terminal(30, 120, %W{ruby -I#{@pwd}/lib #{@pwd}/test/reline/yamatanooroti/multiline_repl}, startup_message: 'Multiline REPL.')
       write("def hoge\nend\C-p\C-e")
-      write("\M-\x0D")
+      write("\e\x0D")
       assert_screen(<<~EOC)
         Multiline REPL.
         prompt> def hoge
@@ -911,7 +919,7 @@ begin
 
     def test_em_set_mark_and_em_exchange_mark
       start_terminal(10, 50, %W{ruby -I#{@pwd}/lib #{@pwd}/test/reline/yamatanooroti/multiline_repl}, startup_message: 'Multiline REPL.')
-      write("aaa bbb ccc ddd\M-b\M-b\M-\x20\M-b\C-x\C-xX\C-x\C-xY")
+      write("aaa bbb ccc ddd\eb\eb\e\x20\eb\C-x\C-xX\C-x\C-xY")
       assert_screen(<<~'EOC')
         Multiline REPL.
         prompt> aaa Ybbb Xccc ddd
@@ -1511,7 +1519,7 @@ begin
     def test_rerender_argument_prompt_after_pasting
       start_terminal(20, 30, %W{ruby -I#{@pwd}/lib #{@pwd}/test/reline/yamatanooroti/multiline_repl}, startup_message: 'Multiline REPL.')
       write('abcdef')
-      write("\M-3\C-h")
+      write("\e3\C-h")
       assert_screen(<<~'EOC')
         Multiline REPL.
         prompt> abc
@@ -1647,7 +1655,7 @@ begin
       write("class A\n  def a\n    3\n  end\nend")
       write("\n")
       write("\C-p\C-p\C-p\C-p\C-p\C-e\C-hS")
-      write("\M-\x0D")
+      write("\e\x0D")
       write("  3")
       assert_screen(<<~'EOC')
         prompt>     3
