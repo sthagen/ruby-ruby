@@ -20,7 +20,6 @@ RSpec.configure do |config|
 
   config.before(:suite) do
     Gem.ruby = ENV["RUBY"] if ENV["RUBY"]
-    ENV["TEST_BUNDLED_GEMS_FAKE_RBCONFIG"] = "true"
 
     require_relative "bundler/support/rubygems_ext"
     Spec::Rubygems.test_setup
@@ -56,9 +55,24 @@ RSpec.configure do |config|
 end
 
 RSpec.describe "bundled_gems.rb" do
+  let(:stub_code) {
+    <<~STUB
+      Gem::BUNDLED_GEMS.send(:remove_const, :LIBDIR)
+      Gem::BUNDLED_GEMS.send(:remove_const, :ARCHDIR)
+      Gem::BUNDLED_GEMS.const_set(:LIBDIR, File.expand_path(File.join(__dir__, "../../..", "lib")) + "/")
+      Gem::BUNDLED_GEMS.const_set(:ARCHDIR, File.expand_path($LOAD_PATH.find{|path| path.include?(".ext/common") }) + "/")
+    STUB
+  }
+
   def script(code, options = {})
     options[:artifice] ||= "compact_index"
-    ruby("require 'bundler/inline'\n\n" + code, options)
+    code = <<~RUBY
+      #{stub_code}
+      require 'bundler/inline'
+
+      #{code}
+    RUBY
+    ruby(code, options)
   end
 
   it "Show warning require and LoadError" do
@@ -75,9 +89,9 @@ RSpec.describe "bundled_gems.rb" do
     RUBY
 
     expect(err).to include(/csv was loaded from (.*) from Ruby 3.4.0/)
-    expect(err).to include(/-e:8/)
+    expect(err).to include(/-e:13/)
     expect(err).to include(/ostruct was loaded from (.*) from Ruby 3.5.0/)
-    expect(err).to include(/-e:11/)
+    expect(err).to include(/-e:16/)
   end
 
   it "Show warning when bundled gems called as dependency" do
@@ -113,7 +127,7 @@ RSpec.describe "bundled_gems.rb" do
     RUBY
 
     expect(err).to include(/net\/smtp was loaded from (.*) from Ruby 3.1.0/)
-    expect(err).to include(/-e:8/)
+    expect(err).to include(/-e:13/)
     expect(err).to include("You can add net-smtp")
   end
 
@@ -129,11 +143,12 @@ RSpec.describe "bundled_gems.rb" do
     RUBY
 
     expect(err).to include(/fiddle\/import is found in fiddle, (.*) part of the default gems starting from Ruby 3\.5\.0/)
-    expect(err).to include(/-e:7/)
+    expect(err).to include(/-e:12/)
   end
 
   it "Show warning when bundle exec with ruby and script" do
     code = <<-RUBY
+      #{stub_code}
       require "ostruct"
     RUBY
     create_file("script.rb", code)
@@ -142,7 +157,7 @@ RSpec.describe "bundled_gems.rb" do
     bundle "exec ruby script.rb"
 
     expect(err).to include(/ostruct was loaded from (.*) from Ruby 3.5.0/)
-    expect(err).to include(/script\.rb:1/)
+    expect(err).to include(/script\.rb:6/)
   end
 
   it "Show warning when bundle exec with shebang's script" do
@@ -150,6 +165,7 @@ RSpec.describe "bundled_gems.rb" do
 
     code = <<-RUBY
       #!/usr/bin/env ruby
+      #{stub_code}
       require "ostruct"
     RUBY
     create_file("script.rb", code)
@@ -159,12 +175,13 @@ RSpec.describe "bundled_gems.rb" do
     bundle "exec ./script.rb"
 
     expect(err).to include(/ostruct was loaded from (.*) from Ruby 3.5.0/)
-    expect(err).to include(/script\.rb:2/)
+    expect(err).to include(/script\.rb:7/)
   end
 
   it "Show warning when bundle exec with -r option" do
+    create_file("stub.rb", stub_code)
     create_file("Gemfile", "source 'https://rubygems.org'")
-    bundle "exec ruby -rostruct -e ''"
+    bundle "exec ruby -r./stub -rostruct -e ''"
 
     expect(err).to include(/ostruct was loaded from (.*) from Ruby 3.5.0/)
   end
@@ -190,7 +207,7 @@ RSpec.describe "bundled_gems.rb" do
     RUBY
 
     expect(err).to include(/ostruct was loaded from (.*) from Ruby 3.5.0/)
-    expect(err).to include(/-e:12/)
+    expect(err).to include(/-e:17/)
   end
 
   it "Don't show warning when bundled gems called as dependency" do
@@ -289,6 +306,7 @@ RSpec.describe "bundled_gems.rb" do
   it "Show warning with zeitwerk" do
     libpath = Dir[File.expand_path("../.bundle/gems/{zeitwerk}-*/lib", __dir__)].map(&:to_s).first
     code = <<-RUBY
+      #{stub_code}
       $LOAD_PATH.unshift("#{libpath}")
       require "zeitwerk"
       loader = Zeitwerk::Loader.for_gem(warn_on_extra_files: false)
@@ -301,7 +319,7 @@ RSpec.describe "bundled_gems.rb" do
     bundle "exec ruby script.rb"
 
     expect(err).to include(/ostruct was loaded from (.*) from Ruby 3.5.0/)
-    expect(err).to include(/script\.rb:6/)
+    expect(err).to include(/script\.rb:11/)
   end
 
   it "Don't show warning fiddle/import when fiddle on Gemfile" do
@@ -344,8 +362,9 @@ RSpec.describe "bundled_gems.rb" do
   end
 
   it "Don't show warning for reline when using irb from standard library" do
+    create_file("stub.rb", stub_code)
     create_file("Gemfile", "source 'https://rubygems.org'")
-    bundle "exec ruby -rirb -e ''"
+    bundle "exec ruby -r./stub -rirb -e ''"
 
     expect(err).to include(/irb was loaded from (.*) from Ruby 3.5.0/)
     expect(err).to_not include(/reline was loaded from (.*) from Ruby 3.5.0/)
