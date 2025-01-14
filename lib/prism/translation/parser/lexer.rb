@@ -482,7 +482,8 @@ module Prism
                 type = :tIDENTIFIER
               end
             when :tXSTRING_BEG
-              if (next_token = lexed[index][0]) && next_token.type != :STRING_CONTENT && next_token.type != :STRING_END
+              if (next_token = lexed[index][0]) && !%i[STRING_CONTENT STRING_END EMBEXPR_BEGIN].include?(next_token.type)
+                # self.`()
                 type = :tBACK_REF2
               end
               quote_stack.push(value)
@@ -569,6 +570,11 @@ module Prism
 
             # String content inside nested heredocs and interpolation is ignored
             if next_token.type == :HEREDOC_START || next_token.type == :EMBEXPR_BEGIN
+              # When interpolation is the first token of a line there is no string
+              # content to check against. There will be no common whitespace.
+              if nesting_level == 0 && next_token.location.start_column == 0
+                result = 0
+              end
               nesting_level += 1
             elsif next_token.type == :HEREDOC_END || next_token.type == :EMBEXPR_END
               nesting_level -= 1
