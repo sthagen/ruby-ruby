@@ -232,12 +232,13 @@ module JSON
   # - Option +max_nesting+, if not provided, defaults to +false+,
   #   which disables checking for nesting depth.
   # - Option +allow_nan+, if not provided, defaults to +true+.
-  def parse!(source, opts = {})
-    opts = {
+  def parse!(source, opts = nil)
+    options = {
       :max_nesting  => false,
       :allow_nan    => true
-    }.merge(opts)
-    Parser.new(source, **(opts||{})).parse
+    }
+    options.merge!(opts) if opts
+    Parser.new(source, options).parse
   end
 
   # :call-seq:
@@ -258,7 +259,7 @@ module JSON
   #   JSON.parse!(File.read(path, opts))
   #
   # See method #parse!
-  def load_file!(filespec, opts = {})
+  def load_file!(filespec, opts = nil)
     parse!(File.read(filespec, encoding: Encoding::UTF_8), opts)
   end
 
@@ -818,11 +819,7 @@ module JSON
     opts = merge_dump_options(opts, **kwargs) if kwargs
 
     begin
-      if State === opts
-        opts.generate(obj, anIO)
-      else
-        State.generate(obj, opts, anIO)
-      end
+      State.generate(obj, opts, anIO)
     rescue JSON::NestingError
       raise ArgumentError, "exceed depth limit"
     end
