@@ -150,6 +150,7 @@ def parse_args(argv = ARGV)
   end
 
   $destdir ||= $mflags.defined?("DESTDIR")
+  $destdir = File.expand_path($destdir) unless $destdir.empty?
   if $extout ||= $mflags.defined?("EXTOUT")
     RbConfig.expand($extout)
   end
@@ -686,9 +687,6 @@ module RbInstall
 
   class UnpackedInstaller < Gem::Installer
     def write_cache_file
-    end
-
-    def generate_plugins
     end
 
     def shebang(bin_file_name)
