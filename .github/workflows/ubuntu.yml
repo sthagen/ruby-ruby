@@ -40,6 +40,8 @@ jobs:
             os: ubuntu-20.04
           - test_task: check
             os: ubuntu-24.04
+          - test_task: check
+            os: ubuntu-24.04-arm
       fail-fast: false
 
     env:
@@ -72,6 +74,7 @@ jobs:
         with:
           ruby-version: '3.0'
           bundler: none
+        if: ${{ !endsWith(matrix.os, 'arm') }}
 
       - uses: ./.github/actions/setup/directories
         with:
