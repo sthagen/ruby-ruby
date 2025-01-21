@@ -5927,14 +5927,11 @@ literal		: numeric
 
 strings		: string
                     {
-                        NODE *node = $1;
-                        if (!node) {
-                            node = NEW_STR(STRING_NEW0(), &@$);
+                        if (!$1) {
+                            $$ = NEW_STR(STRING_NEW0(), &@$);
+                        } else {
+                            $$ = evstr2dstr(p, $1);
                         }
-                        else {
-                            node = evstr2dstr(p, node);
-                        }
-                        $$ = node;
                     /*% ripper: $:1 %*/
                     }
                 ;
@@ -6489,8 +6486,7 @@ f_norm_arg	: f_bad_arg
 
 f_arg_asgn	: f_norm_arg
                     {
-                        ID id = $1;
-                        arg_var(p, id);
+                        arg_var(p, $1);
                         $$ = $1;
                     }
                 ;
