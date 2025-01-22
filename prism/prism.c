@@ -12974,7 +12974,7 @@ typedef struct {
 
 pm_binding_powers_t pm_binding_powers[PM_TOKEN_MAXIMUM] = {
     // rescue
-    [PM_TOKEN_KEYWORD_RESCUE_MODIFIER] = LEFT_ASSOCIATIVE(PM_BINDING_POWER_MODIFIER_RESCUE),
+    [PM_TOKEN_KEYWORD_RESCUE_MODIFIER] = { PM_BINDING_POWER_MODIFIER_RESCUE, PM_BINDING_POWER_COMPOSITION, true, false },
 
     // if unless until while
     [PM_TOKEN_KEYWORD_IF_MODIFIER] = LEFT_ASSOCIATIVE(PM_BINDING_POWER_MODIFIER),
@@ -19476,7 +19476,7 @@ parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power, b
                     context_push(parser, PM_CONTEXT_RESCUE_MODIFIER);
 
                     pm_token_t rescue_keyword = parser->previous;
-                    pm_node_t *value = parse_expression(parser, binding_power, false, false, PM_ERR_RESCUE_MODIFIER_VALUE, (uint16_t) (depth + 1));
+                    pm_node_t *value = parse_expression(parser, pm_binding_powers[PM_TOKEN_KEYWORD_RESCUE_MODIFIER].right, false, false, PM_ERR_RESCUE_MODIFIER_VALUE, (uint16_t) (depth + 1));
                     context_pop(parser);
 
                     statement = (pm_node_t *) pm_rescue_modifier_node_create(parser, statement, &rescue_keyword, value);
@@ -20697,7 +20697,7 @@ parse_assignment_value(pm_parser_t *parser, pm_binding_power_t previous_binding_
         pm_token_t rescue = parser->current;
         parser_lex(parser);
 
-        pm_node_t *right = parse_expression(parser, binding_power, false, false, PM_ERR_RESCUE_MODIFIER_VALUE, (uint16_t) (depth + 1));
+        pm_node_t *right = parse_expression(parser, pm_binding_powers[PM_TOKEN_KEYWORD_RESCUE_MODIFIER].right, false, false, PM_ERR_RESCUE_MODIFIER_VALUE, (uint16_t) (depth + 1));
         context_pop(parser);
 
         return (pm_node_t *) pm_rescue_modifier_node_create(parser, value, &rescue, right);
@@ -20803,7 +20803,7 @@ parse_assignment_values(pm_parser_t *parser, pm_binding_power_t previous_binding
             }
         }
 
-        pm_node_t *right = parse_expression(parser, binding_power, accepts_command_call_inner, false, PM_ERR_RESCUE_MODIFIER_VALUE, (uint16_t) (depth + 1));
+        pm_node_t *right = parse_expression(parser, pm_binding_powers[PM_TOKEN_KEYWORD_RESCUE_MODIFIER].right, accepts_command_call_inner, false, PM_ERR_RESCUE_MODIFIER_VALUE, (uint16_t) (depth + 1));
         context_pop(parser);
 
         return (pm_node_t *) pm_rescue_modifier_node_create(parser, value, &rescue, right);
@@ -22186,6 +22186,10 @@ parse_expression(pm_parser_t *parser, pm_binding_power_t binding_power, bool acc
 static pm_statements_node_t *
 wrap_statements(pm_parser_t *parser, pm_statements_node_t *statements) {
     if (PM_PARSER_COMMAND_LINE_OPTION_P(parser)) {
+        if (statements == NULL) {
+            statements = pm_statements_node_create(parser);
+        }
+
         pm_arguments_node_t *arguments = pm_arguments_node_create(parser);
         pm_arguments_node_arguments_append(
             arguments,
@@ -22201,6 +22205,10 @@ wrap_statements(pm_parser_t *parser, pm_statements_node_t *statements) {
 
     if (PM_PARSER_COMMAND_LINE_OPTION_N(parser)) {
         if (PM_PARSER_COMMAND_LINE_OPTION_A(parser)) {
+            if (statements == NULL) {
+                statements = pm_statements_node_create(parser);
+            }
+
             pm_arguments_node_t *arguments = pm_arguments_node_create(parser);
             pm_arguments_node_arguments_append(
                 arguments,
@@ -22269,9 +22277,7 @@ parse_program(pm_parser_t *parser) {
     parser_lex(parser);
     pm_statements_node_t *statements = parse_statements(parser, PM_CONTEXT_MAIN, 0);
 
-    if (statements == NULL) {
-        statements = pm_statements_node_create(parser);
-    } else if (!parser->parsing_eval) {
+    if (statements != NULL && !parser->parsing_eval) {
         // If we have statements, then the top-level statement should be
         // explicitly checked as well. We have to do this here because
         // everywhere else we check all but the last statement.
@@ -22283,13 +22289,6 @@ parse_program(pm_parser_t *parser) {
     pm_locals_order(parser, &parser->current_scope->locals, &locals, true);
     pm_parser_scope_pop(parser);
 
-    // If this is an empty file, then we're still going to parse all of the
-    // statements in order to gather up all of the comments and such. Here we'll
-    // correct the location information.
-    if (pm_statements_node_body_length(statements) == 0) {
-        pm_statements_node_location_set(statements, parser->start, parser->start);
-    }
-
     // At the top level, see if we need to wrap the statements in a program
     // node with a while loop based on the options.
     if (parser->command_line & (PM_OPTIONS_COMMAND_LINE_P | PM_OPTIONS_COMMAND_LINE_N)) {
@@ -22297,6 +22296,14 @@ parse_program(pm_parser_t *parser) {
     } else {
         flush_block_exits(parser, previous_block_exits);
         pm_node_list_free(&current_block_exits);
+    }
+
+    // If this is an empty file, then we're still going to parse all of the
+    // statements in order to gather up all of the comments and such. Here we'll
+    // correct the location information.
+    if (statements == NULL) {
+        statements = pm_statements_node_create(parser);
+        pm_statements_node_location_set(statements, parser->start, parser->start);
     }
 
     return (pm_node_t *) pm_program_node_create(parser, &locals, statements);
