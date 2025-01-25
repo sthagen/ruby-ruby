@@ -127,11 +127,6 @@ module Gem::BUNDLED_GEMS # :nodoc:
     # name can be a feature name or a file path with String or Pathname
     feature = File.path(name)
 
-    # irb already has reline as a dependency on gemspec, so we don't want to warn about it.
-    # We should update this with a more general solution when we have another case.
-    # ex: Gem.loaded_specs[called_gem].dependencies.any? {|d| d.name == feature }
-    return false if feature.start_with?("reline") && caller_locations(2, 1)[0].to_s.include?("irb")
-
     # The actual checks needed to properly identify the gem being required
     # are costly (see [Bug #20641]), so we first do a much cheaper check
     # to exclude the vast majority of candidates.
@@ -222,6 +217,38 @@ module Gem::BUNDLED_GEMS # :nodoc:
     end
 
     msg
+  end
+
+  def self.force_activate(gem)
+    Bundler.reset!
+
+    builder = Bundler::Dsl.new
+    if Bundler.definition.gemfiles.empty? # bundler/inline
+      Bundler.definition.locked_gems.specs.each{|spec| builder.gem spec.name, spec.version.to_s }
+    else
+      Bundler.definition.gemfiles.each{|gemfile| builder.eval_gemfile(gemfile) }
+    end
+    builder.gem gem
+
+    definition = builder.to_definition(nil, true)
+    definition.validate_runtime!
+
+    begin
+      orig_ui = Bundler.ui
+      orig_no_lock = Bundler::Definition.no_lock
+
+      ui = Bundler::UI::Shell.new
+      ui.level = "silent"
+      Bundler.ui = ui
+      Bundler::Definition.no_lock = true
+
+      Bundler::Runtime.new(nil, definition).setup
+    rescue Bundler::GemNotFound
+      warn "Failed to activate #{gem}, please install it with 'gem install #{gem}'"
+    ensure
+      Bundler.ui = orig_ui
+      Bundler::Definition.no_lock = orig_no_lock
+    end
   end
 end
 
