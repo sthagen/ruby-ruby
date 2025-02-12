@@ -705,7 +705,9 @@ ossl_sslctx_setup(VALUE self)
     SSL_CTX_set_tmp_dh_callback(ctx, ossl_tmp_dh_callback);
 #endif
 
+#if !defined(OPENSSL_IS_AWSLC) /* AWS-LC has no support for TLS 1.3 PHA. */
     SSL_CTX_set_post_handshake_auth(ctx, 1);
+#endif
 
     val = rb_attr_get(self, id_i_cert_store);
     if (!NIL_P(val)) {
@@ -2448,7 +2450,7 @@ ossl_ssl_get_peer_finished(VALUE self)
 
 /*
  * call-seq:
- *    ssl.client_ca => [x509name, ...]
+ *    ssl.client_ca => [x509name, ...] or nil
  *
  * Returns the list of client CAs. Please note that in contrast to
  * SSLContext#client_ca= no array of X509::Certificate is returned but
@@ -2466,6 +2468,8 @@ ossl_ssl_get_client_ca_list(VALUE self)
     GetSSL(self, ssl);
 
     ca = SSL_get_client_CA_list(ssl);
+    if (!ca)
+        return Qnil;
     return ossl_x509name_sk2ary(ca);
 }
 
