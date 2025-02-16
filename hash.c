@@ -2403,26 +2403,33 @@ rb_hash_delete(VALUE hash, VALUE key)
  *    delete(key) -> value or nil
  *    delete(key) {|key| ... } -> object
  *
- *  Deletes the entry for the given +key+ and returns its associated value.
+ *  If an entry for the given +key+ is found,
+ *  deletes the entry and returns its associated value;
+ *  otherwise returns +nil+ or calls the given block.
  *
- *  If no block is given and +key+ is found, deletes the entry and returns the associated value:
+ *  With no block given and +key+ found, deletes the entry and returns its value:
+ *
  *    h = {foo: 0, bar: 1, baz: 2}
  *    h.delete(:bar) # => 1
  *    h # => {foo: 0, baz: 2}
  *
- *  If no block given and +key+ is not found, returns +nil+.
+ *  With no block given and +key+ not found, returns +nil+.
  *
- *  If a block is given and +key+ is found, ignores the block,
- *  deletes the entry, and returns the associated value:
+ *  With a block given and +key+ found, ignores the block,
+ *  deletes the entry, and returns its value:
+ *
  *    h = {foo: 0, bar: 1, baz: 2}
  *    h.delete(:baz) { |key| raise 'Will never happen'} # => 2
  *    h # => {foo: 0, bar: 1}
  *
- *  If a block is given and +key+ is not found,
+ *  With a block given and +key+ not found,
  *  calls the block and returns the block's return value:
+ *
  *    h = {foo: 0, bar: 1, baz: 2}
  *    h.delete(:nosuch) { |key| "Key #{key} not found" } # => "Key nosuch not found"
  *    h # => {foo: 0, bar: 1, baz: 2}
+ *
+ *  Related: see {Methods for Deleting}[rdoc-ref:Hash@Methods+for+Deleting].
  */
 
 static VALUE
@@ -2850,6 +2857,8 @@ clear_i(VALUE key, VALUE value, VALUE dummy)
  *    clear -> self
  *
  *  Removes all entries from +self+; returns emptied +self+.
+ *
+ *  Related: see {Methods for Deleting}[rdoc-ref:Hash@Methods+for+Deleting].
  */
 
 VALUE
@@ -4183,6 +4192,8 @@ assoc_i(VALUE key, VALUE val, VALUE arg)
  *    h.assoc(:bar) # => [:bar, 1]
  *
  *  Returns +nil+ if the key is not found.
+ *
+ *  Related: see {Methods for Fetching}[rdoc-ref:Hash@Methods+for+Fetching].
  */
 
 static VALUE
@@ -4347,9 +4358,11 @@ delete_if_nil(VALUE key, VALUE value, VALUE hash)
  *    compact -> new_hash
  *
  *  Returns a copy of +self+ with all +nil+-valued entries removed:
+ *
  *    h = {foo: 0, bar: nil, baz: 2, bat: nil}
- *    h1 = h.compact
- *    h1 # => {foo: 0, baz: 2}
+ *    h.compact # => {foo: 0, baz: 2}
+ *
+ * Related: see {Methods for Deleting}[rdoc-ref:Hash@Methods+for+Deleting].
  */
 
 static VALUE
@@ -4395,28 +4408,26 @@ rb_hash_compact_bang(VALUE hash)
  *  call-seq:
  *    compare_by_identity -> self
  *
- *  Sets +self+ to consider only identity in comparing keys;
- *  two keys are considered the same only if they are the same object;
- *  returns +self+.
+ *  Sets +self+ to compare keys using _identity_ (rather than mere _equality_);
+ *  returns +self+:
  *
- *  By default, these two object are considered to be the same key,
- *  so +s1+ will overwrite +s0+:
- *    s0 = 'x'
- *    s1 = 'x'
+ *  By default, two keys are considered to be the same key
+ *  if and only if they are _equal_ objects (per method #==):
+ *
  *    h = {}
- *    h.compare_by_identity? # => false
- *    h[s0] = 0
- *    h[s1] = 1
+ *    h['x'] = 0
+ *    h['x'] = 1 # Overwrites.
  *    h # => {"x"=>1}
  *
- *  After calling \#compare_by_identity, the keys are considered to be different,
- *  and therefore do not overwrite each other:
- *    h = {}
- *    h.compare_by_identity # => {}
- *    h.compare_by_identity? # => true
- *    h[s0] = 0
- *    h[s1] = 1
- *    h # => {"x"=>0, "x"=>1}
+ *  When this method has been called, two keys are considered to be the same key
+ *  if and only if they are the _same_ object:
+ *
+ *    h.compare_by_identity
+ *    h['x'] = 2 # Does not overwrite.
+ *    h # => {"x"=>1, "x"=>2}
+ *
+ *  Related: #compare_by_identity?;
+ *  see also {Methods for Comparing}[rdoc-ref:Hash@Methods+for+Comparing].
  */
 
 VALUE
@@ -4463,7 +4474,15 @@ rb_hash_compare_by_id(VALUE hash)
  *  call-seq:
  *    compare_by_identity? -> true or false
  *
- *  Returns +true+ if #compare_by_identity has been called, +false+ otherwise.
+ *  Returns whether #compare_by_identity has been called:
+ *
+ *    h = {}
+ *    h.compare_by_identity? # => false
+ *    h.compare_by_identity
+ *    h.compare_by_identity? # => true
+ *
+ *  Related: #compare_by_identity;
+ *  see also {Methods for Comparing}[rdoc-ref:Hash@Methods+for+Comparing].
  */
 
 VALUE
@@ -4563,7 +4582,8 @@ any_p_i_pattern(VALUE key, VALUE value, VALUE arg)
  *  With both argument +entry+ and a block given,
  *  issues a warning and ignores the block.
  *
- *  Related: Enumerable#any? (which this method overrides).
+ *  Related: Enumerable#any? (which this method overrides);
+ *  see also {Methods for Fetching}[rdoc-ref:Hash@Methods+for+Fetching].
  */
 
 static VALUE
