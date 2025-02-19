@@ -2143,21 +2143,24 @@ rb_hash_lookup(VALUE hash, VALUE key)
  *    fetch(key, default_value) -> object
  *    fetch(key) {|key| ... } -> object
  *
- *  Returns the value for the given +key+, if found.
+ *  With no block given, returns the value for the given +key+, if found;
+ *
  *    h = {foo: 0, bar: 1, baz: 2}
- *    h.fetch(:bar) # => 1
+ *    h.fetch(:bar)  # => 1
  *
- *  If +key+ is not found and no block was given,
- *  returns +default_value+:
- *    {}.fetch(:nosuch, :default) # => :default
+ *  If the key is not found, returns +default_value+, if given,
+ *  or raises KeyError otherwise:
  *
- *  If +key+ is not found and a block was given,
- *  yields +key+ to the block and returns the block's return value:
+ *    h.fetch(:nosuch, :default) # => :default
+ *    h.fetch(:nosuch)           # Raises KeyError.
+ *
+ *  With a block given, calls the block with +key+ and returns the block's return value:
+ *
  *    {}.fetch(:nosuch) {|key| "No key #{key}"} # => "No key nosuch"
  *
- *  Raises KeyError if neither +default_value+ nor a block was given.
- *
  *  Note that this method does not use the values of either #default or #default_proc.
+ *
+ *  Related: see {Methods for Fetching}[rdoc-ref:Hash@Methods+for+Fetching].
  */
 
 static VALUE
@@ -2665,13 +2668,16 @@ rb_hash_slice(int argc, VALUE *argv, VALUE hash)
 
 /*
  *  call-seq:
- *     hsh.except(*keys) -> a_hash
+ *    except(*keys) -> new_hash
  *
- *  Returns a new +Hash+ excluding entries for the given +keys+:
- *     h = { a: 100, b: 200, c: 300 }
- *     h.except(:a)          #=> {b: 200, c: 300}
+ *  Returns a copy of +self+ that excludes entries for the given +keys+;
+ *  any +keys+ that are not found are ignored:
  *
- *  Any given +keys+ that are not found are ignored.
+ *    h = {foo:0, bar: 1, baz: 2} # => {:foo=>0, :bar=>1, :baz=>2}
+ *    h.except(:baz, :foo)        # => {:bar=>1}
+ *    h.except(:bar, :nosuch)     # => {:foo=>0, :baz=>2}
+ *
+ *  Related: see {Methods for Deleting}[rdoc-ref:Hash@Methods+for+Deleting].
  */
 
 static VALUE
@@ -3846,9 +3852,10 @@ rb_hash_equal(VALUE hash1, VALUE hash2)
  *    eql?(object) -> true or false
  *
  *  Returns +true+ if all of the following are true:
- *  * +object+ is a +Hash+ object.
- *  * +hash+ and +object+ have the same keys (regardless of order).
- *  * For each key +key+, <tt>h[key].eql?(object[key])</tt>.
+ *
+ *  - The given +object+ is a +Hash+ object.
+ *  - +self+ and +object+ have the same keys (regardless of order).
+ *  - For each key +key+, <tt>self[key].eql?(object[key])</tt>.
  *
  *  Otherwise, returns +false+.
  *
@@ -3857,6 +3864,8 @@ rb_hash_equal(VALUE hash1, VALUE hash2)
  *    h1.eql? h2 # => true
  *    h3 = {baz: 2, bar: 1, foo: 0}
  *    h1.eql? h3 # => true
+ *
+ *  Related: see {Methods for Querying}[rdoc-ref:Hash@Methods+for+Querying].
  */
 
 static VALUE
@@ -5016,7 +5025,7 @@ env_name(volatile VALUE *s)
 static VALUE env_aset(VALUE nm, VALUE val);
 
 static void
-reset_by_modified_env(const char *nam)
+reset_by_modified_env(const char *nam, const char *val)
 {
     /*
      * ENV['TZ'] = nil has a special meaning.
@@ -5025,7 +5034,7 @@ reset_by_modified_env(const char *nam)
      * This hack might works only on Linux glibc.
      */
     if (ENVMATCH(nam, TZ_ENV)) {
-        ruby_reset_timezone();
+        ruby_reset_timezone(val);
     }
 }
 
@@ -5033,7 +5042,7 @@ static VALUE
 env_delete(VALUE name)
 {
     const char *nam = env_name(name);
-    reset_by_modified_env(nam);
+    reset_by_modified_env(nam, NULL);
     VALUE val = getenv_with_lock(nam);
 
     if (!NIL_P(val)) {
@@ -5439,7 +5448,7 @@ env_aset(VALUE nm, VALUE val)
     get_env_ptr(value, val);
 
     ruby_setenv(name, value);
-    reset_by_modified_env(name);
+    reset_by_modified_env(name, value);
     return val;
 }
 
