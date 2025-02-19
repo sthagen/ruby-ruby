@@ -3017,8 +3017,11 @@ rb_hash_size_num(VALUE hash)
  *    empty? -> true or false
  *
  *  Returns +true+ if there are no hash entries, +false+ otherwise:
+ *
  *    {}.empty? # => true
- *    {foo: 0, bar: 1, baz: 2}.empty? # => false
+ *    {foo: 0}.empty? # => false
+ *
+ *  Related: see {Methods for Querying}[rdoc-ref:Hash@Methods+for+Querying].
  */
 
 VALUE
@@ -3039,23 +3042,19 @@ each_value_i(VALUE key, VALUE value, VALUE _)
  *    each_value {|value| ... } -> self
  *    each_value -> new_enumerator
  *
- *  Calls the given block with each value; returns +self+:
+ *  With a block given, calls the block with each value; returns +self+:
+ *
  *    h = {foo: 0, bar: 1, baz: 2}
  *    h.each_value {|value| puts value } # => {foo: 0, bar: 1, baz: 2}
+ *
  *  Output:
  *    0
  *    1
  *    2
  *
- *  Returns a new Enumerator if no block given:
- *    h = {foo: 0, bar: 1, baz: 2}
- *    e = h.each_value # => #<Enumerator: {foo: 0, bar: 1, baz: 2}:each_value>
- *    h1 = e.each {|value| puts value }
- *    h1 # => {foo: 0, bar: 1, baz: 2}
- *  Output:
- *    0
- *    1
- *    2
+ *  With no block given, returns a new Enumerator.
+ *
+ *  Related: see {Methods for Iterating}[rdoc-ref:Hash@Methods+for+Iterating].
  */
 
 static VALUE
@@ -3078,23 +3077,19 @@ each_key_i(VALUE key, VALUE value, VALUE _)
  *    each_key {|key| ... } -> self
  *    each_key -> new_enumerator
  *
- *  Calls the given block with each key; returns +self+:
+ *  With a block given, calls the block with each key; returns +self+:
+ *
  *    h = {foo: 0, bar: 1, baz: 2}
  *    h.each_key {|key| puts key }  # => {foo: 0, bar: 1, baz: 2}
+ *
  *  Output:
  *    foo
  *    bar
  *    baz
  *
- *  Returns a new Enumerator if no block given:
- *    h = {foo: 0, bar: 1, baz: 2}
- *    e = h.each_key # => #<Enumerator: {foo: 0, bar: 1, baz: 2}:each_key>
- *    h1 = e.each {|key| puts key }
- *    h1 # => {foo: 0, bar: 1, baz: 2}
- *  Output:
- *    foo
- *    bar
- *    baz
+ *  With no block given, returns a new Enumerator.
+ *
+ *  Related: see {Methods for Iterating}[rdoc-ref:Hash@Methods+for+Iterating].
  */
 static VALUE
 rb_hash_each_key(VALUE hash)
