@@ -2334,11 +2334,14 @@ key_i(VALUE key, VALUE value, VALUE arg)
  *
  *  Returns the key for the first-found entry with the given +value+
  *  (see {Entry Order}[rdoc-ref:Hash@Entry+Order]):
+ *
  *    h = {foo: 0, bar: 2, baz: 2}
  *    h.key(0) # => :foo
  *    h.key(2) # => :bar
  *
  *  Returns +nil+ if no such value is found.
+ *
+ *  Related: see {Methods for Fetching}[rdoc-ref:Hash@Methods+for+Fetching].
  */
 
 static VALUE
@@ -2833,16 +2836,16 @@ rb_hash_select_bang(VALUE hash)
  *    keep_if {|key, value| ... } -> self
  *    keep_if -> new_enumerator
  *
- *  Calls the block for each key-value pair;
+ *  With a block given, calls the block for each key-value pair;
  *  retains the entry if the block returns a truthy value;
- *  otherwise deletes the entry; returns +self+.
+ *  otherwise deletes the entry; returns +self+:
+ *
  *    h = {foo: 0, bar: 1, baz: 2}
  *    h.keep_if { |key, value| key.start_with?('b') } # => {bar: 1, baz: 2}
  *
- *  Returns a new Enumerator if no block given:
- *    h = {foo: 0, bar: 1, baz: 2}
- *    e = h.keep_if # => #<Enumerator: {foo: 0, bar: 1, baz: 2}:keep_if>
- *    e.each { |key, value| key.start_with?('b') } # => {bar: 1, baz: 2}
+ *  With no block given, returns a new Enumerator.
+ *
+ *  Related: see {Methods for Deleting}[rdoc-ref:Hash@Methods+for+Deleting].
  */
 
 static VALUE
@@ -2971,8 +2974,11 @@ rb_hash_aset(VALUE hash, VALUE key, VALUE val)
  *
  *  Replaces the entire contents of +self+ with the contents of +other_hash+;
  *  returns +self+:
+ *
  *    h = {foo: 0, bar: 1, baz: 2}
  *    h.replace({bat: 3, bam: 4}) # => {bat: 3, bam: 4}
+ *
+ *  Related: see {Methods for Assigning}[rdoc-ref:Hash@Methods+for+Assigning].
  */
 
 static VALUE
@@ -3505,11 +3511,12 @@ inspect_hash(VALUE hash, VALUE dummy, int recur)
  *  call-seq:
  *    inspect -> new_string
  *
- *  Returns a new String containing the hash entries:
-
+ *  Returns a new string containing the hash entries:
+ *
  *    h = {foo: 0, bar: 1, baz: 2}
  *    h.inspect # => "{foo: 0, bar: 1, baz: 2}"
  *
+ *  Related: see {Methods for Converting}[rdoc-ref:Hash@Methods+for+Converting].
  */
 
 static VALUE
@@ -3608,9 +3615,12 @@ keys_i(VALUE key, VALUE value, VALUE ary)
  *  call-seq:
  *    keys -> new_array
  *
- *  Returns a new Array containing all keys in +self+:
+ *  Returns a new array containing all keys in +self+:
+ *
  *    h = {foo: 0, bar: 1, baz: 2}
  *    h.keys # => [:foo, :bar, :baz]
+ *
+ *  Related: see {Methods for Fetching}[rdoc-ref:Hash@Methods+for+Fetching].
  */
 
 VALUE
@@ -3934,15 +3944,19 @@ rb_hash_invert_i(VALUE key, VALUE value, VALUE hash)
  *  call-seq:
  *    invert -> new_hash
  *
- *  Returns a new +Hash+ object with the each key-value pair inverted:
+ *  Returns a new hash with each key-value pair inverted:
+ *
  *    h = {foo: 0, bar: 1, baz: 2}
  *    h1 = h.invert
  *    h1 # => {0=>:foo, 1=>:bar, 2=>:baz}
  *
- *  Overwrites any repeated new keys:
+ *  Overwrites any repeated new keys
  *  (see {Entry Order}[rdoc-ref:Hash@Entry+Order]):
+ *
  *    h = {foo: 0, bar: 0, baz: 0}
  *    h.invert # => {0=>:baz}
+ *
+ *  Related: see {Methods for Transforming Keys and Values}[rdoc-ref:Hash@Methods+for+Transforming+Keys+and+Values].
  */
 
 static VALUE
