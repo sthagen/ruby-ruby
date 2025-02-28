@@ -835,11 +835,6 @@ class OpenSSL::TestSSL < OpenSSL::SSLTestCase
     #     buzz.example.net, respectively).  ...
     assert_equal(true, OpenSSL::SSL.verify_certificate_identity(
       create_cert_with_san('DNS:baz*.example.com'), 'baz1.example.com'))
-
-    # LibreSSL 3.5.0+ doesn't support other wildcard certificates
-    # (it isn't required to, as RFC states MAY, not MUST)
-    return if libressl?
-
     assert_equal(true, OpenSSL::SSL.verify_certificate_identity(
       create_cert_with_san('DNS:*baz.example.com'), 'foobaz.example.com'))
     assert_equal(true, OpenSSL::SSL.verify_certificate_identity(
@@ -923,11 +918,17 @@ class OpenSSL::TestSSL < OpenSSL::SSLTestCase
   end
 
   def create_cert_with_san(san)
-    ef = OpenSSL::X509::ExtensionFactory.new
     cert = OpenSSL::X509::Certificate.new
     cert.subject = OpenSSL::X509::Name.parse("/DC=some/DC=site/CN=Some Site")
-    ext = ef.create_ext('subjectAltName', san)
-    cert.add_extension(ext)
+    v = OpenSSL::ASN1::Sequence(san.split(",").map { |item|
+      type, value = item.split(":", 2)
+      case type
+      when "DNS" then OpenSSL::ASN1::IA5String(value, 2, :IMPLICIT)
+      when "IP" then OpenSSL::ASN1::OctetString(IPAddr.new(value).hton, 7, :IMPLICIT)
+      else raise "unsupported"
+      end
+    })
+    cert.add_extension(OpenSSL::X509::Extension.new("subjectAltName", v))
     cert
   end
 
@@ -1243,32 +1244,32 @@ class OpenSSL::TestSSL < OpenSSL::SSLTestCase
       OpenSSL::SSL::TLS1_1_VERSION,
       OpenSSL::SSL::TLS1_2_VERSION,
       OpenSSL::SSL::TLS1_3_VERSION,
-    ].compact
+    ]
 
-    # Prepare for testing & do sanity check
     supported = []
-    possible_versions.each do |ver|
-      catch(:unsupported) {
-        ctx_proc = proc { |ctx|
-          begin
-            ctx.min_version = ctx.max_version = ver
-          rescue ArgumentError, OpenSSL::SSL::SSLError
-            throw :unsupported
-          end
+    ctx_proc = proc { |ctx|
+      # The default security level is 1 in OpenSSL <= 3.1, 2 in OpenSSL >= 3.2
+      # In OpenSSL >= 3.0, TLS 1.1 or older is disabled at level 1
+      ctx.security_level = 0
+      # Explicitly reset them to avoid influenced by OPENSSL_CONF
+      ctx.min_version = ctx.max_version = nil
+    }
+    start_server(ctx_proc: ctx_proc, ignore_listener_error: true) do |port|
+      possible_versions.each do |ver|
+        ctx = OpenSSL::SSL::SSLContext.new
+        ctx.security_level = 0
+        ctx.min_version = ctx.max_version = ver
+        server_connect(port, ctx) { |ssl|
+          ssl.puts "abc"; assert_equal "abc\n", ssl.gets
         }
-        start_server(ctx_proc: ctx_proc, ignore_listener_error: true) do |port|
-          begin
-            server_connect(port) { |ssl|
-              ssl.puts "abc"; assert_equal "abc\n", ssl.gets
-            }
-          rescue OpenSSL::SSL::SSLError, Errno::ECONNRESET
-          else
-            supported << ver
-          end
-        end
-      }
+        supported << ver
+      rescue OpenSSL::SSL::SSLError, Errno::ECONNRESET
+      end
     end
-    assert_not_empty supported
+
+    # Sanity check: in our test suite we assume these are always supported
+    assert_include(supported, OpenSSL::SSL::TLS1_2_VERSION)
+    assert_include(supported, OpenSSL::SSL::TLS1_3_VERSION)
 
     supported
   end
@@ -1307,11 +1308,15 @@ class OpenSSL::TestSSL < OpenSSL::SSLTestCase
 
     # Server enables a single version
     supported.each do |ver|
-      ctx_proc = proc { |ctx| ctx.min_version = ctx.max_version = ver }
+      ctx_proc = proc { |ctx|
+        ctx.security_level = 0
+        ctx.min_version = ctx.max_version = ver
+      }
       start_server(ctx_proc: ctx_proc, ignore_listener_error: true) { |port|
         supported.each do |cver|
           # Client enables a single version
           ctx1 = OpenSSL::SSL::SSLContext.new
+          ctx1.security_level = 0
           ctx1.min_version = ctx1.max_version = cver
           if ver == cver
             server_connect(port, ctx1) { |ssl|
@@ -1326,6 +1331,7 @@ class OpenSSL::TestSSL < OpenSSL::SSLTestCase
           if cver <= OpenSSL::SSL::TLS1_2_VERSION
             # Client enables a single version using #ssl_version=
             ctx2 = OpenSSL::SSL::SSLContext.new
+            ctx2.security_level = 0
             ctx2.ssl_version = vmap[cver][:method]
             if ver == cver
               server_connect(port, ctx2) { |ssl|
@@ -1340,6 +1346,7 @@ class OpenSSL::TestSSL < OpenSSL::SSLTestCase
 
         # Client enables all supported versions
         ctx3 = OpenSSL::SSL::SSLContext.new
+        ctx3.security_level = 0
         ctx3.min_version = ctx3.max_version = nil
         server_connect(port, ctx3) { |ssl|
           assert_equal vmap[ver][:name], ssl.ssl_version
@@ -1354,12 +1361,17 @@ class OpenSSL::TestSSL < OpenSSL::SSLTestCase
 
     # Server sets min_version (earliest is disabled)
     sver = supported[1]
-    ctx_proc = proc { |ctx| ctx.min_version = sver }
+    ctx_proc = proc { |ctx|
+      ctx.security_level = 0
+      ctx.min_version = sver
+    }
     start_server(ctx_proc: ctx_proc, ignore_listener_error: true) { |port|
       supported.each do |cver|
         # Client sets min_version
         ctx1 = OpenSSL::SSL::SSLContext.new
+        ctx1.security_level = 0
         ctx1.min_version = cver
+        ctx1.max_version = 0
         server_connect(port, ctx1) { |ssl|
           assert_equal vmap[supported.last][:name], ssl.ssl_version
           ssl.puts "abc"; assert_equal "abc\n", ssl.gets
@@ -1367,6 +1379,8 @@ class OpenSSL::TestSSL < OpenSSL::SSLTestCase
 
         # Client sets max_version
         ctx2 = OpenSSL::SSL::SSLContext.new
+        ctx2.security_level = 0
+        ctx2.min_version = 0
         ctx2.max_version = cver
         if cver >= sver
           server_connect(port, ctx2) { |ssl|
@@ -1381,7 +1395,11 @@ class OpenSSL::TestSSL < OpenSSL::SSLTestCase
 
     # Server sets max_version (latest is disabled)
     sver = supported[-2]
-    ctx_proc = proc { |ctx| ctx.max_version = sver }
+    ctx_proc = proc { |ctx|
+      ctx.security_level = 0
+      ctx.min_version = 0
+      ctx.max_version = sver
+    }
     start_server(ctx_proc: ctx_proc, ignore_listener_error: true) { |port|
       supported.each do |cver|
         # Client sets min_version
@@ -1398,6 +1416,8 @@ class OpenSSL::TestSSL < OpenSSL::SSLTestCase
 
         # Client sets max_version
         ctx2 = OpenSSL::SSL::SSLContext.new
+        ctx2.security_level = 0
+        ctx2.min_version = 0
         ctx2.max_version = cver
         server_connect(port, ctx2) { |ssl|
           if cver >= sver
@@ -1774,11 +1794,11 @@ class OpenSSL::TestSSL < OpenSSL::SSLTestCase
 
   def test_fallback_scsv
     supported = check_supported_protocol_versions
-    return unless supported.include?(OpenSSL::SSL::TLS1_1_VERSION) &&
-      supported.include?(OpenSSL::SSL::TLS1_2_VERSION)
+    unless supported.include?(OpenSSL::SSL::TLS1_1_VERSION)
+      omit "TLS 1.1 support is required to run this test case"
+    end
 
-    pend "Fallback SCSV is not supported" unless \
-      OpenSSL::SSL::SSLContext.method_defined?(:enable_fallback_scsv)
+    omit "Fallback SCSV is not supported" if libressl?
 
     start_server do |port|
       ctx = OpenSSL::SSL::SSLContext.new
@@ -1789,11 +1809,15 @@ class OpenSSL::TestSSL < OpenSSL::SSLTestCase
     end
 
     ctx_proc = proc { |ctx|
+      ctx.security_level = 0
+      ctx.min_version = 0
       ctx.max_version = OpenSSL::SSL::TLS1_1_VERSION
     }
     start_server(ctx_proc: ctx_proc) do |port|
       ctx = OpenSSL::SSL::SSLContext.new
       ctx.enable_fallback_scsv
+      ctx.security_level = 0
+      ctx.min_version = 0
       ctx.max_version = OpenSSL::SSL::TLS1_1_VERSION
       # Here is OK too
       # TLS1.2 not supported, fallback to TLS1.1 and signaling the fallback
@@ -1811,11 +1835,15 @@ class OpenSSL::TestSSL < OpenSSL::SSLTestCase
       # Otherwise, this test fails when using openssl 1.1.1 (or later) that supports TLS1.3.
       # TODO: We may need another test for TLS1.3 because it seems to have a different mechanism.
       ctx1 = OpenSSL::SSL::SSLContext.new
+      ctx1.security_level = 0
+      ctx1.min_version = 0
       ctx1.max_version = OpenSSL::SSL::TLS1_2_VERSION
       s1 = OpenSSL::SSL::SSLSocket.new(sock1, ctx1)
 
       ctx2 = OpenSSL::SSL::SSLContext.new
       ctx2.enable_fallback_scsv
+      ctx2.security_level = 0
+      ctx2.min_version = 0
       ctx2.max_version = OpenSSL::SSL::TLS1_1_VERSION
       s2 = OpenSSL::SSL::SSLSocket.new(sock2, ctx2)
       # AWS-LC has slightly different error messages in all-caps.
