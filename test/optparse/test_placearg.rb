@@ -7,6 +7,8 @@ class TestOptionParserPlaceArg < TestOptionParser
     @opt.def_option("-x [VAL]") {|x| @flag = x}
     @opt.def_option("--option [VAL]") {|x| @flag = x}
     @opt.def_option("-T [level]", /^[0-4]$/, Integer) {|x| @topt = x}
+    @opt.def_option("--enum [VAL]", [:Alpha, :Bravo, :Charlie]) {|x| @enum = x}
+    @opt.def_option("--integer [VAL]", [1, 2, 3]) {|x| @integer = x}
     @topt = nil
     @opt.def_option("-n") {}
     @opt.def_option("--regexp [REGEXP]", Regexp) {|x| @reopt = x}
@@ -92,5 +94,15 @@ class TestOptionParserPlaceArg < TestOptionParser
     assert_equal("lambda2", @flag)
     assert_equal(%w"", no_error {@opt.parse!(%w"--lambda")})
     assert_equal(nil, @flag)
+  end
+
+  def test_enum
+    assert_equal([], no_error {@opt.parse!(%w"--enum=A")})
+    assert_equal(:Alpha, @enum)
+  end
+
+  def test_enum_conversion
+    assert_equal([], no_error {@opt.parse!(%w"--integer=1")})
+    assert_equal(1, @integer)
   end
 end
