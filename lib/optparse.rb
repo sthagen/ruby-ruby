@@ -142,7 +142,7 @@
 # Used:
 #
 #   $ ruby optparse-test.rb -r
-#   optparse-test.rb:9:in `<main>': missing argument: -r (OptionParser::MissingArgument)
+#   optparse-test.rb:9:in '<main>': missing argument: -r (OptionParser::MissingArgument)
 #   $ ruby optparse-test.rb -r my-library
 #   You required my-library!
 #
@@ -235,7 +235,7 @@
 #   $ ruby optparse-test.rb --user 2
 #   #<struct User id=2, name="Gandalf">
 #   $ ruby optparse-test.rb --user 3
-#   optparse-test.rb:15:in `block in find_user': No User Found for id 3 (RuntimeError)
+#   optparse-test.rb:15:in 'block in find_user': No User Found for id 3 (RuntimeError)
 #
 # === Store options to a Hash
 #
@@ -425,7 +425,7 @@
 #
 class OptionParser
   # The version string
-  OptionParser::Version = "0.6.0"
+  OptionParser::Version = "0.7.0.dev.1"
 
   # :stopdoc:
   NoArgument = [NO_ARGUMENT = :NONE, nil].freeze
@@ -459,6 +459,10 @@ class OptionParser
         candidates << [k, v, kn]
       end
       candidates
+    end
+
+    def self.completable?(key)
+      String.try_convert(key) or defined?(key.id2name)
     end
 
     def candidate(key, icase = false, pat = nil, &_)
@@ -496,14 +500,12 @@ class OptionParser
     end
   end
 
-
   #
   # Map from option/keyword string to object with completion.
   #
   class OptionMap < Hash
     include Completion
   end
-
 
   #
   # Individual switch class.  Not important to the user.
@@ -546,11 +548,11 @@ class OptionParser
 
     def initialize(pattern = nil, conv = nil,
                    short = nil, long = nil, arg = nil,
-                   desc = ([] if short or long), block = nil, &_block)
+                   desc = ([] if short or long), block = nil, values = nil, &_block)
       raise if Array === pattern
       block ||= _block
-      @pattern, @conv, @short, @long, @arg, @desc, @block =
-        pattern, conv, short, long, arg, desc, block
+      @pattern, @conv, @short, @long, @arg, @desc, @block, @values =
+        pattern, conv, short, long, arg, desc, block, values
     end
 
     #
@@ -583,10 +585,14 @@ class OptionParser
     # exception.
     #
     def conv_arg(arg, val = []) # :nodoc:
+      v, = *val
       if conv
         val = conv.call(*val)
       else
         val = proc {|v| v}.call(*val)
+      end
+      if @values
+        @values.include?(val) or raise InvalidArgument, v
       end
       return arg, block, val
     end
@@ -1032,7 +1038,6 @@ class OptionParser
   DefaultList.short['-'] = Switch::NoArgument.new {}
   DefaultList.long[''] = Switch::NoArgument.new {throw :terminate}
 
-
   COMPSYS_HEADER = <<'XXX'      # :nodoc:
 
 typeset -A opt_args
@@ -1051,16 +1056,16 @@ XXX
   end
 
   def help_exit
-    if STDOUT.tty? && (pager = ENV.values_at(*%w[RUBY_PAGER PAGER]).find {|e| e && !e.empty?})
+    if $stdout.tty? && (pager = ENV.values_at(*%w[RUBY_PAGER PAGER]).find {|e| e && !e.empty?})
       less = ENV["LESS"]
-      args = [{"LESS" => "#{!less || less.empty? ? '-' : less}Fe"}, pager, "w"]
+      args = [{"LESS" => "#{less} -Fe"}, pager, "w"]
       print = proc do |f|
         f.puts help
       rescue Errno::EPIPE
         # pager terminated
       end
       if Process.respond_to?(:fork) and false
-        IO.popen("-") {|f| f ? Process.exec(*args, in: f) : print.call(STDOUT)}
+        IO.popen("-") {|f| f ? Process.exec(*args, in: f) : print.call($stdout)}
         # unreachable
       end
       IO.popen(*args, &print)
@@ -1102,7 +1107,7 @@ XXX
   #
   Officious['*-completion-zsh'] = proc do |parser|
     Switch::OptionalArgument.new do |arg|
-      parser.compsys(STDOUT, arg)
+      parser.compsys($stdout, arg)
       exit
     end
   end
@@ -1467,6 +1472,7 @@ XXX
     klass = nil
     q, a = nil
     has_arg = false
+    values = nil
 
     opts.each do |o|
       # argument class
@@ -1480,7 +1486,7 @@ XXX
       end
 
       # directly specified pattern(any object possible to match)
-      if (!(String === o || Symbol === o)) and o.respond_to?(:match)
+      if !Completion.completable?(o) and o.respond_to?(:match)
         pattern = notwice(o, pattern, 'pattern')
         if pattern.respond_to?(:convert)
           conv = pattern.method(:convert).to_proc
@@ -1495,6 +1501,11 @@ XXX
       when Proc, Method
         block = notwice(o, block, 'block')
       when Array, Hash
+        if Array === o
+          o, v = o.partition {|v| Completion.completable?(v)}
+          values = notwice(v, values, 'values') unless v.empty?
+          next if o.empty?
+        end
         case pattern
         when CompletingHash
         when nil
@@ -1503,7 +1514,9 @@ XXX
         else
           raise ArgumentError, "argument pattern given twice"
         end
-        o.each {|pat, *v| pattern[pat.to_s] = v.fetch(0) {pat}}
+        o.each {|pat, *v| pattern[pat] = v.fetch(0) {pat}}
+      when Range
+        values = notwice(o, values, 'values')
       when Module
         raise ArgumentError, "unsupported argument type: #{o}", ParseError.filter_backtrace(caller(4))
       when *ArgumentStyle.keys
@@ -1571,12 +1584,18 @@ XXX
     end
 
     default_pattern, conv = search(:atype, default_style.pattern) unless default_pattern
+    if Range === values and klass
+      unless (!values.begin or klass === values.begin) and
+            (!values.end or klass === values.end)
+        raise ArgumentError, "range does not match class"
+      end
+    end
     if !(short.empty? and long.empty?)
       if has_arg and default_style == Switch::NoArgument
         default_style = Switch::RequiredArgument
       end
       s = (style || default_style).new(pattern || default_pattern,
-                                       conv, sdesc, ldesc, arg, desc, block)
+                                       conv, sdesc, ldesc, arg, desc, block, values)
     elsif !block
       if style or pattern
         raise ArgumentError, "no switch given", ParseError.filter_backtrace(caller)
@@ -1585,7 +1604,7 @@ XXX
     else
       short << pattern
       s = (style || default_style).new(pattern,
-                                       conv, nil, nil, arg, desc, block)
+                                       conv, nil, nil, arg, desc, block, values)
     end
     return s, short, long,
       (not_style.new(not_pattern, not_conv, sdesc, ldesc, nil, desc, block) if not_style),
