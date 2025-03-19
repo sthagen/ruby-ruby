@@ -2,7 +2,7 @@
 
 Gem::Specification.new do |spec|
   spec.name = "prism"
-  spec.version = "1.3.0"
+  spec.version = "1.4.0"
   spec.authors = ["Shopify"]
   spec.email = ["ruby@shopify.com"]
 
@@ -86,6 +86,7 @@ Gem::Specification.new do |spec|
     "lib/prism/parse_result/errors.rb",
     "lib/prism/parse_result/newlines.rb",
     "lib/prism/pattern.rb",
+    "lib/prism/polyfill/append_as_bytes.rb",
     "lib/prism/polyfill/byteindex.rb",
     "lib/prism/polyfill/unpack1.rb",
     "lib/prism/reflection.rb",
