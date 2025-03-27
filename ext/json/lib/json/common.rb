@@ -70,9 +70,6 @@ module JSON
       end
       self.state = generator::State
       const_set :State, self.state
-      const_set :SAFE_STATE_PROTOTYPE, State.new # for JRuby
-      const_set :FAST_STATE_PROTOTYPE, create_fast_state
-      const_set :PRETTY_STATE_PROTOTYPE, create_pretty_state
     ensure
       $VERBOSE = old
     end
@@ -101,6 +98,29 @@ module JSON
 
     # Sets or Returns the JSON generator state class that is used by JSON.
     attr_accessor :state
+
+    private
+
+    def deprecated_singleton_attr_accessor(*attrs)
+      args = RUBY_VERSION >= "3.0" ? ", category: :deprecated" : ""
+      attrs.each do |attr|
+        singleton_class.class_eval <<~RUBY
+          def #{attr}
+            warn "JSON.#{attr} is deprecated and will be removed in json 3.0.0", uplevel: 1 #{args}
+            @#{attr}
+          end
+
+          def #{attr}=(val)
+            warn "JSON.#{attr}= is deprecated and will be removed in json 3.0.0", uplevel: 1 #{args}
+            @#{attr} = val
+          end
+
+          def _#{attr}
+            @#{attr}
+          end
+        RUBY
+      end
+    end
   end
 
   # Sets create identifier, which is used to decide if the _json_create_
@@ -334,13 +354,6 @@ module JSON
     end
   end
 
-  # :stopdoc:
-  # I want to deprecate these later, so I'll first be silent about them, and
-  # later delete them.
-  alias unparse generate
-  module_function :unparse
-  # :startdoc:
-
   # :call-seq:
   #   JSON.fast_generate(obj, opts) -> new_string
   #
@@ -362,12 +375,6 @@ module JSON
     end
     state.generate(obj)
   end
-
-  # :stopdoc:
-  # I want to deprecate these later, so I'll first be silent about them, and later delete them.
-  alias fast_unparse fast_generate
-  module_function :fast_unparse
-  # :startdoc:
 
   # :call-seq:
   #   JSON.pretty_generate(obj, opts = nil) -> new_string
@@ -418,34 +425,26 @@ module JSON
     state.generate(obj)
   end
 
-  # :stopdoc:
-  # I want to deprecate these later, so I'll first be silent about them, and later delete them.
-  alias pretty_unparse pretty_generate
-  module_function :pretty_unparse
-  # :startdoc:
+  # Sets or returns default options for the JSON.unsafe_load method.
+  # Initially:
+  #   opts = JSON.load_default_options
+  #   opts # => {:max_nesting=>false, :allow_nan=>true, :allow_blank=>true, :create_additions=>true}
+  deprecated_singleton_attr_accessor :unsafe_load_default_options
 
-  class << self
-    # Sets or returns default options for the JSON.unsafe_load method.
-    # Initially:
-    #   opts = JSON.load_default_options
-    #   opts # => {:max_nesting=>false, :allow_nan=>true, :allow_blank=>true, :create_additions=>true}
-    attr_accessor :unsafe_load_default_options
-  end
-  self.unsafe_load_default_options = {
+  @unsafe_load_default_options = {
     :max_nesting      => false,
     :allow_nan        => true,
     :allow_blank      => true,
     :create_additions => true,
   }
 
-  class << self
-    # Sets or returns default options for the JSON.load method.
-    # Initially:
-    #   opts = JSON.load_default_options
-    #   opts # => {:max_nesting=>false, :allow_nan=>true, :allow_blank=>true, :create_additions=>true}
-    attr_accessor :load_default_options
-  end
-  self.load_default_options = {
+  # Sets or returns default options for the JSON.load method.
+  # Initially:
+  #   opts = JSON.load_default_options
+  #   opts # => {:max_nesting=>false, :allow_nan=>true, :allow_blank=>true, :create_additions=>true}
+  deprecated_singleton_attr_accessor :load_default_options
+
+  @load_default_options = {
     :allow_nan        => true,
     :allow_blank      => true,
     :create_additions => nil,
@@ -581,9 +580,9 @@ module JSON
   #
   def unsafe_load(source, proc = nil, options = nil)
     opts = if options.nil?
-      unsafe_load_default_options
+      _unsafe_load_default_options
     else
-      unsafe_load_default_options.merge(options)
+      _unsafe_load_default_options.merge(options)
     end
 
     unless source.is_a?(String)
@@ -741,9 +740,9 @@ module JSON
   #
   def load(source, proc = nil, options = nil)
     opts = if options.nil?
-      load_default_options
+      _load_default_options
     else
-      load_default_options.merge(options)
+      _load_default_options.merge(options)
     end
 
     unless source.is_a?(String)
@@ -778,17 +777,12 @@ module JSON
     end
   end
 
-  alias restore load
-  module_function :restore
-
-  class << self
-    # Sets or returns the default options for the JSON.dump method.
-    # Initially:
-    #   opts = JSON.dump_default_options
-    #   opts # => {:max_nesting=>false, :allow_nan=>true}
-    attr_accessor :dump_default_options
-  end
-  self.dump_default_options = {
+  # Sets or returns the default options for the JSON.dump method.
+  # Initially:
+  #   opts = JSON.dump_default_options
+  #   opts # => {:max_nesting=>false, :allow_nan=>true}
+  deprecated_singleton_attr_accessor :dump_default_options
+  @dump_default_options = {
     :max_nesting => false,
     :allow_nan   => true,
   }
@@ -841,7 +835,7 @@ module JSON
       end
     end
 
-    opts = JSON.dump_default_options
+    opts = JSON._dump_default_options
     opts = opts.merge(:max_nesting => limit) if limit
     opts = opts.merge(kwargs) if kwargs
 
