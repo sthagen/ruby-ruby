@@ -2711,13 +2711,17 @@ rb_hash_except(int argc, VALUE *argv, VALUE hash)
  *  call-seq:
  *    values_at(*keys) -> new_array
  *
- *  Returns a new Array containing values for the given +keys+:
+ *  Returns a new array containing values for the given +keys+:
+ *
  *    h = {foo: 0, bar: 1, baz: 2}
  *    h.values_at(:baz, :foo) # => [2, 0]
  *
  *  The {hash default}[rdoc-ref:Hash@Hash+Default] is returned
  *  for each key that is not found:
+ *
  *    h.values_at(:hello, :foo) # => [nil, 0]
+ *
+ *  Related: see {Methods for Fetching}[rdoc-ref:Hash@Methods+for+Fetching].
  */
 
 static VALUE
@@ -3818,9 +3822,12 @@ values_i(VALUE key, VALUE value, VALUE ary)
  *  call-seq:
  *    values -> new_array
  *
- *  Returns a new Array containing all values in +self+:
+ *  Returns a new array containing all values in +self+:
+ *
  *    h = {foo: 0, bar: 1, baz: 2}
  *    h.values # => [0, 1, 2]
+ *
+ *  Related: see {Methods for Fetching}[rdoc-ref:Hash@Methods+for+Fetching].
  */
 
 VALUE
@@ -3890,9 +3897,10 @@ rb_hash_search_value(VALUE key, VALUE value, VALUE arg)
 /*
  *  call-seq:
  *    has_value?(value) -> true or false
- *    value?(value) -> true or false
  *
- *  Returns +true+ if +value+ is a value in +self+, otherwise +false+.
+ *  Returns whether +value+ is a value in +self+.
+ *
+ *  Related: {Methods for Querying}[rdoc-ref:Hash@Methods+for+Querying].
  */
 
 static VALUE
