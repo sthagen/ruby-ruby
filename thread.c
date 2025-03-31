@@ -106,6 +106,7 @@
 #endif
 
 static VALUE rb_cThreadShield;
+static VALUE cThGroup;
 
 static VALUE sym_immediate;
 static VALUE sym_on_blocking;
@@ -575,6 +576,8 @@ thread_do_start_proc(rb_thread_t *th)
 
     if (th->invoke_type == thread_invoke_type_ractor_proc) {
         VALUE self = rb_ractor_self(th->ractor);
+        th->thgroup = th->ractor->thgroup_default = rb_obj_alloc(cThGroup);
+
         VM_ASSERT(FIXNUM_P(args));
         args_len = FIX2INT(args);
         args_ptr = ALLOCA_N(VALUE, args_len);
@@ -999,7 +1002,7 @@ rb_thread_create_ractor(rb_ractor_t *r, VALUE args, VALUE proc)
         .args = args,
         .proc = proc,
     };
-    return thread_create_core(rb_thread_alloc(rb_cThread), &params);
+    return thread_create_core(rb_thread_alloc(rb_cThread), &params);;
 }
 
 
@@ -5427,7 +5430,6 @@ Init_Thread_Mutex(void)
 void
 Init_Thread(void)
 {
-    VALUE cThGroup;
     rb_thread_t *th = GET_THREAD();
 
     sym_never = ID2SYM(rb_intern_const("never"));
