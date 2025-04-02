@@ -1758,15 +1758,12 @@ class TestProcess < Test::Unit::TestCase
   end
 
   def test_no_curdir
-    if /solaris/i =~ RUBY_PLATFORM
-      omit "Temporary omit to avoid CI failures after commit to use realpath on required files"
-    end
     with_tmpchdir {|d|
       Dir.mkdir("vd")
       status = nil
       Dir.chdir("vd") {
         dir = "#{d}/vd"
-        # OpenSolaris cannot remove the current directory.
+        # Windows cannot remove the current directory with permission issues.
         system(RUBY, "--disable-gems", "-e", "Dir.chdir '..'; Dir.rmdir #{dir.dump}", err: File::NULL)
         system({"RUBYLIB"=>nil}, RUBY, "--disable-gems", "-e", "exit true")
         status = $?
@@ -1800,9 +1797,6 @@ class TestProcess < Test::Unit::TestCase
   end
 
   def test_aspawn_too_long_path
-    if /solaris/i =~ RUBY_PLATFORM && !defined?(Process::RLIMIT_NPROC)
-      omit "Too exhaustive test on platforms without Process::RLIMIT_NPROC such as Solaris 10"
-    end
     bug4315 = '[ruby-core:34833] #7904 [ruby-core:52628] #11613'
     assert_fail_too_long_path(%w"echo |", bug4315)
   end
