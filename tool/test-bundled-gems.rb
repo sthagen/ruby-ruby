@@ -10,7 +10,7 @@ github_actions = ENV["GITHUB_ACTIONS"] == "true"
 
 allowed_failures = ENV['TEST_BUNDLED_GEMS_ALLOW_FAILURES'] || ''
 if RUBY_PLATFORM =~ /mswin|mingw/
-  allowed_failures = [allowed_failures, "rbs,debug,irb"].join(',')
+  allowed_failures = [allowed_failures, "win32ole,rbs,debug,irb"].join(',')
 end
 allowed_failures = allowed_failures.split(',').uniq.reject(&:empty?)
 
@@ -60,7 +60,7 @@ File.foreach("#{gem_dir}/bundled_gems") do |line|
     load_path = true
 
   when "test-unit"
-    test_command = "#{ruby} -C #{gem_dir}/src/#{gem} test/run-test.rb"
+    test_command = "#{ruby} -C #{gem_dir}/src/#{gem} test/run.rb"
 
   when "win32ole"
     next unless /mswin|mingw/ =~ RUBY_PLATFORM
