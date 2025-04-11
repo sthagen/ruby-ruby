@@ -53,6 +53,13 @@ cd build
 make
 ```
 
+If you have other MSYS2 environment via other package manager like `scoop`, you need to specify `$MINGW_PACKAGE_PREFIX` is `mingw-w64-ucrt-x86_64`.
+And you need to add `--with-opt-dir` option to `configure` command like:
+
+```batch
+sh ../../ruby/configure -C --disable-install-doc --with-opt-dir=C:\Users\username\scoop\apps\msys2\current\ucrt64
+```
+
 [RubyInstaller-Devkit]: https://rubyinstaller.org/
 [git-for-windows]: https://gitforwindows.org/
 [VSCode]: https://code.visualstudio.com/
@@ -67,6 +74,12 @@ make
 
     **Note** if you want to build x64 version, use native compiler for
     x64.
+
+    The minimum requirement is here:
+      * VC++/MSVC on VS 2017/2019 version build tools.
+        * Visual Studio 2022 17.13.x is broken. see https://bugs.ruby-lang.org/issues/21167
+      * Windows 10/11 SDK
+        * 10.0.26100 is broken, 10.0.22621 is recommended. see https://bugs.ruby-lang.org/issues/21255
 
 3.  Please set environment variable `INCLUDE`, `LIB`, `PATH`
     to run required commands properly from the command line.
@@ -88,6 +101,14 @@ make
 
     ```batch
     scoop install git ruby
+    ```
+
+    The windows version of `git` configured with `autocrlf` is `true`. The Ruby
+    test suite may fail with `autocrlf` set to `true`. You can set it to `false`
+    like:
+
+    ```batch
+    git config --global core.autocrlf false
     ```
 
 5.  You need to install required libraries using [vcpkg](https://vcpkg.io/) on
