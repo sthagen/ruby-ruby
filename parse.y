@@ -2764,7 +2764,7 @@ rb_parser_ary_free(rb_parser_t *p, rb_parser_ary_t *ary)
 %type <node_def_temp> defn_head defs_head k_def
 %type <node_exits> block_open k_while k_until k_for allow_exits
 %type <node> top_stmts top_stmt begin_block endless_arg endless_command
-%type <node> bodystmt stmts stmt_or_begin stmt expr arg primary
+%type <node> bodystmt stmts stmt_or_begin stmt expr arg ternary primary
 %type <node> command command_call command_call_value method_call
 %type <node> expr_value expr_value_do arg_value primary_value rel_expr
 %type <node_fcall> fcall
@@ -2793,7 +2793,7 @@ rb_parser_ary_free(rb_parser_t *p, rb_parser_ary_t *ary)
 %type <node> p_case_body p_cases p_top_expr p_top_expr_body
 %type <node> p_expr p_as p_alt p_expr_basic p_find
 %type <node> p_args p_args_head p_args_tail p_args_post p_arg p_rest
-%type <node> p_value p_primitive p_primitive_value p_variable p_var_ref p_expr_ref p_const
+%type <node> p_value p_primitive p_variable p_var_ref p_expr_ref p_const
 %type <node> p_kwargs p_kwarg p_kw
 %type <id>   keyword_variable user_variable sym operation2 operation3
 %type <id>   cname fname op f_rest_arg f_block_arg opt_f_block_arg f_norm_arg f_bad_arg
@@ -2913,7 +2913,7 @@ rb_parser_ary_free(rb_parser_t *p, rb_parser_ary_t *ary)
 /*
  *	parameterizing rules
  */
-%rule asgn(lhs, rhs) <node>
+%rule asgn(rhs) <node>
                 : lhs '=' lex_ctxt rhs
                     {
                         $$ = node_assign(p, (NODE *)$lhs, $rhs, $lex_ctxt, &@$);
@@ -3094,6 +3094,47 @@ rb_parser_ary_free(rb_parser_t *p, rb_parser_ary_t *ary)
                     {
                         $$ = new_args_tail(p, 0, 0, 0, &@0);
                     /*% ripper: [Qnil, Qnil, Qnil] %*/
+                    }
+                ;
+
+%rule range_expr(range) <node>
+                : range tDOT2 range
+                    {
+                        value_expr($1);
+                        value_expr($3);
+                        $$ = NEW_DOT2($1, $3, &@$, &@2);
+                    /*% ripper: dot2!($:1, $:3) %*/
+                    }
+                | range tDOT3 range
+                    {
+                        value_expr($1);
+                        value_expr($3);
+                        $$ = NEW_DOT3($1, $3, &@$, &@2);
+                    /*% ripper: dot3!($:1, $:3) %*/
+                    }
+                | range tDOT2
+                    {
+                        value_expr($1);
+                        $$ = NEW_DOT2($1, new_nil_at(p, &@2.end_pos), &@$, &@2);
+                    /*% ripper: dot2!($:1, Qnil) %*/
+                    }
+                | range tDOT3
+                    {
+                        value_expr($1);
+                        $$ = NEW_DOT3($1, new_nil_at(p, &@2.end_pos), &@$, &@2);
+                    /*% ripper: dot3!($:1, Qnil) %*/
+                    }
+                | tBDOT2 range
+                    {
+                        value_expr($2);
+                        $$ = NEW_DOT2(new_nil_at(p, &@1.beg_pos), $2, &@$, &@1);
+                    /*% ripper: dot2!(Qnil, $:2) %*/
+                    }
+                | tBDOT3 range
+                    {
+                        value_expr($2);
+                        $$ = NEW_DOT3(new_nil_at(p, &@1.beg_pos), $2, &@$, &@1);
+                    /*% ripper: dot3!(Qnil, $:2) %*/
                     }
                 ;
 
@@ -3344,7 +3385,7 @@ stmt		: keyword_alias fitem {SET_LEX_STATE(EXPR_FNAME|EXPR_FITEM);} fitem
                         $$ = node_assign(p, (NODE *)$1, $4, $3, &@$);
                     /*% ripper: massign!($:1, $:4) %*/
                     }
-                | asgn(lhs, mrhs)
+                | asgn(mrhs)
                 | mlhs '=' lex_ctxt mrhs_arg modifier_rescue
                   after_rescue stmt[resbody]
                     {
@@ -3369,7 +3410,7 @@ stmt		: keyword_alias fitem {SET_LEX_STATE(EXPR_FNAME|EXPR_FITEM);} fitem
                     }
                 ;
 
-command_asgn	: asgn(lhs, command_rhs)
+command_asgn	: asgn(command_rhs)
                 | op_asgn(command_rhs)
                 | def_endless_method(endless_command)
                 ;
@@ -3872,46 +3913,9 @@ reswords	: keyword__LINE__ | keyword__FILE__ | keyword__ENCODING__
                 | keyword_while | keyword_until
                 ;
 
-arg		: asgn(lhs, arg_rhs)
+arg		: asgn(arg_rhs)
                 | op_asgn(arg_rhs)
-                | arg tDOT2 arg
-                    {
-                        value_expr($1);
-                        value_expr($3);
-                        $$ = NEW_DOT2($1, $3, &@$, &@2);
-                    /*% ripper: dot2!($:1, $:3) %*/
-                    }
-                | arg tDOT3 arg
-                    {
-                        value_expr($1);
-                        value_expr($3);
-                        $$ = NEW_DOT3($1, $3, &@$, &@2);
-                    /*% ripper: dot3!($:1, $:3) %*/
-                    }
-                | arg tDOT2
-                    {
-                        value_expr($1);
-                        $$ = NEW_DOT2($1, new_nil_at(p, &@2.end_pos), &@$, &@2);
-                    /*% ripper: dot2!($:1, Qnil) %*/
-                    }
-                | arg tDOT3
-                    {
-                        value_expr($1);
-                        $$ = NEW_DOT3($1, new_nil_at(p, &@2.end_pos), &@$, &@2);
-                    /*% ripper: dot3!($:1, Qnil) %*/
-                    }
-                | tBDOT2 arg
-                    {
-                        value_expr($2);
-                        $$ = NEW_DOT2(new_nil_at(p, &@1.beg_pos), $2, &@$, &@1);
-                    /*% ripper: dot2!(Qnil, $:2) %*/
-                    }
-                | tBDOT3 arg
-                    {
-                        value_expr($2);
-                        $$ = NEW_DOT3(new_nil_at(p, &@1.beg_pos), $2, &@$, &@1);
-                    /*% ripper: dot3!(Qnil, $:2) %*/
-                    }
+                | range_expr(arg)
                 | arg '+' arg
                     {
                         $$ = call_bin_op(p, $1, '+', $3, &@2, &@$);
@@ -4039,15 +4043,18 @@ arg		: asgn(lhs, arg_rhs)
                         $$ = new_defined(p, $4, &@$);
                     /*% ripper: defined!($:4) %*/
                     }
-                | arg '?' arg '\n'? ':' arg
+                | def_endless_method(endless_arg)
+                | ternary
+                | primary
+                ;
+
+ternary		: arg '?' arg '\n'? ':' arg
                     {
                         value_expr($1);
                         $$ = new_if(p, $1, $3, $6, &@$, &NULL_LOC, &@5, &NULL_LOC);
                         fixpos($$, $1);
                     /*% ripper: ifop!($:1, $:3, $:6) %*/
                     }
-                | def_endless_method(endless_arg)
-                | primary
                 ;
 
 endless_arg	: arg %prec modifier_rescue
@@ -5758,39 +5765,10 @@ p_any_kwrest	: p_kwrest
                 ;
 
 p_value 	: p_primitive
-                | p_primitive_value tDOT2 p_primitive_value
-                    {
-                        $$ = NEW_DOT2($1, $3, &@$, &@2);
-                    /*% ripper: dot2!($:1, $:3) %*/
-                    }
-                | p_primitive_value tDOT3 p_primitive_value
-                    {
-                        $$ = NEW_DOT3($1, $3, &@$, &@2);
-                    /*% ripper: dot3!($:1, $:3) %*/
-                    }
-                | p_primitive_value tDOT2
-                    {
-                        $$ = NEW_DOT2($1, new_nil_at(p, &@2.end_pos), &@$, &@2);
-                    /*% ripper: dot2!($:1, Qnil) %*/
-                    }
-                | p_primitive_value tDOT3
-                    {
-                        $$ = NEW_DOT3($1, new_nil_at(p, &@2.end_pos), &@$, &@2);
-                    /*% ripper: dot3!($:1, Qnil) %*/
-                    }
+                | range_expr(p_primitive)
                 | p_var_ref
                 | p_expr_ref
                 | p_const
-                | tBDOT2 p_primitive_value
-                    {
-                        $$ = NEW_DOT2(new_nil_at(p, &@1.beg_pos), $2, &@$, &@1);
-                    /*% ripper: dot2!(Qnil, $:2) %*/
-                    }
-                | tBDOT3 p_primitive_value
-                    {
-                        $$ = NEW_DOT3(new_nil_at(p, &@1.beg_pos), $2, &@$, &@1);
-                    /*% ripper: dot3!(Qnil, $:2) %*/
-                    }
                 ;
 
 p_primitive		: inline_primary
@@ -5801,9 +5779,6 @@ p_primitive		: inline_primary
                     }
                 | lambda
                 ;
-
-p_primitive_value	: value_expr(p_primitive)
-                    ;
 
 p_variable	: tIDENTIFIER
                     {
