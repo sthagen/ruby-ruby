@@ -48,7 +48,7 @@ module JSON
         end
       end
 
-      # TODO: exact :create_additions support to another gem for version 3.0
+      # TODO: exctract :create_additions support to another gem for version 3.0
       def create_additions_proc(opts)
         if opts[:symbolize_names]
           raise ArgumentError, "options :symbolize_names and :create_additions cannot be  used in conjunction"
@@ -123,7 +123,7 @@ module JSON
     # Otherwise, calls JSON.generate with +object+ and +opts+ (see method #generate):
     #   ruby = [0, 1, nil]
     #   JSON[ruby] # => '[0,1,null]'
-    def [](object, opts = {})
+    def [](object, opts = nil)
       if object.is_a?(String)
         return JSON.parse(object, opts)
       elsif object.respond_to?(:to_str)
@@ -220,20 +220,14 @@ module JSON
     Thread.current[:"JSON.create_id"] || 'json_class'
   end
 
-  NaN           = 0.0/0
+  NaN           = Float::NAN
 
-  Infinity      = 1.0/0
+  Infinity      = Float::INFINITY
 
   MinusInfinity = -Infinity
 
   # The base exception for JSON errors.
-  class JSONError < StandardError
-    def self.wrap(exception)
-      obj = new("Wrapped(#{exception.class}): #{exception.message.inspect}")
-      obj.set_backtrace exception.backtrace
-      obj
-    end
-  end
+  class JSONError < StandardError; end
 
   # This exception is raised if a parser error occurs.
   class ParserError < JSONError; end
@@ -1011,6 +1005,12 @@ module ::Kernel
   # Outputs _objs_ to STDOUT as JSON strings in the shortest form, that is in
   # one line.
   def j(*objs)
+    if RUBY_VERSION >= "3.0"
+      warn "Kernel#j is deprecated and will be removed in json 3.0.0", uplevel: 1, category: :deprecated
+    else
+      warn "Kernel#j is deprecated and will be removed in json 3.0.0", uplevel: 1
+    end
+
     objs.each do |obj|
       puts JSON::generate(obj, :allow_nan => true, :max_nesting => false)
     end
@@ -1020,6 +1020,12 @@ module ::Kernel
   # Outputs _objs_ to STDOUT as JSON strings in a pretty format, with
   # indentation and over many lines.
   def jj(*objs)
+    if RUBY_VERSION >= "3.0"
+      warn "Kernel#jj is deprecated and will be removed in json 3.0.0", uplevel: 1, category: :deprecated
+    else
+      warn "Kernel#jj is deprecated and will be removed in json 3.0.0", uplevel: 1
+    end
+
     objs.each do |obj|
       puts JSON::pretty_generate(obj, :allow_nan => true, :max_nesting => false)
     end
@@ -1032,16 +1038,7 @@ module ::Kernel
   #
   # The _opts_ argument is passed through to generate/parse respectively. See
   # generate and parse for their documentation.
-  def JSON(object, *args)
-    if object.is_a?(String)
-      return JSON.parse(object, args.first)
-    elsif object.respond_to?(:to_str)
-      str = object.to_str
-      if str.is_a?(String)
-        return JSON.parse(object.to_str, args.first)
-      end
-    end
-
-    JSON.generate(object, args.first)
+  def JSON(object, opts = nil)
+    JSON[object, opts]
   end
 end

@@ -20,6 +20,11 @@ Note: We're only listing outstanding class updates.
       Also, `Binding#local_variable_get` and `Binding#local_variable_set` reject to handle numbered parameters.
       [[Bug #21049]]
 
+* IO
+
+    * `IO.select` accepts +Float::INFINITY+ as a timeout argument.
+      [[Feature #20610]]
+
 * String
 
     * Update Unicode to Version 15.1.0 and Emoji Version 15.1. [[Feature #19908]]
@@ -34,7 +39,7 @@ The following bundled gems are promoted from default gems.
 * benchmark 0.4.0
 * logger 1.7.0
 * rdoc 6.13.1
-* win32ole 1.9.1
+* win32ole 1.9.2
 * irb 1.15.2
 * reline 0.6.1
 * readline 0.0.4
@@ -58,6 +63,7 @@ The following default gems are updated.
 * prism 1.4.0
 * psych 5.2.3
 * stringio 3.1.6
+* strscan 3.1.3
 * uri 1.0.3
 
 The following bundled gems are added.
