@@ -3859,42 +3859,55 @@ AC_SUBST(INSTALL_STATIC_LIBRARY)
 [begin]_group "JIT section" && {
 AC_CHECK_PROG(RUSTC, [rustc], [rustc], [no]) dnl no ac_tool_prefix
 
-dnl check if rustc is recent enough to build YJIT (rustc >= 1.58.0)
-YJIT_RUSTC_OK=no
+dnl check if rustc is recent enough to build YJIT/ZJIT (rustc >= 1.58.0)
+JIT_RUSTC_OK=no
 AS_IF([test "$RUSTC" != "no"],
-    AC_MSG_CHECKING([whether ${RUSTC} works for YJIT])
-    YJIT_TARGET_ARCH=
+    AC_MSG_CHECKING([whether ${RUSTC} works for YJIT/ZJIT])
+    JIT_TARGET_ARCH=
     AS_CASE(["$target_cpu"],
-        [arm64|aarch64], [YJIT_TARGET_ARCH=aarch64],
-        [x86_64], [YJIT_TARGET_ARCH=x86_64],
+        [arm64|aarch64], [JIT_TARGET_ARCH=aarch64],
+        [x86_64], [JIT_TARGET_ARCH=x86_64],
     )
     dnl Fails in case rustc target doesn't match ruby target.
     dnl Can happen on Rosetta, for example.
-    AS_IF([echo "#[cfg(target_arch = \"$YJIT_TARGET_ARCH\")] fn main() { let x = 1; format!(\"{x}\"); }" |
+    AS_IF([echo "#[cfg(target_arch = \"$JIT_TARGET_ARCH\")] fn main() { let x = 1; format!(\"{x}\"); }" |
             $RUSTC - --emit asm=/dev/null 2>/dev/null],
-        [YJIT_RUSTC_OK=yes]
+        [JIT_RUSTC_OK=yes]
     )
-    AC_MSG_RESULT($YJIT_RUSTC_OK)
+    AC_MSG_RESULT($JIT_RUSTC_OK)
 )
 
-dnl check if we can build YJIT on this target platform
+dnl check if we can build YJIT/ZJIT on this target platform
 dnl we can't easily cross-compile with rustc so we don't support that
-YJIT_TARGET_OK=no
+JIT_TARGET_OK=no
 AS_IF([test "$cross_compiling" = no],
     AS_CASE(["$target_cpu-$target_os"],
         [*android*], [
-            YJIT_TARGET_OK=no
+            JIT_TARGET_OK=no
         ],
         [arm64-darwin*|aarch64-darwin*|x86_64-darwin*], [
-            YJIT_TARGET_OK=yes
+            JIT_TARGET_OK=yes
         ],
         [arm64-*linux*|aarch64-*linux*|x86_64-*linux*], [
-            YJIT_TARGET_OK=yes
+            JIT_TARGET_OK=yes
         ],
         [arm64-*bsd*|aarch64-*bsd*|x86_64-*bsd*], [
-            YJIT_TARGET_OK=yes
+            JIT_TARGET_OK=yes
         ]
     )
+)
+
+dnl build ZJIT in release mode if rustc >= 1.58.0 is present and we are on a supported platform
+AC_ARG_ENABLE(zjit,
+    AS_HELP_STRING([--enable-zjit],
+    [enable in-process JIT compiler that requires Rust build tools. enabled by default on supported platforms if rustc 1.58.0+ is available]),
+    [ZJIT_SUPPORT=$enableval],
+    [AS_CASE(["$JIT_TARGET_OK:$JIT_RUSTC_OK:$YJIT_SUPPORT"],
+        [yes:yes:no], [
+            ZJIT_SUPPORT=yes
+        ],
+        [ZJIT_SUPPORT=no]
+    )]
 )
 
 dnl build YJIT in release mode if rustc >= 1.58.0 is present and we are on a supported platform
@@ -3902,8 +3915,8 @@ AC_ARG_ENABLE(yjit,
     AS_HELP_STRING([--enable-yjit],
     [enable in-process JIT compiler that requires Rust build tools. enabled by default on supported platforms if rustc 1.58.0+ is available]),
     [YJIT_SUPPORT=$enableval],
-    [AS_CASE(["$YJIT_TARGET_OK:$YJIT_RUSTC_OK"],
-        [yes:yes], [
+    [AS_CASE(["$JIT_TARGET_OK:$JIT_RUSTC_OK:$ZJIT_SUPPORT"],
+        [yes:yes:no], [
             YJIT_SUPPORT=yes
         ],
         [YJIT_SUPPORT=no]
@@ -3917,6 +3930,9 @@ AS_CASE(["${YJIT_SUPPORT}"],
 [yes|dev|stats|dev_nodebug], [
     AS_IF([test x"$RUSTC" = "xno"],
         AC_MSG_ERROR([rustc is required. Installation instructions available at https://www.rust-lang.org/tools/install])
+    )
+    AS_IF([test x"$ZJIT_SUPPORT" != "xno"],
+        AC_MSG_ERROR([YJIT cannot be enabled when ZJIT is enabled])
     )
 
     AS_CASE(["${YJIT_SUPPORT}"],
@@ -3959,13 +3975,58 @@ AS_CASE(["${YJIT_SUPPORT}"],
     AC_DEFINE(USE_YJIT, 0)
 ])
 
+ZJIT_CARGO_BUILD_ARGS=
+ZJIT_LIBS=
+AS_CASE(["${ZJIT_SUPPORT}"],
+[yes|dev], [
+    AS_IF([test x"$RUSTC" = "xno"],
+        AC_MSG_ERROR([rustc is required. Installation instructions available at https://www.rust-lang.org/tools/install])
+    )
+    AS_IF([test x"$YJIT_SUPPORT" != "xno"],
+        AC_MSG_ERROR([ZJIT cannot be enabled when YJIT is enabled])
+    )
+
+    AS_CASE(["${ZJIT_SUPPORT}"],
+    [yes], [
+	rb_rust_target_subdir=release
+    ],
+    [dev], [
+	rb_rust_target_subdir=debug
+	ZJIT_CARGO_BUILD_ARGS='--profile dev --features disasm'
+	AC_DEFINE(RUBY_DEBUG, 1)
+    ])
+
+    AS_IF([test -n "${ZJIT_CARGO_BUILD_ARGS}"], [
+             AC_CHECK_TOOL(CARGO, [cargo], [no])
+             AS_IF([test x"$CARGO" = "xno"],
+                AC_MSG_ERROR([cargo is required. Installation instructions available at https://www.rust-lang.org/tools/install])
+             ]))
+
+    ZJIT_LIBS="zjit/target/${rb_rust_target_subdir}/libzjit.a"
+    AS_CASE(["$target_os"],[openbsd*],[
+        # Link libc++abi (which requires libpthread) for _Unwind_* functions needed by yjit
+        LDFLAGS="$LDFLAGS -lpthread -lc++abi"
+    ])
+    ZJIT_OBJ='zjit.$(OBJEXT)'
+    AS_IF([test x"$ZJIT_SUPPORT" != "xyes" ], [
+        AC_DEFINE_UNQUOTED(ZJIT_SUPPORT, [$ZJIT_SUPPORT])
+    ])
+    AC_DEFINE(USE_ZJIT, 1)
+], [
+    AC_DEFINE(USE_ZJIT, 0)
+])
+
 dnl These variables end up in ::RbConfig::CONFIG
 AC_SUBST(YJIT_SUPPORT)dnl what flavor of YJIT the Ruby build includes
 AC_SUBST(RUSTC)dnl Rust compiler command
 AC_SUBST(CARGO)dnl Cargo command for Rust builds
 AC_SUBST(CARGO_BUILD_ARGS)dnl for selecting Rust build profiles
+AC_SUBST(ZJIT_CARGO_BUILD_ARGS)dnl for selecting Rust build profiles
 AC_SUBST(YJIT_LIBS)dnl for optionally building the Rust parts of YJIT
 AC_SUBST(YJIT_OBJ)dnl for optionally building the C parts of YJIT
+AC_SUBST(ZJIT_SUPPORT)dnl what flavor of ZJIT the Ruby build includes
+AC_SUBST(ZJIT_LIBS)dnl for optionally building the Rust parts of YJIT
+AC_SUBST(ZJIT_OBJ)dnl for optionally building the C parts of YJIT
 }
 
 [begin]_group "build section" && {
@@ -4688,6 +4749,7 @@ config_summary "hardenflags"         "$hardenflags"
 config_summary "strip command"       "$STRIP"
 config_summary "install doc"         "$DOCTARGETS"
 config_summary "YJIT support"        "$YJIT_SUPPORT"
+config_summary "ZJIT support"        "$ZJIT_SUPPORT"
 config_summary "man page type"       "$MANTYPE"
 config_summary "search path"         "$search_path"
 config_summary "static-linked-ext"   ${EXTSTATIC:+"yes"}

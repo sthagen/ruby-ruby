@@ -106,6 +106,8 @@ void rb_warning_category_update(unsigned int mask, unsigned int bits);
     X(frozen_string_literal) \
     SEP \
     X(yjit) \
+    SEP \
+    X(zjit) \
     /* END OF FEATURES */
 #define EACH_DEBUG_FEATURES(X, SEP) \
     X(frozen_string_literal) \
@@ -118,7 +120,7 @@ enum feature_flag_bits {
     DEFINE_FEATURE(frozen_string_literal_set),
     feature_debug_flag_first,
     DEFINE_FEATURE(jit) = feature_yjit,
-    feature_jit_mask = FEATURE_BIT(yjit),
+    feature_jit_mask = FEATURE_BIT(yjit) | FEATURE_BIT(zjit),
 
     feature_debug_flag_begin = feature_debug_flag_first - 1,
     EACH_DEBUG_FEATURES(DEFINE_DEBUG_FEATURE, COMMA),
@@ -342,9 +344,10 @@ usage(const char *name, int help, int highlight, int columns)
 #if USE_YJIT
         M("--yjit",        "",                     "Enable in-process JIT compiler."),
 #endif
+        M("--zjit",        "",                     "Enable in-process JIT compiler."),
         M("-h",		   "",			   "Print this help message; use --help for longer message."),
     };
-    STATIC_ASSERT(usage_msg_size, numberof(usage_msg) < 25);
+    STATIC_ASSERT(usage_msg_size, numberof(usage_msg) < 26);
 
     static const struct ruby_opt_message help_msg[] = {
         M("--backtrace-limit=num",        "",            "Set backtrace limit."),
@@ -1181,6 +1184,21 @@ setup_yjit_options(const char *s)
 }
 #endif
 
+#if USE_ZJIT
+static void
+setup_zjit_options(ruby_cmdline_options_t *opt, const char *s)
+{
+    // The option parsing is done in zjit/src/options.rs
+    extern void *rb_zjit_init_options(void);
+    extern bool rb_zjit_parse_option(void *options, const char *s);
+
+    if (!opt->zjit) opt->zjit = rb_zjit_init_options();
+    if (!rb_zjit_parse_option(opt->zjit, s)) {
+        rb_raise(rb_eRuntimeError, "invalid ZJIT option '%s' (--help will show valid zjit options)", s);
+    }
+}
+#endif
+
 /*
  * Following proc_*_option functions are tree kinds:
  *
@@ -1448,6 +1466,15 @@ proc_long_options(ruby_cmdline_options_t *opt, const char *s, long argc, char **
 #else
         rb_warn("Ruby was built without YJIT support."
                 " You may need to install rustc to build Ruby with YJIT.");
+#endif
+    }
+    else if (is_option_with_optarg("zjit", '-', true, false, false)) {
+#if USE_ZJIT
+        FEATURE_SET(opt->features, FEATURE_BIT(zjit));
+        setup_zjit_options(opt, s);
+#else
+        rb_warn("Ruby was built without ZJIT support."
+                " You may need to install rustc to build Ruby with ZJIT.");
 #endif
     }
     else if (strcmp("yydebug", s) == 0) {
@@ -1789,10 +1816,18 @@ ruby_opt_init(ruby_cmdline_options_t *opt)
 #if USE_YJIT
     rb_yjit_init(opt->yjit);
 #endif
+#if USE_ZJIT
+    if (opt->zjit) {
+        extern void rb_zjit_init(void *options);
+        rb_zjit_init(opt->zjit);
+    }
+#endif
 
+#if USE_YJIT
     // Call yjit_hook.rb after rb_yjit_init() to use `RubyVM::YJIT.enabled?`
     void Init_builtin_yjit_hook();
     Init_builtin_yjit_hook();
+#endif
 
     ruby_set_script_name(opt->script_name);
     require_libraries(&opt->req_list);
@@ -2321,6 +2356,12 @@ process_options(int argc, char **argv, ruby_cmdline_options_t *opt)
     if (FEATURE_SET_P(opt->features, yjit)) {
         bool rb_yjit_option_disable(void);
         opt->yjit = !rb_yjit_option_disable(); // set opt->yjit for Init_ruby_description() and calling rb_yjit_init()
+    }
+#endif
+#if USE_ZJIT
+    if (FEATURE_SET_P(opt->features, zjit) && !opt->zjit) {
+        extern void *rb_zjit_init_options(void);
+        opt->zjit = rb_zjit_init_options();
     }
 #endif
 

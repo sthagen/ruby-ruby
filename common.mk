@@ -185,6 +185,8 @@ COMMONOBJS    = array.$(OBJEXT) \
 		$(PRISM_FILES) \
 		$(YJIT_OBJ) \
 		$(YJIT_LIBOBJ) \
+		$(ZJIT_OBJ) \
+		$(ZJIT_LIBOBJ) \
 		$(COROUTINE_OBJ) \
 		$(DTRACE_OBJ) \
 		$(BUILTIN_ENCOBJS) \
@@ -342,6 +344,16 @@ YJIT_RUSTC_ARGS = --crate-name=yjit \
 	'--out-dir=$(CARGO_TARGET_DIR)/release/' \
 	$(top_srcdir)/yjit/src/lib.rs
 
+ZJIT_RUSTC_ARGS = --crate-name=zjit \
+	--crate-type=staticlib \
+	--edition=2021 \
+	-g \
+	-C lto=thin \
+	-C opt-level=3 \
+	-C overflow-checks=on \
+	'--out-dir=$(ZJIT_CARGO_TARGET_DIR)/release/' \
+	$(top_srcdir)/zjit/src/lib.rs
+
 all: $(SHOWFLAGS) main
 
 main: $(SHOWFLAGS) exts $(ENCSTATIC:static=lib)encs
@@ -366,6 +378,7 @@ showflags:
 	"	MFLAGS = $(MFLAGS)" \
 	"	RUSTC = $(RUSTC)" \
 	"	YJIT_RUSTC_ARGS = $(YJIT_RUSTC_ARGS)" \
+	"	ZJIT_RUSTC_ARGS = $(ZJIT_RUSTC_ARGS)" \
 	$(MESSAGE_END)
 	-@$(CC_VERSION)
 
@@ -1181,10 +1194,12 @@ $(srcs_vpath)insns.inc: $(tooldir)/ruby_vm/views/insns.inc.erb $(inc_common_head
 $(srcs_vpath)insns_info.inc: $(tooldir)/ruby_vm/views/insns_info.inc.erb $(inc_common_headers) \
   $(tooldir)/ruby_vm/views/_insn_type_chars.erb $(tooldir)/ruby_vm/views/_insn_name_info.erb \
   $(tooldir)/ruby_vm/views/_insn_len_info.erb $(tooldir)/ruby_vm/views/_insn_operand_info.erb \
-  $(tooldir)/ruby_vm/views/_attributes.erb $(tooldir)/ruby_vm/views/_comptime_insn_stack_increase.erb
+  $(tooldir)/ruby_vm/views/_attributes.erb $(tooldir)/ruby_vm/views/_comptime_insn_stack_increase.erb \
+  $(tooldir)/ruby_vm/views/_zjit_helpers.erb
 $(srcs_vpath)vmtc.inc: $(tooldir)/ruby_vm/views/vmtc.inc.erb $(inc_common_headers)
 $(srcs_vpath)vm.inc: $(tooldir)/ruby_vm/views/vm.inc.erb $(inc_common_headers) \
-  $(tooldir)/ruby_vm/views/_insn_entry.erb $(tooldir)/ruby_vm/views/_trace_instruction.erb
+  $(tooldir)/ruby_vm/views/_insn_entry.erb $(tooldir)/ruby_vm/views/_trace_instruction.erb \
+  $(tooldir)/ruby_vm/views/_zjit_instruction.erb
 
 BUILTIN_RB_SRCS = \
 		$(srcdir)/ast.rb \
@@ -1208,6 +1223,7 @@ BUILTIN_RB_SRCS = \
 		$(srcdir)/gem_prelude.rb \
 		$(srcdir)/yjit.rb \
 		$(srcdir)/yjit_hook.rb \
+		$(srcdir)/zjit.rb \
 		$(empty)
 BUILTIN_RB_INCS = $(BUILTIN_RB_SRCS:.rb=.rbinc)
 
@@ -10702,6 +10718,7 @@ miniinit.$(OBJEXT): {$(VPATH)}vm_opts.h
 miniinit.$(OBJEXT): {$(VPATH)}warning.rb
 miniinit.$(OBJEXT): {$(VPATH)}yjit.rb
 miniinit.$(OBJEXT): {$(VPATH)}yjit_hook.rb
+miniinit.$(OBJEXT): {$(VPATH)}zjit.rb
 node.$(OBJEXT): $(CCAN_DIR)/check_type/check_type.h
 node.$(OBJEXT): $(CCAN_DIR)/container_of/container_of.h
 node.$(OBJEXT): $(CCAN_DIR)/list/list.h
@@ -19555,6 +19572,7 @@ vm.$(OBJEXT): {$(VPATH)}vm_sync.h
 vm.$(OBJEXT): {$(VPATH)}vmtc.inc
 vm.$(OBJEXT): {$(VPATH)}yjit.h
 vm.$(OBJEXT): {$(VPATH)}yjit_hook.rbinc
+vm.$(OBJEXT): {$(VPATH)}zjit.h
 vm_backtrace.$(OBJEXT): $(CCAN_DIR)/check_type/check_type.h
 vm_backtrace.$(OBJEXT): $(CCAN_DIR)/container_of/container_of.h
 vm_backtrace.$(OBJEXT): $(CCAN_DIR)/list/list.h
@@ -20914,4 +20932,254 @@ yjit.$(OBJEXT): {$(VPATH)}vm_sync.h
 yjit.$(OBJEXT): {$(VPATH)}yjit.c
 yjit.$(OBJEXT): {$(VPATH)}yjit.h
 yjit.$(OBJEXT): {$(VPATH)}yjit.rbinc
+zjit.$(OBJEXT): $(CCAN_DIR)/check_type/check_type.h
+zjit.$(OBJEXT): $(CCAN_DIR)/container_of/container_of.h
+zjit.$(OBJEXT): $(CCAN_DIR)/list/list.h
+zjit.$(OBJEXT): $(CCAN_DIR)/str/str.h
+zjit.$(OBJEXT): $(hdrdir)/ruby/ruby.h
+zjit.$(OBJEXT): $(top_srcdir)/internal/array.h
+zjit.$(OBJEXT): $(top_srcdir)/internal/basic_operators.h
+zjit.$(OBJEXT): $(top_srcdir)/internal/bignum.h
+zjit.$(OBJEXT): $(top_srcdir)/internal/bits.h
+zjit.$(OBJEXT): $(top_srcdir)/internal/class.h
+zjit.$(OBJEXT): $(top_srcdir)/internal/compile.h
+zjit.$(OBJEXT): $(top_srcdir)/internal/compilers.h
+zjit.$(OBJEXT): $(top_srcdir)/internal/cont.h
+zjit.$(OBJEXT): $(top_srcdir)/internal/fixnum.h
+zjit.$(OBJEXT): $(top_srcdir)/internal/gc.h
+zjit.$(OBJEXT): $(top_srcdir)/internal/hash.h
+zjit.$(OBJEXT): $(top_srcdir)/internal/imemo.h
+zjit.$(OBJEXT): $(top_srcdir)/internal/numeric.h
+zjit.$(OBJEXT): $(top_srcdir)/internal/sanitizers.h
+zjit.$(OBJEXT): $(top_srcdir)/internal/serial.h
+zjit.$(OBJEXT): $(top_srcdir)/internal/static_assert.h
+zjit.$(OBJEXT): $(top_srcdir)/internal/string.h
+zjit.$(OBJEXT): $(top_srcdir)/internal/variable.h
+zjit.$(OBJEXT): $(top_srcdir)/internal/vm.h
+zjit.$(OBJEXT): $(top_srcdir)/internal/warnings.h
+zjit.$(OBJEXT): $(top_srcdir)/prism/defines.h
+zjit.$(OBJEXT): $(top_srcdir)/prism/encoding.h
+zjit.$(OBJEXT): $(top_srcdir)/prism/node.h
+zjit.$(OBJEXT): $(top_srcdir)/prism/options.h
+zjit.$(OBJEXT): $(top_srcdir)/prism/pack.h
+zjit.$(OBJEXT): $(top_srcdir)/prism/parser.h
+zjit.$(OBJEXT): $(top_srcdir)/prism/prettyprint.h
+zjit.$(OBJEXT): $(top_srcdir)/prism/prism.h
+zjit.$(OBJEXT): $(top_srcdir)/prism/regexp.h
+zjit.$(OBJEXT): $(top_srcdir)/prism/static_literals.h
+zjit.$(OBJEXT): $(top_srcdir)/prism/util/pm_buffer.h
+zjit.$(OBJEXT): $(top_srcdir)/prism/util/pm_char.h
+zjit.$(OBJEXT): $(top_srcdir)/prism/util/pm_constant_pool.h
+zjit.$(OBJEXT): $(top_srcdir)/prism/util/pm_integer.h
+zjit.$(OBJEXT): $(top_srcdir)/prism/util/pm_list.h
+zjit.$(OBJEXT): $(top_srcdir)/prism/util/pm_memchr.h
+zjit.$(OBJEXT): $(top_srcdir)/prism/util/pm_newline_list.h
+zjit.$(OBJEXT): $(top_srcdir)/prism/util/pm_string.h
+zjit.$(OBJEXT): $(top_srcdir)/prism/util/pm_strncasecmp.h
+zjit.$(OBJEXT): $(top_srcdir)/prism/util/pm_strpbrk.h
+zjit.$(OBJEXT): {$(VPATH)}assert.h
+zjit.$(OBJEXT): {$(VPATH)}atomic.h
+zjit.$(OBJEXT): {$(VPATH)}backward/2/assume.h
+zjit.$(OBJEXT): {$(VPATH)}backward/2/attributes.h
+zjit.$(OBJEXT): {$(VPATH)}backward/2/bool.h
+zjit.$(OBJEXT): {$(VPATH)}backward/2/gcc_version_since.h
+zjit.$(OBJEXT): {$(VPATH)}backward/2/inttypes.h
+zjit.$(OBJEXT): {$(VPATH)}backward/2/limits.h
+zjit.$(OBJEXT): {$(VPATH)}backward/2/long_long.h
+zjit.$(OBJEXT): {$(VPATH)}backward/2/stdalign.h
+zjit.$(OBJEXT): {$(VPATH)}backward/2/stdarg.h
+zjit.$(OBJEXT): {$(VPATH)}builtin.h
+zjit.$(OBJEXT): {$(VPATH)}config.h
+zjit.$(OBJEXT): {$(VPATH)}constant.h
+zjit.$(OBJEXT): {$(VPATH)}debug.h
+zjit.$(OBJEXT): {$(VPATH)}debug_counter.h
+zjit.$(OBJEXT): {$(VPATH)}defines.h
+zjit.$(OBJEXT): {$(VPATH)}encoding.h
+zjit.$(OBJEXT): {$(VPATH)}id.h
+zjit.$(OBJEXT): {$(VPATH)}id_table.h
+zjit.$(OBJEXT): {$(VPATH)}insns.def
+zjit.$(OBJEXT): {$(VPATH)}insns.inc
+zjit.$(OBJEXT): {$(VPATH)}insns_info.inc
+zjit.$(OBJEXT): {$(VPATH)}intern.h
+zjit.$(OBJEXT): {$(VPATH)}internal.h
+zjit.$(OBJEXT): {$(VPATH)}internal/abi.h
+zjit.$(OBJEXT): {$(VPATH)}internal/anyargs.h
+zjit.$(OBJEXT): {$(VPATH)}internal/arithmetic.h
+zjit.$(OBJEXT): {$(VPATH)}internal/arithmetic/char.h
+zjit.$(OBJEXT): {$(VPATH)}internal/arithmetic/double.h
+zjit.$(OBJEXT): {$(VPATH)}internal/arithmetic/fixnum.h
+zjit.$(OBJEXT): {$(VPATH)}internal/arithmetic/gid_t.h
+zjit.$(OBJEXT): {$(VPATH)}internal/arithmetic/int.h
+zjit.$(OBJEXT): {$(VPATH)}internal/arithmetic/intptr_t.h
+zjit.$(OBJEXT): {$(VPATH)}internal/arithmetic/long.h
+zjit.$(OBJEXT): {$(VPATH)}internal/arithmetic/long_long.h
+zjit.$(OBJEXT): {$(VPATH)}internal/arithmetic/mode_t.h
+zjit.$(OBJEXT): {$(VPATH)}internal/arithmetic/off_t.h
+zjit.$(OBJEXT): {$(VPATH)}internal/arithmetic/pid_t.h
+zjit.$(OBJEXT): {$(VPATH)}internal/arithmetic/short.h
+zjit.$(OBJEXT): {$(VPATH)}internal/arithmetic/size_t.h
+zjit.$(OBJEXT): {$(VPATH)}internal/arithmetic/st_data_t.h
+zjit.$(OBJEXT): {$(VPATH)}internal/arithmetic/uid_t.h
+zjit.$(OBJEXT): {$(VPATH)}internal/assume.h
+zjit.$(OBJEXT): {$(VPATH)}internal/attr/alloc_size.h
+zjit.$(OBJEXT): {$(VPATH)}internal/attr/artificial.h
+zjit.$(OBJEXT): {$(VPATH)}internal/attr/cold.h
+zjit.$(OBJEXT): {$(VPATH)}internal/attr/const.h
+zjit.$(OBJEXT): {$(VPATH)}internal/attr/constexpr.h
+zjit.$(OBJEXT): {$(VPATH)}internal/attr/deprecated.h
+zjit.$(OBJEXT): {$(VPATH)}internal/attr/diagnose_if.h
+zjit.$(OBJEXT): {$(VPATH)}internal/attr/enum_extensibility.h
+zjit.$(OBJEXT): {$(VPATH)}internal/attr/error.h
+zjit.$(OBJEXT): {$(VPATH)}internal/attr/flag_enum.h
+zjit.$(OBJEXT): {$(VPATH)}internal/attr/forceinline.h
+zjit.$(OBJEXT): {$(VPATH)}internal/attr/format.h
+zjit.$(OBJEXT): {$(VPATH)}internal/attr/maybe_unused.h
+zjit.$(OBJEXT): {$(VPATH)}internal/attr/noalias.h
+zjit.$(OBJEXT): {$(VPATH)}internal/attr/nodiscard.h
+zjit.$(OBJEXT): {$(VPATH)}internal/attr/noexcept.h
+zjit.$(OBJEXT): {$(VPATH)}internal/attr/noinline.h
+zjit.$(OBJEXT): {$(VPATH)}internal/attr/nonnull.h
+zjit.$(OBJEXT): {$(VPATH)}internal/attr/noreturn.h
+zjit.$(OBJEXT): {$(VPATH)}internal/attr/packed_struct.h
+zjit.$(OBJEXT): {$(VPATH)}internal/attr/pure.h
+zjit.$(OBJEXT): {$(VPATH)}internal/attr/restrict.h
+zjit.$(OBJEXT): {$(VPATH)}internal/attr/returns_nonnull.h
+zjit.$(OBJEXT): {$(VPATH)}internal/attr/warning.h
+zjit.$(OBJEXT): {$(VPATH)}internal/attr/weakref.h
+zjit.$(OBJEXT): {$(VPATH)}internal/cast.h
+zjit.$(OBJEXT): {$(VPATH)}internal/compiler_is.h
+zjit.$(OBJEXT): {$(VPATH)}internal/compiler_is/apple.h
+zjit.$(OBJEXT): {$(VPATH)}internal/compiler_is/clang.h
+zjit.$(OBJEXT): {$(VPATH)}internal/compiler_is/gcc.h
+zjit.$(OBJEXT): {$(VPATH)}internal/compiler_is/intel.h
+zjit.$(OBJEXT): {$(VPATH)}internal/compiler_is/msvc.h
+zjit.$(OBJEXT): {$(VPATH)}internal/compiler_is/sunpro.h
+zjit.$(OBJEXT): {$(VPATH)}internal/compiler_since.h
+zjit.$(OBJEXT): {$(VPATH)}internal/config.h
+zjit.$(OBJEXT): {$(VPATH)}internal/constant_p.h
+zjit.$(OBJEXT): {$(VPATH)}internal/core.h
+zjit.$(OBJEXT): {$(VPATH)}internal/core/rarray.h
+zjit.$(OBJEXT): {$(VPATH)}internal/core/rbasic.h
+zjit.$(OBJEXT): {$(VPATH)}internal/core/rbignum.h
+zjit.$(OBJEXT): {$(VPATH)}internal/core/rclass.h
+zjit.$(OBJEXT): {$(VPATH)}internal/core/rdata.h
+zjit.$(OBJEXT): {$(VPATH)}internal/core/rfile.h
+zjit.$(OBJEXT): {$(VPATH)}internal/core/rhash.h
+zjit.$(OBJEXT): {$(VPATH)}internal/core/robject.h
+zjit.$(OBJEXT): {$(VPATH)}internal/core/rregexp.h
+zjit.$(OBJEXT): {$(VPATH)}internal/core/rstring.h
+zjit.$(OBJEXT): {$(VPATH)}internal/core/rstruct.h
+zjit.$(OBJEXT): {$(VPATH)}internal/core/rtypeddata.h
+zjit.$(OBJEXT): {$(VPATH)}internal/ctype.h
+zjit.$(OBJEXT): {$(VPATH)}internal/dllexport.h
+zjit.$(OBJEXT): {$(VPATH)}internal/dosish.h
+zjit.$(OBJEXT): {$(VPATH)}internal/encoding/coderange.h
+zjit.$(OBJEXT): {$(VPATH)}internal/encoding/ctype.h
+zjit.$(OBJEXT): {$(VPATH)}internal/encoding/encoding.h
+zjit.$(OBJEXT): {$(VPATH)}internal/encoding/pathname.h
+zjit.$(OBJEXT): {$(VPATH)}internal/encoding/re.h
+zjit.$(OBJEXT): {$(VPATH)}internal/encoding/sprintf.h
+zjit.$(OBJEXT): {$(VPATH)}internal/encoding/string.h
+zjit.$(OBJEXT): {$(VPATH)}internal/encoding/symbol.h
+zjit.$(OBJEXT): {$(VPATH)}internal/encoding/transcode.h
+zjit.$(OBJEXT): {$(VPATH)}internal/error.h
+zjit.$(OBJEXT): {$(VPATH)}internal/eval.h
+zjit.$(OBJEXT): {$(VPATH)}internal/event.h
+zjit.$(OBJEXT): {$(VPATH)}internal/fl_type.h
+zjit.$(OBJEXT): {$(VPATH)}internal/gc.h
+zjit.$(OBJEXT): {$(VPATH)}internal/glob.h
+zjit.$(OBJEXT): {$(VPATH)}internal/globals.h
+zjit.$(OBJEXT): {$(VPATH)}internal/has/attribute.h
+zjit.$(OBJEXT): {$(VPATH)}internal/has/builtin.h
+zjit.$(OBJEXT): {$(VPATH)}internal/has/c_attribute.h
+zjit.$(OBJEXT): {$(VPATH)}internal/has/cpp_attribute.h
+zjit.$(OBJEXT): {$(VPATH)}internal/has/declspec_attribute.h
+zjit.$(OBJEXT): {$(VPATH)}internal/has/extension.h
+zjit.$(OBJEXT): {$(VPATH)}internal/has/feature.h
+zjit.$(OBJEXT): {$(VPATH)}internal/has/warning.h
+zjit.$(OBJEXT): {$(VPATH)}internal/intern/array.h
+zjit.$(OBJEXT): {$(VPATH)}internal/intern/bignum.h
+zjit.$(OBJEXT): {$(VPATH)}internal/intern/class.h
+zjit.$(OBJEXT): {$(VPATH)}internal/intern/compar.h
+zjit.$(OBJEXT): {$(VPATH)}internal/intern/complex.h
+zjit.$(OBJEXT): {$(VPATH)}internal/intern/cont.h
+zjit.$(OBJEXT): {$(VPATH)}internal/intern/dir.h
+zjit.$(OBJEXT): {$(VPATH)}internal/intern/enum.h
+zjit.$(OBJEXT): {$(VPATH)}internal/intern/enumerator.h
+zjit.$(OBJEXT): {$(VPATH)}internal/intern/error.h
+zjit.$(OBJEXT): {$(VPATH)}internal/intern/eval.h
+zjit.$(OBJEXT): {$(VPATH)}internal/intern/file.h
+zjit.$(OBJEXT): {$(VPATH)}internal/intern/hash.h
+zjit.$(OBJEXT): {$(VPATH)}internal/intern/io.h
+zjit.$(OBJEXT): {$(VPATH)}internal/intern/load.h
+zjit.$(OBJEXT): {$(VPATH)}internal/intern/marshal.h
+zjit.$(OBJEXT): {$(VPATH)}internal/intern/numeric.h
+zjit.$(OBJEXT): {$(VPATH)}internal/intern/object.h
+zjit.$(OBJEXT): {$(VPATH)}internal/intern/parse.h
+zjit.$(OBJEXT): {$(VPATH)}internal/intern/proc.h
+zjit.$(OBJEXT): {$(VPATH)}internal/intern/process.h
+zjit.$(OBJEXT): {$(VPATH)}internal/intern/random.h
+zjit.$(OBJEXT): {$(VPATH)}internal/intern/range.h
+zjit.$(OBJEXT): {$(VPATH)}internal/intern/rational.h
+zjit.$(OBJEXT): {$(VPATH)}internal/intern/re.h
+zjit.$(OBJEXT): {$(VPATH)}internal/intern/ruby.h
+zjit.$(OBJEXT): {$(VPATH)}internal/intern/select.h
+zjit.$(OBJEXT): {$(VPATH)}internal/intern/select/largesize.h
+zjit.$(OBJEXT): {$(VPATH)}internal/intern/signal.h
+zjit.$(OBJEXT): {$(VPATH)}internal/intern/sprintf.h
+zjit.$(OBJEXT): {$(VPATH)}internal/intern/string.h
+zjit.$(OBJEXT): {$(VPATH)}internal/intern/struct.h
+zjit.$(OBJEXT): {$(VPATH)}internal/intern/thread.h
+zjit.$(OBJEXT): {$(VPATH)}internal/intern/time.h
+zjit.$(OBJEXT): {$(VPATH)}internal/intern/variable.h
+zjit.$(OBJEXT): {$(VPATH)}internal/intern/vm.h
+zjit.$(OBJEXT): {$(VPATH)}internal/interpreter.h
+zjit.$(OBJEXT): {$(VPATH)}internal/iterator.h
+zjit.$(OBJEXT): {$(VPATH)}internal/memory.h
+zjit.$(OBJEXT): {$(VPATH)}internal/method.h
+zjit.$(OBJEXT): {$(VPATH)}internal/module.h
+zjit.$(OBJEXT): {$(VPATH)}internal/newobj.h
+zjit.$(OBJEXT): {$(VPATH)}internal/numeric.h
+zjit.$(OBJEXT): {$(VPATH)}internal/scan_args.h
+zjit.$(OBJEXT): {$(VPATH)}internal/special_consts.h
+zjit.$(OBJEXT): {$(VPATH)}internal/static_assert.h
+zjit.$(OBJEXT): {$(VPATH)}internal/stdalign.h
+zjit.$(OBJEXT): {$(VPATH)}internal/stdbool.h
+zjit.$(OBJEXT): {$(VPATH)}internal/stdckdint.h
+zjit.$(OBJEXT): {$(VPATH)}internal/symbol.h
+zjit.$(OBJEXT): {$(VPATH)}internal/value.h
+zjit.$(OBJEXT): {$(VPATH)}internal/value_type.h
+zjit.$(OBJEXT): {$(VPATH)}internal/variable.h
+zjit.$(OBJEXT): {$(VPATH)}internal/warning_push.h
+zjit.$(OBJEXT): {$(VPATH)}internal/xmalloc.h
+zjit.$(OBJEXT): {$(VPATH)}iseq.h
+zjit.$(OBJEXT): {$(VPATH)}method.h
+zjit.$(OBJEXT): {$(VPATH)}missing.h
+zjit.$(OBJEXT): {$(VPATH)}node.h
+zjit.$(OBJEXT): {$(VPATH)}onigmo.h
+zjit.$(OBJEXT): {$(VPATH)}oniguruma.h
+zjit.$(OBJEXT): {$(VPATH)}prism/ast.h
+zjit.$(OBJEXT): {$(VPATH)}prism/diagnostic.h
+zjit.$(OBJEXT): {$(VPATH)}prism/version.h
+zjit.$(OBJEXT): {$(VPATH)}prism_compile.h
+zjit.$(OBJEXT): {$(VPATH)}probes.dmyh
+zjit.$(OBJEXT): {$(VPATH)}probes.h
+zjit.$(OBJEXT): {$(VPATH)}probes_helper.h
+zjit.$(OBJEXT): {$(VPATH)}ruby_assert.h
+zjit.$(OBJEXT): {$(VPATH)}ruby_atomic.h
+zjit.$(OBJEXT): {$(VPATH)}rubyparser.h
+zjit.$(OBJEXT): {$(VPATH)}shape.h
+zjit.$(OBJEXT): {$(VPATH)}st.h
+zjit.$(OBJEXT): {$(VPATH)}subst.h
+zjit.$(OBJEXT): {$(VPATH)}thread_$(THREAD_MODEL).h
+zjit.$(OBJEXT): {$(VPATH)}thread_native.h
+zjit.$(OBJEXT): {$(VPATH)}vm_callinfo.h
+zjit.$(OBJEXT): {$(VPATH)}vm_core.h
+zjit.$(OBJEXT): {$(VPATH)}vm_debug.h
+zjit.$(OBJEXT): {$(VPATH)}vm_insnhelper.h
+zjit.$(OBJEXT): {$(VPATH)}vm_opts.h
+zjit.$(OBJEXT): {$(VPATH)}vm_sync.h
+zjit.$(OBJEXT): {$(VPATH)}zjit.c
+zjit.$(OBJEXT): {$(VPATH)}zjit.h
+zjit.$(OBJEXT): {$(VPATH)}zjit.rbinc
 # AUTOGENERATED DEPENDENCIES END

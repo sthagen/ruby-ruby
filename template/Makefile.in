@@ -101,12 +101,19 @@ XCFLAGS = @XCFLAGS@ $(INCFLAGS) $(_RUBY_DEVEL_enabled:yes=-DRUBY_DEVEL=1) -Dmodu
 USE_RUBYGEMS = @USE_RUBYGEMS@
 USE_RUBYGEMS_ = $(USE_RUBYGEMS:yes=)
 CPPFLAGS = @CPPFLAGS@ $(USE_RUBYGEMS_:no=-DDISABLE_RUBYGEMS=1)
+TOP_BUILD_DIR=@abs_top_builddir@
 YJIT_SUPPORT=@YJIT_SUPPORT@
 YJIT_LIBS=@YJIT_LIBS@
 YJIT_OBJ=@YJIT_OBJ@
 YJIT_LIBOBJ = $(YJIT_LIBS:.a=.@OBJEXT@)
+ZJIT_SUPPORT=@ZJIT_SUPPORT@
+ZJIT_LIBS=@ZJIT_LIBS@
+ZJIT_OBJ=@ZJIT_OBJ@
+ZJIT_LIBOBJ = $(ZJIT_LIBS:.a=.@OBJEXT@)
 CARGO_TARGET_DIR=@abs_top_builddir@/yjit/target
 CARGO_BUILD_ARGS=@CARGO_BUILD_ARGS@
+ZJIT_CARGO_BUILD_ARGS=@ZJIT_CARGO_BUILD_ARGS@
+ZJIT_CARGO_TARGET_DIR=@abs_top_builddir@/zjit/target
 LDFLAGS = @STATIC@ $(CFLAGS) @LDFLAGS@
 EXE_LDFLAGS = $(LDFLAGS)
 EXTLDFLAGS = @EXTLDFLAGS@
@@ -201,7 +208,8 @@ DTRACE_DEPENDENT_OBJS = array.$(OBJEXT) \
 			string.$(OBJEXT) \
 			symbol.$(OBJEXT) \
 			vm.$(OBJEXT) \
-			$(YJIT_OBJ)
+			$(YJIT_OBJ) \
+			$(ZJIT_OBJ)
 
 THREAD_MODEL  = @THREAD_MODEL@
 
@@ -632,6 +640,7 @@ $(INSNS): $(srcdir)/insns.def vm_opts.h \
 	  $(tooldir)/ruby_vm/models/operands_unifications.rb \
 	  $(tooldir)/ruby_vm/models/trace_instructions.rb \
 	  $(tooldir)/ruby_vm/models/typemap.rb \
+	  $(tooldir)/ruby_vm/models/zjit_instructions.rb \
 	  $(tooldir)/ruby_vm/scripts/converter.rb \
 	  $(tooldir)/ruby_vm/scripts/insns2vm.rb \
 	  $(tooldir)/ruby_vm/views/_attributes.erb \
@@ -647,6 +656,7 @@ $(INSNS): $(srcdir)/insns.def vm_opts.h \
 	  $(tooldir)/ruby_vm/views/_notice.erb \
 	  $(tooldir)/ruby_vm/views/_sp_inc_helpers.erb \
 	  $(tooldir)/ruby_vm/views/_trace_instruction.erb \
+	  $(tooldir)/ruby_vm/views/_zjit_instruction.erb \
 	  $(tooldir)/ruby_vm/views/insns.inc.erb \
 	  $(tooldir)/ruby_vm/views/insns_info.inc.erb \
 	  $(tooldir)/ruby_vm/views/optinsn.inc.erb \
