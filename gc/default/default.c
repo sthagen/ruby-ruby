@@ -2834,6 +2834,8 @@ rb_gc_impl_define_finalizer(void *objspace_ptr, VALUE obj, VALUE block)
 
     RBASIC(obj)->flags |= FL_FINALIZE;
 
+    int lev = rb_gc_vm_lock();
+
     if (st_lookup(finalizer_table, obj, &data)) {
         table = (VALUE)data;
 
@@ -2845,6 +2847,7 @@ rb_gc_impl_define_finalizer(void *objspace_ptr, VALUE obj, VALUE block)
             for (i = 0; i < len; i++) {
                 VALUE recv = RARRAY_AREF(table, i);
                 if (rb_equal(recv, block)) {
+                    rb_gc_vm_unlock(lev);
                     return recv;
                 }
             }
@@ -2857,6 +2860,8 @@ rb_gc_impl_define_finalizer(void *objspace_ptr, VALUE obj, VALUE block)
         rb_obj_hide(table);
         st_add_direct(finalizer_table, obj, table);
     }
+
+    rb_gc_vm_unlock(lev);
 
     return block;
 }
