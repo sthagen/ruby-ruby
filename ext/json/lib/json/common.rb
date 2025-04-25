@@ -919,6 +919,68 @@ module JSON
     end
   end
 
+  # :stopdoc:
+  # All these were meant to be deprecated circa 2009, but were just set as undocumented
+  # so usage still exist in the wild.
+  def unparse(...)
+    if RUBY_VERSION >= "3.0"
+      warn "JSON.unparse is deprecated and will be removed in json 3.0.0, just use JSON.generate", uplevel: 1, category: :deprecated
+    else
+      warn "JSON.unparse is deprecated and will be removed in json 3.0.0, just use JSON.generate", uplevel: 1
+    end
+    generate(...)
+  end
+  module_function :unparse
+
+  def fast_unparse(...)
+    if RUBY_VERSION >= "3.0"
+      warn "JSON.fast_unparse is deprecated and will be removed in json 3.0.0, just use JSON.generate", uplevel: 1, category: :deprecated
+    else
+      warn "JSON.fast_unparse is deprecated and will be removed in json 3.0.0, just use JSON.generate", uplevel: 1
+    end
+    generate(...)
+  end
+  module_function :fast_unparse
+
+  def pretty_unparse(...)
+    if RUBY_VERSION >= "3.0"
+      warn "JSON.pretty_unparse is deprecated and will be removed in json 3.0.0, just use JSON.pretty_generate", uplevel: 1, category: :deprecated
+    else
+      warn "JSON.pretty_unparse is deprecated and will be removed in json 3.0.0, just use JSON.pretty_generate", uplevel: 1
+    end
+    pretty_generate(...)
+  end
+  module_function :fast_unparse
+
+  def restore(...)
+    if RUBY_VERSION >= "3.0"
+      warn "JSON.restore is deprecated and will be removed in json 3.0.0, just use JSON.load", uplevel: 1, category: :deprecated
+    else
+      warn "JSON.restore is deprecated and will be removed in json 3.0.0, just use JSON.load", uplevel: 1
+    end
+    load(...)
+  end
+  module_function :restore
+
+  class << self
+    private
+
+    def const_missing(const_name)
+      case const_name
+      when :PRETTY_STATE_PROTOTYPE
+        if RUBY_VERSION >= "3.0"
+          warn "JSON::PRETTY_STATE_PROTOTYPE is deprecated and will be removed in json 3.0.0, just use JSON.pretty_generate", uplevel: 1, category: :deprecated
+        else
+          warn "JSON::PRETTY_STATE_PROTOTYPE is deprecated and will be removed in json 3.0.0, just use JSON.pretty_generate", uplevel: 1
+        end
+        state.new(PRETTY_GENERATE_OPTIONS)
+      else
+        super
+      end
+    end
+  end
+  # :startdoc:
+
   # JSON::Coder holds a parser and generator configuration.
   #
   #   module MyApp
