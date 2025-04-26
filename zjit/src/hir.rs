@@ -1028,10 +1028,11 @@ impl Function {
             fun: &mut Function,
             block: BlockId,
             payload: &profile::IseqPayload,
+            self_type: Type,
             send: Insn,
             send_insn_id: InsnId,
         ) -> Result<(), ()> {
-            let Insn::SendWithoutBlock { self_val, cd, mut args, state, .. } = send else {
+            let Insn::SendWithoutBlock { mut self_val, cd, mut args, state, .. } = send else {
                 return Err(());
             };
 
@@ -1045,13 +1046,14 @@ impl Function {
             // TODO(alan): there was a seemingly a miscomp here if you swap with
             // `inexact_ruby_class`. Theoretically it can call a method too general
             // for the receiver. Confirm and add a test.
-            //
-            // TODO(max): Use runtime_exact_ruby_class so we can also specialize on known (not just
-            // profiled) types.
-            let (recv_class, recv_type) = payload.get_operand_types(iseq_insn_idx)
+            let (recv_class, guard_type) = if let Some(klass) = self_type.runtime_exact_ruby_class() {
+                (klass, None)
+            } else {
+                payload.get_operand_types(iseq_insn_idx)
                 .and_then(|types| types.get(argc as usize))
-                .and_then(|recv_type| recv_type.exact_ruby_class().and_then(|class| Some((class, recv_type))))
-                .ok_or(())?;
+                .and_then(|recv_type| recv_type.exact_ruby_class().and_then(|class| Some((class, Some(recv_type.unspecialized())))))
+                .ok_or(())?
+            };
 
             // Do method lookup
             let method = unsafe { rb_callable_method_entry(recv_class, method_id) };
@@ -1090,8 +1092,10 @@ impl Function {
                     if ci_flags & VM_CALL_ARGS_SIMPLE != 0 {
                         // Commit to the replacement. Put PatchPoint.
                         fun.push_insn(block, Insn::PatchPoint(Invariant::MethodRedefined { klass: recv_class, method: method_id }));
-                        // Guard receiver class
-                        let self_val = fun.push_insn(block, Insn::GuardType { val: self_val, guard_type: recv_type.unspecialized(), state });
+                        if let Some(guard_type) = guard_type {
+                            // Guard receiver class
+                            self_val = fun.push_insn(block, Insn::GuardType { val: self_val, guard_type, state });
+                        }
                         let cfun = unsafe { get_mct_func(cfunc) }.cast();
                         let mut cfunc_args = vec![self_val];
                         cfunc_args.append(&mut args);
@@ -1119,8 +1123,9 @@ impl Function {
             let old_insns = std::mem::take(&mut self.blocks[block.0].insns);
             assert!(self.blocks[block.0].insns.is_empty());
             for insn_id in old_insns {
-                if let send @ Insn::SendWithoutBlock { .. } = self.find(insn_id) {
-                    if reduce_to_ccall(self, block, payload, send, insn_id).is_ok() {
+                if let send @ Insn::SendWithoutBlock { self_val, .. } = self.find(insn_id) {
+                    let self_type = self.type_of(self_val);
+                    if reduce_to_ccall(self, block, payload, self_type, send, insn_id).is_ok() {
                         continue;
                     }
                 }
@@ -1405,7 +1410,7 @@ impl<'a> std::fmt::Display for FunctionPrinter<'a> {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FrameState {
     iseq: IseqPtr,
     insn_idx: usize,
@@ -1551,10 +1556,26 @@ fn compute_jump_targets(iseq: *const rb_iseq_t) -> Vec<u32> {
     result
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
+pub enum CallType {
+    Splat,
+    BlockArg,
+    Kwarg,
+    KwSplat,
+    Tailcall,
+    Super,
+    Zsuper,
+    OptSend,
+    KwSplatMut,
+    SplatMut,
+    Forwarding,
+}
+
+#[derive(Debug, PartialEq)]
 pub enum ParseError {
     StackUnderflow(FrameState),
     UnknownOpcode(String),
+    UnhandledCallType(CallType),
 }
 
 fn num_lead_params(iseq: *const rb_iseq_t) -> usize {
@@ -1566,6 +1587,22 @@ fn num_lead_params(iseq: *const rb_iseq_t) -> usize {
 /// Return the number of locals in the current ISEQ (includes parameters)
 fn num_locals(iseq: *const rb_iseq_t) -> usize {
     (unsafe { get_iseq_body_local_table_size(iseq) }) as usize
+}
+
+/// If we can't handle the type of send (yet), bail out.
+fn filter_translatable_calls(flag: u32) -> Result<(), ParseError> {
+    if (flag & VM_CALL_KW_SPLAT_MUT) != 0 { return Err(ParseError::UnhandledCallType(CallType::KwSplatMut)); }
+    if (flag & VM_CALL_ARGS_SPLAT_MUT) != 0 { return Err(ParseError::UnhandledCallType(CallType::SplatMut)); }
+    if (flag & VM_CALL_ARGS_SPLAT) != 0 { return Err(ParseError::UnhandledCallType(CallType::Splat)); }
+    if (flag & VM_CALL_KW_SPLAT) != 0 { return Err(ParseError::UnhandledCallType(CallType::KwSplat)); }
+    if (flag & VM_CALL_ARGS_BLOCKARG) != 0 { return Err(ParseError::UnhandledCallType(CallType::BlockArg)); }
+    if (flag & VM_CALL_KWARG) != 0 { return Err(ParseError::UnhandledCallType(CallType::Kwarg)); }
+    if (flag & VM_CALL_TAILCALL) != 0 { return Err(ParseError::UnhandledCallType(CallType::Tailcall)); }
+    if (flag & VM_CALL_SUPER) != 0 { return Err(ParseError::UnhandledCallType(CallType::Super)); }
+    if (flag & VM_CALL_ZSUPER) != 0 { return Err(ParseError::UnhandledCallType(CallType::Zsuper)); }
+    if (flag & VM_CALL_OPT_SEND) != 0 { return Err(ParseError::UnhandledCallType(CallType::OptSend)); }
+    if (flag & VM_CALL_FORWARDING) != 0 { return Err(ParseError::UnhandledCallType(CallType::Forwarding)); }
+    Ok(())
 }
 
 /// Compile ISEQ into High-level IR
@@ -1752,6 +1789,7 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     // NB: opt_neq has two cd; get_arg(0) is for eq and get_arg(1) is for neq
                     let cd: *const rb_call_data = get_arg(pc, 1).as_ptr();
                     let call_info = unsafe { rb_get_call_data_ci(cd) };
+                    filter_translatable_calls(unsafe { rb_vm_ci_flag(call_info) })?;
                     let argc = unsafe { vm_ci_argc((*cd).ci) };
 
 
@@ -1792,6 +1830,7 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                 YARVINSN_opt_send_without_block => {
                     let cd: *const rb_call_data = get_arg(pc, 0).as_ptr();
                     let call_info = unsafe { rb_get_call_data_ci(cd) };
+                    filter_translatable_calls(unsafe { rb_vm_ci_flag(call_info) })?;
                     let argc = unsafe { vm_ci_argc((*cd).ci) };
 
 
@@ -1814,6 +1853,7 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     let cd: *const rb_call_data = get_arg(pc, 0).as_ptr();
                     let blockiseq: IseqPtr = get_arg(pc, 1).as_iseq();
                     let call_info = unsafe { rb_get_call_data_ci(cd) };
+                    filter_translatable_calls(unsafe { rb_vm_ci_flag(call_info) })?;
                     let argc = unsafe { vm_ci_argc((*cd).ci) };
 
                     let method_name = unsafe {
@@ -2128,6 +2168,16 @@ mod tests {
         let actual_hir = format!("{}", FunctionPrinter::without_snapshot(&function));
         expected_hir.assert_eq(&actual_hir);
     }
+
+    #[track_caller]
+    fn assert_compile_fails(method: &str, reason: ParseError) {
+        let iseq = crate::cruby::with_rubyvm(|| get_method_iseq(method));
+        unsafe { crate::cruby::rb_zjit_profile_disable(iseq) };
+        let result = iseq_to_hir(iseq);
+        assert!(result.is_err(), "Expected an error but succesfully compiled to HIR");
+        assert_eq!(result.unwrap_err(), reason);
+    }
+
 
     #[test]
     fn test_putobject() {
@@ -2604,6 +2654,90 @@ mod tests {
               v13:BasicObject = SendWithoutBlock v1, :unknown_method, v4, v7, v9, v11
               Return v13
         "#]]);
+    }
+
+    #[test]
+    fn test_cant_compile_splat() {
+        eval("
+            def test(a) = foo(*a)
+        ");
+        assert_compile_fails("test", ParseError::UnknownOpcode("splatarray".into()))
+    }
+
+    #[test]
+    fn test_cant_compile_block_arg() {
+        eval("
+            def test(a) = foo(&a)
+        ");
+        assert_compile_fails("test", ParseError::UnhandledCallType(CallType::BlockArg))
+    }
+
+    #[test]
+    fn test_cant_compile_kwarg() {
+        eval("
+            def test(a) = foo(a: 1)
+        ");
+        assert_compile_fails("test", ParseError::UnhandledCallType(CallType::Kwarg))
+    }
+
+    #[test]
+    fn test_cant_compile_kw_splat() {
+        eval("
+            def test(a) = foo(**a)
+        ");
+        assert_compile_fails("test", ParseError::UnhandledCallType(CallType::KwSplat))
+    }
+
+    // TODO(max): Figure out how to generate a call with TAILCALL flag
+
+    #[test]
+    fn test_cant_compile_super() {
+        eval("
+            def test = super()
+        ");
+        assert_compile_fails("test", ParseError::UnknownOpcode("invokesuper".into()))
+    }
+
+    #[test]
+    fn test_cant_compile_zsuper() {
+        eval("
+            def test = super
+        ");
+        assert_compile_fails("test", ParseError::UnknownOpcode("invokesuper".into()))
+    }
+
+    #[test]
+    fn test_cant_compile_super_forward() {
+        eval("
+            def test(...) = super(...)
+        ");
+        assert_compile_fails("test", ParseError::UnknownOpcode("invokesuperforward".into()))
+    }
+
+    // TODO(max): Figure out how to generate a call with OPT_SEND flag
+
+    #[test]
+    fn test_cant_compile_kw_splat_mut() {
+        eval("
+            def test(a) = foo **a, b: 1
+        ");
+        assert_compile_fails("test", ParseError::UnknownOpcode("putspecialobject".into()))
+    }
+
+    #[test]
+    fn test_cant_compile_splat_mut() {
+        eval("
+            def test(*) = foo *, 1
+        ");
+        assert_compile_fails("test", ParseError::UnknownOpcode("splatarray".into()))
+    }
+
+    #[test]
+    fn test_cant_compile_forwarding() {
+        eval("
+            def test(...) = foo(...)
+        ");
+        assert_compile_fails("test", ParseError::UnknownOpcode("sendforward".into()))
     }
 }
 
@@ -3330,7 +3464,7 @@ mod opt_tests {
     }
 
     #[test]
-    fn kernel_itself_simple() {
+    fn kernel_itself_const() {
         eval("
             def test(x) = x.itself
             test(0) # profile
@@ -3342,6 +3476,21 @@ mod opt_tests {
               PatchPoint MethodRedefined(Integer@0x1000, itself@0x1008)
               v6:Fixnum = GuardType v0, Fixnum
               v7:BasicObject = CCall itself@0x1010, v6
+              Return v7
+        "#]]);
+    }
+
+    #[test]
+    fn kernel_itself_known_type() {
+        eval("
+            def test = [].itself
+        ");
+        assert_optimized_method_hir("test", expect![[r#"
+            fn test:
+            bb0():
+              v2:ArrayExact = NewArray
+              PatchPoint MethodRedefined(Array@0x1000, itself@0x1008)
+              v7:BasicObject = CCall itself@0x1010, v2
               Return v7
         "#]]);
     }
@@ -3412,8 +3561,8 @@ mod opt_tests {
               v1:StringExact[VALUE(0x1000)] = Const Value(VALUE(0x1000))
               v2:StringExact = StringCopy v1
               PatchPoint MethodRedefined(String@0x1008, bytesize@0x1010)
-              v8:Fixnum = CCall bytesize@0x1018, v2
-              Return v8
+              v7:Fixnum = CCall bytesize@0x1018, v2
+              Return v7
         "#]]);
     }
 }
