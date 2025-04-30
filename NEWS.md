@@ -63,7 +63,7 @@ The following default gems are updated.
 * RubyGems 3.7.0.dev
 * bundler 2.7.0.dev
 * cgi 0.4.2
-* json 2.11.2
+* json 2.11.3
 * optparse 0.7.0.dev.2
 * prism 1.4.0
 * psych 5.2.3
@@ -79,7 +79,7 @@ The following bundled gems are updated.
 * minitest 5.25.5
 * test-unit 3.6.8
 * rexml 3.4.1
-* net-imap 0.5.7
+* net-imap 0.5.8
 * net-smtp 0.5.1
 * rbs 3.9.2
 * bigdecimal 3.1.9

@@ -666,8 +666,12 @@ impl Function {
     // Add an instruction to the function without adding it to any block
     fn new_insn(&mut self, insn: Insn) -> InsnId {
         let id = InsnId(self.insns.len());
+        if insn.has_output() {
+            self.insn_types.push(types::Any);
+        } else {
+            self.insn_types.push(types::Empty);
+        }
         self.insns.push(insn);
-        self.insn_types.push(types::Empty);
         id
     }
 
@@ -740,11 +744,21 @@ impl Function {
                 }
             };
         }
+        macro_rules! find_branch_edge {
+            ( $edge:ident ) => {
+                {
+                    BranchEdge {
+                        target: $edge.target,
+                        args: $edge.args.iter().map(|x| self.union_find.find_const(*x)).collect(),
+                    }
+                }
+            };
+        }
         let insn_id = self.union_find.find_const(insn_id);
         use Insn::*;
         match &self.insns[insn_id.0] {
             result@(PutSelf | Const {..} | Param {..} | NewArray {..} | GetConstantPath {..}
-                    | Jump(_) | PatchPoint {..}) => result.clone(),
+                    | PatchPoint {..}) => result.clone(),
             Snapshot { state: FrameState { iseq, insn_idx, pc, stack, locals } } =>
                 Snapshot {
                     state: FrameState {
@@ -759,8 +773,9 @@ impl Function {
             StringCopy { val } => StringCopy { val: find!(*val) },
             StringIntern { val } => StringIntern { val: find!(*val) },
             Test { val } => Test { val: find!(*val) },
-            IfTrue { val, target } => IfTrue { val: find!(*val), target: target.clone() },
-            IfFalse { val, target } => IfFalse { val: find!(*val), target: target.clone() },
+            Jump(target) => Jump(find_branch_edge!(target)),
+            IfTrue { val, target } => IfTrue { val: find!(*val), target: find_branch_edge!(target) },
+            IfFalse { val, target } => IfFalse { val: find!(*val), target: find_branch_edge!(target) },
             GuardType { val, guard_type, state } => GuardType { val: find!(*val), guard_type: *guard_type, state: *state },
             GuardBitEquals { val, expected, state } => GuardBitEquals { val: find!(*val), expected: *expected, state: *state },
             FixnumAdd { left, right, state } => FixnumAdd { left: find!(*left), right: find!(*right), state: *state },
@@ -2854,8 +2869,8 @@ mod opt_tests {
             bb0():
               PatchPoint BOPRedefined(INTEGER_REDEFINED_OP_FLAG, BOP_PLUS)
               PatchPoint BOPRedefined(INTEGER_REDEFINED_OP_FLAG, BOP_PLUS)
-              v14:Fixnum[6] = Const Value(6)
-              Return v14
+              v15:Fixnum[6] = Const Value(6)
+              Return v15
         "#]]);
     }
 
