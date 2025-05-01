@@ -619,7 +619,7 @@ impl<T: Copy + Into<usize> + PartialEq> UnionFind<T> {
     }
 
     /// Find the set representative for `insn` without doing path compression.
-    pub fn find_const(&self, insn: T) -> T {
+    fn find_const(&self, insn: T) -> T {
         let mut result = insn;
         loop {
             match self.at(result) {
@@ -645,7 +645,7 @@ pub struct Function {
     // TODO: get method name and source location from the ISEQ
 
     insns: Vec<Insn>,
-    union_find: UnionFind<InsnId>,
+    union_find: std::cell::RefCell<UnionFind<InsnId>>,
     insn_types: Vec<Type>,
     blocks: Vec<Block>,
     entry_block: BlockId,
@@ -657,7 +657,7 @@ impl Function {
             iseq,
             insns: vec![],
             insn_types: vec![],
-            union_find: UnionFind::new(),
+            union_find: UnionFind::new().into(),
             blocks: vec![Block::default()],
             entry_block: BlockId(0),
         }
@@ -740,7 +740,7 @@ impl Function {
         macro_rules! find {
             ( $x:expr ) => {
                 {
-                    self.union_find.find_const($x)
+                    self.union_find.borrow_mut().find($x)
                 }
             };
         }
@@ -749,12 +749,12 @@ impl Function {
                 {
                     BranchEdge {
                         target: $edge.target,
-                        args: $edge.args.iter().map(|x| self.union_find.find_const(*x)).collect(),
+                        args: $edge.args.iter().map(|x| find!(*x)).collect(),
                     }
                 }
             };
         }
-        let insn_id = self.union_find.find_const(insn_id);
+        let insn_id = self.union_find.borrow_mut().find(insn_id);
         use Insn::*;
         match &self.insns[insn_id.0] {
             result@(PutSelf | Const {..} | Param {..} | NewArray {..} | GetConstantPath {..}
@@ -822,12 +822,12 @@ impl Function {
     /// Replace `insn` with the new instruction `replacement`, which will get appended to `insns`.
     fn make_equal_to(&mut self, insn: InsnId, replacement: InsnId) {
         // Don't push it to the block
-        self.union_find.make_equal_to(insn, replacement);
+        self.union_find.borrow_mut().make_equal_to(insn, replacement);
     }
 
     fn type_of(&self, insn: InsnId) -> Type {
         assert!(self.insns[insn.0].has_output());
-        self.insn_types[self.union_find.find_const(insn).0]
+        self.insn_types[self.union_find.borrow_mut().find(insn).0]
     }
 
     /// Check if the type of `insn` is a subtype of `ty`.
@@ -1600,6 +1600,10 @@ fn compute_jump_targets(iseq: *const rb_iseq_t) -> Vec<u32> {
                 let offset = get_arg(pc, 0).as_i64();
                 jump_targets.insert(insn_idx_at_offset(insn_idx, offset));
             }
+            YARVINSN_opt_new => {
+                let offset = get_arg(pc, 1).as_i64();
+                jump_targets.insert(insn_idx_at_offset(insn_idx, offset));
+            }
             YARVINSN_leave | YARVINSN_opt_invokebuiltin_delegate_leave => {
                 if insn_idx < iseq_size {
                     jump_targets.insert(insn_idx);
@@ -1800,6 +1804,17 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     });
                     queue.push_back((state.clone(), target, target_idx));
                 }
+                YARVINSN_opt_new => {
+                    let offset = get_arg(pc, 1).as_i64();
+                    // TODO(max): Check interrupts
+                    let target_idx = insn_idx_at_offset(insn_idx, offset);
+                    let target = insn_idx_to_block[&target_idx];
+                    // Skip the fast-path and go straight to the fallback code. We will let the
+                    // optimizer take care of the converting Class#new->alloc+initialize instead.
+                    fun.push_insn(block, Insn::Jump(BranchEdge { target, args: state.as_args() }));
+                    queue.push_back((state.clone(), target, target_idx));
+                    break;  // Don't enqueue the next block as a successor
+                }
                 YARVINSN_jump => {
                     let offset = get_arg(pc, 0).as_i64();
                     // TODO(max): Check interrupts
@@ -1963,19 +1978,19 @@ mod union_find_tests {
     }
 
     #[test]
-    fn test_find_const_returns_target() {
+    fn test_find_returns_target() {
         let mut uf = UnionFind::new();
         uf.make_equal_to(3, 4);
-        assert_eq!(uf.find_const(3usize), 4);
+        assert_eq!(uf.find(3usize), 4);
     }
 
     #[test]
-    fn test_find_const_returns_transitive_target() {
+    fn test_find_returns_transitive_target() {
         let mut uf = UnionFind::new();
         uf.make_equal_to(3, 4);
         uf.make_equal_to(4, 5);
-        assert_eq!(uf.find_const(3usize), 5);
-        assert_eq!(uf.find_const(4usize), 5);
+        assert_eq!(uf.find(3usize), 5);
+        assert_eq!(uf.find(4usize), 5);
     }
 
     #[test]
@@ -2795,6 +2810,26 @@ mod tests {
             def test(...) = foo(...)
         ");
         assert_compile_fails("test", ParseError::UnknownOpcode("sendforward".into()))
+    }
+
+    #[test]
+    fn test_opt_new() {
+        eval("
+            class C; end
+            def test = C.new
+        ");
+        assert_method_hir("test",  expect![[r#"
+            fn test:
+            bb0():
+              v1:BasicObject = GetConstantPath 0x1000
+              v2:NilClassExact = Const Value(nil)
+              Jump bb1(v2, v1)
+            bb1(v4:NilClassExact, v5:BasicObject):
+              v8:BasicObject = SendWithoutBlock v5, :new
+              Jump bb2(v8, v4)
+            bb2(v10:BasicObject, v11:NilClassExact):
+              Return v10
+        "#]]);
     }
 }
 
@@ -3686,6 +3721,57 @@ mod opt_tests {
               PatchPoint StableConstantNames(0x1000, Foo::Bar::C)
               v5:BasicObject[VALUE(0x1008)] = Const Value(VALUE(0x1008))
               Return v5
+        "#]]);
+    }
+
+    #[test]
+    fn test_opt_new_no_initialize() {
+        eval("
+            class C; end
+            def test = C.new
+            test
+        ");
+        assert_optimized_method_hir("test",  expect![[r#"
+            fn test:
+            bb0():
+              PatchPoint SingleRactorMode
+              PatchPoint StableConstantNames(0x1000, C)
+              v16:BasicObject[VALUE(0x1008)] = Const Value(VALUE(0x1008))
+              v2:NilClassExact = Const Value(nil)
+              Jump bb1(v2, v16)
+            bb1(v4:NilClassExact, v5:BasicObject[VALUE(0x1008)]):
+              v8:BasicObject = SendWithoutBlock v5, :new
+              Jump bb2(v8, v4)
+            bb2(v10:BasicObject, v11:NilClassExact):
+              Return v10
+        "#]]);
+    }
+
+    #[test]
+    fn test_opt_new_initialize() {
+        eval("
+            class C
+              def initialize x
+                @x = x
+              end
+            end
+            def test = C.new 1
+            test
+        ");
+        assert_optimized_method_hir("test",  expect![[r#"
+            fn test:
+            bb0():
+              PatchPoint SingleRactorMode
+              PatchPoint StableConstantNames(0x1000, C)
+              v18:BasicObject[VALUE(0x1008)] = Const Value(VALUE(0x1008))
+              v2:NilClassExact = Const Value(nil)
+              v3:Fixnum[1] = Const Value(1)
+              Jump bb1(v2, v18, v3)
+            bb1(v5:NilClassExact, v6:BasicObject[VALUE(0x1008)], v7:Fixnum[1]):
+              v10:BasicObject = SendWithoutBlock v6, :new, v7
+              Jump bb2(v10, v5)
+            bb2(v12:BasicObject, v13:NilClassExact):
+              Return v12
         "#]]);
     }
 }
