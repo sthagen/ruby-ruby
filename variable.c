@@ -1709,7 +1709,7 @@ generic_ivar_set_too_complex_table(VALUE obj, void *data)
     if (!rb_gen_ivtbl_get(obj, 0, &ivtbl)) {
         ivtbl = xmalloc(sizeof(struct gen_ivtbl));
 #if !SHAPE_IN_BASIC_FLAGS
-        ivtbl->shape_id = SHAPE_OBJ_TOO_COMPLEX;
+        ivtbl->shape_id = OBJ_TOO_COMPLEX_SHAPE_ID;
 #endif
         ivtbl->as.complex.table = st_init_numtable_with_size(1);
 
@@ -2045,7 +2045,7 @@ each_hash_iv(st_data_t id, st_data_t val, st_data_t data)
 static void
 obj_ivar_each(VALUE obj, rb_ivar_foreach_callback_func *func, st_data_t arg)
 {
-    rb_shape_t* shape = rb_shape_get_shape(obj);
+    rb_shape_t *shape = rb_shape_get_shape(obj);
     struct iv_itr_data itr_data;
     itr_data.obj = obj;
     itr_data.arg = arg;
@@ -2083,7 +2083,7 @@ class_ivar_each(VALUE obj, rb_ivar_foreach_callback_func *func, st_data_t arg)
 {
     RUBY_ASSERT(RB_TYPE_P(obj, T_CLASS) || RB_TYPE_P(obj, T_MODULE));
 
-    rb_shape_t* shape = rb_shape_get_shape(obj);
+    rb_shape_t *shape = rb_shape_get_shape(obj);
     struct iv_itr_data itr_data;
     itr_data.obj = obj;
     itr_data.arg = arg;
@@ -2117,7 +2117,7 @@ rb_copy_generic_ivar(VALUE clone, VALUE obj)
         if (rb_shape_obj_too_complex(obj)) {
             new_ivtbl = xmalloc(sizeof(struct gen_ivtbl));
 #if !SHAPE_IN_BASIC_FLAGS
-            new_ivtbl->shape_id = SHAPE_OBJ_TOO_COMPLEX;
+            new_ivtbl->shape_id = OBJ_TOO_COMPLEX_SHAPE_ID;
 #endif
             new_ivtbl->as.complex.table = st_copy(obj_ivtbl->as.complex.table);
         }
