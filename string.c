@@ -2772,12 +2772,13 @@ rb_str_empty(VALUE str)
 
 /*
  *  call-seq:
- *    string + other_string -> new_string
+ *    self + other_string -> new_string
  *
- *  Returns a new +String+ containing +other_string+ concatenated to +self+:
+ *  Returns a new string containing +other_string+ concatenated to +self+:
  *
- *    "Hello from " + self.to_s # => "Hello from main"
+ *    'Hello from ' + self.to_s # => "Hello from main"
  *
+ *  Related: see {Methods for Converting to New String}[rdoc-ref:String@Methods+for+Converting+to+New+String].
  */
 
 VALUE
@@ -2843,13 +2844,14 @@ rb_str_opt_plus(VALUE str1, VALUE str2)
 
 /*
  *  call-seq:
- *    string * integer -> new_string
+ *    self * n -> new_string
  *
- *  Returns a new +String+ containing +integer+ copies of +self+:
+ *  Returns a new string containing +n+ copies of +self+:
  *
- *    "Ho! " * 3 # => "Ho! Ho! Ho! "
- *    "Ho! " * 0 # => ""
+ *    'Ho!' * 3 # => "Ho!Ho!Ho!"
+ *    'No!' * 0 # => ""
  *
+ *  Related: see {Methods for Converting to New String}[rdoc-ref:String@Methods+for+Converting+to+New+String].
  */
 
 VALUE
@@ -2912,20 +2914,22 @@ rb_str_times(VALUE str, VALUE times)
 
 /*
  *  call-seq:
- *    string % object -> new_string
+ *    self % object -> new_string
  *
- *  Returns the result of formatting +object+ into the format specification +self+
- *  (see Kernel#sprintf for formatting details):
+ *  Returns the result of formatting +object+ into the format specifications
+ *  contained in +self+
+ *  (see {Format Specifications}[rdoc-ref:format_specifications.rdoc]):
  *
- *    "%05d" % 123 # => "00123"
+ *    '%05d' % 123 # => "00123"
  *
- *  If +self+ contains multiple substitutions, +object+ must be
- *  an Array or Hash containing the values to be substituted:
+ *  If +self+ contains multiple format specifications,
+ *  +object+ must be an array or hash containing the objects to be formatted:
  *
- *    "%-5s: %016x" % [ "ID", self.object_id ] # => "ID   : 00002b054ec93168"
- *    "foo = %{foo}" % {foo: 'bar'} # => "foo = bar"
- *    "foo = %{foo}, baz = %{baz}" % {foo: 'bar', baz: 'bat'} # => "foo = bar, baz = bat"
+ *    '%-5s: %016x' % [ 'ID', self.object_id ]                # => "ID   : 00002b054ec93168"
+ *    'foo = %{foo}' % {foo: 'bar'}                           # => "foo = bar"
+ *    'foo = %{foo}, baz = %{baz}' % {foo: 'bar', baz: 'bat'} # => "foo = bar, baz = bat"
  *
+ *  Related: see {Methods for Converting to New String}[rdoc-ref:String@Methods+for+Converting+to+New+String].
  */
 
 static VALUE
