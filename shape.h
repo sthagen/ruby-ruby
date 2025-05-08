@@ -23,7 +23,7 @@ typedef uint16_t shape_id_t;
 
 typedef uint32_t redblack_id_t;
 
-#define MAX_IVARS (attr_index_t)(-1)
+#define SHAPE_MAX_FIELDS (attr_index_t)(-1)
 
 # define SHAPE_MASK (((uintptr_t)1 << SHAPE_ID_NUM_BITS) - 1)
 # define SHAPE_FLAG_MASK (((VALUE)-1) >> SHAPE_ID_NUM_BITS)
@@ -33,21 +33,24 @@ typedef uint32_t redblack_id_t;
 # define SHAPE_MAX_VARIATIONS 8
 
 # define INVALID_SHAPE_ID SHAPE_MASK
-# define ROOT_SHAPE_ID 0x0
 
-# define SPECIAL_CONST_SHAPE_ID (ROOT_SHAPE_ID + 1)
-# define OBJ_TOO_COMPLEX_SHAPE_ID (SPECIAL_CONST_SHAPE_ID + 1)
-# define FIRST_T_OBJECT_SHAPE_ID (OBJ_TOO_COMPLEX_SHAPE_ID + 1)
+#define ROOT_SHAPE_ID               0x0
+#define SPECIAL_CONST_SHAPE_ID      0x1
+//      ROOT_TOO_COMPLEX_SHAPE_ID   0x2
+#define FIRST_T_OBJECT_SHAPE_ID     0x3
+
+extern ID ruby_internal_object_id;
 
 typedef struct redblack_node redblack_node_t;
 
 struct rb_shape {
     struct rb_id_table *edges; // id_table from ID (ivar) to next shape
     ID edge_name; // ID (ivar) for transition from parent to rb_shape
-    attr_index_t next_iv_index;
+    attr_index_t next_field_index; // Fields are either ivars or internal properties like `object_id`
     attr_index_t capacity; // Total capacity of the object with this shape
     uint8_t type;
     uint8_t heap_index;
+    uint8_t flags;
     shape_id_t parent_id;
     redblack_node_t *ancestor_index;
 };
@@ -64,6 +67,7 @@ struct redblack_node {
 enum shape_type {
     SHAPE_ROOT,
     SHAPE_IVAR,
+    SHAPE_OBJ_ID,
     SHAPE_FROZEN,
     SHAPE_T_OBJECT,
     SHAPE_OBJ_TOO_COMPLEX,
@@ -157,19 +161,31 @@ rb_shape_t *rb_shape_get_next_iv_shape(rb_shape_t *shape, ID id);
 bool rb_shape_get_iv_index(rb_shape_t *shape, ID id, attr_index_t *value);
 bool rb_shape_get_iv_index_with_hint(shape_id_t shape_id, ID id, attr_index_t *value, shape_id_t *shape_id_hint);
 RUBY_FUNC_EXPORTED bool rb_shape_obj_too_complex(VALUE obj);
+bool rb_shape_too_complex_p(rb_shape_t *shape);
+bool rb_shape_id_too_complex_p(shape_id_t shape_id);
 
 void rb_shape_set_shape(VALUE obj, rb_shape_t *shape);
 rb_shape_t *rb_shape_get_shape(VALUE obj);
-int rb_shape_frozen_shape_p(rb_shape_t *shape);
+bool rb_shape_frozen_shape_p(rb_shape_t *shape);
 rb_shape_t *rb_shape_transition_shape_frozen(VALUE obj);
+rb_shape_t *rb_shape_transition_shape_too_complex(VALUE obj);
 bool rb_shape_transition_shape_remove_ivar(VALUE obj, ID id, rb_shape_t *shape, VALUE *removed);
 rb_shape_t *rb_shape_get_next(rb_shape_t *shape, VALUE obj, ID id);
 rb_shape_t *rb_shape_get_next_no_warnings(rb_shape_t *shape, VALUE obj, ID id);
+rb_shape_t *rb_shape_object_id_shape(VALUE obj);
+bool rb_shape_has_object_id(rb_shape_t *shape);
+attr_index_t rb_shape_object_id_index(rb_shape_t *shape);
 
 rb_shape_t *rb_shape_rebuild_shape(rb_shape_t *initial_shape, rb_shape_t *dest_shape);
 
+static inline bool
+rb_shape_canonical_p(rb_shape_t *shape)
+{
+    return !shape->flags;
+}
+
 static inline uint32_t
-ROBJECT_IV_CAPACITY(VALUE obj)
+ROBJECT_FIELDS_CAPACITY(VALUE obj)
 {
     RBIMPL_ASSERT_TYPE(obj, RUBY_T_OBJECT);
     // Asking for capacity doesn't make sense when the object is using
@@ -179,45 +195,51 @@ ROBJECT_IV_CAPACITY(VALUE obj)
 }
 
 static inline st_table *
-ROBJECT_IV_HASH(VALUE obj)
+ROBJECT_FIELDS_HASH(VALUE obj)
 {
     RBIMPL_ASSERT_TYPE(obj, RUBY_T_OBJECT);
     RUBY_ASSERT(rb_shape_obj_too_complex(obj));
-    return (st_table *)ROBJECT(obj)->as.heap.ivptr;
+    return (st_table *)ROBJECT(obj)->as.heap.fields;
 }
 
 static inline void
-ROBJECT_SET_IV_HASH(VALUE obj, const st_table *tbl)
+ROBJECT_SET_FIELDS_HASH(VALUE obj, const st_table *tbl)
 {
     RBIMPL_ASSERT_TYPE(obj, RUBY_T_OBJECT);
     RUBY_ASSERT(rb_shape_obj_too_complex(obj));
-    ROBJECT(obj)->as.heap.ivptr = (VALUE *)tbl;
+    ROBJECT(obj)->as.heap.fields = (VALUE *)tbl;
 }
 
 size_t rb_id_table_size(const struct rb_id_table *tbl);
 
 static inline uint32_t
-ROBJECT_IV_COUNT(VALUE obj)
+ROBJECT_FIELDS_COUNT(VALUE obj)
 {
     if (rb_shape_obj_too_complex(obj)) {
-        return (uint32_t)rb_st_table_size(ROBJECT_IV_HASH(obj));
+        return (uint32_t)rb_st_table_size(ROBJECT_FIELDS_HASH(obj));
     }
     else {
         RBIMPL_ASSERT_TYPE(obj, RUBY_T_OBJECT);
         RUBY_ASSERT(!rb_shape_obj_too_complex(obj));
-        return rb_shape_get_shape_by_id(ROBJECT_SHAPE_ID(obj))->next_iv_index;
+        return rb_shape_get_shape_by_id(ROBJECT_SHAPE_ID(obj))->next_field_index;
     }
 }
 
 static inline uint32_t
-RBASIC_IV_COUNT(VALUE obj)
+RBASIC_FIELDS_COUNT(VALUE obj)
 {
-    return rb_shape_get_shape_by_id(rb_shape_get_shape_id(obj))->next_iv_index;
+    return rb_shape_get_shape_by_id(rb_shape_get_shape_id(obj))->next_field_index;
 }
 
 rb_shape_t *rb_shape_traverse_from_new_root(rb_shape_t *initial_shape, rb_shape_t *orig_shape);
 
 bool rb_shape_set_shape_id(VALUE obj, shape_id_t shape_id);
+
+static inline bool
+rb_shape_obj_has_id(VALUE obj)
+{
+    return rb_shape_has_object_id(rb_shape_get_shape(obj));
+}
 
 VALUE rb_obj_debug_shape(VALUE self, VALUE obj);
 
