@@ -1545,6 +1545,18 @@ os_obj_of(VALUE of)
  *     2.2250738585072e-308
  *     Total count: 7
  *
+ *  Due to a current known Ractor implementation issue, this method will not yield
+ *  Ractor-unshareable objects in multi-Ractor mode (when
+ *  <code>Ractor.new</code> has been called within the process at least once).
+ *  See https://bugs.ruby-lang.org/issues/19387 for more information.
+ *
+ *     a = 12345678987654321 # shareable
+ *     b = [].freeze # shareable
+ *     c = {} # not shareable
+ *     ObjectSpace.each_object {|x| x } # yields a, b, and c
+ *     Ractor.new {} # enter multi-Ractor mode
+ *     ObjectSpace.each_object {|x| x } # does not yield c
+ *
  */
 
 static VALUE
@@ -1844,7 +1856,7 @@ object_id(VALUE obj)
     }
     else if (rb_shape_has_object_id(shape)) {
         rb_shape_t *object_id_shape = rb_shape_object_id_shape(obj);
-        id = rb_field_get(obj, object_id_shape);
+        id = rb_obj_field_get(obj, object_id_shape);
     }
     else {
         id = ULL2NUM(next_object_id);
