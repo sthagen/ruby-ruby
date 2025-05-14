@@ -62,6 +62,7 @@ The following default gems are updated.
 
 * RubyGems 3.7.0.dev
 * bundler 2.7.0.dev
+* erb 5.0.0
 * json 2.12.0
 * optparse 0.7.0.dev.2
 * prism 1.4.0
@@ -112,8 +113,6 @@ The following bundled gems are updated.
       operations, and may lead to undefined beahviour. In other words, if two
       `IO` objects share the same file descriptor, closing one does not affect
       the other. [[Feature #18455]]
-
- [[Feature #18455]]
 
 ## Implementation improvements
 
