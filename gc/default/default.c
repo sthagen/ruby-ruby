@@ -2073,10 +2073,10 @@ heap_prepare(rb_objspace_t *objspace, rb_heap_t *heap)
 static inline VALUE
 newobj_fill(VALUE obj, VALUE v1, VALUE v2, VALUE v3)
 {
-    VALUE *p = (VALUE *)obj;
-    p[2] = v1;
-    p[3] = v2;
-    p[4] = v3;
+    VALUE *p = (VALUE *)(obj + sizeof(struct RBasic));
+    p[0] = v1;
+    p[1] = v2;
+    p[2] = v3;
     return obj;
 }
 
@@ -2774,7 +2774,11 @@ rb_gc_impl_undefine_finalizer(void *objspace_ptr, VALUE obj)
     GC_ASSERT(!OBJ_FROZEN(obj));
 
     st_data_t data = obj;
+
+    int lev = rb_gc_vm_lock();
     st_delete(finalizer_table, &data, 0);
+    rb_gc_vm_unlock(lev);
+
     FL_UNSET(obj, FL_FINALIZE);
 }
 
