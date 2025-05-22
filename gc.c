@@ -133,7 +133,7 @@
 unsigned int
 rb_gc_vm_lock(void)
 {
-    unsigned int lev;
+    unsigned int lev = 0;
     RB_VM_LOCK_ENTER_LEV(&lev);
     return lev;
 }
@@ -2828,12 +2828,11 @@ struct mark_cc_entry_args {
 };
 
 static enum rb_id_table_iterator_result
-mark_cc_entry_i(ID id, VALUE ccs_ptr, void *data)
+mark_cc_entry_i(VALUE ccs_ptr, void *data)
 {
     struct rb_class_cc_entries *ccs = (struct rb_class_cc_entries *)ccs_ptr;
 
     VM_ASSERT(vm_ccs_p(ccs));
-    VM_ASSERT(id == ccs->cme->called_id);
 
     if (METHOD_ENTRY_INVALIDATED(ccs->cme)) {
         rb_vm_ccs_free(ccs);
@@ -2861,7 +2860,7 @@ mark_cc_tbl(rb_objspace_t *objspace, struct rb_id_table *tbl, VALUE klass)
 
     args.objspace = objspace;
     args.klass = klass;
-    rb_id_table_foreach(tbl, mark_cc_entry_i, (void *)&args);
+    rb_id_table_foreach_values(tbl, mark_cc_entry_i, (void *)&args);
 }
 
 static enum rb_id_table_iterator_result
@@ -3280,7 +3279,6 @@ rb_gc_mark_children(void *objspace, VALUE obj)
             // Skip updating max_iv_count if the prime classext is not writable
             // because GC context doesn't provide information about namespaces.
             if (RCLASS_PRIME_CLASSEXT_WRITABLE_P(klass)) {
-                VM_ASSERT(rb_shape_obj_too_complex_p(klass));
                 // Increment max_iv_count if applicable, used to determine size pool allocation
                 if (RCLASS_MAX_IV_COUNT(klass) < fields_count) {
                     RCLASS_SET_MAX_IV_COUNT(klass, fields_count);
