@@ -327,9 +327,13 @@ pub enum Insn {
     StringIntern { val: InsnId },
 
     NewArray { elements: Vec<InsnId>, state: InsnId },
+    /// NewHash contains a vec of (key, value) pairs
+    NewHash { elements: Vec<(InsnId,InsnId)>, state: InsnId },
     ArraySet { array: InsnId, idx: usize, val: InsnId },
     ArrayDup { val: InsnId, state: InsnId },
     ArrayMax { elements: Vec<InsnId>, state: InsnId },
+
+    HashDup { val: InsnId, state: InsnId },
 
     /// Check if the value is truthy and "return" a C boolean. In reality, we will likely fuse this
     /// with IfTrue/IfFalse in the backend to generate jcc.
@@ -338,8 +342,10 @@ pub enum Insn {
     GetConstantPath { ic: *const iseq_inline_constant_cache },
 
     //NewObject?
-    //SetIvar {},
-    //GetIvar {},
+    /// Get an instance variable `id` from `self_val`
+    GetIvar { self_val: InsnId, id: ID, state: InsnId },
+    /// Set `self_val`'s instance variable `id` to `val`
+    SetIvar { self_val: InsnId, id: ID, val: InsnId, state: InsnId },
 
     /// Own a FrameState so that instructions can look up their dominating FrameState when
     /// generating deopt side-exits and frame reconstruction metadata. Does not directly generate
@@ -395,7 +401,7 @@ impl Insn {
         match self {
             Insn::ArraySet { .. } | Insn::Snapshot { .. } | Insn::Jump(_)
             | Insn::IfTrue { .. } | Insn::IfFalse { .. } | Insn::Return { .. }
-            | Insn::PatchPoint { .. } => false,
+            | Insn::PatchPoint { .. } | Insn::SetIvar { .. } => false,
             _ => true,
         }
     }
@@ -421,7 +427,9 @@ impl Insn {
             Insn::Param { .. } => false,
             Insn::StringCopy { .. } => false,
             Insn::NewArray { .. } => false,
+            Insn::NewHash { .. } => false,
             Insn::ArrayDup { .. } => false,
+            Insn::HashDup { .. } => false,
             Insn::Test { .. } => false,
             Insn::Snapshot { .. } => false,
             Insn::FixnumAdd  { .. } => false,
@@ -462,6 +470,15 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
                 }
                 Ok(())
             }
+            Insn::NewHash { elements, .. } => {
+                write!(f, "NewHash")?;
+                let mut prefix = " ";
+                for (key, value) in elements {
+                    write!(f, "{prefix}{key}: {value}")?;
+                    prefix = ", ";
+                }
+                Ok(())
+            }
             Insn::ArrayMax { elements, .. } => {
                 write!(f, "ArrayMax")?;
                 let mut prefix = " ";
@@ -473,6 +490,7 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
             }
             Insn::ArraySet { array, idx, val } => { write!(f, "ArraySet {array}, {idx}, {val}") }
             Insn::ArrayDup { val, .. } => { write!(f, "ArrayDup {val}") }
+            Insn::HashDup { val, .. } => { write!(f, "HashDup {val}") }
             Insn::StringCopy { val } => { write!(f, "StringCopy {val}") }
             Insn::Test { val } => { write!(f, "Test {val}") }
             Insn::Jump(target) => { write!(f, "Jump {target}") }
@@ -526,6 +544,8 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
                 Ok(())
             },
             Insn::Snapshot { state } => write!(f, "Snapshot {}", state),
+            Insn::GetIvar { self_val, id, .. } => write!(f, "GetIvar {self_val}, :{}", id.contents_lossy().into_owned()),
+            Insn::SetIvar { self_val, id, val, .. } => write!(f, "SetIvar {self_val}, :{}, {val}", id.contents_lossy().into_owned()),
             insn => { write!(f, "{insn:?}") }
         }
     }
@@ -862,10 +882,20 @@ impl Function {
             },
             ArraySet { array, idx, val } => ArraySet { array: find!(*array), idx: *idx, val: find!(*val) },
             ArrayDup { val , state } => ArrayDup { val: find!(*val), state: *state },
+            &HashDup { val , state } => HashDup { val: find!(val), state },
             &CCall { cfun, ref args, name, return_type, elidable } => CCall { cfun: cfun, args: args.iter().map(|arg| find!(*arg)).collect(), name: name, return_type: return_type, elidable },
             Defined { .. } => todo!("find(Defined)"),
             NewArray { elements, state } => NewArray { elements: find_vec!(*elements), state: find!(*state) },
+            &NewHash { ref elements, state } => {
+                let mut found_elements = vec![];
+                for &(key, value) in elements {
+                    found_elements.push((find!(key), find!(value)));
+                }
+                NewHash { elements: found_elements, state: find!(state) }
+            }
             ArrayMax { elements, state } => ArrayMax { elements: find_vec!(*elements), state: find!(*state) },
+            &GetIvar { self_val, id, state } => GetIvar { self_val: find!(self_val), id, state },
+            &SetIvar { self_val, id, val, state } => SetIvar { self_val: find!(self_val), id, val, state },
         }
     }
 
@@ -891,7 +921,7 @@ impl Function {
             Insn::Param { .. } => unimplemented!("params should not be present in block.insns"),
             Insn::ArraySet { .. } | Insn::Snapshot { .. } | Insn::Jump(_)
             | Insn::IfTrue { .. } | Insn::IfFalse { .. } | Insn::Return { .. }
-            | Insn::PatchPoint { .. } =>
+            | Insn::PatchPoint { .. } | Insn::SetIvar { .. } =>
                 panic!("Cannot infer type of instruction with no output"),
             Insn::Const { val: Const::Value(val) } => Type::from_value(*val),
             Insn::Const { val: Const::CBool(val) } => Type::from_cbool(*val),
@@ -912,6 +942,8 @@ impl Function {
             Insn::StringIntern { .. } => types::StringExact,
             Insn::NewArray { .. } => types::ArrayExact,
             Insn::ArrayDup { .. } => types::ArrayExact,
+            Insn::NewHash { .. } => types::HashExact,
+            Insn::HashDup { .. } => types::HashExact,
             Insn::CCall { return_type, .. } => *return_type,
             Insn::GuardType { val, guard_type, .. } => self.type_of(*val).intersection(*guard_type),
             Insn::GuardBitEquals { val, expected, .. } => self.type_of(*val).intersection(Type::from_value(*expected)),
@@ -933,6 +965,7 @@ impl Function {
             Insn::Defined { .. } => types::BasicObject,
             Insn::GetConstantPath { .. } => types::BasicObject,
             Insn::ArrayMax { .. } => types::BasicObject,
+            Insn::GetIvar { .. } => types::BasicObject,
         }
     }
 
@@ -1383,6 +1416,13 @@ impl Function {
                     worklist.extend(elements);
                     worklist.push_back(state);
                 }
+                Insn::NewHash { elements, state } => {
+                    for (key, value) in elements {
+                        worklist.push_back(key);
+                        worklist.push_back(value);
+                    }
+                    worklist.push_back(state);
+                }
                 Insn::StringCopy { val }
                 | Insn::StringIntern { val }
                 | Insn::Return { val }
@@ -1427,7 +1467,7 @@ impl Function {
                     worklist.push_back(val);
                     worklist.extend(args);
                 }
-                Insn::ArrayDup { val , state } => {
+                Insn::ArrayDup { val, state } | Insn::HashDup { val, state } => {
                     worklist.push_back(val);
                     worklist.push_back(state);
                 }
@@ -1439,6 +1479,15 @@ impl Function {
                     worklist.push_back(state);
                 }
                 Insn::CCall { args, .. } => worklist.extend(args),
+                Insn::GetIvar { self_val, state, .. } => {
+                    worklist.push_back(self_val);
+                    worklist.push_back(state);
+                }
+                Insn::SetIvar { self_val, val, state, .. } => {
+                    worklist.push_back(self_val);
+                    worklist.push_back(val);
+                    worklist.push_back(state);
+                }
             }
         }
         // Now remove all unnecessary instructions
@@ -1907,6 +1956,25 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     let insn_id = fun.push_insn(block, Insn::ArrayDup { val, state: exit_id });
                     state.stack_push(insn_id);
                 }
+                YARVINSN_newhash => {
+                    let count = get_arg(pc, 0).as_usize();
+                    assert!(count % 2 == 0, "newhash count should be even");
+                    let exit_id = fun.push_insn(block, Insn::Snapshot { state: exit_state });
+                    let mut elements = vec![];
+                    for _ in 0..(count/2) {
+                        let value = state.stack_pop()?;
+                        let key = state.stack_pop()?;
+                        elements.push((key, value));
+                    }
+                    elements.reverse();
+                    state.stack_push(fun.push_insn(block, Insn::NewHash { elements, state: exit_id }));
+                }
+                YARVINSN_duphash => {
+                    let val = fun.push_insn(block, Insn::Const { val: Const::Value(get_arg(pc, 0)) });
+                    let exit_id = fun.push_insn(block, Insn::Snapshot { state: exit_state });
+                    let insn_id = fun.push_insn(block, Insn::HashDup { val, state: exit_id });
+                    state.stack_push(insn_id);
+                }
                 YARVINSN_putobject_INT2FIX_0_ => {
                     state.stack_push(fun.push_insn(block, Insn::Const { val: Const::Value(VALUE::fixnum_from_usize(0)) }));
                 }
@@ -2095,6 +2163,22 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     let exit_id = fun.push_insn(block, Insn::Snapshot { state: exit_state });
                     let send = fun.push_insn(block, Insn::Send { self_val: recv, call_info: CallInfo { method_name }, cd, blockiseq, args, state: exit_id });
                     state.stack_push(send);
+                }
+                YARVINSN_getinstancevariable => {
+                    let id = ID(get_arg(pc, 0).as_u64());
+                    // ic is in arg 1
+                    let exit_id = fun.push_insn(block, Insn::Snapshot { state: exit_state });
+                    let self_val = fun.push_insn(block, Insn::PutSelf);
+                    let result = fun.push_insn(block, Insn::GetIvar { self_val, id, state: exit_id });
+                    state.stack_push(result);
+                }
+                YARVINSN_setinstancevariable => {
+                    let id = ID(get_arg(pc, 0).as_u64());
+                    // ic is in arg 1
+                    let exit_id = fun.push_insn(block, Insn::Snapshot { state: exit_state });
+                    let self_val = fun.push_insn(block, Insn::PutSelf);
+                    let val = state.stack_pop()?;
+                    fun.push_insn(block, Insn::SetIvar { self_val, id, val, state: exit_id });
                 }
                 _ => return Err(ParseError::UnknownOpcode(insn_name(opcode as usize))),
             }
@@ -2461,7 +2545,41 @@ mod tests {
         "#]]);
     }
 
-    // TODO(max): Test newhash when we have it
+    #[test]
+    fn test_hash_dup() {
+        eval("def test = {a: 1, b: 2}");
+        assert_method_hir("test", expect![[r#"
+            fn test:
+            bb0():
+              v1:HashExact[VALUE(0x1000)] = Const Value(VALUE(0x1000))
+              v3:HashExact = HashDup v1
+              Return v3
+        "#]]);
+    }
+
+    #[test]
+    fn test_new_hash_empty() {
+        eval("def test = {}");
+        assert_method_hir("test", expect![[r#"
+            fn test:
+            bb0():
+              v2:HashExact = NewHash
+              Return v2
+        "#]]);
+    }
+
+    #[test]
+    fn test_new_hash_with_elements() {
+        eval("def test(aval, bval) = {a: aval, b: bval}");
+        assert_method_hir("test", expect![[r#"
+            fn test:
+            bb0(v0:BasicObject, v1:BasicObject):
+              v3:StaticSymbol[VALUE(0x1000)] = Const Value(VALUE(0x1000))
+              v4:StaticSymbol[VALUE(0x1008)] = Const Value(VALUE(0x1008))
+              v6:HashExact = NewHash v3: v0, v4: v1
+              Return v6
+        "#]]);
+    }
 
     #[test]
     fn test_string_copy() {
@@ -3042,6 +3160,37 @@ mod tests {
               Return v6
         "#]]);
     }
+
+    #[test]
+    fn test_getinstancevariable() {
+        eval("
+            def test = @foo
+            test
+        ");
+        assert_method_hir("test",  expect![[r#"
+            fn test:
+            bb0():
+              v2:BasicObject = PutSelf
+              v3:BasicObject = GetIvar v2, :@foo
+              Return v3
+        "#]]);
+    }
+
+    #[test]
+    fn test_setinstancevariable() {
+        eval("
+            def test = @foo = 1
+            test
+        ");
+        assert_method_hir("test",  expect![[r#"
+            fn test:
+            bb0():
+              v1:Fixnum[1] = Const Value(1)
+              v3:BasicObject = PutSelf
+              SetIvar v3, :@foo, v1
+              Return v1
+        "#]]);
+    }
 }
 
 #[cfg(test)]
@@ -3486,7 +3635,6 @@ mod opt_tests {
         "#]]);
     }
 
-
     #[test]
     fn test_eliminate_new_array() {
         eval("
@@ -3522,6 +3670,38 @@ mod opt_tests {
     }
 
     #[test]
+    fn test_eliminate_new_hash() {
+        eval("
+            def test()
+              c = {}
+              5
+            end
+        ");
+        assert_optimized_method_hir("test", expect![[r#"
+            fn test:
+            bb0():
+              v4:Fixnum[5] = Const Value(5)
+              Return v4
+        "#]]);
+    }
+
+    #[test]
+    fn test_eliminate_new_hash_with_elements() {
+        eval("
+            def test(aval, bval)
+              c = {a: aval, b: bval}
+              5
+            end
+        ");
+        assert_optimized_method_hir("test", expect![[r#"
+            fn test:
+            bb0(v0:BasicObject, v1:BasicObject):
+              v8:Fixnum[5] = Const Value(5)
+              Return v8
+        "#]]);
+    }
+
+    #[test]
     fn test_eliminate_array_dup() {
         eval("
             def test
@@ -3529,6 +3709,22 @@ mod opt_tests {
               5
             end
             test; test
+        ");
+        assert_optimized_method_hir("test", expect![[r#"
+            fn test:
+            bb0():
+              v5:Fixnum[5] = Const Value(5)
+              Return v5
+        "#]]);
+    }
+
+    #[test]
+    fn test_eliminate_hash_dup() {
+        eval("
+            def test
+              c = {a: 1, b: 2}
+              5
+            end
         ");
         assert_optimized_method_hir("test", expect![[r#"
             fn test:
@@ -4095,6 +4291,35 @@ mod opt_tests {
               v4:ArrayExact = NewArray v0, v1
               v6:BasicObject = SendWithoutBlock v4, :size
               Return v6
+        "#]]);
+    }
+
+    #[test]
+    fn test_getinstancevariable() {
+        eval("
+            def test = @foo
+        ");
+        assert_optimized_method_hir("test",  expect![[r#"
+            fn test:
+            bb0():
+              v2:BasicObject = PutSelf
+              v3:BasicObject = GetIvar v2, :@foo
+              Return v3
+        "#]]);
+    }
+
+    #[test]
+    fn test_setinstancevariable() {
+        eval("
+            def test = @foo = 1
+        ");
+        assert_optimized_method_hir("test",  expect![[r#"
+            fn test:
+            bb0():
+              v1:Fixnum[1] = Const Value(1)
+              v3:BasicObject = PutSelf
+              SetIvar v3, :@foo, v1
+              Return v1
         "#]]);
     }
 }
