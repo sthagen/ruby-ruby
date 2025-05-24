@@ -183,16 +183,6 @@ duplicate_classext_const_tbl(struct rb_id_table *src, VALUE klass)
     return dst;
 }
 
-static void
-duplicate_classext_superclasses(rb_classext_t *orig, rb_classext_t *copy)
-{
-    RCLASSEXT_SUPERCLASSES(copy) = RCLASSEXT_SUPERCLASSES(orig);
-    RCLASSEXT_SUPERCLASS_DEPTH(copy) = RCLASSEXT_SUPERCLASS_DEPTH(orig);
-    // the copy is always not the owner and the orig (or its parent class) will maintain the superclasses array
-    RCLASSEXT_SUPERCLASSES_OWNER(copy) = false;
-    RCLASSEXT_SUPERCLASSES_WITH_SELF(copy) = RCLASSEXT_SUPERCLASSES_WITH_SELF(orig);
-}
-
 static VALUE
 namespace_subclasses_tbl_key(const rb_namespace_t *ns)
 {
@@ -348,9 +338,6 @@ rb_class_duplicate_classext(rb_classext_t *orig, VALUE klass, const rb_namespace
      */
 
     RCLASSEXT_CVC_TBL(ext) = duplicate_classext_id_table(RCLASSEXT_CVC_TBL(orig), dup_iclass);
-
-    // superclass_depth, superclasses
-    duplicate_classext_superclasses(orig, ext);
 
     // subclasses, subclasses_index
     duplicate_classext_subclasses(orig, ext);
@@ -713,7 +700,6 @@ class_alloc(VALUE flags, VALUE klass)
 
     RCLASS_SET_ORIGIN((VALUE)obj, (VALUE)obj);
     RCLASS_SET_REFINED_CLASS((VALUE)obj, Qnil);
-    RCLASS_SET_ALLOCATOR((VALUE)obj, 0);
 
     RCLASS_SET_SUBCLASSES((VALUE)obj, anchor);
 
@@ -832,11 +818,11 @@ rb_class_update_superclasses(VALUE klass)
     }
     else {
         superclasses = class_superclasses_including_self(super);
-        RCLASS_WRITE_SUPERCLASSES(super, super_depth, superclasses, true, true);
+        RCLASS_WRITE_SUPERCLASSES(super, super_depth, superclasses, true);
     }
 
     size_t depth = super_depth == RCLASS_MAX_SUPERCLASS_DEPTH ? super_depth : super_depth + 1;
-    RCLASS_WRITE_SUPERCLASSES(klass, depth, superclasses, false, false);
+    RCLASS_WRITE_SUPERCLASSES(klass, depth, superclasses, false);
 }
 
 void
@@ -1057,7 +1043,9 @@ rb_mod_init_copy(VALUE clone, VALUE orig)
         RBASIC_SET_CLASS(clone, rb_singleton_class_clone(orig));
         rb_singleton_class_attached(METACLASS_OF(clone), (VALUE)clone);
     }
-    RCLASS_SET_ALLOCATOR(clone, RCLASS_ALLOCATOR(orig));
+    if (BUILTIN_TYPE(clone) == T_CLASS) {
+        RCLASS_SET_ALLOCATOR(clone, RCLASS_ALLOCATOR(orig));
+    }
     copy_tables(clone, orig);
     if (RCLASS_M_TBL(orig)) {
         struct clone_method_arg arg;
@@ -1098,7 +1086,6 @@ rb_mod_init_copy(VALUE clone, VALUE orig)
             rb_class_set_super(prev_clone_p, clone_p);
             prev_clone_p = clone_p;
             RCLASS_SET_CONST_TBL(clone_p, RCLASS_CONST_TBL(p), false);
-            RCLASS_SET_ALLOCATOR(clone_p, RCLASS_ALLOCATOR(p));
             if (RB_TYPE_P(clone, T_CLASS)) {
                 RCLASS_SET_INCLUDER(clone_p, clone);
             }

@@ -576,9 +576,8 @@ ractor_wakeup(rb_ractor_t *r, rb_thread_t *th /* can be NULL */, enum rb_ractor_
 {
     ASSERT_ractor_locking(r);
 
-    RUBY_DEBUG_LOG("r:%u wait_by:%s -> wait:%s wakeup:%s",
+    RUBY_DEBUG_LOG("r:%u wait:%s wakeup:%s",
                    rb_ractor_id(r),
-                   wait_status_str(th->ractor_waiting.wait_status),
                    wait_status_str(wait_status),
                    wakeup_status_str(wakeup_status));
 
@@ -3678,9 +3677,11 @@ move_leave(VALUE obj, struct obj_traverse_replace_data *data)
         rb_replace_generic_ivar(data->replacement, obj);
     }
 
+    VALUE flags = T_OBJECT | FL_FREEZE | (RBASIC(obj)->flags & FL_PROMOTED);
+
     // Avoid mutations using bind_call, etc.
     MEMZERO((char *)obj + sizeof(struct RBasic), char, size - sizeof(struct RBasic));
-    RBASIC(obj)->flags = T_OBJECT | FL_FREEZE;
+    RBASIC(obj)->flags = flags;
     RBASIC_SET_CLASS_RAW(obj, rb_cRactorMovedObject);
     return traverse_cont;
 }
@@ -4215,9 +4216,12 @@ rb_ractor_require(VALUE feature)
     rb_ractor_channel_close(ec, crr.ch);
 
     if (crr.exception != Qundef) {
+        ractor_reset_belonging(crr.exception);
         rb_exc_raise(crr.exception);
     }
     else {
+        RUBY_ASSERT(crr.result != Qundef);
+        ractor_reset_belonging(crr.result);
         return crr.result;
     }
 }
