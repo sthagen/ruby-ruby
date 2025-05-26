@@ -347,10 +347,6 @@ rb_shape_lookup(shape_id_t shape_id)
     return &GET_SHAPE_TREE()->shape_list[shape_id];
 }
 
-#if !SHAPE_IN_BASIC_FLAGS
-shape_id_t rb_generic_shape_id(VALUE obj);
-#endif
-
 RUBY_FUNC_EXPORTED shape_id_t
 rb_obj_shape_id(VALUE obj)
 {
@@ -358,20 +354,7 @@ rb_obj_shape_id(VALUE obj)
         return SPECIAL_CONST_SHAPE_ID;
     }
 
-#if SHAPE_IN_BASIC_FLAGS
     return RBASIC_SHAPE_ID(obj);
-#else
-    switch (BUILTIN_TYPE(obj)) {
-      case T_OBJECT:
-        return ROBJECT_SHAPE_ID(obj);
-        break;
-      case T_CLASS:
-      case T_MODULE:
-        return RCLASS_SHAPE_ID(obj);
-      default:
-        return rb_generic_shape_id(obj);
-    }
-#endif
 }
 
 size_t
@@ -517,8 +500,7 @@ get_next_shape_internal(rb_shape_t *shape, ID id, enum shape_type shape_type, bo
         }
     }
 
-    RB_VM_LOCK_ENTER();
-    {
+    RB_VM_LOCKING() {
         // The situation may have changed while we waited for the lock.
         // So we load the edge again.
         edges = RUBY_ATOMIC_PTR_LOAD(shape->edges);
@@ -577,7 +559,6 @@ get_next_shape_internal(rb_shape_t *shape, ID id, enum shape_type shape_type, bo
             }
         }
     }
-    RB_VM_LOCK_LEAVE();
 
     return res;
 }

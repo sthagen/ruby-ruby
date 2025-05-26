@@ -42,10 +42,6 @@
  * 2:    RCLASS_PRIME_CLASSEXT_PRIME_WRITABLE
  *           This class's prime classext is the only classext and writable from any namespaces.
  *           If unset, the prime classext is writable only from the root namespace.
- * if !SHAPE_IN_BASIC_FLAGS
- * 4-19: SHAPE_FLAG_MASK
- *           Shape ID for the class.
- * endif
  */
 
 /* Flags of T_ICLASS
@@ -53,10 +49,6 @@
  * 2:    RCLASS_PRIME_CLASSEXT_PRIME_WRITABLE
  *           This module's prime classext is the only classext and writable from any namespaces.
  *           If unset, the prime classext is writable only from the root namespace.
- * if !SHAPE_IN_BASIC_FLAGS
- * 4-19: SHAPE_FLAG_MASK
- *           Shape ID. This is set but not used.
- * endif
  */
 
 /* Flags of T_MODULE
@@ -71,10 +63,6 @@
  *           If unset, the prime classext is writable only from the root namespace.
  * 3:    RMODULE_IS_REFINEMENT
  *           Module is used for refinements.
- * if !SHAPE_IN_BASIC_FLAGS
- * 4-19: SHAPE_FLAG_MASK
- *           Shape ID for the module.
- * endif
  */
 
 #define METACLASS_OF(k) RBASIC(k)->klass
@@ -446,8 +434,7 @@ push_subclass_entry_to_list(VALUE super, VALUE klass, bool is_module)
     entry = ZALLOC(rb_subclass_entry_t);
     entry->klass = klass;
 
-    RB_VM_LOCK_ENTER();
-    {
+    RB_VM_LOCKING() {
         anchor = RCLASS_WRITABLE_SUBCLASSES(super);
         VM_ASSERT(anchor);
         ns_subclasses = (rb_ns_subclasses_t *)anchor->ns_subclasses;
@@ -464,7 +451,6 @@ push_subclass_entry_to_list(VALUE super, VALUE klass, bool is_module)
         entry->prev = head;
         st_insert(tbl, namespace_subclasses_tbl_key(ns), (st_data_t)entry);
     }
-    RB_VM_LOCK_LEAVE();
 
     if (is_module) {
         RCLASS_WRITE_NS_MODULE_SUBCLASSES(klass, anchor->ns_subclasses);
