@@ -373,14 +373,14 @@ rb_gc_get_shape(VALUE obj)
 void
 rb_gc_set_shape(VALUE obj, uint32_t shape_id)
 {
-    rb_shape_set_shape_id(obj, (uint32_t)shape_id);
+    rb_obj_set_shape_id(obj, (uint32_t)shape_id);
 }
 
 uint32_t
 rb_gc_rebuild_shape(VALUE obj, size_t heap_id)
 {
     shape_id_t orig_shape_id = rb_obj_shape_id(obj);
-    if (rb_shape_id_too_complex_p(orig_shape_id)) {
+    if (rb_shape_too_complex_p(orig_shape_id)) {
         return (uint32_t)orig_shape_id;
     }
 
@@ -1849,19 +1849,6 @@ id2ref_tbl_memsize(const void *data)
 }
 
 static void
-id2ref_tbl_compact(void *data)
-{
-    st_table *table = (st_table *)data;
-    if (LIKELY(RB_POSFIXABLE(LAST_OBJECT_ID()))) {
-        // We know keys are all FIXNUM, so no need to update them.
-        gc_ref_update_table_values_only(table);
-    }
-    else {
-        gc_update_table_refs(table);
-    }
-}
-
-static void
 id2ref_tbl_free(void *data)
 {
     id2ref_tbl = NULL; // clear global ref
@@ -1875,7 +1862,8 @@ static const rb_data_type_t id2ref_tbl_type = {
         .dmark = id2ref_tbl_mark,
         .dfree = id2ref_tbl_free,
         .dsize = id2ref_tbl_memsize,
-        .dcompact = id2ref_tbl_compact,
+        // dcompact function not required because the table is reference updated
+        // in rb_gc_vm_weak_table_foreach
     },
     .flags = RUBY_TYPED_WB_PROTECTED | RUBY_TYPED_FREE_IMMEDIATELY
 };
@@ -1906,7 +1894,7 @@ object_id0(VALUE obj)
 {
     VALUE id = Qfalse;
 
-    if (rb_shape_has_object_id(rb_obj_shape(obj))) {
+    if (rb_shape_has_object_id(RBASIC_SHAPE_ID(obj))) {
         shape_id_t object_id_shape_id = rb_shape_transition_object_id(obj);
         id = rb_obj_field_get(obj, object_id_shape_id);
         RUBY_ASSERT(id, "object_id missing");

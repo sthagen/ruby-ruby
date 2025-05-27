@@ -319,7 +319,7 @@ rb_shape_get_root_shape(void)
     return GET_SHAPE_TREE()->root_shape;
 }
 
-shape_id_t
+static inline shape_id_t
 rb_shape_id(rb_shape_t *shape)
 {
     if (shape == NULL) {
@@ -328,13 +328,20 @@ rb_shape_id(rb_shape_t *shape)
     return (shape_id_t)(shape - GET_SHAPE_TREE()->shape_list);
 }
 
-void
-rb_shape_each_shape(each_shape_callback callback, void *data)
+static inline bool
+shape_too_complex_p(rb_shape_t *shape)
 {
-    rb_shape_t *cursor = rb_shape_get_root_shape();
+    return shape->flags & SHAPE_FL_TOO_COMPLEX;
+}
+
+void
+rb_shape_each_shape_id(each_shape_callback callback, void *data)
+{
+    rb_shape_t *start = rb_shape_get_root_shape();
+    rb_shape_t *cursor = start;
     rb_shape_t *end = RSHAPE(GET_SHAPE_TREE()->next_shape_id);
     while (cursor < end) {
-        callback(cursor, data);
+        callback((shape_id_t)(cursor - start), data);
         cursor += 1;
     }
 }
@@ -369,6 +376,12 @@ rb_shape_depth(shape_id_t shape_id)
     }
 
     return depth;
+}
+
+static inline rb_shape_t *
+obj_shape(VALUE obj)
+{
+    return RSHAPE(rb_obj_shape_id(obj));
 }
 
 static rb_shape_t *
@@ -487,7 +500,7 @@ get_next_shape_internal(rb_shape_t *shape, ID id, enum shape_type shape_type, bo
     rb_shape_t *res = NULL;
 
     // There should never be outgoing edges from "too complex", except for SHAPE_FROZEN and SHAPE_OBJ_ID
-    RUBY_ASSERT(!rb_shape_too_complex_p(shape) || shape_type == SHAPE_FROZEN || shape_type == SHAPE_OBJ_ID);
+    RUBY_ASSERT(!shape_too_complex_p(shape) || shape_type == SHAPE_FROZEN || shape_type == SHAPE_OBJ_ID);
 
     *variation_created = false;
 
@@ -564,7 +577,7 @@ get_next_shape_internal(rb_shape_t *shape, ID id, enum shape_type shape_type, bo
 }
 
 static inline bool
-rb_shape_frozen_shape_p(rb_shape_t *shape)
+shape_frozen_p(rb_shape_t *shape)
 {
     return SHAPE_FL_FROZEN & shape->flags;
 }
@@ -590,13 +603,13 @@ remove_shape_recursive(rb_shape_t *shape, ID id, rb_shape_t **removed_shape)
             // We found a new parent.  Create a child of the new parent that
             // has the same attributes as this shape.
             if (new_parent) {
-                if (UNLIKELY(rb_shape_too_complex_p(new_parent))) {
+                if (UNLIKELY(shape_too_complex_p(new_parent))) {
                     return new_parent;
                 }
 
                 bool dont_care;
                 rb_shape_t *new_child = get_next_shape_internal(new_parent, shape->edge_name, shape->type, &dont_care, true);
-                if (UNLIKELY(rb_shape_too_complex_p(new_child))) {
+                if (UNLIKELY(shape_too_complex_p(new_child))) {
                     return new_child;
                 }
 
@@ -619,7 +632,7 @@ rb_shape_transition_remove_ivar(VALUE obj, ID id, shape_id_t *removed_shape_id)
     shape_id_t shape_id = rb_obj_shape_id(obj);
     rb_shape_t *shape = RSHAPE(shape_id);
 
-    RUBY_ASSERT(!rb_shape_too_complex_p(shape));
+    RUBY_ASSERT(!shape_too_complex_p(shape));
 
     rb_shape_t *removed_shape = NULL;
     rb_shape_t *new_shape = remove_shape_recursive(shape, id, &removed_shape);
@@ -643,7 +656,7 @@ rb_shape_transition_frozen(VALUE obj)
     rb_shape_t *shape = RSHAPE(shape_id);
     RUBY_ASSERT(shape);
 
-    if (rb_shape_frozen_shape_p(shape)) {
+    if (shape_frozen_p(shape)) {
         return shape_id;
     }
 
@@ -675,20 +688,26 @@ shape_transition_too_complex(rb_shape_t *original_shape)
 shape_id_t
 rb_shape_transition_complex(VALUE obj)
 {
-    rb_shape_t *original_shape = rb_obj_shape(obj);
+    rb_shape_t *original_shape = obj_shape(obj);
     return rb_shape_id(shape_transition_too_complex(original_shape));
 }
 
-bool
-rb_shape_has_object_id(rb_shape_t *shape)
+static inline bool
+shape_has_object_id(rb_shape_t *shape)
 {
     return shape->flags & SHAPE_FL_HAS_OBJECT_ID;
+}
+
+bool
+rb_shape_has_object_id(shape_id_t shape_id)
+{
+    return shape_has_object_id(RSHAPE(shape_id));
 }
 
 shape_id_t
 rb_shape_transition_object_id(VALUE obj)
 {
-    rb_shape_t* shape = rb_obj_shape(obj);
+    rb_shape_t* shape = obj_shape(obj);
     RUBY_ASSERT(shape);
 
     if (shape->flags & SHAPE_FL_HAS_OBJECT_ID) {
@@ -724,17 +743,46 @@ rb_shape_get_next_iv_shape(shape_id_t shape_id, ID id)
     return rb_shape_id(next_shape);
 }
 
+static bool
+shape_get_iv_index(rb_shape_t *shape, ID id, attr_index_t *value)
+{
+    while (shape->parent_id != INVALID_SHAPE_ID) {
+        if (shape->edge_name == id) {
+            enum shape_type shape_type;
+            shape_type = (enum shape_type)shape->type;
+
+            switch (shape_type) {
+              case SHAPE_IVAR:
+                RUBY_ASSERT(shape->next_field_index > 0);
+                *value = shape->next_field_index - 1;
+                return true;
+              case SHAPE_ROOT:
+              case SHAPE_T_OBJECT:
+                return false;
+              case SHAPE_OBJ_TOO_COMPLEX:
+              case SHAPE_OBJ_ID:
+              case SHAPE_FROZEN:
+                rb_bug("Ivar should not exist on transition");
+            }
+        }
+
+        shape = RSHAPE(shape->parent_id);
+    }
+
+    return false;
+}
+
 static inline rb_shape_t *
 shape_get_next(rb_shape_t *shape, VALUE obj, ID id, bool emit_warnings)
 {
     RUBY_ASSERT(!is_instance_id(id) || RTEST(rb_sym2str(ID2SYM(id))));
-    if (UNLIKELY(rb_shape_too_complex_p(shape))) {
+    if (UNLIKELY(shape_too_complex_p(shape))) {
         return shape;
     }
 
 #if RUBY_DEBUG
     attr_index_t index;
-    if (rb_shape_get_iv_index(shape, id, &index)) {
+    if (shape_get_iv_index(shape, id, &index)) {
         rb_bug("rb_shape_get_next: trying to create ivar that already exists at index %u", index);
     }
 #endif
@@ -781,13 +829,13 @@ shape_get_next(rb_shape_t *shape, VALUE obj, ID id, bool emit_warnings)
 shape_id_t
 rb_shape_transition_add_ivar(VALUE obj, ID id)
 {
-    return rb_shape_id(shape_get_next(rb_obj_shape(obj), obj, id, true));
+    return rb_shape_id(shape_get_next(obj_shape(obj), obj, id, true));
 }
 
 shape_id_t
 rb_shape_transition_add_ivar_no_warnings(VALUE obj, ID id)
 {
-    return rb_shape_id(shape_get_next(rb_obj_shape(obj), obj, id, false));
+    return rb_shape_id(shape_get_next(obj_shape(obj), obj, id, false));
 }
 
 // Same as rb_shape_get_iv_index, but uses a provided valid shape id and index
@@ -796,14 +844,14 @@ bool
 rb_shape_get_iv_index_with_hint(shape_id_t shape_id, ID id, attr_index_t *value, shape_id_t *shape_id_hint)
 {
     attr_index_t index_hint = *value;
-    rb_shape_t *shape = RSHAPE(shape_id);
-    rb_shape_t *initial_shape = shape;
 
     if (*shape_id_hint == INVALID_SHAPE_ID) {
         *shape_id_hint = shape_id;
-        return rb_shape_get_iv_index(shape, id, value);
+        return rb_shape_get_iv_index(shape_id, id, value);
     }
 
+    rb_shape_t *shape = RSHAPE(shape_id);
+    rb_shape_t *initial_shape = shape;
     rb_shape_t *shape_hint = RSHAPE(*shape_id_hint);
 
     // We assume it's likely shape_id_hint and shape_id have a close common
@@ -843,36 +891,7 @@ rb_shape_get_iv_index_with_hint(shape_id_t shape_id, ID id, attr_index_t *value,
         shape = initial_shape;
     }
     *shape_id_hint = shape_id;
-    return rb_shape_get_iv_index(shape, id, value);
-}
-
-static bool
-shape_get_iv_index(rb_shape_t *shape, ID id, attr_index_t *value)
-{
-    while (shape->parent_id != INVALID_SHAPE_ID) {
-        if (shape->edge_name == id) {
-            enum shape_type shape_type;
-            shape_type = (enum shape_type)shape->type;
-
-            switch (shape_type) {
-              case SHAPE_IVAR:
-                RUBY_ASSERT(shape->next_field_index > 0);
-                *value = shape->next_field_index - 1;
-                return true;
-              case SHAPE_ROOT:
-              case SHAPE_T_OBJECT:
-                return false;
-              case SHAPE_OBJ_TOO_COMPLEX:
-              case SHAPE_OBJ_ID:
-              case SHAPE_FROZEN:
-                rb_bug("Ivar should not exist on transition");
-            }
-        }
-
-        shape = RSHAPE(shape->parent_id);
-    }
-
-    return false;
+    return shape_get_iv_index(shape, id, value);
 }
 
 static bool
@@ -902,11 +921,13 @@ shape_cache_get_iv_index(rb_shape_t *shape, ID id, attr_index_t *value)
 }
 
 bool
-rb_shape_get_iv_index(rb_shape_t *shape, ID id, attr_index_t *value)
+rb_shape_get_iv_index(shape_id_t shape_id, ID id, attr_index_t *value)
 {
+    rb_shape_t *shape = RSHAPE(shape_id);
+
     // It doesn't make sense to ask for the index of an IV that's stored
     // on an object that is "too complex" as it uses a hash for storing IVs
-    RUBY_ASSERT(rb_shape_id(shape) != ROOT_TOO_COMPLEX_SHAPE_ID);
+    RUBY_ASSERT(!shape_too_complex_p(shape));
 
     if (!shape_cache_get_iv_index(shape, id, value)) {
         // If it wasn't in the ancestor cache, then don't do a linear search
@@ -919,12 +940,6 @@ rb_shape_get_iv_index(rb_shape_t *shape, ID id, attr_index_t *value)
     }
 
     return true;
-}
-
-void
-rb_shape_set_shape(VALUE obj, rb_shape_t *shape)
-{
-    rb_shape_set_shape_id(obj, rb_shape_id(shape));
 }
 
 int32_t
@@ -1032,22 +1047,63 @@ rb_shape_rebuild_shape(rb_shape_t *initial_shape, rb_shape_t *dest_shape)
     return midway_shape;
 }
 
+shape_id_t
+rb_shape_rebuild(shape_id_t initial_shape_id, shape_id_t dest_shape_id)
+{
+    return rb_shape_id(rb_shape_rebuild_shape(RSHAPE(initial_shape_id), RSHAPE(dest_shape_id)));
+}
+
+void
+rb_shape_copy_fields(VALUE dest, VALUE *dest_buf, shape_id_t dest_shape_id, VALUE src, VALUE *src_buf, shape_id_t src_shape_id)
+{
+    rb_shape_t *dest_shape = RSHAPE(dest_shape_id);
+    rb_shape_t *src_shape = RSHAPE(src_shape_id);
+
+    if (src_shape->next_field_index == dest_shape->next_field_index) {
+        // Happy path, we can just memcpy the ivptr content
+        MEMCPY(dest_buf, src_buf, VALUE, dest_shape->next_field_index);
+
+        // Fire write barriers
+        for (uint32_t i = 0; i < dest_shape->next_field_index; i++) {
+            RB_OBJ_WRITTEN(dest, Qundef, dest_buf[i]);
+        }
+    }
+    else {
+        while (src_shape->parent_id != INVALID_SHAPE_ID) {
+            if (src_shape->type == SHAPE_IVAR) {
+                while (dest_shape->edge_name != src_shape->edge_name) {
+                    dest_shape = RSHAPE(dest_shape->parent_id);
+                }
+
+                RB_OBJ_WRITE(dest, &dest_buf[dest_shape->next_field_index - 1], src_buf[src_shape->next_field_index - 1]);
+            }
+            src_shape = RSHAPE(src_shape->parent_id);
+        }
+    }
+}
+
+void
+rb_shape_copy_complex_ivars(VALUE dest, VALUE obj, shape_id_t src_shape_id, st_table *fields_table)
+{
+    // obj is TOO_COMPLEX so we can copy its iv_hash
+    st_table *table = st_copy(fields_table);
+    if (rb_shape_has_object_id(src_shape_id)) {
+        st_data_t id = (st_data_t)ruby_internal_object_id;
+        st_delete(table, &id, NULL);
+    }
+    rb_obj_init_too_complex(dest, table);
+}
+
 RUBY_FUNC_EXPORTED bool
 rb_shape_obj_too_complex_p(VALUE obj)
 {
-    return rb_shape_too_complex_p(rb_obj_shape(obj));
+    return shape_too_complex_p(obj_shape(obj));
 }
 
 bool
-rb_shape_id_too_complex_p(shape_id_t shape_id)
+rb_shape_too_complex_p(shape_id_t shape_id)
 {
-    return rb_shape_too_complex_p(RSHAPE(shape_id));
-}
-
-bool
-rb_shape_too_complex_p(rb_shape_t *shape)
-{
-    return shape->flags & SHAPE_FL_TOO_COMPLEX;
+    return shape_too_complex_p(RSHAPE(shape_id));
 }
 
 size_t
@@ -1087,7 +1143,7 @@ shape_too_complex(VALUE self)
 {
     shape_id_t shape_id = NUM2INT(rb_struct_getmember(self, rb_intern("id")));
     rb_shape_t *shape = RSHAPE(shape_id);
-    return RBOOL(rb_shape_too_complex_p(shape));
+    return RBOOL(shape_too_complex_p(shape));
 }
 
 static VALUE
@@ -1095,15 +1151,15 @@ shape_frozen(VALUE self)
 {
     shape_id_t shape_id = NUM2INT(rb_struct_getmember(self, rb_intern("id")));
     rb_shape_t *shape = RSHAPE(shape_id);
-    return RBOOL(rb_shape_frozen_shape_p(shape));
+    return RBOOL(shape_frozen_p(shape));
 }
 
 static VALUE
-shape_has_object_id(VALUE self)
+shape_has_object_id_p(VALUE self)
 {
     shape_id_t shape_id = NUM2INT(rb_struct_getmember(self, rb_intern("id")));
     rb_shape_t *shape = RSHAPE(shape_id);
-    return RBOOL(rb_shape_has_object_id(shape));
+    return RBOOL(shape_has_object_id(shape));
 }
 
 static VALUE
@@ -1198,7 +1254,7 @@ rb_shape_parent(VALUE self)
 static VALUE
 rb_shape_debug_shape(VALUE self, VALUE obj)
 {
-    return rb_shape_t_to_rb_cShape(rb_obj_shape(obj));
+    return rb_shape_t_to_rb_cShape(obj_shape(obj));
 }
 
 static VALUE
@@ -1344,7 +1400,7 @@ Init_default_shapes(void)
         get_next_shape_internal(root, id_frozen, SHAPE_FROZEN, &dont_care, true);
     RUBY_ASSERT(rb_shape_id(special_const_shape) == SPECIAL_CONST_SHAPE_ID);
     RUBY_ASSERT(SPECIAL_CONST_SHAPE_ID == (GET_SHAPE_TREE()->next_shape_id - 1));
-    RUBY_ASSERT(rb_shape_frozen_shape_p(special_const_shape));
+    RUBY_ASSERT(shape_frozen_p(special_const_shape));
 
     rb_shape_t *too_complex_shape = rb_shape_alloc_with_parent_id(0, ROOT_SHAPE_ID);
     too_complex_shape->type = SHAPE_OBJ_TOO_COMPLEX;
@@ -1411,7 +1467,7 @@ Init_shape(void)
     rb_define_method(rb_cShape, "depth", rb_shape_export_depth, 0);
     rb_define_method(rb_cShape, "too_complex?", shape_too_complex, 0);
     rb_define_method(rb_cShape, "shape_frozen?", shape_frozen, 0);
-    rb_define_method(rb_cShape, "has_object_id?", shape_has_object_id, 0);
+    rb_define_method(rb_cShape, "has_object_id?", shape_has_object_id_p, 0);
 
     rb_define_const(rb_cShape, "SHAPE_ROOT", INT2NUM(SHAPE_ROOT));
     rb_define_const(rb_cShape, "SHAPE_IVAR", INT2NUM(SHAPE_IVAR));

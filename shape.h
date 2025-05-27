@@ -122,13 +122,12 @@ int32_t rb_shape_id_offset(void);
 RUBY_FUNC_EXPORTED rb_shape_t *rb_shape_lookup(shape_id_t shape_id);
 RUBY_FUNC_EXPORTED shape_id_t rb_obj_shape_id(VALUE obj);
 shape_id_t rb_shape_get_next_iv_shape(shape_id_t shape_id, ID id);
-bool rb_shape_get_iv_index(rb_shape_t *shape, ID id, attr_index_t *value);
+bool rb_shape_get_iv_index(shape_id_t shape_id, ID id, attr_index_t *value);
 bool rb_shape_get_iv_index_with_hint(shape_id_t shape_id, ID id, attr_index_t *value, shape_id_t *shape_id_hint);
 RUBY_FUNC_EXPORTED bool rb_shape_obj_too_complex_p(VALUE obj);
-bool rb_shape_too_complex_p(rb_shape_t *shape);
-bool rb_shape_id_too_complex_p(shape_id_t shape_id);
+bool rb_shape_too_complex_p(shape_id_t shape_id);
+bool rb_shape_has_object_id(shape_id_t shape_id);
 
-void rb_shape_set_shape(VALUE obj, rb_shape_t *shape);
 shape_id_t rb_shape_transition_frozen(VALUE obj);
 shape_id_t rb_shape_transition_complex(VALUE obj);
 shape_id_t rb_shape_transition_remove_ivar(VALUE obj, ID id, shape_id_t *removed_shape_id);
@@ -136,27 +135,52 @@ shape_id_t rb_shape_transition_add_ivar(VALUE obj, ID id);
 shape_id_t rb_shape_transition_add_ivar_no_warnings(VALUE obj, ID id);
 shape_id_t rb_shape_transition_object_id(VALUE obj);
 
-bool rb_shape_has_object_id(rb_shape_t *shape);
 void rb_shape_free_all(void);
 
-rb_shape_t *rb_shape_rebuild_shape(rb_shape_t *initial_shape, rb_shape_t *dest_shape);
-
-static inline rb_shape_t *
-rb_obj_shape(VALUE obj)
-{
-    return RSHAPE(rb_obj_shape_id(obj));
-}
+shape_id_t rb_shape_rebuild(shape_id_t initial_shape_id, shape_id_t dest_shape_id);
+void rb_shape_copy_fields(VALUE dest, VALUE *dest_buf, shape_id_t dest_shape_id, VALUE src, VALUE *src_buf, shape_id_t src_shape_id);
+void rb_shape_copy_complex_ivars(VALUE dest, VALUE obj, shape_id_t src_shape_id, st_table *fields_table);
 
 static inline bool
-rb_shape_canonical_p(rb_shape_t *shape)
+rb_shape_canonical_p(shape_id_t shape_id)
 {
-    return !shape->flags;
+    return !RSHAPE(shape_id)->flags;
 }
 
 static inline shape_id_t
 rb_shape_root(size_t heap_id)
 {
     return (shape_id_t)(heap_id + FIRST_T_OBJECT_SHAPE_ID);
+}
+
+static inline bool
+RSHAPE_TYPE_P(shape_id_t shape_id, enum shape_type type)
+{
+    return RSHAPE(shape_id)->type == type;
+}
+
+static inline attr_index_t
+RSHAPE_CAPACITY(shape_id_t shape_id)
+{
+    return RSHAPE(shape_id)->capacity;
+}
+
+static inline attr_index_t
+RSHAPE_LEN(shape_id_t shape_id)
+{
+    return RSHAPE(shape_id)->next_field_index;
+}
+
+static inline attr_index_t
+RSHAPE_INDEX(shape_id_t shape_id)
+{
+    return RSHAPE_LEN(shape_id) - 1;
+}
+
+static inline ID
+RSHAPE_EDGE_NAME(shape_id_t shape_id)
+{
+    return RSHAPE(shape_id)->edge_name;
 }
 
 static inline uint32_t
@@ -206,22 +230,21 @@ RBASIC_FIELDS_COUNT(VALUE obj)
 
 shape_id_t rb_shape_traverse_from_new_root(shape_id_t initial_shape_id, shape_id_t orig_shape_id);
 
-bool rb_shape_set_shape_id(VALUE obj, shape_id_t shape_id);
+bool rb_obj_set_shape_id(VALUE obj, shape_id_t shape_id);
 
 static inline bool
 rb_shape_obj_has_id(VALUE obj)
 {
-    return rb_shape_has_object_id(rb_obj_shape(obj));
+    return rb_shape_has_object_id(RBASIC_SHAPE_ID(obj));
 }
 
 // For ext/objspace
 RUBY_SYMBOL_EXPORT_BEGIN
-typedef void each_shape_callback(rb_shape_t *shape, void *data);
-void rb_shape_each_shape(each_shape_callback callback, void *data);
+typedef void each_shape_callback(shape_id_t shape_id, void *data);
+void rb_shape_each_shape_id(each_shape_callback callback, void *data);
 size_t rb_shape_memsize(shape_id_t shape);
 size_t rb_shape_edges_count(shape_id_t shape_id);
 size_t rb_shape_depth(shape_id_t shape_id);
-shape_id_t rb_shape_id(rb_shape_t *shape);
 RUBY_SYMBOL_EXPORT_END
 
 #endif
