@@ -17,6 +17,7 @@ editor.
 Ruby core development can be done either in Windows `cmd` like:
 
 ```batch
+ridk install
 ridk enable ucrt64
 
 pacman -S --needed %MINGW_PACKAGE_PREFIX%-openssl %MINGW_PACKAGE_PREFIX%-libyaml %MINGW_PACKAGE_PREFIX%-libffi
@@ -37,6 +38,7 @@ make
 or in MSYS2 `bash` like:
 
 ```bash
+ridk install
 ridk enable ucrt64
 bash
 
@@ -76,14 +78,41 @@ sh ../../ruby/configure -C --disable-install-doc --with-opt-dir=C:\Users\usernam
     x64.
 
     The minimum requirement is here:
-      * VC++/MSVC on VS 2017/2019 version build tools.
-        * Visual Studio 2022 17.13.x is broken. see https://bugs.ruby-lang.org/issues/21167
+      * VC++/MSVC on VS 2017/2019/2022 version build tools.
       * Windows 10/11 SDK
-        * 10.0.26100 is broken, 10.0.22621 is recommended. see https://bugs.ruby-lang.org/issues/21255
+
+    You can install Visual Studio Build Tools with `winget`. The minimum requirement manifest is:
+
+    ```json
+    {
+      "version": "1.0",
+      "components": [
+        "Microsoft.VisualStudio.Component.Roslyn.Compiler",
+        "Microsoft.Component.MSBuild",
+        "Microsoft.VisualStudio.Component.CoreBuildTools",
+        "Microsoft.VisualStudio.Workload.MSBuildTools",
+        "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+        "Microsoft.VisualStudio.Component.VC.Redist.14.Latest",
+        "Microsoft.VisualStudio.Component.Windows11SDK.26100"
+      ],
+      "extensions": []
+    }
+    ```
+
+    You save the above JSON to a file like `minimum.vsconfig` and run the following command:
+
+    ```batch
+    winget install Microsoft.VisualStudio.2022.BuildTools --override "--passive --config minimum.vsconfig"
+    ```
 
 3.  Please set environment variable `INCLUDE`, `LIB`, `PATH`
     to run required commands properly from the command line.
-    These are set properly by `vcvarall*.bat` usually.
+    These are set properly by `vcvarall*.bat` usually. You can run
+    the following command to set them in your command line.
+
+    ```
+    cmd /k "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
+    ```
 
     **Note** building ruby requires following commands.
 
