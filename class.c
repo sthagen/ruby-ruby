@@ -42,6 +42,8 @@
  * 2:    RCLASS_PRIME_CLASSEXT_PRIME_WRITABLE
  *           This class's prime classext is the only classext and writable from any namespaces.
  *           If unset, the prime classext is writable only from the root namespace.
+ * 3:    RCLASS_IS_INITIALIZED
+ *           Class has been initialized.
  */
 
 /* Flags of T_ICLASS
@@ -56,13 +58,13 @@
  * 0:    RCLASS_IS_ROOT
  *           The class has been added to the VM roots. Will always be marked and pinned.
  *           This is done for classes defined from C to allow storing them in global variables.
- * 1:    RMODULE_ALLOCATED_BUT_NOT_INITIALIZED
- *           Module has not been initialized.
+ * 1:    RMODULE_IS_REFINEMENT
+ *           Module is used for refinements.
  * 2:    RCLASS_PRIME_CLASSEXT_PRIME_WRITABLE
  *           This module's prime classext is the only classext and writable from any namespaces.
  *           If unset, the prime classext is writable only from the root namespace.
- * 3:    RMODULE_IS_REFINEMENT
- *           Module is used for refinements.
+ * 3:    RCLASS_IS_INITIALIZED
+ *           Module has been initialized.
  */
 
 #define METACLASS_OF(k) RBASIC(k)->klass
@@ -634,19 +636,17 @@ class_switch_superclass(VALUE super, VALUE klass)
 }
 
 /**
- * Allocates a struct RClass for a new class.
+ * Allocates a struct RClass for a new class, iclass, or module.
  *
- * @param flags     initial value for basic.flags of the returned class.
- * @param klass     the class of the returned class.
- * @return          an uninitialized Class object.
- * @pre  `klass` must refer `Class` class or an ancestor of Class.
- * @pre  `(flags | T_CLASS) != 0`
- * @post the returned class can safely be `#initialize` 'd.
+ * @param type      The type of the RClass (T_CLASS, T_ICLASS, or T_MODULE)
+ * @param klass     value for basic.klass of the returned object.
+ * @return          an uninitialized Class/IClass/Module object.
+ * @pre  `klass` must refer to a class or module
  *
  * @note this function is not Class#allocate.
  */
 static VALUE
-class_alloc(VALUE flags, VALUE klass)
+class_alloc(enum ruby_value_type type, VALUE klass)
 {
     rb_ns_subclasses_t *ns_subclasses;
     rb_subclass_anchor_t *anchor;
@@ -666,7 +666,9 @@ class_alloc(VALUE flags, VALUE klass)
     anchor->ns_subclasses = ns_subclasses;
     anchor->head = ZALLOC(rb_subclass_entry_t);
 
-    flags &= T_MASK;
+    RUBY_ASSERT(type == T_CLASS || type == T_ICLASS || type == T_MODULE);
+
+    VALUE flags = type;
     if (RGENGC_WB_PROTECTED_CLASS) flags |= FL_WB_PROTECTED;
     NEWOBJ_OF(obj, struct RClass, klass, flags, alloc_size, 0);
 
@@ -746,6 +748,9 @@ rb_class_boot(VALUE super)
     class_initialize_method_table(klass);
 
     class_associate_super(klass, super, true);
+    if (super && !UNDEF_P(super)) {
+        rb_class_set_initialized(klass);
+    }
 
     return (VALUE)klass;
 }
@@ -903,7 +908,7 @@ class_init_copy_check(VALUE clone, VALUE orig)
     if (orig == rb_cBasicObject) {
         rb_raise(rb_eTypeError, "can't copy the root class");
     }
-    if (RCLASS_SUPER(clone) != 0 || clone == rb_cBasicObject) {
+    if (RCLASS_INITIALIZED_P(clone)) {
         rb_raise(rb_eTypeError, "already initialized class");
     }
     if (RCLASS_SINGLETON_P(orig)) {
@@ -976,28 +981,18 @@ copy_tables(VALUE clone, VALUE orig)
 
 static bool ensure_origin(VALUE klass);
 
-/**
- * If this flag is set, that module is allocated but not initialized yet.
- */
-enum {RMODULE_ALLOCATED_BUT_NOT_INITIALIZED = RUBY_FL_USER1};
-
-static inline bool
-RMODULE_UNINITIALIZED(VALUE module)
-{
-    return FL_TEST_RAW(module, RMODULE_ALLOCATED_BUT_NOT_INITIALIZED);
-}
-
 void
-rb_module_set_initialized(VALUE mod)
+rb_class_set_initialized(VALUE klass)
 {
-    FL_UNSET_RAW(mod, RMODULE_ALLOCATED_BUT_NOT_INITIALIZED);
+    RUBY_ASSERT(RB_TYPE_P(klass, T_CLASS) || RB_TYPE_P(klass, T_MODULE));
+    FL_SET_RAW(klass, RCLASS_IS_INITIALIZED);
     /* no more re-initialization */
 }
 
 void
 rb_module_check_initializable(VALUE mod)
 {
-    if (!RMODULE_UNINITIALIZED(mod)) {
+    if (RCLASS_INITIALIZED_P(mod)) {
         rb_raise(rb_eTypeError, "already initialized module");
     }
 }
@@ -1006,9 +1001,11 @@ rb_module_check_initializable(VALUE mod)
 VALUE
 rb_mod_init_copy(VALUE clone, VALUE orig)
 {
+    /* Only class or module is valid here, but other classes may enter here and
+     * only hit an exception on the OBJ_INIT_COPY checks
+     */
     switch (BUILTIN_TYPE(clone)) {
       case T_CLASS:
-      case T_ICLASS:
         class_init_copy_check(clone, orig);
         break;
       case T_MODULE:
@@ -1018,6 +1015,11 @@ rb_mod_init_copy(VALUE clone, VALUE orig)
         break;
     }
     if (!OBJ_INIT_COPY(clone, orig)) return clone;
+
+    RUBY_ASSERT(RB_TYPE_P(orig, T_CLASS) || RB_TYPE_P(orig, T_MODULE));
+    RUBY_ASSERT(BUILTIN_TYPE(clone) == BUILTIN_TYPE(orig));
+
+    rb_class_set_initialized(clone);
 
     /* cloned flag is refer at constant inline cache
      * see vm_get_const_key_cref() in vm_insnhelper.c
@@ -1064,7 +1066,7 @@ rb_mod_init_copy(VALUE clone, VALUE orig)
             if (BUILTIN_TYPE(p) != T_ICLASS) {
                 rb_bug("non iclass between module/class and origin");
             }
-            clone_p = class_alloc(RBASIC(p)->flags, METACLASS_OF(p));
+            clone_p = class_alloc(T_ICLASS, METACLASS_OF(p));
             /* We should set the m_tbl right after allocation before anything
              * that can trigger GC to avoid clone_p from becoming old and
              * needing to fire write barriers. */
@@ -1141,7 +1143,8 @@ rb_singleton_class_clone_and_attach(VALUE obj, VALUE attach)
     else {
         /* copy singleton(unnamed) class */
         bool klass_of_clone_is_new;
-        VALUE clone = class_alloc(RBASIC(klass)->flags, 0);
+        RUBY_ASSERT(RB_TYPE_P(klass, T_CLASS));
+        VALUE clone = class_alloc(T_CLASS, 0);
 
         if (BUILTIN_TYPE(obj) == T_CLASS) {
             klass_of_clone_is_new = true;
@@ -1265,6 +1268,7 @@ make_metaclass(VALUE klass)
     super = RCLASS_SUPER(klass);
     while (RB_TYPE_P(super, T_ICLASS)) super = RCLASS_SUPER(super);
     class_associate_super(metaclass, super ? ENSURE_EIGENCLASS(super) : rb_cClass, true);
+    rb_class_set_initialized(klass);
 
     // Full class ancestry may not have been filled until we reach here.
     rb_class_update_superclasses(METACLASS_OF(metaclass));
@@ -1547,7 +1551,6 @@ rb_module_s_alloc(VALUE klass)
 {
     VALUE mod = class_alloc(T_MODULE, klass);
     class_initialize_method_table(mod);
-    FL_SET(mod, RMODULE_ALLOCATED_BUT_NOT_INITIALIZED);
     return mod;
 }
 
@@ -1671,7 +1674,7 @@ ensure_includable(VALUE klass, VALUE module)
 {
     rb_class_modify_check(klass);
     Check_Type(module, T_MODULE);
-    rb_module_set_initialized(module);
+    rb_class_set_initialized(module);
     if (!NIL_P(rb_refinement_module_get_refined_class(module))) {
         rb_raise(rb_eArgError, "refinement module is not allowed");
     }
