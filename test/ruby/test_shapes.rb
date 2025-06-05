@@ -92,15 +92,18 @@ class TestShapes < Test::Unit::TestCase
   # RubyVM::Shape.of returns new instances of shape objects for
   # each call. This helper method allows us to define equality for
   # shapes
-  def assert_shape_equal(shape1, shape2)
-    assert_equal(shape1.id, shape2.id)
-    assert_equal(shape1.parent_id, shape2.parent_id)
-    assert_equal(shape1.depth, shape2.depth)
-    assert_equal(shape1.type, shape2.type)
+  def assert_shape_equal(e, a)
+    assert_equal(
+      {id: e.id, parent_id: e.parent_id, depth: e.depth, type: e.type},
+      {id: a.id, parent_id: a.parent_id, depth: a.depth, type: a.type},
+    )
   end
 
-  def refute_shape_equal(shape1, shape2)
-    refute_equal(shape1.id, shape2.id)
+  def refute_shape_equal(e, a)
+    refute_equal(
+      {id: e.id, parent_id: e.parent_id, depth: e.depth, type: e.type},
+      {id: a.id, parent_id: a.parent_id, depth: a.depth, type: a.type},
+    )
   end
 
   def test_iv_order_correct_on_complex_objects
@@ -651,6 +654,22 @@ class TestShapes < Test::Unit::TestCase
     end;
   end
 
+  def test_object_id_transition_too_complex
+    assert_separately([], "#{<<~"begin;"}\n#{<<~'end;'}")
+    begin;
+      class Hi; end
+      obj = Hi.new
+      obj.instance_variable_set(:@a, 1)
+      obj.instance_variable_set(:@b, 2)
+      old_id = obj.object_id
+
+      RubyVM::Shape.exhaust_shapes
+      obj.remove_instance_variable(:@a)
+
+      assert_equal old_id, obj.object_id
+    end;
+  end
+
   def test_too_complex_and_frozen_and_object_id
     assert_separately([], "#{<<~"begin;"}\n#{<<~'end;'}")
     begin;
@@ -676,7 +695,7 @@ class TestShapes < Test::Unit::TestCase
       assert_predicate frozen_shape, :shape_frozen?
       refute_predicate frozen_shape, :has_object_id?
 
-      tc.object_id
+      assert_equal tc.object_id, tc.object_id
 
       id_shape = RubyVM::Shape.of(tc)
       refute_equal frozen_shape.id, id_shape.id
