@@ -274,6 +274,8 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
         Insn::GuardBitEquals { val, expected, state } => gen_guard_bit_equals(jit, asm, opnd!(val), *expected, &function.frame_state(*state))?,
         Insn::PatchPoint(_) => return Some(()), // For now, rb_zjit_bop_redefined() panics. TODO: leave a patch point and fix rb_zjit_bop_redefined()
         Insn::CCall { cfun, args, name: _, return_type: _, elidable: _ } => gen_ccall(jit, asm, *cfun, args)?,
+        Insn::GetIvar { self_val, id, state: _ } => gen_getivar(asm, opnd!(self_val), *id),
+        Insn::SetIvar { self_val, id, val, state: _ } => gen_setivar(asm, opnd!(self_val), *id, opnd!(val)),
         _ => {
             debug!("ZJIT: gen_function: unexpected insn {:?}", insn);
             return None;
@@ -295,6 +297,24 @@ fn gen_ccall(jit: &mut JITState, asm: &mut Assembler, cfun: *const u8, args: &[I
     }
 
     Some(asm.ccall(cfun, lir_args))
+}
+
+/// Emit an uncached instance variable lookup
+fn gen_getivar(asm: &mut Assembler, recv: Opnd, id: ID) -> Opnd {
+    asm_comment!(asm, "call rb_ivar_get");
+    asm.ccall(
+        rb_ivar_get as *const u8,
+        vec![recv, Opnd::UImm(id.0)],
+    )
+}
+
+/// Emit an uncached instance variable store
+fn gen_setivar(asm: &mut Assembler, recv: Opnd, id: ID, val: Opnd) -> Opnd {
+    asm_comment!(asm, "call rb_ivar_set");
+    asm.ccall(
+        rb_ivar_set as *const u8,
+        vec![recv, Opnd::UImm(id.0), val],
+    )
 }
 
 /// Compile an interpreter entry block to be inserted into an ISEQ
@@ -713,6 +733,12 @@ fn gen_save_sp(asm: &mut Assembler, stack_size: usize) {
 fn param_reg(idx: usize) -> Reg {
     // To simplify the implementation, allocate a fixed register for each basic block argument for now.
     // TODO: Allow allocating arbitrary registers for basic block arguments
+    if idx >= ALLOC_REGS.len() {
+        unimplemented!(
+            "register spilling not yet implemented, too many basic block arguments ({}/{})",
+            idx + 1, ALLOC_REGS.len()
+        );
+    }
     ALLOC_REGS[idx]
 }
 

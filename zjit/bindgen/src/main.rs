@@ -368,6 +368,7 @@ fn main() {
         .allowlist_function("rb_iseqw_to_iseq")
         .allowlist_function("rb_iseq_label")
         .allowlist_function("rb_iseq_line_no")
+        .allowlist_function("rb_iseq_defined_string")
         .allowlist_type("defined_type")
 
         // From builtin.h
@@ -381,6 +382,7 @@ fn main() {
         .allowlist_function("rb_attr_get")
         .allowlist_function("rb_ivar_defined")
         .allowlist_function("rb_ivar_get")
+        .allowlist_function("rb_ivar_set")
         .allowlist_function("rb_mod_name")
 
         // From include/ruby/internal/intern/vm.h
