@@ -17,7 +17,16 @@ STATIC_ASSERT(shape_id_num_bits, SHAPE_ID_NUM_BITS == sizeof(shape_id_t) * CHAR_
 #define SHAPE_ID_FL_HAS_OBJECT_ID (SHAPE_FL_HAS_OBJECT_ID << SHAPE_ID_OFFSET_NUM_BITS)
 #define SHAPE_ID_FL_TOO_COMPLEX (SHAPE_FL_TOO_COMPLEX << SHAPE_ID_OFFSET_NUM_BITS)
 #define SHAPE_ID_FL_NON_CANONICAL_MASK (SHAPE_FL_NON_CANONICAL_MASK << SHAPE_ID_OFFSET_NUM_BITS)
-#define SHAPE_ID_READ_ONLY_MASK (~SHAPE_ID_FL_FROZEN)
+
+#define SHAPE_ID_HEAP_INDEX_BITS 3
+#define SHAPE_ID_HEAP_INDEX_OFFSET (SHAPE_ID_NUM_BITS - SHAPE_ID_HEAP_INDEX_BITS - 1) // FIXME: -1 to avoid crashing YJIT
+#define SHAPE_ID_HEAP_INDEX_MAX ((1 << SHAPE_ID_HEAP_INDEX_BITS) - 1)
+#define SHAPE_ID_HEAP_INDEX_MASK (SHAPE_ID_HEAP_INDEX_MAX << SHAPE_ID_HEAP_INDEX_OFFSET)
+
+// The interpreter doesn't care about frozen status or slot size when reading ivars.
+// So we normalize shape_id by clearing these bits to improve cache hits.
+// JITs however might care about it.
+#define SHAPE_ID_READ_ONLY_MASK (~(SHAPE_ID_FL_FROZEN | SHAPE_ID_HEAP_INDEX_MASK))
 
 typedef uint32_t redblack_id_t;
 
@@ -35,7 +44,6 @@ typedef uint32_t redblack_id_t;
 #define ROOT_TOO_COMPLEX_SHAPE_ID       (ROOT_SHAPE_ID | SHAPE_ID_FL_TOO_COMPLEX)
 #define ROOT_TOO_COMPLEX_WITH_OBJ_ID    (ROOT_SHAPE_WITH_OBJ_ID | SHAPE_ID_FL_TOO_COMPLEX | SHAPE_ID_FL_HAS_OBJECT_ID)
 #define SPECIAL_CONST_SHAPE_ID          (ROOT_SHAPE_ID | SHAPE_ID_FL_FROZEN)
-#define FIRST_T_OBJECT_SHAPE_ID         0x2
 
 extern ID ruby_internal_object_id;
 
@@ -49,7 +57,6 @@ struct rb_shape {
     attr_index_t next_field_index; // Fields are either ivars or internal properties like `object_id`
     attr_index_t capacity; // Total capacity of the object with this shape
     uint8_t type;
-    uint8_t heap_index;
 };
 
 typedef struct rb_shape rb_shape_t;
@@ -65,7 +72,6 @@ enum shape_type {
     SHAPE_ROOT,
     SHAPE_IVAR,
     SHAPE_OBJ_ID,
-    SHAPE_T_OBJECT,
 };
 
 enum shape_flags {
@@ -80,6 +86,7 @@ typedef struct {
     /* object shapes */
     rb_shape_t *shape_list;
     rb_shape_t *root_shape;
+    const attr_index_t *capacities;
     rb_atomic_t next_shape_id;
 
     redblack_node_t *shape_cache;
@@ -157,6 +164,7 @@ shape_id_t rb_shape_transition_remove_ivar(VALUE obj, ID id, shape_id_t *removed
 shape_id_t rb_shape_transition_add_ivar(VALUE obj, ID id);
 shape_id_t rb_shape_transition_add_ivar_no_warnings(VALUE obj, ID id);
 shape_id_t rb_shape_transition_object_id(VALUE obj);
+shape_id_t rb_shape_transition_heap(VALUE obj, size_t heap_index);
 shape_id_t rb_shape_object_id(shape_id_t original_shape_id);
 
 void rb_shape_free_all(void);
@@ -189,10 +197,18 @@ rb_shape_canonical_p(shape_id_t shape_id)
     return !(shape_id & SHAPE_ID_FL_NON_CANONICAL_MASK);
 }
 
+static inline uint8_t
+rb_shape_heap_index(shape_id_t shape_id)
+{
+    return (uint8_t)((shape_id & SHAPE_ID_HEAP_INDEX_MASK) >> SHAPE_ID_HEAP_INDEX_OFFSET);
+}
+
 static inline shape_id_t
 rb_shape_root(size_t heap_id)
 {
-    return (shape_id_t)(heap_id + FIRST_T_OBJECT_SHAPE_ID);
+    shape_id_t heap_index = (shape_id_t)heap_id;
+
+    return ROOT_SHAPE_ID | ((heap_index + 1) << SHAPE_ID_HEAP_INDEX_OFFSET);
 }
 
 static inline bool
@@ -202,9 +218,26 @@ RSHAPE_TYPE_P(shape_id_t shape_id, enum shape_type type)
 }
 
 static inline attr_index_t
+RSHAPE_EMBEDDED_CAPACITY(shape_id_t shape_id)
+{
+    uint8_t heap_index = rb_shape_heap_index(shape_id);
+    if (heap_index) {
+        return GET_SHAPE_TREE()->capacities[heap_index - 1];
+    }
+    return 0;
+}
+
+static inline attr_index_t
 RSHAPE_CAPACITY(shape_id_t shape_id)
 {
-    return RSHAPE(shape_id)->capacity;
+    attr_index_t embedded_capacity = RSHAPE_EMBEDDED_CAPACITY(shape_id);
+
+    if (embedded_capacity > RSHAPE(shape_id)->capacity) {
+        return embedded_capacity;
+    }
+    else {
+        return RSHAPE(shape_id)->capacity;
+    }
 }
 
 static inline attr_index_t
@@ -269,8 +302,6 @@ RBASIC_FIELDS_COUNT(VALUE obj)
 {
     return RSHAPE(rb_obj_shape_id(obj))->next_field_index;
 }
-
-shape_id_t rb_shape_traverse_from_new_root(shape_id_t initial_shape_id, shape_id_t orig_shape_id);
 
 bool rb_obj_set_shape_id(VALUE obj, shape_id_t shape_id);
 

@@ -905,13 +905,15 @@ class TestShapes < Test::Unit::TestCase
   def test_remove_instance_variable_capacity_transition
     assert_separately([], "#{<<~"begin;"}\n#{<<~'end;'}")
     begin;
-      t_object_shape = RubyVM::Shape.find_by_id(RubyVM::Shape::FIRST_T_OBJECT_SHAPE_ID)
-      assert_equal(RubyVM::Shape::SHAPE_T_OBJECT, t_object_shape.type)
-
-      initial_capacity = t_object_shape.capacity
 
       # a does not transition in capacity
       a = Class.new.new
+      root_shape = RubyVM::Shape.of(a)
+
+      assert_equal(RubyVM::Shape::SHAPE_ROOT, root_shape.type)
+      initial_capacity = root_shape.capacity
+      refute_equal(0, initial_capacity)
+
       initial_capacity.times do |i|
         a.instance_variable_set(:"@ivar#{i + 1}", i)
       end
@@ -976,7 +978,7 @@ class TestShapes < Test::Unit::TestCase
     example.add_foo # makes a transition
     add_foo_shape = RubyVM::Shape.of(example)
     assert_equal([:@foo], example.instance_variables)
-    assert_equal(initial_shape.id, add_foo_shape.parent.id)
+    assert_equal(initial_shape.raw_id, add_foo_shape.parent.raw_id)
     assert_equal(1, add_foo_shape.next_field_index)
 
     example.remove_foo # makes a transition
@@ -987,7 +989,7 @@ class TestShapes < Test::Unit::TestCase
     example.add_bar # makes a transition
     bar_shape = RubyVM::Shape.of(example)
     assert_equal([:@bar], example.instance_variables)
-    assert_equal(initial_shape.id, bar_shape.parent_id)
+    assert_equal(initial_shape.raw_id, bar_shape.parent_id)
     assert_equal(1, bar_shape.next_field_index)
   end
 
@@ -1007,7 +1009,7 @@ class TestShapes < Test::Unit::TestCase
   def test_new_obj_has_t_object_shape
     obj = TestObject.new
     shape = RubyVM::Shape.of(obj)
-    assert_equal RubyVM::Shape::SHAPE_T_OBJECT, shape.type
+    assert_equal RubyVM::Shape::SHAPE_ROOT, shape.type
     assert_nil shape.parent
   end
 
@@ -1039,7 +1041,7 @@ class TestShapes < Test::Unit::TestCase
     assert_equal RubyVM::Shape::SHAPE_IVAR, shape.type
 
     shape = shape.parent
-    assert_equal RubyVM::Shape::SHAPE_T_OBJECT, shape.type
+    assert_equal RubyVM::Shape::SHAPE_ROOT, shape.type
     assert_nil shape.parent
 
     assert_equal(1, obj.instance_variable_get(:@a))
