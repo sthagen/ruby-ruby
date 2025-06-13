@@ -778,7 +778,7 @@ VALUE
 rb_object_shape_count(void)
 {
     // next_shape_id starts from 0, so it's the same as the count
-    return ULONG2NUM((unsigned long)GET_SHAPE_TREE()->next_shape_id);
+    return ULONG2NUM((unsigned long)rb_shape_tree.next_shape_id);
 }
 
 bool
@@ -797,6 +797,12 @@ attr_index_t
 rb_yjit_shape_capacity(shape_id_t shape_id)
 {
     return RSHAPE_CAPACITY(shape_id);
+}
+
+attr_index_t
+rb_yjit_shape_index(shape_id_t shape_id)
+{
+    return RSHAPE_INDEX(shape_id);
 }
 
 // Assert that we have the VM lock. Relevant mostly for multi ractor situations.

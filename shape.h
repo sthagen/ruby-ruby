@@ -92,7 +92,10 @@ typedef struct {
     redblack_node_t *shape_cache;
     unsigned int cache_size;
 } rb_shape_tree_t;
-RUBY_EXTERN rb_shape_tree_t *rb_shape_tree_ptr;
+
+RUBY_SYMBOL_EXPORT_BEGIN
+RUBY_EXTERN rb_shape_tree_t rb_shape_tree;
+RUBY_SYMBOL_EXPORT_END
 
 union rb_attr_index_cache {
     uint64_t pack;
@@ -101,13 +104,6 @@ union rb_attr_index_cache {
         attr_index_t index;
     } unpack;
 };
-
-static inline rb_shape_tree_t *
-rb_current_shape_tree(void)
-{
-    return rb_shape_tree_ptr;
-}
-#define GET_SHAPE_TREE() rb_current_shape_tree()
 
 static inline shape_id_t
 RBASIC_SHAPE_ID(VALUE obj)
@@ -149,11 +145,17 @@ RBASIC_SET_SHAPE_ID(VALUE obj, shape_id_t shape_id)
 #endif
 }
 
-#define RSHAPE rb_shape_lookup
+static inline rb_shape_t *
+RSHAPE(shape_id_t shape_id)
+{
+    uint32_t offset = (shape_id & SHAPE_ID_OFFSET_MASK);
+    RUBY_ASSERT(offset != INVALID_SHAPE_ID);
+
+    return &rb_shape_tree.shape_list[offset];
+}
 
 int32_t rb_shape_id_offset(void);
 
-RUBY_FUNC_EXPORTED rb_shape_t *rb_shape_lookup(shape_id_t shape_id);
 RUBY_FUNC_EXPORTED shape_id_t rb_obj_shape_id(VALUE obj);
 shape_id_t rb_shape_get_next_iv_shape(shape_id_t shape_id, ID id);
 bool rb_shape_get_iv_index(shape_id_t shape_id, ID id, attr_index_t *value);
@@ -238,7 +240,7 @@ RSHAPE_EMBEDDED_CAPACITY(shape_id_t shape_id)
 {
     uint8_t heap_index = rb_shape_heap_index(shape_id);
     if (heap_index) {
-        return GET_SHAPE_TREE()->capacities[heap_index - 1];
+        return rb_shape_tree.capacities[heap_index - 1];
     }
     return 0;
 }
