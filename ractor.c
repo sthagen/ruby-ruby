@@ -1357,8 +1357,25 @@ make_shareable_check_shareable(VALUE obj)
         }
     }
 
-    if (RB_TYPE_P(obj, T_IMEMO)) {
-        return traverse_skip;
+    switch (TYPE(obj)) {
+        case T_IMEMO:
+          return traverse_skip;
+        case T_OBJECT:
+          {
+              // If a T_OBJECT is shared and has no free capacity, we can't safely store the object_id inline,
+              // as it would require to move the object content into an external buffer.
+              // This is only a problem for T_OBJECT, given other types have external fields and can do RCU.
+              // To avoid this issue, we proactively create the object_id.
+              shape_id_t shape_id = RBASIC_SHAPE_ID(obj);
+              attr_index_t capacity = RSHAPE_CAPACITY(shape_id);
+              attr_index_t free_capacity = capacity - RSHAPE_LEN(shape_id);
+              if (!rb_shape_has_object_id(shape_id) && capacity && !free_capacity) {
+                  rb_obj_id(obj);
+              }
+          }
+          break;
+        default:
+          break;
     }
 
     if (!RB_OBJ_FROZEN_RAW(obj)) {
@@ -1639,7 +1656,7 @@ obj_traverse_replace_i(VALUE obj, struct obj_traverse_replace_data *data)
     else if (data->replacement != _val)     { RB_OBJ_WRITE(obj, &v, data->replacement); } \
 } while (0)
 
-    if (UNLIKELY(FL_TEST_RAW(obj, FL_EXIVAR))) {
+    if (UNLIKELY(rb_obj_exivar_p(obj))) {
         struct gen_fields_tbl *fields_tbl;
         rb_ivar_generic_fields_tbl_lookup(obj, &fields_tbl);
 
@@ -1868,7 +1885,7 @@ move_leave(VALUE obj, struct obj_traverse_replace_data *data)
 
     rb_gc_obj_id_moved(data->replacement);
 
-    if (UNLIKELY(FL_TEST_RAW(obj, FL_EXIVAR))) {
+    if (UNLIKELY(rb_obj_exivar_p(obj))) {
         rb_replace_generic_ivar(data->replacement, obj);
     }
 

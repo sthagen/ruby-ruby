@@ -225,10 +225,11 @@ pub const RUBY_FL_PROMOTED: ruby_fl_type = 32;
 pub const RUBY_FL_UNUSED6: ruby_fl_type = 64;
 pub const RUBY_FL_FINALIZE: ruby_fl_type = 128;
 pub const RUBY_FL_TAINT: ruby_fl_type = 0;
+pub const RUBY_FL_EXIVAR: ruby_fl_type = 0;
 pub const RUBY_FL_SHAREABLE: ruby_fl_type = 256;
 pub const RUBY_FL_UNTRUSTED: ruby_fl_type = 0;
 pub const RUBY_FL_UNUSED9: ruby_fl_type = 512;
-pub const RUBY_FL_EXIVAR: ruby_fl_type = 1024;
+pub const RUBY_FL_UNUSED10: ruby_fl_type = 1024;
 pub const RUBY_FL_FREEZE: ruby_fl_type = 2048;
 pub const RUBY_FL_USER0: ruby_fl_type = 4096;
 pub const RUBY_FL_USER1: ruby_fl_type = 8192;
@@ -1119,6 +1120,7 @@ extern "C" {
     pub fn rb_gvar_set(arg1: ID, arg2: VALUE) -> VALUE;
     pub fn rb_ensure_iv_list_size(obj: VALUE, current_len: u32, newsize: u32);
     pub fn rb_vm_barrier();
+    pub fn rb_str_dup_m(str_: VALUE) -> VALUE;
     pub fn rb_str_byte_substr(str_: VALUE, beg: VALUE, len: VALUE) -> VALUE;
     pub fn rb_str_substr_two_fixnums(
         str_: VALUE,

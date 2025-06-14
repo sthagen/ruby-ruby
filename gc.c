@@ -2070,9 +2070,8 @@ rb_gc_obj_free_vm_weak_references(VALUE obj)
 {
     obj_free_object_id(obj);
 
-    if (FL_TEST_RAW(obj, FL_EXIVAR)) {
+    if (rb_obj_exivar_p(obj)) {
         rb_free_generic_ivar((VALUE)obj);
-        FL_UNSET_RAW(obj, FL_EXIVAR);
     }
 
     switch (BUILTIN_TYPE(obj)) {
@@ -2317,7 +2316,7 @@ rb_obj_memsize_of(VALUE obj)
         return 0;
     }
 
-    if (FL_TEST(obj, FL_EXIVAR)) {
+    if (rb_obj_exivar_p(obj)) {
         size += rb_generic_ivar_memsize(obj);
     }
 
@@ -3142,7 +3141,7 @@ rb_gc_mark_children(void *objspace, VALUE obj)
 {
     struct gc_mark_classext_foreach_arg foreach_args;
 
-    if (FL_TEST_RAW(obj, FL_EXIVAR)) {
+    if (rb_obj_exivar_p(obj)) {
         rb_mark_generic_ivar(obj);
     }
 
@@ -4011,8 +4010,7 @@ vm_weak_table_gen_fields_foreach(st_data_t key, st_data_t value, st_data_t data)
 
       case ST_DELETE:
         free_gen_fields_tbl((VALUE)key, (struct gen_fields_tbl *)value);
-
-        FL_UNSET((VALUE)key, FL_EXIVAR);
+        RBASIC_SET_SHAPE_ID((VALUE)key, ROOT_SHAPE_ID);
         return ST_DELETE;
 
       case ST_REPLACE: {

@@ -388,12 +388,7 @@ fstring_hash(VALUE str)
 static inline bool
 BARE_STRING_P(VALUE str)
 {
-    if (RBASIC_CLASS(str) != rb_cString) return false;
-
-    if (FL_TEST_RAW(str, FL_EXIVAR)) {
-        return rb_ivar_count(str) == 0;
-    }
-    return true;
+    return RBASIC_CLASS(str) == rb_cString && !rb_shape_obj_has_ivars(str);
 }
 
 static inline st_index_t
@@ -490,7 +485,7 @@ build_fstring(VALUE str, struct fstr_update_arg *arg)
     RUBY_ASSERT(RB_TYPE_P(str, T_STRING));
     RUBY_ASSERT(OBJ_FROZEN(str));
     RUBY_ASSERT(!FL_TEST_RAW(str, STR_FAKESTR));
-    RUBY_ASSERT(!FL_TEST_RAW(str, FL_EXIVAR));
+    RUBY_ASSERT(!rb_obj_exivar_p(str));
     RUBY_ASSERT(RBASIC_CLASS(str) == rb_cString);
     RUBY_ASSERT(!rb_objspace_garbage_object_p(str));
 
@@ -2316,7 +2311,7 @@ VALUE
 rb_str_dup_m(VALUE str)
 {
     if (LIKELY(BARE_STRING_P(str))) {
-        return str_duplicate(rb_obj_class(str), str);
+        return str_duplicate(rb_cString, str);
     }
     else {
         return rb_obj_dup(str);

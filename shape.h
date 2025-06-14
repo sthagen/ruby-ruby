@@ -23,6 +23,10 @@ STATIC_ASSERT(shape_id_num_bits, SHAPE_ID_NUM_BITS == sizeof(shape_id_t) * CHAR_
 #define SHAPE_ID_HEAP_INDEX_MAX ((1 << SHAPE_ID_HEAP_INDEX_BITS) - 1)
 #define SHAPE_ID_HEAP_INDEX_MASK (SHAPE_ID_HEAP_INDEX_MAX << SHAPE_ID_HEAP_INDEX_OFFSET)
 
+// This masks allows to check if a shape_id contains any ivar.
+// It rely on ROOT_SHAPE_WITH_OBJ_ID==1.
+#define SHAPE_ID_HAS_IVAR_MASK (SHAPE_ID_FL_TOO_COMPLEX | (SHAPE_ID_OFFSET_MASK - 1))
+
 // The interpreter doesn't care about frozen status or slot size when reading ivars.
 // So we normalize shape_id by clearing these bits to improve cache hits.
 // JITs however might care about it.
@@ -44,8 +48,6 @@ typedef uint32_t redblack_id_t;
 #define ROOT_TOO_COMPLEX_SHAPE_ID       (ROOT_SHAPE_ID | SHAPE_ID_FL_TOO_COMPLEX)
 #define ROOT_TOO_COMPLEX_WITH_OBJ_ID    (ROOT_SHAPE_WITH_OBJ_ID | SHAPE_ID_FL_TOO_COMPLEX | SHAPE_ID_FL_HAS_OBJECT_ID)
 #define SPECIAL_CONST_SHAPE_ID          (ROOT_SHAPE_ID | SHAPE_ID_FL_FROZEN)
-
-extern ID ruby_internal_object_id;
 
 typedef struct redblack_node redblack_node_t;
 
@@ -134,8 +136,6 @@ RBASIC_SET_SHAPE_ID(VALUE obj, shape_id_t shape_id)
 {
     RUBY_ASSERT(!RB_SPECIAL_CONST_P(obj));
     RUBY_ASSERT(!RB_TYPE_P(obj, T_IMEMO) || IMEMO_TYPE_P(obj, imemo_class_fields));
-    RUBY_ASSERT(rb_shape_verify_consistency(obj, shape_id));
-
 #if RBASIC_SHAPE_ID_FIELD
     RBASIC(obj)->shape_id = (VALUE)shape_id;
 #else
@@ -143,6 +143,7 @@ RBASIC_SET_SHAPE_ID(VALUE obj, shape_id_t shape_id)
     RBASIC(obj)->flags &= SHAPE_FLAG_MASK;
     RBASIC(obj)->flags |= ((VALUE)(shape_id) << SHAPE_FLAG_SHIFT);
 #endif
+    RUBY_ASSERT(rb_shape_verify_consistency(obj, shape_id));
 }
 
 static inline rb_shape_t *
@@ -327,6 +328,46 @@ static inline bool
 rb_shape_obj_has_id(VALUE obj)
 {
     return rb_shape_has_object_id(RBASIC_SHAPE_ID(obj));
+}
+
+static inline bool
+rb_shape_has_ivars(shape_id_t shape_id)
+{
+    return shape_id & SHAPE_ID_HAS_IVAR_MASK;
+}
+
+static inline bool
+rb_shape_obj_has_ivars(VALUE obj)
+{
+    return rb_shape_has_ivars(RBASIC_SHAPE_ID(obj));
+}
+
+static inline bool
+rb_shape_has_fields(shape_id_t shape_id)
+{
+    return shape_id & (SHAPE_ID_OFFSET_MASK | SHAPE_ID_FL_TOO_COMPLEX);
+}
+
+static inline bool
+rb_shape_obj_has_fields(VALUE obj)
+{
+    return rb_shape_has_fields(RBASIC_SHAPE_ID(obj));
+}
+
+static inline bool
+rb_obj_exivar_p(VALUE obj)
+{
+    switch (TYPE(obj)) {
+        case T_NONE:
+        case T_OBJECT:
+        case T_CLASS:
+        case T_MODULE:
+        case T_IMEMO:
+          return false;
+        default:
+          break;
+    }
+    return rb_shape_obj_has_fields(obj);
 }
 
 // For ext/objspace

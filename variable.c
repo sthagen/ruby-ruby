@@ -1255,20 +1255,23 @@ rb_mark_generic_ivar(VALUE obj)
 void
 rb_free_generic_ivar(VALUE obj)
 {
-    st_data_t key = (st_data_t)obj, value;
+    if (rb_obj_exivar_p(obj)) {
+        st_data_t key = (st_data_t)obj, value;
 
-    bool too_complex = rb_shape_obj_too_complex_p(obj);
+        bool too_complex = rb_shape_obj_too_complex_p(obj);
 
-    RB_VM_LOCKING() {
-        if (st_delete(generic_fields_tbl_no_ractor_check(obj), &key, &value)) {
-            struct gen_fields_tbl *fields_tbl = (struct gen_fields_tbl *)value;
+        RB_VM_LOCKING() {
+            if (st_delete(generic_fields_tbl_no_ractor_check(obj), &key, &value)) {
+                struct gen_fields_tbl *fields_tbl = (struct gen_fields_tbl *)value;
 
-            if (UNLIKELY(too_complex)) {
-                st_free_table(fields_tbl->as.complex.table);
+                if (UNLIKELY(too_complex)) {
+                    st_free_table(fields_tbl->as.complex.table);
+                }
+
+                xfree(fields_tbl);
             }
-
-            xfree(fields_tbl);
         }
+        RBASIC_SET_SHAPE_ID(obj, ROOT_SHAPE_ID);
     }
 }
 
@@ -1325,7 +1328,7 @@ rb_obj_field_get(VALUE obj, shape_id_t target_shape_id)
             fields_hash = ROBJECT_FIELDS_HASH(obj);
             break;
           default:
-            RUBY_ASSERT(FL_TEST_RAW(obj, FL_EXIVAR));
+            RUBY_ASSERT(rb_obj_exivar_p(obj));
             struct gen_fields_tbl *fields_tbl = NULL;
             rb_ivar_generic_fields_tbl_lookup(obj, &fields_tbl);
             RUBY_ASSERT(fields_tbl);
@@ -1356,7 +1359,7 @@ rb_obj_field_get(VALUE obj, shape_id_t target_shape_id)
         fields = ROBJECT_FIELDS(obj);
         break;
       default:
-        RUBY_ASSERT(FL_TEST_RAW(obj, FL_EXIVAR));
+        RUBY_ASSERT(rb_obj_exivar_p(obj));
         struct gen_fields_tbl *fields_tbl = NULL;
         rb_ivar_generic_fields_tbl_lookup(obj, &fields_tbl);
         RUBY_ASSERT(fields_tbl);
@@ -1434,7 +1437,7 @@ rb_ivar_lookup(VALUE obj, ID id, VALUE undef)
         }
       default:
         shape_id = RBASIC_SHAPE_ID(obj);
-        if (FL_TEST_RAW(obj, FL_EXIVAR)) {
+        if (rb_obj_exivar_p(obj)) {
             struct gen_fields_tbl *fields_tbl;
             rb_gen_fields_tbl_get(obj, id, &fields_tbl);
 
@@ -1542,13 +1545,18 @@ rb_ivar_delete(VALUE obj, ID id, VALUE undef)
 
     RUBY_ASSERT(removed_shape_id != INVALID_SHAPE_ID);
 
-    attr_index_t new_fields_count = RSHAPE_LEN(next_shape_id);
-
     attr_index_t removed_index = RSHAPE_INDEX(removed_shape_id);
     val = fields[removed_index];
-    size_t trailing_fields = new_fields_count - removed_index;
 
-    MEMMOVE(&fields[removed_index], &fields[removed_index + 1], VALUE, trailing_fields);
+    attr_index_t new_fields_count = RSHAPE_LEN(next_shape_id);
+    if (new_fields_count) {
+        size_t trailing_fields = new_fields_count - removed_index;
+
+        MEMMOVE(&fields[removed_index], &fields[removed_index + 1], VALUE, trailing_fields);
+    }
+    else {
+        rb_free_generic_ivar(obj);
+    }
 
     if (RB_TYPE_P(obj, T_OBJECT) &&
         !RB_FL_TEST_RAW(obj, ROBJECT_EMBED) &&
@@ -1828,20 +1836,17 @@ generic_fields_lookup_ensure_size(st_data_t *k, st_data_t *v, st_data_t u, int e
             RUBY_ASSERT(RSHAPE_TYPE_P(fields_lookup->shape_id, SHAPE_IVAR) || RSHAPE_TYPE_P(fields_lookup->shape_id, SHAPE_OBJ_ID));
             RUBY_ASSERT(RSHAPE_CAPACITY(RSHAPE_PARENT(fields_lookup->shape_id)) < RSHAPE_CAPACITY(fields_lookup->shape_id));
         }
-        else {
-            FL_SET_RAW((VALUE)*k, FL_EXIVAR);
-        }
 
         fields_tbl = gen_fields_tbl_resize(fields_tbl, RSHAPE_CAPACITY(fields_lookup->shape_id));
         *v = (st_data_t)fields_tbl;
     }
 
-    RUBY_ASSERT(FL_TEST((VALUE)*k, FL_EXIVAR));
-
     fields_lookup->fields_tbl = fields_tbl;
     if (fields_lookup->shape_id) {
         rb_obj_set_shape_id(fields_lookup->obj, fields_lookup->shape_id);
     }
+
+    RUBY_ASSERT(rb_obj_exivar_p((VALUE)*k));
 
     return ST_CONTINUE;
 }
@@ -1856,8 +1861,6 @@ generic_ivar_set_shape_fields(VALUE obj, void *data)
     RB_VM_LOCKING() {
         st_update(generic_fields_tbl(obj, fields_lookup->id, false), (st_data_t)obj, generic_fields_lookup_ensure_size, (st_data_t)fields_lookup);
     }
-
-    FL_SET_RAW(obj, FL_EXIVAR);
 
     return fields_lookup->fields_tbl->as.shape.fields;
 }
@@ -1882,7 +1885,6 @@ static shape_id_t
 generic_ivar_set_transition_too_complex(VALUE obj, void *_data)
 {
     shape_id_t new_shape_id = rb_evict_fields_to_hash(obj);
-    FL_SET_RAW(obj, FL_EXIVAR);
     return new_shape_id;
 }
 
@@ -1899,8 +1901,6 @@ generic_ivar_set_too_complex_table(VALUE obj, void *data)
         RB_VM_LOCKING() {
             st_insert(generic_fields_tbl(obj, fields_lookup->id, false), (st_data_t)obj, (st_data_t)fields_tbl);
         }
-
-        FL_SET_RAW(obj, FL_EXIVAR);
     }
 
     RUBY_ASSERT(rb_shape_obj_too_complex_p(obj));
@@ -2341,8 +2341,8 @@ rb_copy_generic_ivar(VALUE dest, VALUE obj)
 
     rb_check_frozen(dest);
 
-    if (!FL_TEST(obj, FL_EXIVAR)) {
-        goto clear;
+    if (!rb_obj_exivar_p(obj)) {
+        return;
     }
 
     unsigned long src_num_ivs = rb_ivar_count(obj);
@@ -2355,8 +2355,6 @@ rb_copy_generic_ivar(VALUE dest, VALUE obj)
     if (rb_gen_fields_tbl_get(obj, 0, &obj_fields_tbl)) {
         if (gen_fields_tbl_count(obj, obj_fields_tbl) == 0)
             goto clear;
-
-        FL_SET(dest, FL_EXIVAR);
 
         if (rb_shape_too_complex_p(src_shape_id)) {
             rb_shape_copy_complex_ivars(dest, obj, src_shape_id, obj_fields_tbl->as.complex.table);
@@ -2381,7 +2379,6 @@ rb_copy_generic_ivar(VALUE dest, VALUE obj)
 
         if (!RSHAPE_LEN(dest_shape_id)) {
             rb_obj_set_shape_id(dest, dest_shape_id);
-            FL_UNSET(dest, FL_EXIVAR);
             return;
         }
 
@@ -2406,25 +2403,16 @@ rb_copy_generic_ivar(VALUE dest, VALUE obj)
     return;
 
   clear:
-    if (FL_TEST(dest, FL_EXIVAR)) {
-        RBASIC_SET_SHAPE_ID(dest, ROOT_SHAPE_ID);
-        rb_free_generic_ivar(dest);
-        FL_UNSET(dest, FL_EXIVAR);
-    }
+    rb_free_generic_ivar(dest);
 }
 
 void
 rb_replace_generic_ivar(VALUE clone, VALUE obj)
 {
-    RUBY_ASSERT(FL_TEST(obj, FL_EXIVAR));
-
     RB_VM_LOCKING() {
         st_data_t fields_tbl, obj_data = (st_data_t)obj;
         if (st_delete(generic_fields_tbl_, &obj_data, &fields_tbl)) {
-            FL_UNSET_RAW(obj, FL_EXIVAR);
-
             st_insert(generic_fields_tbl_, (st_data_t)clone, fields_tbl);
-            FL_SET_RAW(clone, FL_EXIVAR);
         }
         else {
             rb_bug("unreachable");
@@ -2456,7 +2444,7 @@ rb_field_foreach(VALUE obj, rb_ivar_foreach_callback_func *func, st_data_t arg, 
         }
         break;
       default:
-        if (FL_TEST_RAW(obj, FL_EXIVAR)) {
+        if (rb_obj_exivar_p(obj)) {
             gen_fields_each(obj, func, arg, ivar_only);
         }
         break;
@@ -2492,7 +2480,7 @@ rb_ivar_count(VALUE obj)
             return RBASIC_FIELDS_COUNT(fields_obj);
         }
       default:
-        if (FL_TEST(obj, FL_EXIVAR)) {
+        if (rb_obj_exivar_p(obj)) {
             struct gen_fields_tbl *fields_tbl;
 
             if (rb_gen_fields_tbl_get(obj, 0, &fields_tbl)) {
