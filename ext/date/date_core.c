@@ -1599,7 +1599,7 @@ m_ajd(union DateData *x)
 
     if (simple_dat_p(x)) {
 	r = m_real_jd(x);
-	if (FIXNUM_P(r) && FIX2LONG(r) <= (FIXNUM_MAX / 2)) {
+	if (FIXNUM_P(r) && FIX2LONG(r) <= (FIXNUM_MAX / 2) && FIX2LONG(r) >= (FIXNUM_MIN + 1) / 2) {
 	    long ir = FIX2LONG(r);
 	    ir = ir * 2 - 1;
 	    return rb_rational_new2(LONG2FIX(ir), INT2FIX(2));
@@ -6936,13 +6936,24 @@ d_lite_eql_p(VALUE self, VALUE other)
 static VALUE
 d_lite_hash(VALUE self)
 {
-    st_index_t v, h[4];
+    st_index_t v, h[5];
+    VALUE nth;
 
     get_d1(self);
-    h[0] = m_nth(dat);
-    h[1] = m_jd(dat);
-    h[2] = m_df(dat);
-    h[3] = m_sf(dat);
+    nth = m_nth(dat);
+
+    if (FIXNUM_P(nth)) {
+        h[0] = 0;
+        h[1] = (st_index_t)nth;
+    } else {
+        h[0] = 1;
+        h[1] = (st_index_t)FIX2LONG(rb_hash(nth));
+    }
+
+    h[2] = m_jd(dat);
+    h[3] = m_df(dat);
+    h[4] = m_sf(dat);
+
     v = rb_memhash(h, sizeof(h));
     return ST2FIX(v);
 }

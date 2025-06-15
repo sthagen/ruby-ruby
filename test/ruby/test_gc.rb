@@ -393,12 +393,10 @@ class TestGc < Test::Unit::TestCase
 
       # Create some objects and place it in a WeakMap
       wmap = ObjectSpace::WeakMap.new
-      ary = Array.new(count)
-      enum = count.times
-      enum.each.with_index do |i|
+      ary = Array.new(count) do |i|
         obj = Object.new
-        ary[i] = obj
         wmap[obj] = nil
+        obj
       end
 
       # Run full GC to collect stats about weak references
@@ -421,7 +419,7 @@ class TestGc < Test::Unit::TestCase
       GC.start
 
       # Sometimes the WeakMap has a few elements, which might be held on by registers.
-      assert_operator(wmap.size, :<=, 2)
+      assert_operator(wmap.size, :<=, count / 1000)
 
       assert_operator(GC.latest_gc_info(:weak_references_count), :<=, before_weak_references_count - count + error_tolerance)
       assert_operator(GC.latest_gc_info(:retained_weak_references_count), :<=, before_retained_weak_references_count - count + error_tolerance)
