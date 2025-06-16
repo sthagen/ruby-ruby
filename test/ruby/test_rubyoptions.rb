@@ -787,6 +787,12 @@ class TestRubyOptions < Test::Unit::TestCase
     unless /mswin|mingw/ =~ RUBY_PLATFORM
       opts[:rlimit_core] = 0
     end
+    opts[:failed] = proc do |status, message = "", out = ""|
+      if (sig = status.termsig) && Signal.list["SEGV"] == sig
+        out = ""
+      end
+      Test::Unit::CoreAssertions::FailDesc[status, message]
+    end
     ExecOptions = opts.freeze
 
     # The regexp list that should match the entire stderr output.
@@ -847,7 +853,11 @@ class TestRubyOptions < Test::Unit::TestCase
     args.unshift(env)
 
     test_stdin = ""
-    tests = [//, list] unless block
+    if !block
+      tests = [//, list, message]
+    elsif message
+      tests = [[], [], message]
+    end
 
     assert_in_out_err(args, test_stdin, *tests, encoding: "ASCII-8BIT",
                       **SEGVTest::ExecOptions, **opt, &block)
@@ -860,13 +870,12 @@ class TestRubyOptions < Test::Unit::TestCase
   def test_segv_loaded_features
     bug7402 = '[ruby-core:49573]'
 
-    status = assert_segv(['-e', "END {#{SEGVTest::KILL_SELF}}",
-                          '-e', 'class Bogus; def to_str; exit true; end; end',
-                          '-e', '$".clear',
-                          '-e', '$".unshift Bogus.new',
-                          '-e', '(p $"; abort) unless $".size == 1',
-                         ])
-    assert_not_predicate(status, :success?, "segv but success #{bug7402}")
+    assert_segv(['-e', "END {#{SEGVTest::KILL_SELF}}",
+                 '-e', 'class Bogus; def to_str; exit true; end; end',
+                 '-e', '$".clear',
+                 '-e', '$".unshift Bogus.new',
+                 '-e', '(p $"; abort) unless $".size == 1',
+                ], success: false)
   end
 
   def test_segv_setproctitle

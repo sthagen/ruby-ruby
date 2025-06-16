@@ -123,7 +123,7 @@ setup_launchable() {
             --flavor cppflags="${INPUT_CPPFLAGS}" \
             --test-suite test-spec \
             > "${builddir}"/${test_spec_session_file} \
-            spec_opts+=--launchable-test-reports="${test_spec_report_path}" || :
+            && spec_opts+=--launchable-test-reports="${test_spec_report_path}" || :
     fi
 }
 launchable_record_test() {
@@ -143,7 +143,7 @@ if [ "$LAUNCHABLE_ENABLED" = "true" ]; then
     btest_session_file='launchable_btest_session.txt'
     test_spec_session_file='launchable_test_spec_session.txt'
     setup_pid=$$
-    (sleep 180; echo "setup_launchable timed out; killing"; kill -INT "$setup_pid" 2> /dev/null) & sleep_pid=$!
+    (sleep 180; echo "setup_launchable timed out; killing"; kill -INT "-$setup_pid" 2> /dev/null) & sleep_pid=$!
     launchable_failed=false
     trap "launchable_failed=true" INT
     setup_launchable
