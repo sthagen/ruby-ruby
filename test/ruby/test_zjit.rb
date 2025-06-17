@@ -295,6 +295,34 @@ class TestZJIT < Test::Unit::TestCase
     }, insns: [:opt_ge], call_threshold: 2
   end
 
+  def test_opt_hash_freeze
+    assert_compiles '{}', <<~RUBY, insns: [:opt_hash_freeze]
+      def test = {}.freeze
+      test
+    RUBY
+  end
+
+  def test_opt_ary_freeze
+    assert_compiles '[]', <<~RUBY, insns: [:opt_ary_freeze]
+      def test = [].freeze
+      test
+    RUBY
+  end
+
+  def test_opt_str_freeze
+    assert_compiles '""', <<~RUBY, insns: [:opt_str_freeze]
+      def test = "".freeze
+      test
+    RUBY
+  end
+
+  def test_opt_str_uminus
+    assert_compiles '""', <<~RUBY, insns: [:opt_str_uminus]
+      def test = -""
+      test
+    RUBY
+  end
+
   def test_new_array_empty
     assert_compiles '[]', %q{
       def test = []
@@ -648,6 +676,27 @@ class TestZJIT < Test::Unit::TestCase
       test()
       @foo
     }
+  end
+
+  def test_uncached_getconstant_path
+    assert_compiles RUBY_COPYRIGHT.dump, %q{
+      def test = RUBY_COPYRIGHT
+      test
+    }, call_threshold: 1, insns: [:opt_getconstant_path]
+  end
+
+  def test_getconstant_path_autoload
+    # A constant-referencing expression can run arbitrary code through Kernel#autoload.
+    Dir.mktmpdir('autoload') do |tmpdir|
+      autoload_path = File.join(tmpdir, 'test_getconstant_path_autoload.rb')
+      File.write(autoload_path, 'X = RUBY_COPYRIGHT')
+
+      assert_compiles RUBY_COPYRIGHT.dump, %Q{
+        Object.autoload(:X, #{File.realpath(autoload_path).inspect})
+        def test = X
+        test
+      }, call_threshold: 1, insns: [:opt_getconstant_path]
+    end
   end
 
   def test_send_backtrace
