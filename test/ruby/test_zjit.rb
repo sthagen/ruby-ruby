@@ -31,6 +31,20 @@ class TestZJIT < Test::Unit::TestCase
     }
   end
 
+  def test_putstring
+    assert_compiles '""', %q{
+      def test = "#{""}"
+      test
+    }, insns: [:putstring]
+  end
+
+  def test_putchilldedstring
+    assert_compiles '""', %q{
+      def test = ""
+      test
+    }, insns: [:putchilledstring]
+  end
+
   def test_leave_param
     assert_compiles '5', %q{
       def test(n) = n
@@ -649,6 +663,32 @@ class TestZJIT < Test::Unit::TestCase
       def entry = jit_frame1      # 3
       entry # profile send        # 4
       entry                       # 5
+    }, call_threshold: 2
+  end
+
+  def test_putspecialobject_vm_core_and_cbase
+    assert_compiles '10', %q{
+      def test
+        alias bar test
+        10
+      end
+
+      test
+      bar
+    }, insns: [:putspecialobject]
+  end
+
+  def test_putspecialobject_const_base
+    assert_compiles '1', %q{
+      Foo = 1
+
+      def test = Foo
+
+      # First call: populates the constant cache
+      test
+      # Second call: triggers ZJIT compilation with warm cache
+      # RubyVM::ZJIT.assert_compiles will panic if this fails to compile
+      test
     }, call_threshold: 2
   end
 
