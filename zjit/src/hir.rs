@@ -496,6 +496,9 @@ pub enum Insn {
     FixnumGt   { left: InsnId, right: InsnId },
     FixnumGe   { left: InsnId, right: InsnId },
 
+    // Distinct from `SendWithoutBlock` with `mid:to_s` because does not have a patch point for String to_s being redefined
+    ObjToString { val: InsnId, call_info: CallInfo, cd: *const rb_call_data, state: InsnId },
+
     /// Side-exit if val doesn't have the expected type.
     GuardType { val: InsnId, guard_type: Type, state: InsnId },
     /// Side-exit if val is not the expected VALUE.
@@ -695,6 +698,7 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
             Insn::ToNewArray { val, .. } => write!(f, "ToNewArray {val}"),
             Insn::ArrayExtend { left, right, .. } => write!(f, "ArrayExtend {left}, {right}"),
             Insn::ArrayPush { array, val, .. } => write!(f, "ArrayPush {array}, {val}"),
+            Insn::ObjToString { val, .. } => { write!(f, "ObjToString {val}") },
             Insn::SideExit { .. } => write!(f, "SideExit"),
             Insn::PutSpecialObject { value_type } => {
                 write!(f, "PutSpecialObject {}", value_type)
@@ -1013,6 +1017,12 @@ impl Function {
             FixnumLt { left, right } => FixnumLt { left: find!(*left), right: find!(*right) },
             FixnumLe { left, right } => FixnumLe { left: find!(*left), right: find!(*right) },
             PutSpecialObject { value_type } => PutSpecialObject { value_type: *value_type },
+            ObjToString { val, call_info, cd, state } => ObjToString {
+                val: find!(*val),
+                call_info: call_info.clone(),
+                cd: *cd,
+                state: *state,
+            },
             SendWithoutBlock { self_val, call_info, cd, args, state } => SendWithoutBlock {
                 self_val: find!(*self_val),
                 call_info: call_info.clone(),
@@ -1143,6 +1153,7 @@ impl Function {
             Insn::GetIvar { .. } => types::BasicObject,
             Insn::ToNewArray { .. } => types::ArrayExact,
             Insn::ToArray { .. } => types::ArrayExact,
+            Insn::ObjToString { .. } => types::BasicObject,
         }
     }
 
@@ -1385,6 +1396,15 @@ impl Function {
                         self.push_insn(block, Insn::PatchPoint(Invariant::StableConstantNames { idlist }));
                         let replacement = self.push_insn(block, Insn::Const { val: Const::Value(unsafe { (*ice).value }) });
                         self.make_equal_to(insn_id, replacement);
+                    }
+                    Insn::ObjToString { val, call_info, cd, state, .. } => {
+                        if self.is_a(val, types::StringExact) {
+                            // behaves differently from `SendWithoutBlock` with `mid:to_s` because ObjToString should not have a patch point for String to_s being redefined
+                            self.make_equal_to(insn_id, val);
+                        } else {
+                            let replacement = self.push_insn(block, Insn::SendWithoutBlock { self_val: val, call_info, cd, args: vec![], state });
+                            self.make_equal_to(insn_id, replacement)
+                        }
                     }
                     _ => { self.push_insn_id(block, insn_id); }
                 }
@@ -1755,6 +1775,10 @@ impl Function {
                 }
                 Insn::ArrayPush { array, val, state } => {
                     worklist.push_back(array);
+                    worklist.push_back(val);
+                    worklist.push_back(state);
+                }
+                Insn::ObjToString { val, state, .. } => {
                     worklist.push_back(val);
                     worklist.push_back(state);
                 }
@@ -2405,6 +2429,14 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                 }
                 YARVINSN_pop => { state.stack_pop()?; }
                 YARVINSN_dup => { state.stack_push(state.stack_top()?); }
+                YARVINSN_dupn => {
+                    // Duplicate the top N element of the stack. As we push, n-1 naturally
+                    // points higher in the original stack.
+                    let n = get_arg(pc, 0).as_usize();
+                    for _ in 0..n {
+                        state.stack_push(state.stack_topn(n-1)?);
+                    }
+                }
                 YARVINSN_swap => {
                     let right = state.stack_pop()?;
                     let left = state.stack_pop()?;
@@ -2622,6 +2654,16 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     let val = state.stack_pop()?;
                     fun.push_insn(block, Insn::SetIvar { self_val: self_param, id, val, state: exit_id });
                 }
+                YARVINSN_opt_reverse => {
+                    // Reverse the order of the top N stack items.
+                    let n = get_arg(pc, 0).as_usize();
+                    for i in 0..n/2 {
+                        let bottom = state.stack_topn(n - 1 - i)?;
+                        let top = state.stack_topn(i)?;
+                        state.stack_setn(i, bottom);
+                        state.stack_setn(n - 1 - i, top);
+                    }
+                }
                 YARVINSN_newrange => {
                     let flag = RangeType::from(get_arg(pc, 0).as_u32());
                     let high = state.stack_pop()?;
@@ -2658,6 +2700,26 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     let exit_id = fun.push_insn(block, Insn::Snapshot { state: exit_state });
                     let insn_id = fun.push_insn(block, Insn::InvokeBuiltin { bf, args, state: exit_id });
                     state.stack_push(insn_id);
+                }
+                YARVINSN_objtostring => {
+                    let cd: *const rb_call_data = get_arg(pc, 0).as_ptr();
+                    let call_info = unsafe { rb_get_call_data_ci(cd) };
+
+                    if unknown_call_type(unsafe { rb_vm_ci_flag(call_info) }) {
+                        assert!(false, "objtostring should not have unknown call type");
+                    }
+                    let argc = unsafe { vm_ci_argc((*cd).ci) };
+                    assert_eq!(0, argc, "objtostring should not have args");
+
+                    let method_name: String = unsafe {
+                        let mid = rb_vm_ci_mid(call_info);
+                        mid.contents_lossy().into_owned()
+                    };
+
+                    let recv = state.stack_pop()?;
+                    let exit_id = fun.push_insn(block, Insn::Snapshot { state: exit_state });
+                    let objtostring = fun.push_insn(block, Insn::ObjToString { val: recv, call_info: CallInfo { method_name }, cd, state: exit_id });
+                    state.stack_push(objtostring)
                 }
                 _ => {
                     // Unknown opcode; side-exit into the interpreter
@@ -4210,6 +4272,47 @@ mod tests {
     }
 
     #[test]
+    fn opt_reverse() {
+        eval("
+            def reverse_odd
+              a, b, c = @a, @b, @c
+              [a, b, c]
+            end
+
+            def reverse_even
+              a, b, c, d = @a, @b, @c, @d
+              [a, b, c, d]
+            end
+        ");
+        assert_method_hir_with_opcode("reverse_odd", YARVINSN_opt_reverse, expect![[r#"
+            fn reverse_odd:
+            bb0(v0:BasicObject):
+              v1:NilClassExact = Const Value(nil)
+              v2:NilClassExact = Const Value(nil)
+              v3:NilClassExact = Const Value(nil)
+              v6:BasicObject = GetIvar v0, :@a
+              v8:BasicObject = GetIvar v0, :@b
+              v10:BasicObject = GetIvar v0, :@c
+              v12:ArrayExact = NewArray v6, v8, v10
+              Return v12
+        "#]]);
+        assert_method_hir_with_opcode("reverse_even", YARVINSN_opt_reverse, expect![[r#"
+            fn reverse_even:
+            bb0(v0:BasicObject):
+              v1:NilClassExact = Const Value(nil)
+              v2:NilClassExact = Const Value(nil)
+              v3:NilClassExact = Const Value(nil)
+              v4:NilClassExact = Const Value(nil)
+              v7:BasicObject = GetIvar v0, :@a
+              v9:BasicObject = GetIvar v0, :@b
+              v11:BasicObject = GetIvar v0, :@c
+              v13:BasicObject = GetIvar v0, :@d
+              v15:ArrayExact = NewArray v7, v9, v11, v13
+              Return v15
+        "#]]);
+    }
+
+    #[test]
     fn test_branchnil() {
         eval("
         def test(x) = x&.itself
@@ -4261,6 +4364,43 @@ mod tests {
               v6:FalseClassExact = Const Value(false)
               v8:BasicObject = InvokeBuiltin gc_start_internal, v0, v1, v2, v3, v6
               Return v8
+        "#]]);
+    }
+
+    #[test]
+    fn dupn() {
+        eval("
+            def test(x) = (x[0, 1] ||= 2)
+        ");
+        assert_method_hir_with_opcode("test", YARVINSN_dupn, expect![[r#"
+            fn test:
+            bb0(v0:BasicObject, v1:BasicObject):
+              v3:NilClassExact = Const Value(nil)
+              v4:Fixnum[0] = Const Value(0)
+              v5:Fixnum[1] = Const Value(1)
+              v7:BasicObject = SendWithoutBlock v1, :[], v4, v5
+              v8:CBool = Test v7
+              IfTrue v8, bb1(v0, v1, v3, v1, v4, v5, v7)
+              v10:Fixnum[2] = Const Value(2)
+              v12:BasicObject = SendWithoutBlock v1, :[]=, v4, v5, v10
+              Return v10
+            bb1(v14:BasicObject, v15:BasicObject, v16:NilClassExact, v17:BasicObject, v18:Fixnum[0], v19:Fixnum[1], v20:BasicObject):
+              Return v20
+        "#]]);
+    }
+
+    #[test]
+    fn test_objtostring() {
+        eval("
+            def test = \"#{1}\"
+        ");
+        assert_method_hir_with_opcode("test", YARVINSN_objtostring, expect![[r#"
+            fn test:
+            bb0(v0:BasicObject):
+              v2:StringExact[VALUE(0x1000)] = Const Value(VALUE(0x1000))
+              v3:Fixnum[1] = Const Value(1)
+              v5:BasicObject = ObjToString v3
+              SideExit
         "#]]);
     }
 }
@@ -5819,6 +5959,36 @@ mod opt_tests {
               v5:BasicObject = SendWithoutBlock v3, :dup
               v7:BasicObject = SendWithoutBlock v5, :-@
               Return v7
+        "#]]);
+    }
+
+    #[test]
+    fn test_objtostring_string() {
+        eval(r##"
+            def test = "#{('foo')}"
+        "##);
+        assert_optimized_method_hir("test", expect![[r#"
+            fn test:
+            bb0(v0:BasicObject):
+              v2:StringExact[VALUE(0x1000)] = Const Value(VALUE(0x1000))
+              v3:StringExact[VALUE(0x1008)] = Const Value(VALUE(0x1008))
+              v4:StringExact = StringCopy v3
+              SideExit
+        "#]]);
+    }
+
+    #[test]
+    fn test_objtostring_with_non_string() {
+        eval(r##"
+            def test = "#{1}"
+        "##);
+        assert_optimized_method_hir("test", expect![[r#"
+            fn test:
+            bb0(v0:BasicObject):
+              v2:StringExact[VALUE(0x1000)] = Const Value(VALUE(0x1000))
+              v3:Fixnum[1] = Const Value(1)
+              v8:BasicObject = SendWithoutBlock v3, :to_s
+              SideExit
         "#]]);
     }
 }

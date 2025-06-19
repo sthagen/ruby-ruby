@@ -75,6 +75,18 @@ tests=''
 spec_opts=''
 
 # Launchable
+launchable_record_session() {
+    launchable record session \
+        --build "${build_name}" \
+        --flavor test_task=$1 \
+        --flavor workflow=Compilations \
+        --flavor with-gcc="${INPUT_WITH_GCC}" \
+        --flavor CFLAGS="${INPUT_CFLAGS}" \
+        --flavor CXXFLAGS="${INPUT_CXXFLAGS}" \
+        --flavor optflags="${INPUT_OPTFLAGS}" \
+        --flavor cppflags="${INPUT_CPPFLAGS}" \
+        --test-suite ${2-$1}
+}
 setup_launchable() {
     pushd ${srcdir}
     # To prevent a slowdown in CI, disable request retries when the Launchable server is unstable.
@@ -86,52 +98,22 @@ setup_launchable() {
     local github_ref="${GITHUB_REF//\//_}"
     local build_name="${github_ref}"_"${GITHUB_PR_HEAD_SHA}"
     launchable record build --name "${build_name}" || true
-    launchable record session \
-        --build "${build_name}" \
-        --flavor test_task=test \
-        --flavor workflow=Compilations \
-        --flavor with-gcc="${INPUT_WITH_GCC}" \
-        --flavor CFLAGS="${INPUT_CFLAGS}" \
-        --flavor CXXFLAGS="${INPUT_CXXFLAGS}" \
-        --flavor optflags="${INPUT_OPTFLAGS}" \
-        --flavor cppflags="${INPUT_CPPFLAGS}" \
-        --test-suite btest \
-        > "${builddir}"/${btest_session_file} \
+    btest_session=$(launchable_record_session test btest) \
         && btests+=--launchable-test-reports="${btest_report_path}" || :
     if [ "$INPUT_CHECK" = "true" ]; then
-        launchable record session \
-            --build "${build_name}" \
-            --flavor test_task=test-all \
-            --flavor workflow=Compilations \
-            --flavor with-gcc="${INPUT_WITH_GCC}" \
-            --flavor CFLAGS="${INPUT_CFLAGS}" \
-            --flavor CXXFLAGS="${INPUT_CXXFLAGS}" \
-            --flavor optflags="${INPUT_OPTFLAGS}" \
-            --flavor cppflags="${INPUT_CPPFLAGS}" \
-            --test-suite test-all \
-            > "${builddir}"/${test_all_session_file} \
+        test_all_session=$(launchable_record_session test-all) \
             && tests+=--launchable-test-reports="${test_report_path}" || :
         mkdir "${builddir}"/"${test_spec_report_path}"
-        launchable record session \
-            --build "${build_name}" \
-            --flavor test_task=test-spec \
-            --flavor workflow=Compilations \
-            --flavor with-gcc="${INPUT_WITH_GCC}" \
-            --flavor CFLAGS="${INPUT_CFLAGS}" \
-            --flavor CXXFLAGS="${INPUT_CXXFLAGS}" \
-            --flavor optflags="${INPUT_OPTFLAGS}" \
-            --flavor cppflags="${INPUT_CPPFLAGS}" \
-            --test-suite test-spec \
-            > "${builddir}"/${test_spec_session_file} \
+        test_spec_session=$(launchable_record_session test-spec) \
             && spec_opts+=--launchable-test-reports="${test_spec_report_path}" || :
     fi
 }
 launchable_record_test() {
     pushd "${builddir}"
-    grouped launchable record tests --session "$(cat "${btest_session_file}")" raw "${btest_report_path}" || true
+    grouped launchable record tests --session "${btest_session}" raw "${btest_report_path}" || true
     if [ "$INPUT_CHECK" = "true" ]; then
-        grouped launchable record tests --session "$(cat "${test_all_session_file}")" raw "${test_report_path}" || true
-        grouped launchable record tests --session "$(cat "${test_spec_session_file}")" raw "${test_spec_report_path}"/* || true
+        grouped launchable record tests --session "${test_all_session}" raw "${test_report_path}" || true
+        grouped launchable record tests --session "${test_spec_session}" raw "${test_spec_report_path}"/* || true
     fi
 }
 if [ "$LAUNCHABLE_ENABLED" = "true" ]; then
@@ -139,9 +121,6 @@ if [ "$LAUNCHABLE_ENABLED" = "true" ]; then
     btest_report_path='launchable_bootstraptest.json'
     test_report_path='launchable_test_all.json'
     test_spec_report_path='launchable_test_spec_report'
-    test_all_session_file='launchable_test_all_session.txt'
-    btest_session_file='launchable_btest_session.txt'
-    test_spec_session_file='launchable_test_spec_session.txt'
     setup_pid=$$
     (sleep 180; echo "setup_launchable timed out; killing"; kill -INT "-$setup_pid" 2> /dev/null) & sleep_pid=$!
     launchable_failed=false
