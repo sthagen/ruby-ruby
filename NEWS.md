@@ -19,20 +19,22 @@ Note: We're only listing outstanding class updates.
     * `Kernel#inspect` now checks for the existence of a `#instance_variables_to_inspect` method,
       allowing control over which instance variables are displayed in the `#inspect` string:
 
-      ```ruby
-      class DatabaseConfig
-        def initialize(host, user, password)
-          @host = host
-          @user = user
-          @password = password
+        ```ruby
+        class DatabaseConfig
+          def initialize(host, user, password)
+            @host = host
+            @user = user
+            @password = password
+          end
+
+          private def instance_variables_to_inspect = [:@host, :@user]
         end
 
-        private def instance_variables_to_inspect = [:@host, :@user]
-      end
+        conf = DatabaseConfig.new("localhost", "root", "hunter2")
+        conf.inspect #=> #<DatabaseConfig:0x0000000104def350 @host="localhost", @user="root">
+        ```
 
-      conf = DatabaseConfig.new("localhost", "root", "hunter2")
-      conf.inspect #=> #<DatabaseConfig:0x0000000104def350 @host="localhost", @user="root">
-      ```
+        [[Feature #21219]]
 
 * Binding
 
@@ -141,6 +143,7 @@ The following default gems are updated.
 * stringio 3.1.8.dev
 * strscan 3.1.6.dev
 * uri 1.0.3
+* weakref 0.1.4
 
 The following bundled gems are added.
 
@@ -219,6 +222,7 @@ The following bundled gems are updated.
 [Bug #21049]:     https://bugs.ruby-lang.org/issues/21049
 [Feature #21166]: https://bugs.ruby-lang.org/issues/21166
 [Feature #21216]: https://bugs.ruby-lang.org/issues/21216
+[Feature #21219]: https://bugs.ruby-lang.org/issues/21219
 [Feature #21258]: https://bugs.ruby-lang.org/issues/21258
 [Feature #21262]: https://bugs.ruby-lang.org/issues/21262
 [Feature #21287]: https://bugs.ruby-lang.org/issues/21287
