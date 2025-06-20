@@ -15,8 +15,10 @@ class Git
     @branch = branch
 
     # GitHub may not fetch github.event.pull_request.base.sha at checkout
-    git('fetch', '--depth=1', 'origin', @oldrev)
-    git('fetch', '--depth=100', 'origin', @newrev)
+    git('log', '--format=%H', '-1', @oldrev, out: IO::NULL, err: [:child, :out]) or
+      git('fetch', '--depth=1', 'origin', @oldrev)
+    git('log', '--format=%H', '-1', "#@newrev~99", out: IO::NULL, err: [:child, :out]) or
+      git('fetch', '--depth=100', 'origin', @newrev)
 
     with_clean_env do
       @revs = {}
@@ -66,12 +68,14 @@ class Git
 
   private
 
-  def git(*args)
+  def git(*args, **opts)
     cmd = ['git', *args].shelljoin
     puts "+ #{cmd}"
-    unless with_clean_env { system('git', *args) }
+    ret = with_clean_env { system('git', *args, **opts) }
+    unless ret or opts[:err]
       abort "Failed to run: #{cmd}"
     end
+    ret
   end
 
   def with_clean_env
@@ -233,8 +237,8 @@ edited_files = files.select do |f|
 
   if File.fnmatch?("*.[ch]", f, File::FNM_PATHNAME) &&
      !DIFFERENT_STYLE_FILES.any? {|pat| File.fnmatch?(pat, f, File::FNM_PATHNAME)}
-    indent0 = true if src.gsub!(/^\w+\([^(\n)]*?\)\K[ \t]*(?=\{$)/, "\n")
-    indent0 = true if src.gsub!(/^([ \t]*)\}\K[ \t]*(?=else\b)/, "\n" '\1')
+    indent0 = true if src.gsub!(/^\w+\([^\n]*?\)\K[ \t]*(?=\{( *\\)?$)/, '\1' "\n")
+    indent0 = true if src.gsub!(/^([ \t]*)\}\K[ \t]*(?=else\b.*?( *\\)?$)/, '\2' "\n" '\1')
     indent0 = true if src.gsub!(/^[ \t]*\}\n\K\n+(?=[ \t]*else\b)/, '')
     indent ||= indent0
   end
