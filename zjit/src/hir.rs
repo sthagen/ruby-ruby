@@ -206,6 +206,7 @@ impl<'a> std::fmt::Display for InvariantPrinter<'a> {
                     BOP_FREEZE => write!(f, "BOP_FREEZE")?,
                     BOP_UMINUS => write!(f, "BOP_UMINUS")?,
                     BOP_MAX    => write!(f, "BOP_MAX")?,
+                    BOP_AREF   => write!(f, "BOP_AREF")?,
                     _ => write!(f, "{bop}")?,
                 }
                 write!(f, ")")
@@ -1317,6 +1318,25 @@ impl Function {
         }
     }
 
+    fn try_rewrite_aref(&mut self, block: BlockId, orig_insn_id: InsnId, self_val: InsnId, idx_val: InsnId) {
+        let self_type = self.type_of(self_val);
+        let idx_type = self.type_of(idx_val);
+        if self_type.is_subtype(types::ArrayExact) {
+            if let Some(array_obj) = self_type.ruby_object() {
+                if array_obj.is_frozen() {
+                    if let Some(idx) = idx_type.fixnum_value() {
+                        self.push_insn(block, Insn::PatchPoint(Invariant::BOPRedefined { klass: ARRAY_REDEFINED_OP_FLAG, bop: BOP_AREF }));
+                        let val = unsafe { rb_yarv_ary_entry_internal(array_obj, idx) };
+                        let const_insn = self.push_insn(block, Insn::Const { val: Const::Value(val) });
+                        self.make_equal_to(orig_insn_id, const_insn);
+                        return;
+                    }
+                }
+            }
+        }
+        self.push_insn_id(block, orig_insn_id);
+    }
+
     /// Rewrite SendWithoutBlock opcodes into SendWithoutBlockDirect opcodes if we know the target
     /// ISEQ statically. This removes run-time method lookups and opens the door for inlining.
     fn optimize_direct_sends(&mut self) {
@@ -1351,6 +1371,8 @@ impl Function {
                         self.try_rewrite_freeze(block, insn_id, self_val),
                     Insn::SendWithoutBlock { self_val, call_info: CallInfo { method_name }, args, .. } if method_name == "-@" && args.len() == 0 =>
                         self.try_rewrite_uminus(block, insn_id, self_val),
+                    Insn::SendWithoutBlock { self_val, call_info: CallInfo { method_name }, args, .. } if method_name == "[]" && args.len() == 1 =>
+                        self.try_rewrite_aref(block, insn_id, self_val, args[0]),
                     Insn::SendWithoutBlock { mut self_val, call_info, cd, args, state } => {
                         let frame_state = self.frame_state(state);
                         let (klass, guard_equal_to) = if let Some(klass) = self.type_of(self_val).runtime_exact_ruby_class() {
@@ -2306,7 +2328,12 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                 YARVINSN_putobject => { state.stack_push(fun.push_insn(block, Insn::Const { val: Const::Value(get_arg(pc, 0)) })); },
                 YARVINSN_putspecialobject => {
                     let value_type = SpecialObjectType::from(get_arg(pc, 0).as_u32());
-                    state.stack_push(fun.push_insn(block, Insn::PutSpecialObject { value_type }));
+                    let insn = if value_type == SpecialObjectType::VMCore {
+                        Insn::Const { val: Const::Value(unsafe { rb_mRubyVMFrozenCore }) }
+                    } else {
+                        Insn::PutSpecialObject { value_type }
+                    };
+                    state.stack_push(fun.push_insn(block, insn));
                 }
                 YARVINSN_putstring => {
                     let val = fun.push_insn(block, Insn::Const { val: Const::Value(get_arg(pc, 0)) });
@@ -3900,11 +3927,11 @@ mod tests {
         assert_method_hir("test",  expect![[r#"
             fn test:
             bb0(v0:BasicObject, v1:BasicObject):
-              v3:BasicObject = PutSpecialObject VMCore
+              v3:BasicObject[VMFrozenCore] = Const Value(VALUE(0x1000))
               v5:HashExact = NewHash
               v7:BasicObject = SendWithoutBlock v3, :core#hash_merge_kwd, v5, v1
-              v8:BasicObject = PutSpecialObject VMCore
-              v9:StaticSymbol[VALUE(0x1000)] = Const Value(VALUE(0x1000))
+              v8:BasicObject[VMFrozenCore] = Const Value(VALUE(0x1000))
+              v9:StaticSymbol[VALUE(0x1008)] = Const Value(VALUE(0x1008))
               v10:Fixnum[1] = Const Value(1)
               v12:BasicObject = SendWithoutBlock v8, :core#hash_merge_ptr, v7, v9, v10
               SideExit
@@ -4352,10 +4379,10 @@ mod tests {
         assert_method_hir_with_opcode("test", YARVINSN_putspecialobject, expect![[r#"
             fn test:
             bb0(v0:BasicObject):
-              v2:BasicObject = PutSpecialObject VMCore
+              v2:BasicObject[VMFrozenCore] = Const Value(VALUE(0x1000))
               v3:BasicObject = PutSpecialObject CBase
-              v4:StaticSymbol[VALUE(0x1000)] = Const Value(VALUE(0x1000))
-              v5:StaticSymbol[VALUE(0x1008)] = Const Value(VALUE(0x1008))
+              v4:StaticSymbol[VALUE(0x1008)] = Const Value(VALUE(0x1008))
+              v5:StaticSymbol[VALUE(0x1010)] = Const Value(VALUE(0x1010))
               v7:BasicObject = SendWithoutBlock v2, :core#set_method_alias, v3, v4, v5
               Return v7
         "#]]);
@@ -6066,6 +6093,66 @@ mod opt_tests {
               v10:BasicObject = SendWithoutBlock v3, :to_s
               v7:String = AnyToString v3, str: v10
               SideExit
+        "#]]);
+    }
+
+    #[test]
+    fn test_eliminate_load_from_frozen_array_in_bounds() {
+        eval(r##"
+            def test = [4,5,6].freeze[1]
+        "##);
+        assert_optimized_method_hir("test", expect![[r#"
+            fn test:
+            bb0(v0:BasicObject):
+              PatchPoint BOPRedefined(ARRAY_REDEFINED_OP_FLAG, BOP_FREEZE)
+              PatchPoint BOPRedefined(ARRAY_REDEFINED_OP_FLAG, BOP_AREF)
+              v11:Fixnum[5] = Const Value(5)
+              Return v11
+        "#]]);
+    }
+
+    #[test]
+    fn test_eliminate_load_from_frozen_array_negative() {
+        eval(r##"
+            def test = [4,5,6].freeze[-3]
+        "##);
+        assert_optimized_method_hir("test", expect![[r#"
+            fn test:
+            bb0(v0:BasicObject):
+              PatchPoint BOPRedefined(ARRAY_REDEFINED_OP_FLAG, BOP_FREEZE)
+              PatchPoint BOPRedefined(ARRAY_REDEFINED_OP_FLAG, BOP_AREF)
+              v11:Fixnum[4] = Const Value(4)
+              Return v11
+        "#]]);
+    }
+
+    #[test]
+    fn test_eliminate_load_from_frozen_array_negative_out_of_bounds() {
+        eval(r##"
+            def test = [4,5,6].freeze[-10]
+        "##);
+        assert_optimized_method_hir("test", expect![[r#"
+            fn test:
+            bb0(v0:BasicObject):
+              PatchPoint BOPRedefined(ARRAY_REDEFINED_OP_FLAG, BOP_FREEZE)
+              PatchPoint BOPRedefined(ARRAY_REDEFINED_OP_FLAG, BOP_AREF)
+              v11:NilClassExact = Const Value(nil)
+              Return v11
+        "#]]);
+    }
+
+    #[test]
+    fn test_eliminate_load_from_frozen_array_out_of_bounds() {
+        eval(r##"
+            def test = [4,5,6].freeze[10]
+        "##);
+        assert_optimized_method_hir("test", expect![[r#"
+            fn test:
+            bb0(v0:BasicObject):
+              PatchPoint BOPRedefined(ARRAY_REDEFINED_OP_FLAG, BOP_FREEZE)
+              PatchPoint BOPRedefined(ARRAY_REDEFINED_OP_FLAG, BOP_AREF)
+              v11:NilClassExact = Const Value(nil)
+              Return v11
         "#]]);
     }
 }
