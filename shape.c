@@ -818,6 +818,14 @@ rb_shape_transition_heap(VALUE obj, size_t heap_index)
      return (RBASIC_SHAPE_ID(obj) & (~SHAPE_ID_HEAP_INDEX_MASK)) | rb_shape_root(heap_index);
 }
 
+void
+rb_set_namespaced_class_shape_id(VALUE obj, shape_id_t shape_id)
+{
+    RBASIC_SET_SHAPE_ID(RCLASS_WRITABLE_ENSURE_FIELDS_OBJ(obj), shape_id);
+    // FIXME: How to do multi-shape?
+    RBASIC_SET_SHAPE_ID(obj, shape_id);
+}
+
 /*
  * This function is used for assertions where we don't want to increment
  * max_iv_count
@@ -1253,6 +1261,7 @@ rb_shape_verify_consistency(VALUE obj, shape_id_t shape_id)
 
     uint8_t flags_heap_index = rb_shape_heap_index(shape_id);
     if (RB_TYPE_P(obj, T_OBJECT)) {
+        RUBY_ASSERT(flags_heap_index > 0);
         size_t shape_id_slot_size = rb_shape_tree.capacities[flags_heap_index - 1] * sizeof(VALUE) + sizeof(struct RBasic);
         size_t actual_slot_size = rb_gc_obj_slot_size(obj);
 
