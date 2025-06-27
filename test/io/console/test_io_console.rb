@@ -367,7 +367,15 @@ defined?(PTY) and defined?(IO.console) and TestIO_Console.class_eval do
     w.print cc
     w.flush
     result = EnvUtil.timeout(3) {r.gets}
-    result = yield result if defined?(yield)
+    if result
+      case cc
+      when 0..31
+        cc = "^" + (cc.ord | 0x40).chr
+      when 127
+        cc = "^?"
+      end
+      result.sub!(cc, "")
+    end
     assert_equal(expect, result.chomp)
   end
 
@@ -405,7 +413,7 @@ defined?(PTY) and defined?(IO.console) and TestIO_Console.class_eval do
       if cc = ctrl["intr"]
         assert_ctrl("#{cc.ord}", cc, r, w)
         assert_ctrl("#{cc.ord}", cc, r, w)
-        assert_ctrl("Interrupt", cc, r, w) {|res| res.sub("^C", "")} unless /linux/ =~ RUBY_PLATFORM
+        assert_ctrl("Interrupt", cc, r, w) unless /linux/ =~ RUBY_PLATFORM
       end
       if cc = ctrl["dsusp"]
         assert_ctrl("#{cc.ord}", cc, r, w)

@@ -1,5 +1,6 @@
 use std::cell::Cell;
 use std::rc::Rc;
+use std::num::NonZeroU32;
 
 use crate::backend::current::{Reg, ALLOC_REGS};
 use crate::profile::get_or_create_iseq_payload;
@@ -220,7 +221,7 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, function: &Function) -> Optio
         for &insn_id in block.insns() {
             let insn = function.find(insn_id);
             if gen_insn(cb, &mut jit, &mut asm, function, insn_id, &insn).is_none() {
-                debug!("Failed to compile insn: {insn_id} {insn:?}");
+                debug!("Failed to compile insn: {insn_id} {insn}");
                 return None;
             }
         }
@@ -279,13 +280,16 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
         Insn::GetIvar { self_val, id, state: _ } => gen_getivar(asm, opnd!(self_val), *id),
         Insn::SetGlobal { id, val, state: _ } => gen_setglobal(asm, *id, opnd!(val)),
         Insn::GetGlobal { id, state: _ } => gen_getglobal(asm, *id),
+        &Insn::GetLocal { ep_offset, level } => gen_nested_getlocal(asm, ep_offset, level)?,
+        Insn::SetLocal { val, ep_offset, level } => return gen_nested_setlocal(asm, opnd!(val), *ep_offset, *level),
         Insn::GetConstantPath { ic, state } => gen_get_constant_path(asm, *ic, &function.frame_state(*state)),
         Insn::SetIvar { self_val, id, val, state: _ } => return gen_setivar(asm, opnd!(self_val), *id, opnd!(val)),
         Insn::SideExit { state } => return gen_side_exit(jit, asm, &function.frame_state(*state)),
         Insn::PutSpecialObject { value_type } => gen_putspecialobject(asm, *value_type),
         Insn::AnyToString { val, str, state } => gen_anytostring(asm, opnd!(val), opnd!(str), &function.frame_state(*state))?,
+        Insn::Defined { op_type, obj, pushval, v } => gen_defined(jit, asm, *op_type, *obj, *pushval, opnd!(v))?,
         _ => {
-            debug!("ZJIT: gen_function: unexpected insn {:?}", insn);
+            debug!("ZJIT: gen_function: unexpected insn {insn}");
             return None;
         }
     };
@@ -295,6 +299,80 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
     // If the instruction has an output, remember it in jit.opnds
     jit.opnds[insn_id.0] = Some(out_opnd);
 
+    Some(())
+}
+
+/// Gets the EP of the ISeq of the containing method, or "local level".
+/// Equivalent of GET_LEP() macro.
+fn gen_get_lep(jit: &JITState, asm: &mut Assembler) -> Opnd {
+    // Equivalent of get_lvar_level() in compile.c
+    fn get_lvar_level(mut iseq: IseqPtr) -> u32 {
+        let local_iseq = unsafe { rb_get_iseq_body_local_iseq(iseq) };
+        let mut level = 0;
+        while iseq != local_iseq {
+            iseq = unsafe { rb_get_iseq_body_parent_iseq(iseq) };
+            level += 1;
+        }
+
+        level
+    }
+
+    let level = get_lvar_level(jit.iseq);
+    gen_get_ep(asm, level)
+}
+
+// Get EP at `level` from CFP
+fn gen_get_ep(asm: &mut Assembler, level: u32) -> Opnd {
+    // Load environment pointer EP from CFP into a register
+    let ep_opnd = Opnd::mem(64, CFP, RUBY_OFFSET_CFP_EP);
+    let mut ep_opnd = asm.load(ep_opnd);
+
+    for _ in 0..level {
+        // Get the previous EP from the current EP
+        // See GET_PREV_EP(ep) macro
+        // VALUE *prev_ep = ((VALUE *)((ep)[VM_ENV_DATA_INDEX_SPECVAL] & ~0x03))
+        const UNTAGGING_MASK: Opnd = Opnd::Imm(!0x03);
+        let offset = SIZEOF_VALUE_I32 * VM_ENV_DATA_INDEX_SPECVAL;
+        ep_opnd = asm.load(Opnd::mem(64, ep_opnd, offset));
+        ep_opnd = asm.and(ep_opnd, UNTAGGING_MASK);
+    }
+
+    ep_opnd
+}
+
+fn gen_defined(jit: &JITState, asm: &mut Assembler, op_type: usize, _obj: VALUE, pushval: VALUE, _tested_value: Opnd) -> Option<Opnd> {
+    match op_type as defined_type {
+        DEFINED_YIELD => {
+            // `yield` goes to the block handler stowed in the "local" iseq which is
+            // the current iseq or a parent. Only the "method" iseq type can be passed a
+            // block handler. (e.g. `yield` in the top level script is a syntax error.)
+            let local_iseq = unsafe { rb_get_iseq_body_local_iseq(jit.iseq) };
+            if unsafe { rb_get_iseq_body_type(local_iseq) } == ISEQ_TYPE_METHOD {
+                let lep = gen_get_lep(jit, asm);
+                let block_handler = asm.load(Opnd::mem(64, lep, SIZEOF_VALUE_I32 * VM_ENV_DATA_INDEX_SPECVAL));
+                let pushval = asm.load(pushval.into());
+                asm.cmp(block_handler, VM_BLOCK_HANDLER_NONE.into());
+                Some(asm.csel_e(Qnil.into(), pushval.into()))
+            } else {
+                Some(Qnil.into())
+            }
+        }
+        _ => None
+    }
+}
+
+/// Get a local variable from a higher scope. `local_ep_offset` is in number of VALUEs.
+fn gen_nested_getlocal(asm: &mut Assembler, local_ep_offset: u32, level: NonZeroU32) -> Option<lir::Opnd> {
+    let ep = gen_get_ep(asm, level.get());
+    let offset = -(SIZEOF_VALUE_I32 * i32::try_from(local_ep_offset).ok()?);
+    Some(asm.load(Opnd::mem(64, ep, offset)))
+}
+
+/// Set a local variable from a higher scope. `local_ep_offset` is in number of VALUEs.
+fn gen_nested_setlocal(asm: &mut Assembler, val: Opnd, local_ep_offset: u32, level: NonZeroU32) -> Option<()> {
+    let ep = gen_get_ep(asm, level.get());
+    let offset = -(SIZEOF_VALUE_I32 * i32::try_from(local_ep_offset).ok()?);
+    asm.mov(Opnd::mem(64, ep, offset), val);
     Some(())
 }
 
