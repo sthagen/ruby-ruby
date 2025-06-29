@@ -49,12 +49,7 @@ module Gem::BUNDLED_GEMS # :nodoc:
       kernel_class.send(:alias_method, :no_warning_require, :require)
       kernel_class.send(:define_method, :require) do |name|
         if message = ::Gem::BUNDLED_GEMS.warning?(name, specs: spec_names)
-          uplevel = ::Gem::BUNDLED_GEMS.uplevel
-          if uplevel > 0
-            Kernel.warn message, uplevel: uplevel
-          else
-            Kernel.warn message
-          end
+          Kernel.warn message, uplevel: ::Gem::BUNDLED_GEMS.uplevel
         end
         kernel_class.send(:no_warning_require, name)
       end
@@ -86,11 +81,10 @@ module Gem::BUNDLED_GEMS # :nodoc:
       uplevel += 1
       # Don't show script name when bundle exec and call ruby script directly.
       if cl.path.end_with?("bundle")
-        frame_count = 0
-        break
+        return
       end
     end
-    require_found ? 1 : frame_count - 1
+    require_found ? 1 : (frame_count - 1).nonzero?
   end
 
   def self.warning?(name, specs: nil)
@@ -124,24 +118,24 @@ module Gem::BUNDLED_GEMS # :nodoc:
     return if WARNED[name]
     WARNED[name] = true
 
-    level = RUBY_VERSION < SINCE[name] ? "warning" : "error"
+    level = RUBY_VERSION < SINCE[name] ? :warning : :error
 
     if subfeature
       "#{feature} is found in #{name}, which"
     else
-      "#{feature} #{level == "warning" ? "was loaded" : "used to be loaded"} from the standard library, but"
+      "#{feature} #{level == :warning ? "was loaded" : "used to be loaded"} from the standard library, but"
     end + build_message(name, level)
   end
 
   def self.build_message(name, level)
-    msg = if level == "warning"
+    msg = if level == :warning
       " will no longer be part of the default gems starting from Ruby #{SINCE[name]}"
     else
       " is not part of the default gems since Ruby #{SINCE[name]}."
     end
 
     if defined?(Bundler)
-      motivation = level == "warning" ? "silence this warning" : "fix this error"
+      motivation = level == :warning ? "silence this warning" : "fix this error"
       msg += "\nYou can add #{name} to your Gemfile or gemspec to #{motivation}."
 
       # We detect the gem name from caller_locations. First we walk until we find `require`
@@ -236,7 +230,7 @@ class LoadError
 
     name = path.tr("/", "-")
     if !defined?(Bundler) && Gem::BUNDLED_GEMS::SINCE[name] && !Gem::BUNDLED_GEMS::WARNED[name]
-      warn name + Gem::BUNDLED_GEMS.build_message(name, "error"), uplevel: Gem::BUNDLED_GEMS.uplevel
+      warn name + Gem::BUNDLED_GEMS.build_message(name, :error), uplevel: Gem::BUNDLED_GEMS.uplevel
     end
     super
   end
