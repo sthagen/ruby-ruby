@@ -1120,7 +1120,7 @@ impl Function {
             | Insn::IfTrue { .. } | Insn::IfFalse { .. } | Insn::Return { .. }
             | Insn::PatchPoint { .. } | Insn::SetIvar { .. } | Insn::ArrayExtend { .. }
             | Insn::ArrayPush { .. } | Insn::SideExit { .. } | Insn::SetLocal { .. } =>
-                panic!("Cannot infer type of instruction with no output"),
+                panic!("Cannot infer type of instruction with no output: {}", self.insns[insn.0]),
             Insn::Const { val: Const::Value(val) } => Type::from_value(*val),
             Insn::Const { val: Const::CBool(val) } => Type::from_cbool(*val),
             Insn::Const { val: Const::CInt8(val) } => Type::from_cint(types::CInt8, *val as i64),
@@ -6233,6 +6233,26 @@ mod opt_tests {
               PatchPoint BOPRedefined(ARRAY_REDEFINED_OP_FLAG, BOP_AREF)
               v11:NilClassExact = Const Value(nil)
               Return v11
+        "#]]);
+    }
+
+    #[test]
+    fn test_set_type_from_constant() {
+        eval("
+            MY_SET = Set.new
+
+            def test = MY_SET
+
+            test
+            test
+        ");
+        assert_optimized_method_hir("test", expect![[r#"
+            fn test:
+            bb0(v0:BasicObject):
+              PatchPoint SingleRactorMode
+              PatchPoint StableConstantNames(0x1000, MY_SET)
+              v7:SetExact[VALUE(0x1008)] = Const Value(VALUE(0x1008))
+              Return v7
         "#]]);
     }
 }

@@ -47,7 +47,7 @@ RSpec.describe "bundle gem" do
     git("config --global github.user bundleuser")
 
     global_config "BUNDLE_GEM__MIT" => "false", "BUNDLE_GEM__TEST" => "false", "BUNDLE_GEM__COC" => "false", "BUNDLE_GEM__LINTER" => "false",
-                  "BUNDLE_GEM__CI" => "false", "BUNDLE_GEM__CHANGELOG" => "false"
+                  "BUNDLE_GEM__CI" => "false", "BUNDLE_GEM__CHANGELOG" => "false", "BUNDLE_GEM__BUNDLE" => "false"
   end
 
   describe "git repo initialization" do
@@ -161,8 +161,28 @@ RSpec.describe "bundle gem" do
     end
   end
 
+  shared_examples_for "--bundle flag" do
+    before do
+      bundle "gem #{gem_name} --bundle"
+    end
+    it "generates a gem skeleton with bundle install" do
+      gem_skeleton_assertions
+      expect(out).to include("Running bundle install in the new gem directory.")
+    end
+  end
+
+  shared_examples_for "--no-bundle flag" do
+    before do
+      bundle "gem #{gem_name} --no-bundle"
+    end
+    it "generates a gem skeleton without bundle install" do
+      gem_skeleton_assertions
+      expect(out).to_not include("Running bundle install in the new gem directory.")
+    end
+  end
+
   shared_examples_for "--rubocop flag" do
-    context "is deprecated", bundler: "2" do
+    context "is deprecated" do
       before do
         global_config "BUNDLE_GEM__LINTER" => nil
         bundle "gem #{gem_name} --rubocop"
@@ -198,7 +218,7 @@ RSpec.describe "bundle gem" do
   end
 
   shared_examples_for "--no-rubocop flag" do
-    context "is deprecated", bundler: "2" do
+    context "is deprecated" do
       define_negated_matcher :exclude, :include
 
       before do
@@ -1374,7 +1394,7 @@ RSpec.describe "bundle gem" do
       end
     end
 
-    context "gem.rubocop setting set to true", bundler: "2" do
+    context "gem.rubocop setting set to true" do
       before do
         global_config "BUNDLE_GEM__LINTER" => nil
         bundle "config set gem.rubocop true"
@@ -1584,6 +1604,34 @@ RSpec.describe "bundle gem" do
     end
   end
 
+  context "testing --bundle option against git and bundle config settings" do
+    context "with bundle option in bundle config settings set to true" do
+      before do
+        global_config "BUNDLE_GEM__BUNDLE" => "true"
+      end
+      it_behaves_like "--bundle flag"
+      it_behaves_like "--no-bundle flag"
+
+      it "runs bundle install" do
+        bundle "gem #{gem_name}"
+        expect(out).to include("Running bundle install in the new gem directory.")
+      end
+    end
+
+    context "with bundle option in bundle config settings set to false" do
+      before do
+        global_config "BUNDLE_GEM__BUNDLE" => "false"
+      end
+      it_behaves_like "--bundle flag"
+      it_behaves_like "--no-bundle flag"
+
+      it "does not run bundle install" do
+        bundle "gem #{gem_name}"
+        expect(out).to_not include("Running bundle install in the new gem directory.")
+      end
+    end
+  end
+
   context "testing --github-username option against git and bundle config settings" do
     context "without git config set" do
       before do
@@ -1657,7 +1705,7 @@ RSpec.describe "bundle gem" do
     include_examples "generating a gem"
 
     context "--ext parameter with no value" do
-      context "is deprecated", bundler: "2" do
+      context "is deprecated" do
         it "prints deprecation when used after gem name" do
           bundle ["gem", "--ext", gem_name].compact.join(" ")
           expect(err).to include "[DEPRECATED]"

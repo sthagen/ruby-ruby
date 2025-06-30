@@ -6870,45 +6870,10 @@ str_byte_aref(VALUE str, VALUE indx)
 
 /*
  *  call-seq:
- *    byteslice(index, length = 1) -> string or nil
- *    byteslice(range)             -> string or nil
+ *    byteslice(offset, length = 1) -> string or nil
+ *    byteslice(range) -> string or nil
  *
- *  Returns a substring of +self+, or +nil+ if the substring cannot be constructed.
- *
- *  With integer arguments +index+ and +length+ given,
- *  returns the substring beginning at the given +index+
- *  of the given +length+ (if possible),
- *  or +nil+ if +length+ is negative or +index+ falls outside of +self+:
- *
- *    s = '0123456789' # => "0123456789"
- *    s.byteslice(2)   # => "2"
- *    s.byteslice(200) # => nil
- *    s.byteslice(4, 3)  # => "456"
- *    s.byteslice(4, 30) # => "456789"
- *    s.byteslice(4, -1) # => nil
- *    s.byteslice(40, 2) # => nil
- *
- *  In either case above, counts backwards from the end of +self+
- *  if +index+ is negative:
- *
- *    s = '0123456789'   # => "0123456789"
- *    s.byteslice(-4)    # => "6"
- *    s.byteslice(-4, 3) # => "678"
- *
- *  With Range argument +range+ given, returns
- *  <tt>byteslice(range.begin, range.size)</tt>:
- *
- *    s = '0123456789'    # => "0123456789"
- *    s.byteslice(4..6)   # => "456"
- *    s.byteslice(-6..-4) # => "456"
- *    s.byteslice(5..2)   # => "" # range.size is zero.
- *    s.byteslice(40..42) # => nil
- *
- *  In all cases, a returned string has the same encoding as +self+:
- *
- *    s.encoding              # => #<Encoding:UTF-8>
- *    s.byteslice(4).encoding # => #<Encoding:UTF-8>
- *
+ *  :include: doc/string/byteslice.rdoc
  */
 
 static VALUE
@@ -6948,23 +6913,12 @@ str_check_beg_len(VALUE str, long *beg, long *len)
 
 /*
  *  call-seq:
- *    bytesplice(index, length, str) -> string
- *    bytesplice(index, length, str, str_index, str_length) -> string
- *    bytesplice(range, str) -> string
- *    bytesplice(range, str, str_range) -> string
+ *    bytesplice(offset, length, str) -> self
+ *    bytesplice(offset, length, str, str_offset, str_length) -> self
+ *    bytesplice(range, str) -> self
+ *    bytesplice(range, str, str_range) -> self
  *
- *  Replaces some or all of the content of +self+ with +str+, and returns +self+.
- *  The portion of the string affected is determined using
- *  the same criteria as String#byteslice, except that +length+ cannot be omitted.
- *  If the replacement string is not the same length as the text it is replacing,
- *  the string will be adjusted accordingly.
- *
- *  If +str_index+ and +str_length+, or +str_range+ are given, the content of +self+ is replaced by str.byteslice(str_index, str_length) or str.byteslice(str_range); however the substring of +str+ is not allocated as a new string.
- *
- *  The form that take an Integer will raise an IndexError if the value is out
- *  of range; the Range form will raise a RangeError.
- *  If the beginning or ending offset does not land on character (codepoint)
- *  boundary, an IndexError will be raised.
+ *  :include: doc/string/bytesplice.rdoc
  */
 
 static VALUE
