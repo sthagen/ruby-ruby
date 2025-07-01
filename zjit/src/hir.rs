@@ -570,6 +570,8 @@ impl Insn {
             Insn::FixnumLe   { .. } => false,
             Insn::FixnumGt   { .. } => false,
             Insn::FixnumGe   { .. } => false,
+            Insn::GetLocal   { .. } => false,
+            Insn::IsNil      { .. } => false,
             Insn::CCall { elidable, .. } => !elidable,
             _ => true,
         }
@@ -2187,8 +2189,14 @@ pub enum CallType {
 }
 
 #[derive(Debug, PartialEq)]
+pub enum ParameterType {
+    Optional,
+}
+
+#[derive(Debug, PartialEq)]
 pub enum ParseError {
     StackUnderflow(FrameState),
+    UnknownParameterType(ParameterType),
     MalformedIseq(u32), // insn_idx into iseq_encoded
 }
 
@@ -2248,8 +2256,14 @@ impl ProfileOracle {
 /// The index of the self parameter in the HIR function
 pub const SELF_PARAM_IDX: usize = 0;
 
+fn filter_unknown_parameter_type(iseq: *const rb_iseq_t) -> Result<(), ParseError> {
+    if unsafe { rb_get_iseq_body_param_opt_num(iseq) } != 0 { return Err(ParseError::UnknownParameterType(ParameterType::Optional)); }
+    Ok(())
+}
+
 /// Compile ISEQ into High-level IR
 pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
+    filter_unknown_parameter_type(iseq)?;
     let payload = get_or_create_iseq_payload(iseq);
     let mut profiles = ProfileOracle::new(payload);
     let mut fun = Function::new(iseq);
@@ -3227,6 +3241,11 @@ mod tests {
         assert_eq!(result.unwrap_err(), reason);
     }
 
+    #[test]
+    fn test_cant_compile_optional() {
+        eval("def test(x=1) = 123");
+        assert_compile_fails("test", ParseError::UnknownParameterType(ParameterType::Optional));
+    }
 
     #[test]
     fn test_putobject() {
@@ -3359,8 +3378,8 @@ mod tests {
         assert_method_hir_with_opcode("test", YARVINSN_newhash, expect![[r#"
             fn test:
             bb0(v0:BasicObject, v1:BasicObject, v2:BasicObject):
-              v4:StaticSymbol[VALUE(0x1000)] = Const Value(VALUE(0x1000))
-              v5:StaticSymbol[VALUE(0x1008)] = Const Value(VALUE(0x1008))
+              v4:StaticSymbol[:a] = Const Value(VALUE(0x1000))
+              v5:StaticSymbol[:b] = Const Value(VALUE(0x1008))
               v7:HashExact = NewHash v4: v1, v5: v2
               Return v7
         "#]]);
@@ -3417,7 +3436,7 @@ mod tests {
         assert_method_hir_with_opcode("test", YARVINSN_putobject, expect![[r#"
             fn test:
             bb0(v0:BasicObject):
-              v2:StaticSymbol[VALUE(0x1000)] = Const Value(VALUE(0x1000))
+              v2:StaticSymbol[:foo] = Const Value(VALUE(0x1000))
               Return v2
         "#]]);
     }
@@ -4011,7 +4030,7 @@ mod tests {
               v5:HashExact = NewHash
               v7:BasicObject = SendWithoutBlock v3, :core#hash_merge_kwd, v5, v1
               v8:BasicObject[VMFrozenCore] = Const Value(VALUE(0x1000))
-              v9:StaticSymbol[VALUE(0x1008)] = Const Value(VALUE(0x1008))
+              v9:StaticSymbol[:b] = Const Value(VALUE(0x1008))
               v10:Fixnum[1] = Const Value(1)
               v12:BasicObject = SendWithoutBlock v8, :core#hash_merge_ptr, v7, v9, v10
               SideExit
@@ -4461,8 +4480,8 @@ mod tests {
             bb0(v0:BasicObject):
               v2:BasicObject[VMFrozenCore] = Const Value(VALUE(0x1000))
               v3:BasicObject = PutSpecialObject CBase
-              v4:StaticSymbol[VALUE(0x1008)] = Const Value(VALUE(0x1008))
-              v5:StaticSymbol[VALUE(0x1010)] = Const Value(VALUE(0x1010))
+              v4:StaticSymbol[:aliased] = Const Value(VALUE(0x1008))
+              v5:StaticSymbol[:__callee__] = Const Value(VALUE(0x1010))
               v7:BasicObject = SendWithoutBlock v2, :core#set_method_alias, v3, v4, v5
               Return v7
         "#]]);
@@ -6173,6 +6192,42 @@ mod opt_tests {
               v10:BasicObject = SendWithoutBlock v3, :to_s
               v7:String = AnyToString v3, str: v10
               SideExit
+        "#]]);
+    }
+
+    #[test]
+    fn test_branchnil_nil() {
+        eval("
+            def test
+              x = nil
+              x&.itself
+            end
+        ");
+
+        assert_optimized_method_hir("test", expect![[r#"
+            fn test:
+            bb0(v0:BasicObject):
+              v3:NilClassExact = Const Value(nil)
+              Return v3
+        "#]]);
+    }
+
+    #[test]
+    fn test_branchnil_truthy() {
+        eval("
+            def test
+              x = 1
+              x&.itself
+            end
+        ");
+
+        assert_optimized_method_hir("test", expect![[r#"
+            fn test:
+            bb0(v0:BasicObject):
+              v3:Fixnum[1] = Const Value(1)
+              PatchPoint MethodRedefined(Integer@0x1000, itself@0x1008)
+              v15:BasicObject = CCall itself@0x1010, v3
+              Return v15
         "#]]);
     }
 
