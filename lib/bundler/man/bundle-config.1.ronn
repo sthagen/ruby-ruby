@@ -177,8 +177,6 @@ learn more about their operation in [bundle install(1)](bundle-install.1.html).
    Enable Bundler's experimental plugin system.
 * `prefer_patch` (BUNDLE_PREFER_PATCH):
    Prefer updating only to next patch version during updates. Makes `bundle update` calls equivalent to `bundler update --patch`.
-* `print_only_version_number` (`BUNDLE_PRINT_ONLY_VERSION_NUMBER`):
-   Print only version number from `bundler --version`.
 * `redirect` (`BUNDLE_REDIRECT`):
    The number of redirects allowed for network requests. Defaults to `5`.
 * `retry` (`BUNDLE_RETRY`):
@@ -194,6 +192,10 @@ learn more about their operation in [bundle install(1)](bundle-install.1.html).
    be changed in the next major version.
 * `silence_root_warning` (`BUNDLE_SILENCE_ROOT_WARNING`):
    Silence the warning Bundler prints when installing gems as root.
+* `simulate_version` (`BUNDLE_SIMULATE_VERSION`):
+   The virtual version Bundler should use for activating feature flags. Can be
+   used to simulate all the new functionality that will be enabled in a future
+   major version.
 * `ssl_ca_cert` (`BUNDLE_SSL_CA_CERT`):
    Path to a designated CA certificate file or folder containing multiple
    certificates for trusted CAs in PEM format.
@@ -212,6 +214,9 @@ learn more about their operation in [bundle install(1)](bundle-install.1.html).
    and disallow passing no options to `bundle update`.
 * `user_agent` (`BUNDLE_USER_AGENT`):
    The custom user agent fragment Bundler includes in API requests.
+* `verbose` (`BUNDLE_VERBOSE`):
+   Whether Bundler should print verbose output. Defaults to `false`, unless the
+   `--verbose` CLI flag is used.
 * `version` (`BUNDLE_VERSION`):
    The version of Bundler to use when running under Bundler environment.
    Defaults to `lockfile`. You can also specify `system` or `x.y.z`.

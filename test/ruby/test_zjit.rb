@@ -693,6 +693,40 @@ class TestZJIT < Test::Unit::TestCase
     }, call_threshold: 5, num_profiles: 3
   end
 
+  def test_spilled_basic_block_args
+    assert_compiles '55', %q{
+      def test(n1, n2)
+        n3 = 3
+        n4 = 4
+        n5 = 5
+        n6 = 6
+        n7 = 7
+        n8 = 8
+        n9 = 9
+        n10 = 10
+        if n1 < n2
+          n1 + n2 + n3 + n4 + n5 + n6 + n7 + n8 + n9 + n10
+        end
+      end
+      test(1, 2)
+    }
+  end
+
+  def test_spilled_method_args
+    omit 'CCall with spilled arguments is not implemented yet'
+    assert_compiles '55', %q{
+      def foo(n1, n2, n3, n4, n5, n6, n7, n8, n9, n10)
+        n1 + n2 + n3 + n4 + n5 + n6 + n7 + n8 + n9 + n10
+      end
+
+      def test
+        foo(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
+      end
+
+      test
+    }
+  end
+
   def test_opt_aref_with
     assert_compiles ':ok', %q{
       def aref_with(hash) = hash["key"]
@@ -838,6 +872,20 @@ class TestZJIT < Test::Unit::TestCase
       end
       [test(1), test(nil)]
     }, call_threshold: 1, insns: [:branchnil]
+  end
+
+  def test_nil_nil
+    assert_compiles 'true', %q{
+      def test = nil.nil?
+      test
+    }, insns: [:opt_nil_p]
+  end
+
+  def test_non_nil_nil
+    assert_compiles 'false', %q{
+      def test = 1.nil?
+      test
+    }, insns: [:opt_nil_p]
   end
 
   # tool/ruby_vm/views/*.erb relies on the zjit instructions a) being contiguous and

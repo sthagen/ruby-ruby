@@ -161,9 +161,6 @@ Enable Bundler's experimental plugin system\.
 \fBprefer_patch\fR (BUNDLE_PREFER_PATCH)
 Prefer updating only to next patch version during updates\. Makes \fBbundle update\fR calls equivalent to \fBbundler update \-\-patch\fR\.
 .TP
-\fBprint_only_version_number\fR (\fBBUNDLE_PRINT_ONLY_VERSION_NUMBER\fR)
-Print only version number from \fBbundler \-\-version\fR\.
-.TP
 \fBredirect\fR (\fBBUNDLE_REDIRECT\fR)
 The number of redirects allowed for network requests\. Defaults to \fB5\fR\.
 .TP
@@ -181,6 +178,9 @@ Whether Bundler should silence deprecation warnings for behavior that will be ch
 .TP
 \fBsilence_root_warning\fR (\fBBUNDLE_SILENCE_ROOT_WARNING\fR)
 Silence the warning Bundler prints when installing gems as root\.
+.TP
+\fBsimulate_version\fR (\fBBUNDLE_SIMULATE_VERSION\fR)
+The virtual version Bundler should use for activating feature flags\. Can be used to simulate all the new functionality that will be enabled in a future major version\.
 .TP
 \fBssl_ca_cert\fR (\fBBUNDLE_SSL_CA_CERT\fR)
 Path to a designated CA certificate file or folder containing multiple certificates for trusted CAs in PEM format\.
@@ -202,6 +202,9 @@ Require passing \fB\-\-all\fR to \fBbundle update\fR when everything should be u
 .TP
 \fBuser_agent\fR (\fBBUNDLE_USER_AGENT\fR)
 The custom user agent fragment Bundler includes in API requests\.
+.TP
+\fBverbose\fR (\fBBUNDLE_VERBOSE\fR)
+Whether Bundler should print verbose output\. Defaults to \fBfalse\fR, unless the \fB\-\-verbose\fR CLI flag is used\.
 .TP
 \fBversion\fR (\fBBUNDLE_VERSION\fR)
 The version of Bundler to use when running under Bundler environment\. Defaults to \fBlockfile\fR\. You can also specify \fBsystem\fR or \fBx\.y\.z\fR\. \fBlockfile\fR will use the Bundler version specified in the \fBGemfile\.lock\fR, \fBsystem\fR will use the system version of Bundler, and \fBx\.y\.z\fR will use the specified version of Bundler\.

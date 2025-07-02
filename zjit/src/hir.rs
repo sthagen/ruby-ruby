@@ -393,6 +393,28 @@ impl PtrPrintMap {
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum SideExitReason {
+    UnknownNewarraySend(vm_opt_newarray_send_type),
+    UnknownCallType,
+    UnknownOpcode(u32),
+}
+
+impl std::fmt::Display for SideExitReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            SideExitReason::UnknownOpcode(opcode) => write!(f, "UnknownOpcode({})", insn_name(*opcode as usize)),
+            SideExitReason::UnknownNewarraySend(VM_OPT_NEWARRAY_SEND_MAX) => write!(f, "UnknownNewarraySend(MAX)"),
+            SideExitReason::UnknownNewarraySend(VM_OPT_NEWARRAY_SEND_MIN) => write!(f, "UnknownNewarraySend(MIN)"),
+            SideExitReason::UnknownNewarraySend(VM_OPT_NEWARRAY_SEND_HASH) => write!(f, "UnknownNewarraySend(HASH)"),
+            SideExitReason::UnknownNewarraySend(VM_OPT_NEWARRAY_SEND_PACK) => write!(f, "UnknownNewarraySend(PACK)"),
+            SideExitReason::UnknownNewarraySend(VM_OPT_NEWARRAY_SEND_PACK_BUFFER) => write!(f, "UnknownNewarraySend(PACK_BUFFER)"),
+            SideExitReason::UnknownNewarraySend(VM_OPT_NEWARRAY_SEND_INCLUDE_P) => write!(f, "UnknownNewarraySend(INCLUDE_P)"),
+            _ => write!(f, "{self:?}"),
+        }
+    }
+}
+
 /// An instruction in the SSA IR. The output of an instruction is referred to by the index of
 /// the instruction ([`InsnId`]). SSA form enables this, and [`UnionFind`] ([`Function::find`])
 /// helps with editing.
@@ -488,6 +510,8 @@ pub enum Insn {
 
     /// Control flow instructions
     Return { val: InsnId },
+    /// Non-local control flow. See the throw YARV instruction
+    Throw { throw_state: u32, val: InsnId },
 
     /// Fixnum +, -, *, /, %, ==, !=, <, <=, >, >=
     FixnumAdd  { left: InsnId, right: InsnId, state: InsnId },
@@ -516,7 +540,7 @@ pub enum Insn {
     PatchPoint(Invariant),
 
     /// Side-exit into the interpreter.
-    SideExit { state: InsnId },
+    SideExit { state: InsnId, reason: SideExitReason },
 }
 
 impl Insn {
@@ -527,7 +551,7 @@ impl Insn {
             | Insn::IfTrue { .. } | Insn::IfFalse { .. } | Insn::Return { .. }
             | Insn::PatchPoint { .. } | Insn::SetIvar { .. } | Insn::ArrayExtend { .. }
             | Insn::ArrayPush { .. } | Insn::SideExit { .. } | Insn::SetGlobal { .. }
-            | Insn::SetLocal { .. } => false,
+            | Insn::SetLocal { .. } | Insn::Throw { .. } => false,
             _ => true,
         }
     }
@@ -535,7 +559,7 @@ impl Insn {
     /// Return true if the instruction ends a basic block and false otherwise.
     pub fn is_terminator(&self) -> bool {
         match self {
-            Insn::Jump(_) | Insn::Return { .. } | Insn::SideExit { .. } => true,
+            Insn::Jump(_) | Insn::Return { .. } | Insn::SideExit { .. } | Insn::Throw { .. } => true,
             _ => false,
         }
     }
@@ -712,9 +736,26 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
             Insn::ArrayPush { array, val, .. } => write!(f, "ArrayPush {array}, {val}"),
             Insn::ObjToString { val, .. } => { write!(f, "ObjToString {val}") },
             Insn::AnyToString { val, str, .. } => { write!(f, "AnyToString {val}, str: {str}") },
-            Insn::SideExit { .. } => write!(f, "SideExit"),
-            Insn::PutSpecialObject { value_type } => {
-                write!(f, "PutSpecialObject {}", value_type)
+            Insn::SideExit { reason, .. } => write!(f, "SideExit {reason}"),
+            Insn::PutSpecialObject { value_type } => write!(f, "PutSpecialObject {value_type}"),
+            Insn::Throw { throw_state, val } => {
+                let mut state_string = match throw_state & VM_THROW_STATE_MASK {
+                    RUBY_TAG_NONE => "TAG_NONE".to_string(),
+                    RUBY_TAG_RETURN => "TAG_RETURN".to_string(),
+                    RUBY_TAG_BREAK => "TAG_BREAK".to_string(),
+                    RUBY_TAG_NEXT => "TAG_NEXT".to_string(),
+                    RUBY_TAG_RETRY => "TAG_RETRY".to_string(),
+                    RUBY_TAG_REDO => "TAG_REDO".to_string(),
+                    RUBY_TAG_RAISE => "TAG_RAISE".to_string(),
+                    RUBY_TAG_THROW => "TAG_THROW".to_string(),
+                    RUBY_TAG_FATAL => "TAG_FATAL".to_string(),
+                    tag => format!("{tag}")
+                };
+                if throw_state & VM_THROW_NO_ESCAPE_FLAG != 0 {
+                    use std::fmt::Write;
+                    write!(state_string, "|NO_ESCAPE")?;
+                }
+                write!(f, "Throw {state_string}, {val}")
             }
             insn => { write!(f, "{insn:?}") }
         }
@@ -1015,6 +1056,7 @@ impl Function {
                     }
                 },
             Return { val } => Return { val: find!(*val) },
+            &Throw { throw_state, val } => Throw { throw_state, val: find!(val) },
             StringCopy { val, chilled } => StringCopy { val: find!(*val), chilled: *chilled },
             StringIntern { val } => StringIntern { val: find!(*val) },
             Test { val } => Test { val: find!(*val) },
@@ -1074,7 +1116,7 @@ impl Function {
             ArraySet { array, idx, val } => ArraySet { array: find!(*array), idx: *idx, val: find!(*val) },
             ArrayDup { val , state } => ArrayDup { val: find!(*val), state: *state },
             &HashDup { val , state } => HashDup { val: find!(val), state },
-            &CCall { cfun, ref args, name, return_type, elidable } => CCall { cfun: cfun, args: find_vec!(args), name: name, return_type: return_type, elidable },
+            &CCall { cfun, ref args, name, return_type, elidable } => CCall { cfun, args: find_vec!(args), name, return_type, elidable },
             &Defined { op_type, obj, pushval, v } => Defined { op_type, obj, pushval, v: find!(v) },
             &DefinedIvar { self_val, pushval, id, state } => DefinedIvar { self_val: find!(self_val), pushval, id, state },
             NewArray { elements, state } => NewArray { elements: find_vec!(*elements), state: find!(*state) },
@@ -1119,7 +1161,7 @@ impl Function {
         match &self.insns[insn.0] {
             Insn::Param { .. } => unimplemented!("params should not be present in block.insns"),
             Insn::SetGlobal { .. } | Insn::ArraySet { .. } | Insn::Snapshot { .. } | Insn::Jump(_)
-            | Insn::IfTrue { .. } | Insn::IfFalse { .. } | Insn::Return { .. }
+            | Insn::IfTrue { .. } | Insn::IfFalse { .. } | Insn::Return { .. } | Insn::Throw { .. }
             | Insn::PatchPoint { .. } | Insn::SetIvar { .. } | Insn::ArrayExtend { .. }
             | Insn::ArrayPush { .. } | Insn::SideExit { .. } | Insn::SetLocal { .. } =>
                 panic!("Cannot infer type of instruction with no output: {}", self.insns[insn.0]),
@@ -1755,6 +1797,7 @@ impl Function {
                 Insn::StringCopy { val, .. }
                 | Insn::StringIntern { val }
                 | Insn::Return { val }
+                | Insn::Throw { val, .. }
                 | Insn::Defined { v: val, .. }
                 | Insn::Test { val }
                 | Insn::SetLocal { val, .. }
@@ -1842,7 +1885,7 @@ impl Function {
                     worklist.push_back(state);
                 }
                 Insn::GetGlobal { state, .. } |
-                Insn::SideExit { state } => worklist.push_back(state),
+                Insn::SideExit { state, .. } => worklist.push_back(state),
             }
         }
         // Now remove all unnecessary instructions
@@ -2404,7 +2447,7 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                         VM_OPT_NEWARRAY_SEND_MAX => (BOP_MAX, Insn::ArrayMax { elements, state: exit_id }),
                         _ => {
                             // Unknown opcode; side-exit into the interpreter
-                            fun.push_insn(block, Insn::SideExit { state: exit_id });
+                            fun.push_insn(block, Insn::SideExit { state: exit_id, reason: SideExitReason::UnknownNewarraySend(method) });
                             break;  // End the block
                         },
                     };
@@ -2630,7 +2673,7 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     if unknown_call_type(unsafe { rb_vm_ci_flag(call_info) }) {
                         // Unknown call type; side-exit into the interpreter
                         let exit_id = fun.push_insn(block, Insn::Snapshot { state: exit_state });
-                        fun.push_insn(block, Insn::SideExit { state: exit_id });
+                        fun.push_insn(block, Insn::SideExit { state: exit_id, reason: SideExitReason::UnknownCallType });
                         break;  // End the block
                     }
                     let argc = unsafe { vm_ci_argc((*cd).ci) };
@@ -2656,7 +2699,7 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     if unknown_call_type(unsafe { rb_vm_ci_flag(call_info) }) {
                         // Unknown call type; side-exit into the interpreter
                         let exit_id = fun.push_insn(block, Insn::Snapshot { state: exit_state });
-                        fun.push_insn(block, Insn::SideExit { state: exit_id });
+                        fun.push_insn(block, Insn::SideExit { state: exit_id, reason: SideExitReason::UnknownCallType });
                         break;  // End the block
                     }
                     let argc = unsafe { vm_ci_argc((*cd).ci) };
@@ -2687,7 +2730,7 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     if unknown_call_type(unsafe { rb_vm_ci_flag(call_info) }) {
                         // Unknown call type; side-exit into the interpreter
                         let exit_id = fun.push_insn(block, Insn::Snapshot { state: exit_state });
-                        fun.push_insn(block, Insn::SideExit { state: exit_id });
+                        fun.push_insn(block, Insn::SideExit { state: exit_id, reason: SideExitReason::UnknownCallType });
                         break;  // End the block
                     }
                     let argc = unsafe { vm_ci_argc((*cd).ci) };
@@ -2708,6 +2751,10 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
 
                 YARVINSN_leave => {
                     fun.push_insn(block, Insn::Return { val: state.stack_pop()? });
+                    break;  // Don't enqueue the next block as a successor
+                }
+                YARVINSN_throw => {
+                    fun.push_insn(block, Insn::Throw { throw_state: get_arg(pc, 0).as_u32(), val: state.stack_pop()? });
                     break;  // Don't enqueue the next block as a successor
                 }
 
@@ -2743,7 +2790,7 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     if unknown_call_type(unsafe { rb_vm_ci_flag(call_info) }) {
                         // Unknown call type; side-exit into the interpreter
                         let exit_id = fun.push_insn(block, Insn::Snapshot { state: exit_state });
-                        fun.push_insn(block, Insn::SideExit { state: exit_id });
+                        fun.push_insn(block, Insn::SideExit { state: exit_id, reason: SideExitReason::UnknownCallType });
                         break;  // End the block
                     }
                     let argc = unsafe { vm_ci_argc((*cd).ci) };
@@ -2771,7 +2818,7 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     if unknown_call_type(unsafe { rb_vm_ci_flag(call_info) }) {
                         // Unknown call type; side-exit into the interpreter
                         let exit_id = fun.push_insn(block, Insn::Snapshot { state: exit_state });
-                        fun.push_insn(block, Insn::SideExit { state: exit_id });
+                        fun.push_insn(block, Insn::SideExit { state: exit_id, reason: SideExitReason::UnknownCallType });
                         break;  // End the block
                     }
                     let argc = unsafe { vm_ci_argc((*cd).ci) };
@@ -2895,7 +2942,7 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                 _ => {
                     // Unknown opcode; side-exit into the interpreter
                     let exit_id = fun.push_insn(block, Insn::Snapshot { state: exit_state });
-                    fun.push_insn(block, Insn::SideExit { state: exit_id });
+                    fun.push_insn(block, Insn::SideExit { state: exit_id, reason: SideExitReason::UnknownOpcode(opcode) });
                     break;  // End the block
                 }
             }
@@ -3937,7 +3984,7 @@ mod tests {
             fn test:
             bb0(v0:BasicObject, v1:BasicObject):
               v4:ArrayExact = ToArray v1
-              SideExit
+              SideExit UnknownCallType
         "#]]);
     }
 
@@ -3949,7 +3996,7 @@ mod tests {
         assert_method_hir("test",  expect![[r#"
             fn test:
             bb0(v0:BasicObject, v1:BasicObject):
-              SideExit
+              SideExit UnknownCallType
         "#]]);
     }
 
@@ -3962,7 +4009,7 @@ mod tests {
             fn test:
             bb0(v0:BasicObject, v1:BasicObject):
               v3:Fixnum[1] = Const Value(1)
-              SideExit
+              SideExit UnknownCallType
         "#]]);
     }
 
@@ -3974,7 +4021,7 @@ mod tests {
         assert_method_hir("test",  expect![[r#"
             fn test:
             bb0(v0:BasicObject, v1:BasicObject):
-              SideExit
+              SideExit UnknownCallType
         "#]]);
     }
 
@@ -3988,7 +4035,7 @@ mod tests {
         assert_method_hir("test",  expect![[r#"
             fn test:
             bb0(v0:BasicObject):
-              SideExit
+              SideExit UnknownOpcode(invokesuper)
         "#]]);
     }
 
@@ -4000,7 +4047,7 @@ mod tests {
         assert_method_hir("test",  expect![[r#"
             fn test:
             bb0(v0:BasicObject):
-              SideExit
+              SideExit UnknownOpcode(invokesuper)
         "#]]);
     }
 
@@ -4012,7 +4059,7 @@ mod tests {
         assert_method_hir("test",  expect![[r#"
             fn test:
             bb0(v0:BasicObject, v1:BasicObject):
-              SideExit
+              SideExit UnknownOpcode(invokesuperforward)
         "#]]);
     }
 
@@ -4033,7 +4080,7 @@ mod tests {
               v9:StaticSymbol[:b] = Const Value(VALUE(0x1008))
               v10:Fixnum[1] = Const Value(1)
               v12:BasicObject = SendWithoutBlock v8, :core#hash_merge_ptr, v7, v9, v10
-              SideExit
+              SideExit UnknownCallType
         "#]]);
     }
 
@@ -4048,7 +4095,7 @@ mod tests {
               v4:ArrayExact = ToNewArray v1
               v5:Fixnum[1] = Const Value(1)
               ArrayPush v4, v5
-              SideExit
+              SideExit UnknownCallType
         "#]]);
     }
 
@@ -4060,7 +4107,7 @@ mod tests {
         assert_method_hir("test",  expect![[r#"
             fn test:
             bb0(v0:BasicObject, v1:BasicObject):
-              SideExit
+              SideExit UnknownOpcode(sendforward)
         "#]]);
     }
 
@@ -4129,7 +4176,7 @@ mod tests {
               v3:NilClassExact = Const Value(nil)
               v4:NilClassExact = Const Value(nil)
               v7:BasicObject = SendWithoutBlock v1, :+, v2
-              SideExit
+              SideExit UnknownNewarraySend(MIN)
         "#]]);
     }
 
@@ -4149,7 +4196,7 @@ mod tests {
               v3:NilClassExact = Const Value(nil)
               v4:NilClassExact = Const Value(nil)
               v7:BasicObject = SendWithoutBlock v1, :+, v2
-              SideExit
+              SideExit UnknownNewarraySend(HASH)
         "#]]);
     }
 
@@ -4171,7 +4218,7 @@ mod tests {
               v7:BasicObject = SendWithoutBlock v1, :+, v2
               v8:StringExact[VALUE(0x1000)] = Const Value(VALUE(0x1000))
               v9:StringExact = StringCopy v8
-              SideExit
+              SideExit UnknownNewarraySend(PACK)
         "#]]);
     }
 
@@ -4193,7 +4240,7 @@ mod tests {
               v3:NilClassExact = Const Value(nil)
               v4:NilClassExact = Const Value(nil)
               v7:BasicObject = SendWithoutBlock v1, :+, v2
-              SideExit
+              SideExit UnknownNewarraySend(INCLUDE_P)
         "#]]);
     }
 
@@ -4617,7 +4664,27 @@ mod tests {
               v3:Fixnum[1] = Const Value(1)
               v5:BasicObject = ObjToString v3
               v7:String = AnyToString v3, str: v5
-              SideExit
+              SideExit UnknownOpcode(concatstrings)
+        "#]]);
+    }
+
+    #[test]
+    fn throw() {
+        eval("
+            define_method(:throw_return) { return 1 }
+            define_method(:throw_break) { break 2 }
+        ");
+        assert_method_hir_with_opcode("throw_return", YARVINSN_throw, expect![[r#"
+            fn block in <compiled>:
+            bb0(v0:BasicObject):
+              v2:Fixnum[1] = Const Value(1)
+              Throw TAG_RETURN, v2
+        "#]]);
+        assert_method_hir_with_opcode("throw_break", YARVINSN_throw, expect![[r#"
+            fn block in <compiled>:
+            bb0(v0:BasicObject):
+              v2:Fixnum[2] = Const Value(2)
+              Throw TAG_BREAK, v2
         "#]]);
     }
 }
@@ -6175,7 +6242,7 @@ mod opt_tests {
               v2:StringExact[VALUE(0x1000)] = Const Value(VALUE(0x1000))
               v3:StringExact[VALUE(0x1008)] = Const Value(VALUE(0x1008))
               v4:StringExact = StringCopy v3
-              SideExit
+              SideExit UnknownOpcode(concatstrings)
         "#]]);
     }
 
@@ -6191,7 +6258,7 @@ mod opt_tests {
               v3:Fixnum[1] = Const Value(1)
               v10:BasicObject = SendWithoutBlock v3, :to_s
               v7:String = AnyToString v3, str: v10
-              SideExit
+              SideExit UnknownOpcode(concatstrings)
         "#]]);
     }
 
@@ -6308,6 +6375,83 @@ mod opt_tests {
               PatchPoint StableConstantNames(0x1000, MY_SET)
               v7:SetExact[VALUE(0x1008)] = Const Value(VALUE(0x1008))
               Return v7
+        "#]]);
+    }
+
+    #[test]
+    fn test_regexp_type() {
+        eval("
+            def test = /a/
+        ");
+        assert_optimized_method_hir("test", expect![[r#"
+            fn test:
+            bb0(v0:BasicObject):
+              v2:RegexpExact[VALUE(0x1000)] = Const Value(VALUE(0x1000))
+              Return v2
+        "#]]);
+    }
+
+    #[test]
+    fn test_nil_nil_specialized_to_ccall() {
+        eval("
+            def test = nil.nil?
+        ");
+        assert_optimized_method_hir("test", expect![[r#"
+            fn test:
+            bb0(v0:BasicObject):
+              v2:NilClassExact = Const Value(nil)
+              PatchPoint MethodRedefined(NilClass@0x1000, nil?@0x1008)
+              v7:TrueClassExact = CCall nil?@0x1010, v2
+              Return v7
+        "#]]);
+    }
+
+    #[test]
+    fn test_eliminate_nil_nil_specialized_to_ccall() {
+        eval("
+            def test
+              nil.nil?
+              1
+            end
+        ");
+        assert_optimized_method_hir("test", expect![[r#"
+            fn test:
+            bb0(v0:BasicObject):
+              PatchPoint MethodRedefined(NilClass@0x1000, nil?@0x1008)
+              v5:Fixnum[1] = Const Value(1)
+              Return v5
+        "#]]);
+    }
+
+    #[test]
+    fn test_non_nil_nil_specialized_to_ccall() {
+        eval("
+            def test = 1.nil?
+        ");
+        assert_optimized_method_hir("test", expect![[r#"
+            fn test:
+            bb0(v0:BasicObject):
+              v2:Fixnum[1] = Const Value(1)
+              PatchPoint MethodRedefined(Integer@0x1000, nil?@0x1008)
+              v7:FalseClassExact = CCall nil?@0x1010, v2
+              Return v7
+        "#]]);
+    }
+
+    #[test]
+    fn test_eliminate_non_nil_nil_specialized_to_ccall() {
+        eval("
+            def test
+              1.nil?
+              2
+            end
+        ");
+        assert_optimized_method_hir("test", expect![[r#"
+            fn test:
+            bb0(v0:BasicObject):
+              PatchPoint MethodRedefined(Integer@0x1000, nil?@0x1008)
+              v5:Fixnum[2] = Const Value(2)
+              Return v5
         "#]]);
     }
 }

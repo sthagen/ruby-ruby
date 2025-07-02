@@ -6,8 +6,7 @@ use crate::backend::current::{Reg, ALLOC_REGS};
 use crate::profile::get_or_create_iseq_payload;
 use crate::state::ZJITState;
 use crate::{asm::CodeBlock, cruby::*, options::debug, virtualmem::CodePtr};
-use crate::invariants::{iseq_escapes_ep, track_no_ep_escape_assumption};
-use crate::backend::lir::{self, asm_comment, Assembler, Opnd, Target, CFP, C_ARG_OPNDS, C_RET_OPND, EC, SP};
+use crate::backend::lir::{self, asm_comment, Assembler, Opnd, Target, CFP, C_ARG_OPNDS, C_RET_OPND, EC, NATIVE_STACK_PTR, SP};
 use crate::hir::{iseq_to_hir, Block, BlockId, BranchEdge, CallInfo, RangeType, SELF_PARAM_IDX, SpecialObjectType};
 use crate::hir::{Const, FrameState, Function, Insn, InsnId};
 use crate::hir_type::{types::Fixnum, Type};
@@ -26,16 +25,20 @@ struct JITState {
 
     /// Branches to an ISEQ that need to be compiled later
     branch_iseqs: Vec<(Rc<Branch>, IseqPtr)>,
+
+    /// The number of bytes allocated for basic block arguments spilled onto the C stack
+    c_stack_bytes: usize,
 }
 
 impl JITState {
     /// Create a new JITState instance
-    fn new(iseq: IseqPtr, num_insns: usize, num_blocks: usize) -> Self {
+    fn new(iseq: IseqPtr, num_insns: usize, num_blocks: usize, c_stack_bytes: usize) -> Self {
         JITState {
             iseq,
             opnds: vec![None; num_insns],
             labels: vec![None; num_blocks],
             branch_iseqs: Vec::default(),
+            c_stack_bytes,
         }
     }
 
@@ -59,15 +62,6 @@ impl JITState {
             }
         }
     }
-
-    /// Assume that this ISEQ doesn't escape EP. Return false if it's known to escape EP.
-    fn assume_no_ep_escape(iseq: IseqPtr) -> bool {
-        if iseq_escapes_ep(iseq) {
-            return false;
-        }
-        track_no_ep_escape_assumption(iseq);
-        true
-    }
 }
 
 /// CRuby API to compile a given ISEQ
@@ -75,6 +69,14 @@ impl JITState {
 pub extern "C" fn rb_zjit_iseq_gen_entry_point(iseq: IseqPtr, _ec: EcPtr) -> *const u8 {
     // Do not test the JIT code in HIR tests
     if cfg!(test) {
+        return std::ptr::null();
+    }
+
+    // Reject ISEQs with very large temp stacks.
+    // We cannot encode too large offsets to access locals in arm64.
+    let stack_max = unsafe { rb_get_iseq_body_stack_max(iseq) };
+    if stack_max >= i8::MAX as u32 {
+        debug!("ISEQ stack too large: {stack_max}");
         return std::ptr::null();
     }
 
@@ -145,7 +147,7 @@ fn gen_entry(cb: &mut CodeBlock, iseq: IseqPtr, function: &Function, function_pt
     // Set up registers for CFP, EC, SP, and basic block arguments
     let mut asm = Assembler::new();
     gen_entry_prologue(&mut asm, iseq);
-    gen_method_params(&mut asm, iseq, function.block(BlockId(0)));
+    gen_entry_params(&mut asm, iseq, function.block(BlockId(0)));
 
     // Jump to the first block using a call instruction
     asm.ccall(function_ptr.raw_ptr(cb) as *const u8, vec![]);
@@ -189,7 +191,8 @@ fn gen_iseq(cb: &mut CodeBlock, iseq: IseqPtr) -> Option<(CodePtr, Vec<(Rc<Branc
 
 /// Compile a function
 fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, function: &Function) -> Option<(CodePtr, Vec<(Rc<Branch>, IseqPtr)>)> {
-    let mut jit = JITState::new(iseq, function.num_insns(), function.num_blocks());
+    let c_stack_bytes = aligned_stack_bytes(max_num_params(function).saturating_sub(ALLOC_REGS.len()));
+    let mut jit = JITState::new(iseq, function.num_insns(), function.num_blocks(), c_stack_bytes);
     let mut asm = Assembler::new();
 
     // Compile each basic block
@@ -205,6 +208,13 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, function: &Function) -> Optio
         // Set up the frame at the first block
         if block_id == BlockId(0) {
             asm.frame_setup();
+
+            // Bump the C stack pointer for basic block arguments
+            if jit.c_stack_bytes > 0 {
+                asm_comment!(asm, "bump C stack pointer");
+                let new_sp = asm.sub(NATIVE_STACK_PTR, jit.c_stack_bytes.into());
+                asm.mov(NATIVE_STACK_PTR, new_sp);
+            }
         }
 
         // Compile all parameters
@@ -262,7 +272,7 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
         Insn::SendWithoutBlock { call_info, cd, state, self_val, args, .. } => gen_send_without_block(jit, asm, call_info, *cd, &function.frame_state(*state), self_val, args)?,
         Insn::SendWithoutBlockDirect { cme, iseq, self_val, args, state, .. } => gen_send_without_block_direct(cb, jit, asm, *cme, *iseq, opnd!(self_val), args, &function.frame_state(*state))?,
         Insn::InvokeBuiltin { bf, args, state } => gen_invokebuiltin(jit, asm, &function.frame_state(*state), bf, args)?,
-        Insn::Return { val } => return Some(gen_return(asm, opnd!(val))?),
+        Insn::Return { val } => return Some(gen_return(jit, asm, opnd!(val))?),
         Insn::FixnumAdd { left, right, state } => gen_fixnum_add(jit, asm, opnd!(left), opnd!(right), &function.frame_state(*state))?,
         Insn::FixnumSub { left, right, state } => gen_fixnum_sub(jit, asm, opnd!(left), opnd!(right), &function.frame_state(*state))?,
         Insn::FixnumMult { left, right, state } => gen_fixnum_mult(jit, asm, opnd!(left), opnd!(right), &function.frame_state(*state))?,
@@ -285,7 +295,7 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
         Insn::SetLocal { val, ep_offset, level } => return gen_nested_setlocal(asm, opnd!(val), *ep_offset, *level),
         Insn::GetConstantPath { ic, state } => gen_get_constant_path(asm, *ic, &function.frame_state(*state)),
         Insn::SetIvar { self_val, id, val, state: _ } => return gen_setivar(asm, opnd!(self_val), *id, opnd!(val)),
-        Insn::SideExit { state } => return gen_side_exit(jit, asm, &function.frame_state(*state)),
+        Insn::SideExit { state, reason: _ } => return gen_side_exit(jit, asm, &function.frame_state(*state)),
         Insn::PutSpecialObject { value_type } => gen_putspecialobject(asm, *value_type),
         Insn::AnyToString { val, str, state } => gen_anytostring(asm, opnd!(val), opnd!(str), &function.frame_state(*state))?,
         Insn::Defined { op_type, obj, pushval, v } => gen_defined(jit, asm, *op_type, *obj, *pushval, opnd!(v))?,
@@ -501,7 +511,7 @@ fn gen_entry_prologue(asm: &mut Assembler, iseq: IseqPtr) {
 }
 
 /// Assign method arguments to basic block arguments at JIT entry
-fn gen_method_params(asm: &mut Assembler, iseq: IseqPtr, entry_block: &Block) {
+fn gen_entry_params(asm: &mut Assembler, iseq: IseqPtr, entry_block: &Block) {
     let self_param = gen_param(asm, SELF_PARAM_IDX);
     asm.mov(self_param, Opnd::mem(VALUE_BITS, CFP, RUBY_OFFSET_CFP_SELF));
 
@@ -516,7 +526,7 @@ fn gen_method_params(asm: &mut Assembler, iseq: IseqPtr, entry_block: &Block) {
 
         // Assign local variables to the basic block arguments
         for (idx, &param) in params.iter().enumerate() {
-            let local = gen_getlocal(asm, iseq, idx);
+            let local = gen_entry_param(asm, iseq, idx);
             asm.load_into(param, local);
         }
     }
@@ -528,18 +538,29 @@ fn gen_branch_params(jit: &mut JITState, asm: &mut Assembler, branch: &BranchEdg
         asm_comment!(asm, "set branch params: {}", branch.args.len());
         let mut moves: Vec<(Reg, Opnd)> = vec![];
         for (idx, &arg) in branch.args.iter().enumerate() {
-            moves.push((param_reg(idx), jit.get_opnd(arg)?));
+            match param_opnd(idx) {
+                Opnd::Reg(reg) => {
+                    // If a parameter is a register, we need to parallel-move it
+                    moves.push((reg, jit.get_opnd(arg)?));
+                },
+                param => {
+                    // If a parameter is memory, we set it beforehand
+                    asm.mov(param, jit.get_opnd(arg)?);
+                }
+            }
         }
         asm.parallel_mov(moves);
     }
     Some(())
 }
 
-/// Get the local variable at the given index
-fn gen_getlocal(asm: &mut Assembler, iseq: IseqPtr, local_idx: usize) -> lir::Opnd {
+/// Get a method parameter on JIT entry. As of entry, whether EP is escaped or not solely
+/// depends on the ISEQ type.
+fn gen_entry_param(asm: &mut Assembler, iseq: IseqPtr, local_idx: usize) -> lir::Opnd {
     let ep_offset = local_idx_to_ep_offset(iseq, local_idx);
 
-    if JITState::assume_no_ep_escape(iseq) {
+    // If the ISEQ does not escape EP, we can optimize the local variable access using the SP register.
+    if !iseq_entry_escapes_ep(iseq) {
         // Create a reference to the local variable using the SP register. We assume EP == BP.
         // TODO: Implement the invalidation in rb_zjit_invalidate_ep_is_bp()
         let offs = -(SIZEOF_VALUE_I32 * (ep_offset + 1));
@@ -563,7 +584,13 @@ fn gen_const(val: VALUE) -> lir::Opnd {
 
 /// Compile a basic block argument
 fn gen_param(asm: &mut Assembler, idx: usize) -> lir::Opnd {
-    asm.live_reg_opnd(Opnd::Reg(param_reg(idx)))
+    // Allocate a register or a stack slot
+    match param_opnd(idx) {
+        // If it's a register, insert LiveReg instruction to reserve the register
+        // in the register pool for register allocation.
+        param @ Opnd::Reg(_) => asm.live_reg_opnd(param),
+        param => param,
+    }
 }
 
 /// Compile a jump to a basic block
@@ -805,13 +832,20 @@ fn gen_new_range(
 }
 
 /// Compile code that exits from JIT code with a return value
-fn gen_return(asm: &mut Assembler, val: lir::Opnd) -> Option<()> {
+fn gen_return(jit: &JITState, asm: &mut Assembler, val: lir::Opnd) -> Option<()> {
     // Pop the current frame (ec->cfp++)
     // Note: the return PC is already in the previous CFP
     asm_comment!(asm, "pop stack frame");
     let incr_cfp = asm.add(CFP, RUBY_SIZEOF_CONTROL_FRAME.into());
     asm.mov(CFP, incr_cfp);
     asm.mov(Opnd::mem(64, EC, RUBY_OFFSET_EC_CFP), CFP);
+
+    // Restore the C stack pointer bumped for basic block arguments
+    if jit.c_stack_bytes > 0 {
+        asm_comment!(asm, "restore C stack pointer");
+        let new_sp = asm.add(NATIVE_STACK_PTR, jit.c_stack_bytes.into());
+        asm.mov(NATIVE_STACK_PTR, new_sp);
+    }
 
     asm.frame_teardown();
 
@@ -1000,17 +1034,15 @@ fn gen_push_frame(asm: &mut Assembler, argc: usize, state: &FrameState, frame: C
     asm.mov(cfp_opnd(RUBY_OFFSET_CFP_BLOCK_CODE), 0.into());
 }
 
-/// Return a register we use for the basic block argument at a given index
-fn param_reg(idx: usize) -> Reg {
-    // To simplify the implementation, allocate a fixed register for each basic block argument for now.
+/// Return an operand we use for the basic block argument at a given index
+fn param_opnd(idx: usize) -> Opnd {
+    // To simplify the implementation, allocate a fixed register or a stack slot for each basic block argument for now.
     // TODO: Allow allocating arbitrary registers for basic block arguments
-    if idx >= ALLOC_REGS.len() {
-        unimplemented!(
-            "register spilling not yet implemented, too many basic block arguments ({}/{})",
-            idx + 1, ALLOC_REGS.len()
-        );
+    if idx < ALLOC_REGS.len() {
+        Opnd::Reg(ALLOC_REGS[idx])
+    } else {
+        Opnd::mem(64, NATIVE_STACK_PTR, -((idx - ALLOC_REGS.len() + 1) as i32) * SIZEOF_VALUE_I32)
     }
-    ALLOC_REGS[idx]
 }
 
 /// Inverse of ep_offset_to_local_idx(). See ep_offset_to_local_idx() for details.
@@ -1053,8 +1085,45 @@ fn side_exit(jit: &mut JITState, state: &FrameState) -> Option<Target> {
         pc: state.pc,
         stack,
         locals,
+        c_stack_bytes: jit.c_stack_bytes,
     };
     Some(target)
+}
+
+/// Return true if a given ISEQ is known to escape EP to the heap on entry.
+///
+/// As of vm_push_frame(), EP is always equal to BP. However, after pushing
+/// a frame, some ISEQ setups call vm_bind_update_env(), which redirects EP.
+fn iseq_entry_escapes_ep(iseq: IseqPtr) -> bool {
+    match unsafe { get_iseq_body_type(iseq) } {
+        // <main> frame is always associated to TOPLEVEL_BINDING.
+        ISEQ_TYPE_MAIN |
+        // Kernel#eval uses a heap EP when a Binding argument is not nil.
+        ISEQ_TYPE_EVAL => true,
+        _ => false,
+    }
+}
+
+/// Returne the maximum number of arguments for a block in a given function
+fn max_num_params(function: &Function) -> usize {
+    let reverse_post_order = function.rpo();
+    reverse_post_order.iter().map(|&block_id| {
+        let block = function.block(block_id);
+        block.params().len()
+    }).max().unwrap_or(0)
+}
+
+/// Given the number of spill slots needed for a function, return the number of bytes
+/// the function needs to allocate on the stack for the stack frame.
+fn aligned_stack_bytes(num_slots: usize) -> usize {
+    // Both x86_64 and arm64 require the stack to be aligned to 16 bytes.
+    // Since SIZEOF_VALUE is 8 bytes, we need to round up the size to the nearest even number.
+    let num_slots = if num_slots % 2 == 0 {
+        num_slots
+    } else {
+        num_slots + 1
+    };
+    num_slots * SIZEOF_VALUE
 }
 
 impl Assembler {

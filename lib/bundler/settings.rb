@@ -40,11 +40,11 @@ module Bundler
       path.system
       plugins
       prefer_patch
-      print_only_version_number
       setup_makes_kernel_gem_public
       silence_deprecations
       silence_root_warning
       update_requires_all_flag
+      verbose
     ].freeze
 
     REMEMBERED_KEYS = %w[
@@ -87,6 +87,7 @@ module Bundler
       gemfile
       path
       shebang
+      simulate_version
       system_bindir
       trust-policy
       version
