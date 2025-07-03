@@ -892,7 +892,6 @@ impl Assembler
         let mut pos_markers: Vec<(usize, CodePtr)> = vec![];
 
         // For each instruction
-        //let start_write_pos = cb.get_write_pos();
         let mut insn_idx: usize = 0;
         while let Some(insn) = self.insns.get(insn_idx) {
             //let src_ptr = cb.get_write_ptr();
@@ -1256,9 +1255,6 @@ impl Assembler
                     csel(cb, out.into(), truthy.into(), falsy.into(), Condition::GE);
                 }
                 Insn::LiveReg { .. } => (), // just a reg alloc signal, no code
-                Insn::PadInvalPatch => {
-                    unimplemented!("we haven't needed padding in ZJIT yet");
-                }
             };
 
             // On failure, jump to the next page and retry the current insn
@@ -1297,7 +1293,7 @@ impl Assembler
     /// Optimize and compile the stored instructions
     pub fn compile_with_regs(self, cb: &mut CodeBlock, regs: Vec<Reg>) -> Option<(CodePtr, Vec<u32>)> {
         let asm = self.arm64_split();
-        let mut asm = asm.alloc_regs(regs);
+        let mut asm = asm.alloc_regs(regs)?;
         asm.compile_side_exits()?;
 
         // Create label instances in the code block

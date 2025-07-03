@@ -713,8 +713,7 @@ class TestZJIT < Test::Unit::TestCase
   end
 
   def test_spilled_method_args
-    omit 'CCall with spilled arguments is not implemented yet'
-    assert_compiles '55', %q{
+    assert_runs '55', %q{
       def foo(n1, n2, n3, n4, n5, n6, n7, n8, n9, n10)
         n1 + n2 + n3 + n4 + n5 + n6 + n7 + n8 + n9 + n10
       end
@@ -816,6 +815,21 @@ class TestZJIT < Test::Unit::TestCase
     }, call_threshold: 2
   end
 
+  def test_bop_invalidation
+    omit 'Invalidation on BOP redefinition is not implemented yet'
+    assert_compiles '', %q{
+      def test
+        eval(<<~RUBY)
+          class Integer
+            def +(_) = 100
+          end
+        RUBY
+        1 + 2
+      end
+      test
+    }
+  end
+
   def test_defined_yield
     assert_compiles "nil", "defined?(yield)"
     assert_compiles '[nil, nil, "yield"]', %q{
@@ -906,10 +920,17 @@ class TestZJIT < Test::Unit::TestCase
   # Assert that every method call in `test_script` can be compiled by ZJIT
   # at a given call_threshold
   def assert_compiles(expected, test_script, insns: [], **opts)
+    assert_runs(expected, test_script, insns:, assert_compiles: true, **opts)
+  end
+
+  # Assert that `test_script` runs successfully with ZJIT enabled.
+  # Unlike `assert_compiles`, `assert_runs(assert_compiles: false)`
+  # allows ZJIT to skip compiling methods.
+  def assert_runs(expected, test_script, insns: [], assert_compiles: false, **opts)
     pipe_fd = 3
 
     script = <<~RUBY
-      ret_val = (_test_proc = -> { RubyVM::ZJIT.assert_compiles; #{test_script.lstrip} }).call
+      ret_val = (_test_proc = -> { #{('RubyVM::ZJIT.assert_compiles; ' if assert_compiles)}#{test_script.lstrip} }).call
       result = {
         ret_val:,
         #{ unless insns.empty?

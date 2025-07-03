@@ -3,12 +3,11 @@ use std::fmt;
 use std::mem::take;
 use crate::codegen::local_size_and_idx_to_ep_offset;
 use crate::cruby::{Qundef, RUBY_OFFSET_CFP_PC, RUBY_OFFSET_CFP_SP, SIZEOF_VALUE_I32};
+use crate::options::{debug, get_option};
 use crate::{cruby::VALUE};
 use crate::backend::current::*;
 use crate::virtualmem::CodePtr;
 use crate::asm::{CodeBlock, Label};
-#[cfg(feature = "disasm")]
-use crate::options::*;
 
 pub const EC: Opnd = _EC;
 pub const CFP: Opnd = _CFP;
@@ -485,10 +484,6 @@ pub enum Insn {
     // binary OR operation.
     Or { left: Opnd, right: Opnd, out: Opnd },
 
-    /// Pad nop instructions to accommodate Op::Jmp in case the block or the insn
-    /// is invalidated.
-    PadInvalPatch,
-
     // Mark a position in the generated code
     PosMarker(PosMarkerFn),
 
@@ -608,7 +603,6 @@ impl Insn {
             Insn::Mov { .. } => "Mov",
             Insn::Not { .. } => "Not",
             Insn::Or { .. } => "Or",
-            Insn::PadInvalPatch => "PadEntryExit",
             Insn::PosMarker(_) => "PosMarker",
             Insn::RShift { .. } => "RShift",
             Insn::Store { .. } => "Store",
@@ -802,7 +796,6 @@ impl<'a> Iterator for InsnOpndIterator<'a> {
             Insn::CPushAll |
             Insn::FrameSetup |
             Insn::FrameTeardown |
-            Insn::PadInvalPatch |
             Insn::PosMarker(_) => None,
 
             Insn::CPopInto(opnd) |
@@ -957,7 +950,6 @@ impl<'a> InsnOpndMutIterator<'a> {
             Insn::CPushAll |
             Insn::FrameSetup |
             Insn::FrameTeardown |
-            Insn::PadInvalPatch |
             Insn::PosMarker(_) => None,
 
             Insn::CPopInto(opnd) |
@@ -1519,7 +1511,7 @@ impl Assembler
     /// Sets the out field on the various instructions that require allocated
     /// registers because their output is used as the operand on a subsequent
     /// instruction. This is our implementation of the linear scan algorithm.
-    pub(super) fn alloc_regs(mut self, regs: Vec<Reg>) -> Assembler {
+    pub(super) fn alloc_regs(mut self, regs: Vec<Reg>) -> Option<Assembler> {
         // Dump live registers for register spill debugging.
         fn dump_live_regs(insns: Vec<Insn>, live_ranges: Vec<LiveRange>, num_regs: usize, spill_index: usize) {
             // Convert live_ranges to live_regs: the number of live registers at each index
@@ -1566,8 +1558,12 @@ impl Assembler
                     // If C_RET_REG is in use, move it to another register.
                     // This must happen before last-use registers are deallocated.
                     if let Some(vreg_idx) = pool.vreg_for(&C_RET_REG) {
-                        let new_reg = pool.alloc_reg(vreg_idx)
-                            .expect("spilling VReg is not implemented yet, can't evacuate C_RET_REG on CCall"); // TODO: support spilling VReg
+                        let new_reg = if let Some(new_reg) = pool.alloc_reg(vreg_idx) {
+                            new_reg
+                        } else {
+                            debug!("spilling VReg is not implemented yet, can't evacuate C_RET_REG on CCall");
+                            return None;
+                        };
                         asm.mov(Opnd::Reg(new_reg), C_RET_OPND);
                         pool.dealloc_reg(&C_RET_REG);
                         reg_mapping[vreg_idx] = Some(new_reg);
@@ -1660,13 +1656,16 @@ impl Assembler
                         _ => match pool.alloc_reg(vreg_idx.unwrap()) {
                             Some(reg) => Some(reg),
                             None => {
-                                let mut insns = asm.insns;
-                                insns.push(insn);
-                                while let Some((_, insn)) = iterator.next() {
+                                if get_option!(debug) {
+                                    let mut insns = asm.insns;
                                     insns.push(insn);
+                                    while let Some((_, insn)) = iterator.next() {
+                                        insns.push(insn);
+                                    }
+                                    dump_live_regs(insns, live_ranges, regs.len(), index);
                                 }
-                                dump_live_regs(insns, live_ranges, regs.len(), index);
-                                unreachable!("Register spill not supported");
+                                debug!("Register spill not supported");
+                                return None;
                             }
                         }
                     };
@@ -1737,7 +1736,7 @@ impl Assembler
         }
 
         assert!(pool.is_empty(), "Expected all registers to be returned to the pool");
-        asm
+        Some(asm)
     }
 
     /// Compile the instructions down to machine code.
@@ -2163,10 +2162,6 @@ impl Assembler {
         let out = self.new_vreg(Opnd::match_num_bits(&[left, right]));
         self.push_insn(Insn::Or { left, right, out });
         out
-    }
-
-    pub fn pad_inval_patch(&mut self) {
-        self.push_insn(Insn::PadInvalPatch);
     }
 
     //pub fn pos_marker<F: FnMut(CodePtr)>(&mut self, marker_fn: F)
