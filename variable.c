@@ -2331,7 +2331,7 @@ rb_copy_generic_ivar(VALUE dest, VALUE obj)
         new_fields_obj = rb_imemo_fields_new(rb_obj_class(dest), RSHAPE_CAPACITY(dest_shape_id));
         VALUE *src_buf = rb_imemo_fields_ptr(fields_obj);
         VALUE *dest_buf = rb_imemo_fields_ptr(new_fields_obj);
-        rb_shape_copy_fields(dest, dest_buf, dest_shape_id, obj, src_buf, src_shape_id);
+        rb_shape_copy_fields(new_fields_obj, dest_buf, dest_shape_id, src_buf, src_shape_id);
         RBASIC_SET_SHAPE_ID(new_fields_obj, dest_shape_id);
 
         RB_VM_LOCKING() {
@@ -2355,6 +2355,7 @@ rb_replace_generic_ivar(VALUE clone, VALUE obj)
         st_data_t fields_tbl, obj_data = (st_data_t)obj;
         if (st_delete(generic_fields_tbl_, &obj_data, &fields_tbl)) {
             st_insert(generic_fields_tbl_, (st_data_t)clone, fields_tbl);
+            RB_OBJ_WRITTEN(clone, Qundef, fields_tbl);
         }
         else {
             rb_bug("unreachable");
