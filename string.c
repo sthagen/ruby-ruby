@@ -35,7 +35,7 @@
 #include "internal/numeric.h"
 #include "internal/object.h"
 #include "internal/proc.h"
-#include "internal/ractor_safe_set.h"
+#include "internal/concurrent_set.h"
 #include "internal/re.h"
 #include "internal/sanitizers.h"
 #include "internal/string.h"
@@ -440,7 +440,7 @@ rb_fstring(VALUE str)
 static VALUE fstring_table_obj;
 
 static VALUE
-fstring_ractor_safe_set_hash(VALUE str)
+fstring_concurrent_set_hash(VALUE str)
 {
 #ifdef PRECOMPUTED_FAKESTR_HASH
     st_index_t h;
@@ -460,7 +460,7 @@ fstring_ractor_safe_set_hash(VALUE str)
 }
 
 static bool
-fstring_ractor_safe_set_cmp(VALUE a, VALUE b)
+fstring_concurrent_set_cmp(VALUE a, VALUE b)
 {
     long alen, blen;
     const char *aptr, *bptr;
@@ -481,7 +481,7 @@ struct fstr_create_arg {
 };
 
 static VALUE
-fstring_ractor_safe_set_create(VALUE str, void *data)
+fstring_concurrent_set_create(VALUE str, void *data)
 {
     struct fstr_create_arg *arg = data;
 
@@ -548,16 +548,16 @@ fstring_ractor_safe_set_create(VALUE str, void *data)
     return str;
 }
 
-static struct rb_ractor_safe_set_funcs fstring_ractor_safe_set_funcs = {
-    .hash = fstring_ractor_safe_set_hash,
-    .cmp = fstring_ractor_safe_set_cmp,
-    .create = fstring_ractor_safe_set_create,
+static struct rb_concurrent_set_funcs fstring_concurrent_set_funcs = {
+    .hash = fstring_concurrent_set_hash,
+    .cmp = fstring_concurrent_set_cmp,
+    .create = fstring_concurrent_set_create,
 };
 
 void
 Init_fstring_table(void)
 {
-    fstring_table_obj = rb_ractor_safe_set_new(&fstring_ractor_safe_set_funcs, 8192);
+    fstring_table_obj = rb_concurrent_set_new(&fstring_concurrent_set_funcs, 8192);
     rb_gc_register_address(&fstring_table_obj);
 }
 
@@ -577,7 +577,7 @@ register_fstring(VALUE str, bool copy, bool force_precompute_hash)
     }
 #endif
 
-    VALUE result = rb_ractor_safe_set_find_or_insert(&fstring_table_obj, str, &args);
+    VALUE result = rb_concurrent_set_find_or_insert(&fstring_table_obj, str, &args);
 
     RUBY_ASSERT(!rb_objspace_garbage_object_p(result));
     RUBY_ASSERT(RB_TYPE_P(result, T_STRING));
@@ -602,7 +602,7 @@ rb_gc_free_fstring(VALUE obj)
     // Assume locking and barrier (which there is no assert for)
     ASSERT_vm_locking();
 
-    rb_ractor_safe_set_delete_by_identity(fstring_table_obj, obj);
+    rb_concurrent_set_delete_by_identity(fstring_table_obj, obj);
 
     RB_DEBUG_COUNTER_INC(obj_str_fstr);
 
@@ -613,7 +613,7 @@ void
 rb_fstring_foreach_with_replace(int (*callback)(VALUE *str, void *data), void *data)
 {
     if (fstring_table_obj) {
-        rb_ractor_safe_set_foreach_with_replace(fstring_table_obj, callback, data);
+        rb_concurrent_set_foreach_with_replace(fstring_table_obj, callback, data);
     }
 }
 
@@ -4317,26 +4317,26 @@ static VALUE str_casecmp_p(VALUE str1, VALUE str2);
  *  call-seq:
  *    casecmp(other_string) -> -1, 0, 1, or nil
  *
- *  Compares <tt>self.downcase</tt> and <tt>other_string.downcase</tt>; returns:
+ *  Ignoring case, compares +self+ and +other_string+; returns:
  *
- *  - -1 if <tt>other_string.downcase</tt> is larger.
+ *  - -1 if <tt>self.downcase</tt> is smaller than <tt>other_string.downcase</tt>.
  *  - 0 if the two are equal.
- *  - 1 if <tt>other_string.downcase</tt> is smaller.
+ *  - 1 if <tt>self.downcase</tt> is larger than <tt>other_string.downcase</tt>.
  *  - +nil+ if the two are incomparable.
- *
- *  Examples:
- *
- *    'foo'.casecmp('foo') # => 0
- *    'foo'.casecmp('food') # => -1
- *    'food'.casecmp('foo') # => 1
- *    'FOO'.casecmp('foo') # => 0
- *    'foo'.casecmp('FOO') # => 0
- *    'foo'.casecmp(1) # => nil
  *
  *  See {Case Mapping}[rdoc-ref:case_mapping.rdoc].
  *
- *  Related: String#casecmp?.
+ *  Examples:
  *
+ *    'foo'.casecmp('goo')  # => -1
+ *    'goo'.casecmp('foo')  # => 1
+ *    'foo'.casecmp('food') # => -1
+ *    'food'.casecmp('foo') # => 1
+ *    'FOO'.casecmp('foo')  # => 0
+ *    'foo'.casecmp('FOO')  # => 0
+ *    'foo'.casecmp(1)      # => nil
+ *
+ *  Related: see {Comparing}[rdoc-ref:String@Comparing].
  */
 
 static VALUE
@@ -4411,22 +4411,21 @@ str_casecmp(VALUE str1, VALUE str2)
  *    casecmp?(other_string) -> true, false, or nil
  *
  *  Returns +true+ if +self+ and +other_string+ are equal after
- *  Unicode case folding, otherwise +false+:
- *
- *    'foo'.casecmp?('foo') # => true
- *    'foo'.casecmp?('food') # => false
- *    'food'.casecmp?('foo') # => false
- *    'FOO'.casecmp?('foo') # => true
- *    'foo'.casecmp?('FOO') # => true
- *
- *  Returns +nil+ if the two values are incomparable:
- *
- *    'foo'.casecmp?(1) # => nil
+ *  Unicode case folding, +false+ if unequal, +nil+ if incomparable.
  *
  *  See {Case Mapping}[rdoc-ref:case_mapping.rdoc].
  *
- *  Related: String#casecmp.
+ *  Examples:
  *
+ *    'foo'.casecmp?('goo')  # => false
+ *    'goo'.casecmp?('foo')  # => false
+ *    'foo'.casecmp?('food') # => false
+ *    'food'.casecmp?('foo') # => false
+ *    'FOO'.casecmp?('foo')  # => true
+ *    'foo'.casecmp?('FOO')  # => true
+ *    'foo'.casecmp?(1)      # => nil
+ *
+ *  Related: see {Comparing}[rdoc-ref:String@Comparing].
  */
 
 static VALUE
@@ -8242,22 +8241,14 @@ rb_str_downcase(int argc, VALUE *argv, VALUE str)
 
 /*
  *  call-seq:
- *    capitalize!(mapping) -> self or nil
+ *    capitalize!(mapping = :ascii) -> self or nil
  *
- *  Upcases the first character in +self+;
- *  downcases the remaining characters;
- *  returns +self+ if any changes were made, +nil+ otherwise:
+ *  Like String#capitalize, except that:
  *
- *    s = 'hello World!' # => "hello World!"
- *    s.capitalize!      # => "Hello world!"
- *    s                  # => "Hello world!"
- *    s.capitalize!      # => nil
+ *  - Changes character casings in +self+ (not in a copy of +self+).
+ *  - Returns +self+ if any changes are made, +nil+ otherwise.
  *
- *  The casing may be affected by the given +mapping+;
- *  see {Case Mapping}[rdoc-ref:case_mapping.rdoc].
- *
- *  Related: String#capitalize.
- *
+ *  Related: See {Modifying}[rdoc-ref:String@Modifying].
  */
 
 static VALUE
@@ -8282,20 +8273,29 @@ rb_str_capitalize_bang(int argc, VALUE *argv, VALUE str)
 
 /*
  *  call-seq:
- *    capitalize(mapping) -> string
+ *    capitalize(mapping = :ascii) -> string
  *
- *  Returns a string containing the characters in +self+;
- *  the first character is upcased;
- *  the remaining characters are downcased:
+ *  Returns a string containing the characters in +self+,
+ *  each with possibly changed case:
  *
- *     s = 'hello World!' # => "hello World!"
- *     s.capitalize       # => "Hello world!"
+ *  - The first character is upcased.
+ *  - All other characters are downcased.
  *
- *  The casing may be affected by the given +mapping+;
- *  see {Case Mapping}[rdoc-ref:case_mapping.rdoc].
+ *  Examples:
  *
- *  Related: String#capitalize!.
+ *    'hello world'.capitalize # => "Hello world"
+ *    'HELLO WORLD'.capitalize # => "Hello world"
  *
+ *  Some characters do not have upcase and downcase, and so are not changed;
+ *  see {Case Mapping}[rdoc-ref:case_mapping.rdoc]:
+ *
+ *    '1, 2, 3, ...'.capitalize # => "1, 2, 3, ..."
+ *
+ *  The casing is affected by the given +mapping+,
+ *  which may be +:ascii+, +:fold+, or +:turkic+;
+ *  see {Case Mappings}[rdoc-ref:case_mapping.rdoc@Case+Mappings].
+ *
+ *  Related: see {Converting to New String}[rdoc-ref:String@Converting+to+New+String].
  */
 
 static VALUE
@@ -12717,7 +12717,7 @@ Init_String(void)
 {
     rb_cString  = rb_define_class("String", rb_cObject);
 
-    rb_ractor_safe_set_foreach_with_replace(fstring_table_obj, fstring_set_class_i, NULL);
+    rb_concurrent_set_foreach_with_replace(fstring_table_obj, fstring_set_class_i, NULL);
 
     rb_include_module(rb_cString, rb_mComparable);
     rb_define_alloc_func(rb_cString, empty_str_alloc);

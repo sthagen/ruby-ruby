@@ -79,9 +79,6 @@ learn more about their operation in [bundle install(1)](bundle-install.1.html).
 
 * `allow_offline_install` (`BUNDLE_ALLOW_OFFLINE_INSTALL`):
    Allow Bundler to use cached data when installing without network access.
-* `auto_clean_without_path` (`BUNDLE_AUTO_CLEAN_WITHOUT_PATH`):
-   Automatically run `bundle clean` after installing when an explicit `path`
-   has not been set and Bundler is not installing into the system gems.
 * `auto_install` (`BUNDLE_AUTO_INSTALL`):
    Automatically run `bundle install` when gems are missing.
 * `bin` (`BUNDLE_BIN`):
@@ -98,12 +95,14 @@ learn more about their operation in [bundle install(1)](bundle-install.1.html).
    Defaults to `vendor/cache`.
 * `clean` (`BUNDLE_CLEAN`):
    Whether Bundler should run `bundle clean` automatically after
-   `bundle install`.
+   `bundle install`. Defaults to `true` in Bundler 4, as long as `path` is not
+   explicitly configured.
 * `console` (`BUNDLE_CONSOLE`):
    The console that `bundle console` starts. Defaults to `irb`.
-* `default_install_uses_path` (`BUNDLE_DEFAULT_INSTALL_USES_PATH`):
-   Whether a `bundle install` without an explicit `--path` argument defaults
-   to installing gems in `.bundle`.
+* `default_cli_command` (`BUNDLE_DEFAULT_CLI_COMMAND`):
+   The command that running `bundle` without arguments should run. Defaults to
+   `cli_help` since Bundler 4, but can also be `install` which was the previous
+   default.
 * `deployment` (`BUNDLE_DEPLOYMENT`):
    Equivalent to setting `frozen` to `true` and `path` to `vendor/bundle`.
 * `disable_checksum_validation` (`BUNDLE_DISABLE_CHECKSUM_VALIDATION`):
@@ -145,8 +144,8 @@ learn more about their operation in [bundle install(1)](bundle-install.1.html).
    will search up from the current working directory until it finds a
    `Gemfile`.
 * `global_gem_cache` (`BUNDLE_GLOBAL_GEM_CACHE`):
-   Whether Bundler should cache all gems globally, rather than locally to the
-   installing Ruby installation.
+   Whether Bundler should cache all gems and compiled extensions globally,
+   rather than locally to the configured installation path.
 * `ignore_funding_requests` (`BUNDLE_IGNORE_FUNDING_REQUESTS`):
    When set, no funding requests will be printed.
 * `ignore_messages` (`BUNDLE_IGNORE_MESSAGES`):
@@ -168,11 +167,11 @@ learn more about their operation in [bundle install(1)](bundle-install.1.html).
 * `path` (`BUNDLE_PATH`):
    The location on disk where all gems in your bundle will be located regardless
    of `$GEM_HOME` or `$GEM_PATH` values. Bundle gems not found in this location
-   will be installed by `bundle install`. Defaults to `Gem.dir`.
+   will be installed by `bundle install`. Defaults to `.bundle` relative to
+   repository root in Bundler 4, and to the default system path (`Gem.dir`)
+   before Bundler 4.
 * `path.system` (`BUNDLE_PATH__SYSTEM`):
    Whether Bundler will install gems into the default system path (`Gem.dir`).
-* `path_relative_to_cwd` (`BUNDLE_PATH_RELATIVE_TO_CWD`):
-   Makes `--path` relative to the CWD instead of the `Gemfile`.
 * `plugins` (`BUNDLE_PLUGINS`):
    Enable Bundler's experimental plugin system.
 * `prefer_patch` (BUNDLE_PREFER_PATCH):
@@ -181,9 +180,6 @@ learn more about their operation in [bundle install(1)](bundle-install.1.html).
    The number of redirects allowed for network requests. Defaults to `5`.
 * `retry` (`BUNDLE_RETRY`):
    The number of times to retry failed network requests. Defaults to `3`.
-* `setup_makes_kernel_gem_public` (`BUNDLE_SETUP_MAKES_KERNEL_GEM_PUBLIC`):
-   Have `Bundler.setup` make the `Kernel#gem` method public, even though
-   RubyGems declares it as private.
 * `shebang` (`BUNDLE_SHEBANG`):
    The program name that should be invoked for generated binstubs. Defaults to
    the ruby install name used to generate the binstub.
