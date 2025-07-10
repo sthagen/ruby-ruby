@@ -1,10 +1,10 @@
 use std::cell::Cell;
 use std::rc::Rc;
-use std::num::NonZeroU32;
 
+use crate::asm::Label;
 use crate::backend::current::{Reg, ALLOC_REGS};
 use crate::invariants::track_bop_assumption;
-use crate::profile::get_or_create_iseq_payload;
+use crate::gc::get_or_create_iseq_payload;
 use crate::state::ZJITState;
 use crate::{asm::CodeBlock, cruby::*, options::debug, virtualmem::CodePtr};
 use crate::backend::lir::{self, asm_comment, Assembler, Opnd, Target, CFP, C_ARG_OPNDS, C_RET_OPND, EC, NATIVE_STACK_PTR, SP};
@@ -236,6 +236,8 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, function: &Function) -> Optio
                 return None;
             }
         }
+        // Make sure the last patch point has enough space to insert a jump
+        asm.pad_patch_point();
     }
 
     if get_option!(dump_lir) {
@@ -291,17 +293,19 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
         Insn::FixnumLe { left, right } => gen_fixnum_le(asm, opnd!(left), opnd!(right))?,
         Insn::FixnumGt { left, right } => gen_fixnum_gt(asm, opnd!(left), opnd!(right))?,
         Insn::FixnumGe { left, right } => gen_fixnum_ge(asm, opnd!(left), opnd!(right))?,
+        Insn::FixnumAnd { left, right } => gen_fixnum_and(asm, opnd!(left), opnd!(right))?,
+        Insn::FixnumOr { left, right } => gen_fixnum_or(asm, opnd!(left), opnd!(right))?,
         Insn::IsNil { val } => gen_isnil(asm, opnd!(val))?,
         Insn::Test { val } => gen_test(asm, opnd!(val))?,
         Insn::GuardType { val, guard_type, state } => gen_guard_type(jit, asm, opnd!(val), *guard_type, &function.frame_state(*state))?,
         Insn::GuardBitEquals { val, expected, state } => gen_guard_bit_equals(jit, asm, opnd!(val), *expected, &function.frame_state(*state))?,
-        Insn::PatchPoint(invariant) => return gen_patch_point(asm, invariant),
+        Insn::PatchPoint { invariant, state } => return gen_patch_point(jit, asm, invariant, &function.frame_state(*state)),
         Insn::CCall { cfun, args, name: _, return_type: _, elidable: _ } => gen_ccall(asm, *cfun, opnds!(args))?,
         Insn::GetIvar { self_val, id, state: _ } => gen_getivar(asm, opnd!(self_val), *id),
         Insn::SetGlobal { id, val, state: _ } => return Some(gen_setglobal(asm, *id, opnd!(val))),
         Insn::GetGlobal { id, state: _ } => gen_getglobal(asm, *id),
-        &Insn::GetLocal { ep_offset, level } => gen_nested_getlocal(asm, ep_offset, level)?,
-        Insn::SetLocal { val, ep_offset, level } => return gen_nested_setlocal(asm, opnd!(val), *ep_offset, *level),
+        &Insn::GetLocal { ep_offset, level } => gen_getlocal_with_ep(asm, ep_offset, level)?,
+        Insn::SetLocal { val, ep_offset, level } => return gen_setlocal_with_ep(asm, opnd!(val), *ep_offset, *level),
         Insn::GetConstantPath { ic, state } => gen_get_constant_path(asm, *ic, &function.frame_state(*state)),
         Insn::SetIvar { self_val, id, val, state: _ } => return gen_setivar(asm, opnd!(self_val), *id, opnd!(val)),
         Insn::SideExit { state, reason: _ } => return gen_side_exit(jit, asm, &function.frame_state(*state)),
@@ -381,16 +385,20 @@ fn gen_defined(jit: &JITState, asm: &mut Assembler, op_type: usize, _obj: VALUE,
     }
 }
 
-/// Get a local variable from a higher scope. `local_ep_offset` is in number of VALUEs.
-fn gen_nested_getlocal(asm: &mut Assembler, local_ep_offset: u32, level: NonZeroU32) -> Option<lir::Opnd> {
-    let ep = gen_get_ep(asm, level.get());
+/// Get a local variable from a higher scope or the heap. `local_ep_offset` is in number of VALUEs.
+/// We generate this instruction with level=0 only when the local variable is on the heap, so we
+/// can't optimize the level=0 case using the SP register.
+fn gen_getlocal_with_ep(asm: &mut Assembler, local_ep_offset: u32, level: u32) -> Option<lir::Opnd> {
+    let ep = gen_get_ep(asm, level);
     let offset = -(SIZEOF_VALUE_I32 * i32::try_from(local_ep_offset).ok()?);
     Some(asm.load(Opnd::mem(64, ep, offset)))
 }
 
-/// Set a local variable from a higher scope. `local_ep_offset` is in number of VALUEs.
-fn gen_nested_setlocal(asm: &mut Assembler, val: Opnd, local_ep_offset: u32, level: NonZeroU32) -> Option<()> {
-    let ep = gen_get_ep(asm, level.get());
+/// Set a local variable from a higher scope or the heap. `local_ep_offset` is in number of VALUEs.
+/// We generate this instruction with level=0 only when the local variable is on the heap, so we
+/// can't optimize the level=0 case using the SP register.
+fn gen_setlocal_with_ep(asm: &mut Assembler, val: Opnd, local_ep_offset: u32, level: u32) -> Option<()> {
+    let ep = gen_get_ep(asm, level);
     let offset = -(SIZEOF_VALUE_I32 * i32::try_from(local_ep_offset).ok()?);
     asm.mov(Opnd::mem(64, ep, offset), val);
     Some(())
@@ -429,12 +437,18 @@ fn gen_invokebuiltin(asm: &mut Assembler, state: &FrameState, bf: &rb_builtin_fu
 }
 
 /// Record a patch point that should be invalidated on a given invariant
-fn gen_patch_point(asm: &mut Assembler, invariant: &Invariant) -> Option<()> {
+fn gen_patch_point(jit: &mut JITState, asm: &mut Assembler, invariant: &Invariant, state: &FrameState) -> Option<()> {
+    let label = asm.new_label("patch_point").unwrap_label();
     let invariant = invariant.clone();
-    asm.pos_marker(move |code_ptr, _cb| {
+
+    // Compile a side exit. Fill nop instructions if the last patch point is too close.
+    asm.patch_point(build_side_exit(jit, state, Some(label))?);
+    // Remember the current address as a patch point
+    asm.pos_marker(move |code_ptr, cb| {
         match invariant {
             Invariant::BOPRedefined { klass, bop } => {
-                track_bop_assumption(klass, bop, code_ptr);
+                let side_exit_ptr = cb.resolve_label(label);
+                track_bop_assumption(klass, bop, code_ptr, side_exit_ptr);
             }
             _ => {
                 debug!("ZJIT: gen_patch_point: unimplemented invariant {invariant:?}");
@@ -442,7 +456,6 @@ fn gen_patch_point(asm: &mut Assembler, invariant: &Invariant) -> Option<()> {
             }
         }
     });
-    // TODO: Make sure patch points do not overlap with each other.
     Some(())
 }
 
@@ -939,6 +952,16 @@ fn gen_fixnum_ge(asm: &mut Assembler, left: lir::Opnd, right: lir::Opnd) -> Opti
     Some(asm.csel_ge(Qtrue.into(), Qfalse.into()))
 }
 
+/// Compile Fixnum & Fixnum
+fn gen_fixnum_and(asm: &mut Assembler, left: lir::Opnd, right: lir::Opnd) -> Option<lir::Opnd> {
+    Some(asm.and(left, right))
+}
+
+/// Compile Fixnum | Fixnum
+fn gen_fixnum_or(asm: &mut Assembler, left: lir::Opnd, right: lir::Opnd) -> Option<lir::Opnd> {
+    Some(asm.or(left, right))
+}
+
 // Compile val == nil
 fn gen_isnil(asm: &mut Assembler, val: lir::Opnd) -> Option<lir::Opnd> {
     asm.cmp(val, Qnil.into());
@@ -1095,8 +1118,13 @@ fn compile_iseq(iseq: IseqPtr) -> Option<Function> {
     Some(function)
 }
 
-/// Build a Target::SideExit out of a FrameState
+/// Build a Target::SideExit for non-PatchPoint instructions
 fn side_exit(jit: &mut JITState, state: &FrameState) -> Option<Target> {
+    build_side_exit(jit, state, None)
+}
+
+/// Build a Target::SideExit out of a FrameState
+fn build_side_exit(jit: &mut JITState, state: &FrameState, label: Option<Label>) -> Option<Target> {
     let mut stack = Vec::new();
     for &insn_id in state.stack() {
         stack.push(jit.get_opnd(insn_id)?);
@@ -1112,6 +1140,7 @@ fn side_exit(jit: &mut JITState, state: &FrameState) -> Option<Target> {
         stack,
         locals,
         c_stack_bytes: jit.c_stack_bytes,
+        label,
     };
     Some(target)
 }
