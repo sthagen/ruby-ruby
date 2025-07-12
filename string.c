@@ -8866,9 +8866,10 @@ tr_find(unsigned int c, const char table[TR_TABLE_SIZE], VALUE del, VALUE nodel)
  *  call-seq:
  *    delete!(*selectors) -> self or nil
  *
- *  Like String#delete, but modifies +self+ in place.
- *  Returns +self+ if any changes were made, +nil+ otherwise.
+ *  Like String#delete, but modifies +self+ in place;
+ *  returns +self+ if any characters were deleted, +nil+ otherwise.
  *
+ *  Related: see {Modifying}[rdoc-ref:String@Modifying].
  */
 
 static VALUE
@@ -8937,13 +8938,7 @@ rb_str_delete_bang(int argc, VALUE *argv, VALUE str)
  *  call-seq:
  *    delete(*selectors) -> new_string
  *
- *  Returns a copy of +self+ with characters specified by +selectors+ removed
- *  (see {Multiple Character Selectors}[rdoc-ref:character_selectors.rdoc@Multiple+Character+Selectors]):
- *
- *     "hello".delete "l","lo"        #=> "heo"
- *     "hello".delete "lo"            #=> "he"
- *     "hello".delete "aeiou", "^e"   #=> "hell"
- *     "hello".delete "ej-m"          #=> "ho"
+ *  :include: doc/string/delete.rdoc
  *
  */
 
@@ -9111,23 +9106,7 @@ rb_str_tr_s(VALUE str, VALUE src, VALUE repl)
  *  call-seq:
  *    count(*selectors) -> integer
  *
- *  Returns the total number of characters in +self+
- *  that are specified by the given +selectors+
- *  (see {Multiple Character Selectors}[rdoc-ref:character_selectors.rdoc@Multiple+Character+Selectors]):
- *
- *     a = "hello world"
- *     a.count "lo"                   #=> 5
- *     a.count "lo", "o"              #=> 2
- *     a.count "hello", "^l"          #=> 4
- *     a.count "ej-m"                 #=> 4
- *
- *     "hello^world".count "\\^aeiou" #=> 4
- *     "hello-world".count "a\\-eo"   #=> 4
- *
- *     c = "hello world\\r\\n"
- *     c.count "\\"                   #=> 2
- *     c.count "\\A"                  #=> 0
- *     c.count "X-\\w"                #=> 3
+ *  :include: doc/string/count.rdoc
  */
 
 static VALUE

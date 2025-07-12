@@ -165,6 +165,65 @@ class URI::TestMailTo < Test::Unit::TestCase
     assert_raise(URI::InvalidComponentError) do
       u.to = 'n.@invalid.email'
     end
+
+    assert_raise(URI::InvalidComponentError) do
+      u.to = 'n..t@invalid.email'
+    end
+
+    # Invalid host emails
+    assert_raise(URI::InvalidComponentError) do
+      u.to = 'a@.invalid.email'
+    end
+
+    assert_raise(URI::InvalidComponentError) do
+      u.to = 'a@invalid.email.'
+    end
+
+    assert_raise(URI::InvalidComponentError) do
+      u.to = 'a@invalid..email'
+    end
+
+    assert_raise(URI::InvalidComponentError) do
+      u.to = 'a@-invalid.email'
+    end
+
+    assert_raise(URI::InvalidComponentError) do
+      u.to = 'a@invalid-.email'
+    end
+
+    assert_raise(URI::InvalidComponentError) do
+      u.to = 'a@invalid.-email'
+    end
+
+    assert_raise(URI::InvalidComponentError) do
+      u.to = 'a@invalid.email-'
+    end
+
+    u.to = 'a@'+'invalid'.ljust(63, 'd')+'.email'
+    assert_raise(URI::InvalidComponentError) do
+      u.to = 'a@'+'invalid'.ljust(64, 'd')+'.email'
+    end
+
+    u.to = 'a@invalid.'+'email'.rjust(63, 'e')
+    assert_raise(URI::InvalidComponentError) do
+      u.to = 'a@invalid.'+'email'.rjust(64, 'e')
+    end
+  end
+
+  def test_email_regexp
+    re = URI::MailTo::EMAIL_REGEXP
+
+    rate = 1000
+    longlabel = '.' + 'invalid'.ljust(63, 'd')
+    endlabel = ''
+    pre = ->(n) {'a@invalid' + longlabel*(n*rate) + endlabel}
+    assert_linear_performance(1..10, pre: pre) do |to|
+      re =~ to or flunk
+    end
+    endlabel = '.' + 'email'.rjust(64, 'd')
+    assert_linear_performance(1..10, pre: pre) do |to|
+      re =~ to and flunk
+    end
   end
 
   def test_to_s
