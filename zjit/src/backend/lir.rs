@@ -3,6 +3,7 @@ use std::fmt;
 use std::mem::take;
 use crate::codegen::local_size_and_idx_to_ep_offset;
 use crate::cruby::{Qundef, RUBY_OFFSET_CFP_PC, RUBY_OFFSET_CFP_SP, SIZEOF_VALUE_I32};
+use crate::hir::SideExitReason;
 use crate::options::{debug, get_option};
 use crate::{cruby::VALUE};
 use crate::backend::current::*;
@@ -284,6 +285,7 @@ pub enum Target
         stack: Vec<Opnd>,
         locals: Vec<Opnd>,
         c_stack_bytes: usize,
+        reason: SideExitReason,
         // Some if the side exit should write this label. We use it for patch points.
         label: Option<Label>,
     },
@@ -1765,8 +1767,7 @@ impl Assembler
     /// Compile the instructions down to machine code.
     /// Can fail due to lack of code memory and inopportune code placement, among other reasons.
     #[must_use]
-    pub fn compile(self, cb: &mut CodeBlock) -> Option<(CodePtr, Vec<u32>)>
-    {
+    pub fn compile(self, cb: &mut CodeBlock) -> Option<(CodePtr, Vec<CodePtr>)> {
         #[cfg(feature = "disasm")]
         let start_addr = cb.get_write_ptr();
         let alloc_regs = Self::get_alloc_regs();
@@ -1783,8 +1784,7 @@ impl Assembler
 
     /// Compile with a limited number of registers. Used only for unit tests.
     #[cfg(test)]
-    pub fn compile_with_num_regs(self, cb: &mut CodeBlock, num_regs: usize) -> (CodePtr, Vec<u32>)
-    {
+    pub fn compile_with_num_regs(self, cb: &mut CodeBlock, num_regs: usize) -> (CodePtr, Vec<CodePtr>) {
         let mut alloc_regs = Self::get_alloc_regs();
         let alloc_regs = alloc_regs.drain(0..num_regs).collect();
         self.compile_with_regs(cb, alloc_regs).unwrap()
@@ -1803,8 +1803,8 @@ impl Assembler
         for (idx, target) in targets {
             // Compile a side exit. Note that this is past the split pass and alloc_regs(),
             // so you can't use a VReg or an instruction that needs to be split.
-            if let Target::SideExit { pc, stack, locals, c_stack_bytes, label } = target {
-                asm_comment!(self, "side exit to the interpreter");
+            if let Target::SideExit { pc, stack, locals, c_stack_bytes, reason, label } = target {
+                asm_comment!(self, "Exit: {reason}");
                 let side_exit_label = if let Some(label) = label {
                     Target::Label(label)
                 } else {

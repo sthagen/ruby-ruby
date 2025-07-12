@@ -7,12 +7,7 @@ use crate::{
     cast::IntoUsize, cruby::*, options::{get_option, DumpHIR}, gc::{get_or_create_iseq_payload, IseqPayload}, state::ZJITState
 };
 use std::{
-    cell::RefCell,
-    collections::{HashMap, HashSet, VecDeque},
-    ffi::{c_int, c_void, CStr},
-    mem::{align_of, size_of},
-    ptr,
-    slice::Iter
+    cell::RefCell, collections::{HashMap, HashSet, VecDeque}, ffi::{c_int, c_void, CStr}, fmt::Display, mem::{align_of, size_of}, ptr, slice::Iter
 };
 use crate::hir_type::{Type, types};
 use crate::bitset::BitSet;
@@ -145,6 +140,12 @@ pub enum Invariant {
 impl Invariant {
     pub fn print(self, ptr_map: &PtrPrintMap) -> InvariantPrinter {
         InvariantPrinter { inner: self, ptr_map }
+    }
+}
+
+impl Display for Invariant {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.print(&PtrPrintMap::identity()).fmt(f)
     }
 }
 
@@ -402,11 +403,17 @@ impl PtrPrintMap {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum SideExitReason {
     UnknownNewarraySend(vm_opt_newarray_send_type),
     UnknownCallType,
     UnknownOpcode(u32),
+    FixnumAddOverflow,
+    FixnumSubOverflow,
+    FixnumMultOverflow,
+    GuardType(Type),
+    GuardBitEquals(VALUE),
+    PatchPoint(Invariant),
 }
 
 impl std::fmt::Display for SideExitReason {
@@ -419,6 +426,9 @@ impl std::fmt::Display for SideExitReason {
             SideExitReason::UnknownNewarraySend(VM_OPT_NEWARRAY_SEND_PACK) => write!(f, "UnknownNewarraySend(PACK)"),
             SideExitReason::UnknownNewarraySend(VM_OPT_NEWARRAY_SEND_PACK_BUFFER) => write!(f, "UnknownNewarraySend(PACK_BUFFER)"),
             SideExitReason::UnknownNewarraySend(VM_OPT_NEWARRAY_SEND_INCLUDE_P) => write!(f, "UnknownNewarraySend(INCLUDE_P)"),
+            SideExitReason::GuardType(guard_type) => write!(f, "GuardType({guard_type})"),
+            SideExitReason::GuardBitEquals(value) => write!(f, "GuardBitEquals({})", value.print(&PtrPrintMap::identity())),
+            SideExitReason::PatchPoint(invariant) => write!(f, "PatchPoint({invariant})"),
             _ => write!(f, "{self:?}"),
         }
     }
@@ -917,17 +927,16 @@ impl<T: Copy + Into<usize> + PartialEq> UnionFind<T> {
 
 #[derive(Debug, PartialEq)]
 pub enum ValidationError {
-    // All validation errors come with the function's representation as the first argument.
-    BlockHasNoTerminator(String, BlockId),
+    BlockHasNoTerminator(BlockId),
     // The terminator and its actual position
-    TerminatorNotAtEnd(String, BlockId, InsnId, usize),
+    TerminatorNotAtEnd(BlockId, InsnId, usize),
     /// Expected length, actual length
-    MismatchedBlockArity(String, BlockId, usize, usize),
-    JumpTargetNotInRPO(String, BlockId),
+    MismatchedBlockArity(BlockId, usize, usize),
+    JumpTargetNotInRPO(BlockId),
     // The offending instruction, and the operand
-    OperandNotDefined(String, BlockId, InsnId, InsnId),
+    OperandNotDefined(BlockId, InsnId, InsnId),
     /// The offending block and instruction
-    DuplicateInstruction(String, BlockId, InsnId),
+    DuplicateInstruction(BlockId, InsnId),
 }
 
 
@@ -1164,7 +1173,7 @@ impl Function {
             ArrayMax { elements, state } => ArrayMax { elements: find_vec!(*elements), state: find!(*state) },
             &SetGlobal { id, val, state } => SetGlobal { id, val: find!(val), state },
             &GetIvar { self_val, id, state } => GetIvar { self_val: find!(self_val), id, state },
-            &SetIvar { self_val, id, val, state } => SetIvar { self_val: find!(self_val), id, val, state },
+            &SetIvar { self_val, id, val, state } => SetIvar { self_val: find!(self_val), id, val: find!(val), state },
             &SetLocal { val, ep_offset, level } => SetLocal { val: find!(val), ep_offset, level },
             &ToArray { val, state } => ToArray { val: find!(val), state },
             &ToNewArray { val, state } => ToNewArray { val: find!(val), state },
@@ -2035,14 +2044,28 @@ impl Function {
         result
     }
 
+    fn assert_validates(&self) {
+        if let Err(err) = self.validate() {
+            eprintln!("Function failed validation.");
+            eprintln!("Err: {err:?}");
+            eprintln!("{}", FunctionPrinter::with_snapshot(self));
+            panic!("Aborting...");
+        }
+    }
+
     /// Run all the optimization passes we have.
     pub fn optimize(&mut self) {
         // Function is assumed to have types inferred already
         self.optimize_direct_sends();
+        #[cfg(debug_assertions)] self.assert_validates();
         self.optimize_c_calls();
+        #[cfg(debug_assertions)] self.assert_validates();
         self.fold_constants();
+        #[cfg(debug_assertions)] self.assert_validates();
         self.clean_cfg();
+        #[cfg(debug_assertions)] self.assert_validates();
         self.eliminate_dead_code();
+        #[cfg(debug_assertions)] self.assert_validates();
 
         // Dump HIR after optimization
         match get_option!(dump_hir_opt) {
@@ -2072,7 +2095,7 @@ impl Function {
                         let target_len = target_block.params.len();
                         let args_len = args.len();
                         if target_len != args_len {
-                            return Err(ValidationError::MismatchedBlockArity(format!("{:?}", self), block_id, target_len, args_len))
+                            return Err(ValidationError::MismatchedBlockArity(block_id, target_len, args_len))
                         }
                     }
                     _ => {}
@@ -2082,11 +2105,11 @@ impl Function {
                 }
                 block_has_terminator = true;
                 if idx != insns.len() - 1 {
-                    return Err(ValidationError::TerminatorNotAtEnd(format!("{:?}", self), block_id, *insn_id, idx));
+                    return Err(ValidationError::TerminatorNotAtEnd(block_id, *insn_id, idx));
                 }
             }
             if !block_has_terminator {
-                return Err(ValidationError::BlockHasNoTerminator(format!("{:?}", self), block_id));
+                return Err(ValidationError::BlockHasNoTerminator(block_id));
             }
         }
         Ok(())
@@ -2122,8 +2145,7 @@ impl Function {
                 match self.find(insn_id) {
                     Insn::Jump(target) | Insn::IfTrue { target, .. } | Insn::IfFalse { target, .. } => {
                         let Some(block_in) = assigned_in[target.target.0].as_mut() else {
-                            let fun_string = format!("{:?}", self);
-                            return Err(ValidationError::JumpTargetNotInRPO(fun_string, target.target));
+                            return Err(ValidationError::JumpTargetNotInRPO(target.target));
                         };
                         // jump target's block_in was modified, we need to queue the block for processing.
                         if block_in.intersect_with(&assigned) {
@@ -2150,7 +2172,7 @@ impl Function {
                 self.worklist_traverse_single_insn(&insn, &mut operands);
                 for operand in operands {
                     if !assigned.get(operand) {
-                        return Err(ValidationError::OperandNotDefined(format!("{:?}", self), block, insn_id, operand));
+                        return Err(ValidationError::OperandNotDefined(block, insn_id, operand));
                     }
                 }
                 if insn.has_output() {
@@ -2168,7 +2190,7 @@ impl Function {
             for &insn_id in &self.blocks[block_id.0].insns {
                 let insn_id = self.union_find.borrow().find_const(insn_id);
                 if !seen.insert(insn_id) {
-                    return Err(ValidationError::DuplicateInstruction(format!("{:?}", self), block_id, insn_id));
+                    return Err(ValidationError::DuplicateInstruction(block_id, insn_id));
                 }
             }
         }
@@ -3279,7 +3301,7 @@ mod validation_tests {
         let mut function = Function::new(std::ptr::null());
         let entry = function.entry_block;
         function.push_insn(entry, Insn::Const { val: Const::Value(Qnil) });
-        assert_matches_err(function.validate(), ValidationError::BlockHasNoTerminator(format!("{:?}", function), entry));
+        assert_matches_err(function.validate(), ValidationError::BlockHasNoTerminator(entry));
     }
 
     #[test]
@@ -3289,7 +3311,7 @@ mod validation_tests {
         let val = function.push_insn(entry, Insn::Const { val: Const::Value(Qnil) });
         let insn_id = function.push_insn(entry, Insn::Return { val });
         function.push_insn(entry, Insn::Const { val: Const::Value(Qnil) });
-        assert_matches_err(function.validate(), ValidationError::TerminatorNotAtEnd(format!("{:?}", function), entry, insn_id, 1));
+        assert_matches_err(function.validate(), ValidationError::TerminatorNotAtEnd(entry, insn_id, 1));
     }
 
     #[test]
@@ -3299,7 +3321,7 @@ mod validation_tests {
         let side = function.new_block();
         let val = function.push_insn(entry, Insn::Const { val: Const::Value(Qnil) });
         function.push_insn(entry, Insn::IfTrue { val, target: BranchEdge { target: side, args: vec![val, val, val] } });
-        assert_matches_err(function.validate(), ValidationError::MismatchedBlockArity(format!("{:?}", function), entry, 0, 3));
+        assert_matches_err(function.validate(), ValidationError::MismatchedBlockArity(entry, 0, 3));
     }
 
     #[test]
@@ -3309,7 +3331,7 @@ mod validation_tests {
         let side = function.new_block();
         let val = function.push_insn(entry, Insn::Const { val: Const::Value(Qnil) });
         function.push_insn(entry, Insn::IfFalse { val, target: BranchEdge { target: side, args: vec![val, val, val] } });
-        assert_matches_err(function.validate(), ValidationError::MismatchedBlockArity(format!("{:?}", function), entry, 0, 3));
+        assert_matches_err(function.validate(), ValidationError::MismatchedBlockArity(entry, 0, 3));
     }
 
     #[test]
@@ -3319,7 +3341,7 @@ mod validation_tests {
         let side = function.new_block();
         let val = function.push_insn(entry, Insn::Const { val: Const::Value(Qnil) });
         function.push_insn(entry, Insn::Jump ( BranchEdge { target: side, args: vec![val, val, val] } ));
-        assert_matches_err(function.validate(), ValidationError::MismatchedBlockArity(format!("{:?}", function), entry, 0, 3));
+        assert_matches_err(function.validate(), ValidationError::MismatchedBlockArity(entry, 0, 3));
     }
 
     #[test]
@@ -3329,8 +3351,7 @@ mod validation_tests {
         // Create an instruction without making it belong to anything.
         let dangling = function.new_insn(Insn::Const{val: Const::CBool(true)});
         let val = function.push_insn(function.entry_block, Insn::ArrayDup { val: dangling, state: InsnId(0usize) });
-        let fun_string = format!("{:?}", function);
-        assert_matches_err(function.validate_definite_assignment(), ValidationError::OperandNotDefined(fun_string, entry, val, dangling));
+        assert_matches_err(function.validate_definite_assignment(), ValidationError::OperandNotDefined(entry, val, dangling));
     }
 
     #[test]
@@ -3341,8 +3362,7 @@ mod validation_tests {
         // Ret is a non-output instruction.
         let ret = function.push_insn(function.entry_block, Insn::Return { val: const_ });
         let val = function.push_insn(function.entry_block, Insn::ArrayDup { val: ret, state: InsnId(0usize) });
-        let fun_string = format!("{:?}", function);
-        assert_matches_err(function.validate_definite_assignment(), ValidationError::OperandNotDefined(fun_string, entry, val, ret));
+        assert_matches_err(function.validate_definite_assignment(), ValidationError::OperandNotDefined(entry, val, ret));
     }
 
     #[test]
@@ -3360,8 +3380,7 @@ mod validation_tests {
         let val2 = function.push_insn(exit, Insn::ArrayDup { val: v0, state: v0 });
         crate::cruby::with_rubyvm(|| {
             function.infer_types();
-            let fun_string = format!("{:?}", function);
-            assert_matches_err(function.validate_definite_assignment(), ValidationError::OperandNotDefined(fun_string, exit, val2, v0));
+            assert_matches_err(function.validate_definite_assignment(), ValidationError::OperandNotDefined(exit, val2, v0));
         });
     }
 
@@ -3392,7 +3411,7 @@ mod validation_tests {
         let val = function.push_insn(entry, Insn::Const { val: Const::Value(Qnil) });
         function.push_insn_id(entry, val);
         function.push_insn(entry, Insn::Return { val });
-        assert_matches_err(function.validate(), ValidationError::DuplicateInstruction(format!("{:?}", function), entry, val));
+        assert_matches_err(function.validate(), ValidationError::DuplicateInstruction(entry, val));
     }
 
     #[test]
@@ -3403,7 +3422,7 @@ mod validation_tests {
         let val1 = function.push_insn(entry, Insn::Const { val: Const::Value(Qnil) });
         function.make_equal_to(val1, val0);
         function.push_insn(entry, Insn::Return { val: val0 });
-        assert_matches_err(function.validate(), ValidationError::DuplicateInstruction(format!("{:?}", function), entry, val0));
+        assert_matches_err(function.validate(), ValidationError::DuplicateInstruction(entry, val0));
     }
 
     #[test]
@@ -3415,7 +3434,7 @@ mod validation_tests {
         function.push_insn(entry, Insn::Jump(BranchEdge { target: exit, args: vec![] }));
         function.push_insn_id(exit, val);
         function.push_insn(exit, Insn::Return { val });
-        assert_matches_err(function.validate(), ValidationError::DuplicateInstruction(format!("{:?}", function), exit, val));
+        assert_matches_err(function.validate(), ValidationError::DuplicateInstruction(exit, val));
     }
 }
 
