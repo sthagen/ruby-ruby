@@ -110,6 +110,11 @@ impl Assembler
         vec![RAX_REG, RCX_REG, RDX_REG, RSI_REG, RDI_REG, R8_REG, R9_REG, R10_REG, R11_REG]
     }
 
+    /// How many bytes a call and a [Self::frame_setup] would change native SP
+    pub fn frame_size() -> i32 {
+        0x8
+    }
+
     // These are the callee-saved registers in the x86-64 SysV ABI
     // RBX, RSP, RBP, and R12–R15
 
@@ -244,8 +249,8 @@ impl Assembler
                                 *opnd = asm.load(*opnd);
                             }
                         },
-                        // We have to load memory operands to avoid corrupting them
-                        Opnd::Mem(_) | Opnd::Reg(_) => {
+                        // We have to load non-reg operands to avoid corrupting them
+                        Opnd::Mem(_) | Opnd::Reg(_) | Opnd::UImm(_) | Opnd::Imm(_) => {
                             *opnd = asm.load(*opnd);
                         },
                         _ => {}
@@ -475,6 +480,7 @@ impl Assembler
                 // (e.g. with Linux `perf record --call-graph fp`)
                 Insn::FrameSetup => {
                     if false { // We don't support --zjit-perf yet
+                        // TODO(alan): Change Assembler::frame_size() when adding --zjit-perf support
                         push(cb, RBP);
                         mov(cb, RBP, RSP);
                         push(cb, RBP);

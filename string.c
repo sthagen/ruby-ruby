@@ -28,6 +28,7 @@
 #include "internal/array.h"
 #include "internal/compar.h"
 #include "internal/compilers.h"
+#include "internal/concurrent_set.h"
 #include "internal/encoding.h"
 #include "internal/error.h"
 #include "internal/gc.h"
@@ -35,7 +36,6 @@
 #include "internal/numeric.h"
 #include "internal/object.h"
 #include "internal/proc.h"
-#include "internal/concurrent_set.h"
 #include "internal/re.h"
 #include "internal/sanitizers.h"
 #include "internal/string.h"
@@ -8146,19 +8146,12 @@ downcase_single(VALUE str)
  *  call-seq:
  *    downcase!(mapping) -> self or nil
  *
- *  Downcases the characters in +self+;
- *  returns +self+ if any changes were made, +nil+ otherwise:
+ *  Like String#downcase, except that:
  *
- *    s = 'Hello World!' # => "Hello World!"
- *    s.downcase!        # => "hello world!"
- *    s                  # => "hello world!"
- *    s.downcase!        # => nil
+ *  - Changes character casings in +self+ (not in a copy of +self+).
+ *  - Returns +self+ if any changes are made, +nil+ otherwise.
  *
- *  The casing may be affected by the given +mapping+;
- *  see {Case Mapping}[rdoc-ref:case_mapping.rdoc].
- *
- *  Related: String#downcase, String#upcase, String#upcase!.
- *
+ *  Related: See {Modifying}[rdoc-ref:String@Modifying].
  */
 
 static VALUE
@@ -8188,15 +8181,7 @@ rb_str_downcase_bang(int argc, VALUE *argv, VALUE str)
  *  call-seq:
  *    downcase(mapping) -> string
  *
- *  Returns a string containing the downcased characters in +self+:
- *
- *     s = 'Hello World!' # => "Hello World!"
- *     s.downcase         # => "hello world!"
- *
- *  The casing may be affected by the given +mapping+;
- *  see {Case Mapping}[rdoc-ref:case_mapping.rdoc].
- *
- *  Related: String#downcase!, String#upcase, String#upcase!.
+ *  :include: doc/string/downcase.rdoc
  *
  */
 

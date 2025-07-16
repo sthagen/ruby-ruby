@@ -382,6 +382,16 @@ class TestZJIT < Test::Unit::TestCase
     }, call_threshold: 2, insns: [:opt_or]
   end
 
+  def test_fixnum_mul
+    assert_compiles '12', %q{
+      C = 3
+      def test(n) = C * n
+      test(4)
+      test(4)
+      test(4)
+    }, call_threshold: 2, insns: [:opt_mult]
+  end
+
   def test_opt_not
     assert_compiles('[true, true, false]', <<~RUBY, insns: [:opt_not])
       def test(obj) = !obj
@@ -776,6 +786,11 @@ class TestZJIT < Test::Unit::TestCase
 
       test
     }
+
+    assert_compiles '1', %q{
+      def a(n1,n2,n3,n4,n5,n6,n7,n8,n9) = n1+n9
+      a(2,0,0,0,0,0,0,0,-1)
+    }
   end
 
   def test_opt_aref_with
@@ -991,6 +1006,26 @@ class TestZJIT < Test::Unit::TestCase
     assert_runs 'true', %q{
       GC.auto_compact = true
       require 'rubygems'
+    }, call_threshold: 2
+  end
+
+  def test_profile_under_nested_jit_call
+    assert_compiles '[nil, nil, 3]', %q{
+      def profile
+        1 + 2
+      end
+
+      def jit_call(flag)
+        if flag
+          profile
+        end
+      end
+
+      def entry(flag)
+        jit_call(flag)
+      end
+
+      [entry(false), entry(false), entry(true)]
     }, call_threshold: 2
   end
 

@@ -206,6 +206,11 @@ impl Assembler
         vec![X1_REG, X9_REG, X10_REG, X11_REG, X12_REG, X13_REG, X14_REG, X15_REG]
     }
 
+    /// How many bytes a call and a [Self::frame_setup] would change native SP
+    pub fn frame_size() -> i32 {
+        0x10
+    }
+
     /// Split platform-specific instructions
     /// The transformations done here are meant to make our lives simpler in later
     /// stages of the compilation pipeline.
@@ -410,26 +415,36 @@ impl Assembler
             // being used. It is okay not to use their output here.
             #[allow(unused_must_use)]
             match &mut insn {
-                Insn::Sub { left, right, out } |
                 Insn::Add { left, right, out } => {
                     match (*left, *right) {
-                        (Opnd::Reg(_) | Opnd::VReg { .. }, Opnd::Reg(_) | Opnd::VReg { .. }) => {
-                            merge_three_reg_mov(&live_ranges, &mut iterator, left, right, out);
-                            asm.push_insn(insn);
-                        },
+                        // When one operand is a register, legalize the other operand
+                        // into possibly an immdiate and swap the order if necessary.
+                        // Only the rhs of ADD can be an immediate, but addition is commutative.
                         (reg_opnd @ (Opnd::Reg(_) | Opnd::VReg { .. }), other_opnd) |
                         (other_opnd, reg_opnd @ (Opnd::Reg(_) | Opnd::VReg { .. })) => {
                             *left = reg_opnd;
                             *right = split_shifted_immediate(asm, other_opnd);
+                            // Now `right` is either a register or an immediate, both can try to
+                            // merge with a subsequent mov.
+                            merge_three_reg_mov(&live_ranges, &mut iterator, left, left, out);
                             asm.push_insn(insn);
-                        },
+                        }
                         _ => {
                             *left = split_load_operand(asm, *left);
                             *right = split_shifted_immediate(asm, *right);
+                            merge_three_reg_mov(&live_ranges, &mut iterator, left, right, out);
                             asm.push_insn(insn);
                         }
                     }
-                },
+                }
+                Insn::Sub { left, right, out } => {
+                    *left = split_load_operand(asm, *left);
+                    *right = split_shifted_immediate(asm, *right);
+                    // Now `right` is either a register or an immediate,
+                    // both can try to merge with a subsequent mov.
+                    merge_three_reg_mov(&live_ranges, &mut iterator, left, left, out);
+                    asm.push_insn(insn);
+                }
                 Insn::And { left, right, out } |
                 Insn::Or { left, right, out } |
                 Insn::Xor { left, right, out } => {
@@ -652,12 +667,7 @@ impl Assembler
                 Insn::URShift { opnd, .. } => {
                     // The operand must be in a register, so
                     // if we get anything else we need to load it first.
-                    let opnd0 = match opnd {
-                        Opnd::Mem(_) => split_load_operand(asm, *opnd),
-                        _ => *opnd
-                    };
-
-                    *opnd = opnd0;
+                    *opnd = split_load_operand(asm, *opnd);
                     asm.push_insn(insn);
                 },
                 Insn::Store { dest, src } => {
@@ -914,10 +924,28 @@ impl Assembler
                     ldp_post(cb, X29, X30, A64Opnd::new_mem(128, C_SP_REG, 16));
                 },
                 Insn::Add { left, right, out } => {
-                    adds(cb, out.into(), left.into(), right.into());
+                    // Usually, we issue ADDS, so you could branch on overflow, but ADDS with
+                    // out=31 refers to out=XZR, which discards the sum. So, instead of ADDS
+                    // (aliased to CMN in this case) we issue ADD instead which writes the sum
+                    // to the stack pointer; we assume you got x31 from NATIVE_STACK_POINTER.
+                    let out: A64Opnd = out.into();
+                    if let A64Opnd::Reg(A64Reg { reg_no: 31, .. }) = out {
+                        add(cb, out, left.into(), right.into());
+                    } else {
+                        adds(cb, out, left.into(), right.into());
+                    }
                 },
                 Insn::Sub { left, right, out } => {
-                    subs(cb, out.into(), left.into(), right.into());
+                    // Usually, we issue SUBS, so you could branch on overflow, but SUBS with
+                    // out=31 refers to out=XZR, which discards the result. So, instead of SUBS
+                    // (aliased to CMP in this case) we issue SUB instead which writes the diff
+                    // to the stack pointer; we assume you got x31 from NATIVE_STACK_POINTER.
+                    let out: A64Opnd = out.into();
+                    if let A64Opnd::Reg(A64Reg { reg_no: 31, .. }) = out {
+                        sub(cb, out, left.into(), right.into());
+                    } else {
+                        subs(cb, out, left.into(), right.into());
+                    }
                 },
                 Insn::Mul { left, right, out } => {
                     // If the next instruction is jo (jump on overflow)
@@ -1358,12 +1386,42 @@ mod tests {
         asm.mov(sp, new_sp);
         let new_sp = asm.sub(sp, 0x20.into());
         asm.mov(sp, new_sp);
-        asm.compile_with_num_regs(&mut cb, 2);
 
-        assert_disasm!(cb, "e08300b11f000091e08300f11f000091", {"
+        asm.compile_with_num_regs(&mut cb, 2);
+        assert_disasm!(cb, "ff830091ff8300d1", "
             0x0: add sp, sp, #0x20
             0x4: sub sp, sp, #0x20
-        "});
+        ");
+    }
+
+    #[test]
+    fn add_into() {
+        let (mut asm, mut cb) = setup_asm();
+
+        let sp = Opnd::Reg(XZR_REG);
+        asm.add_into(sp, 8.into());
+        asm.add_into(Opnd::Reg(X20_REG), 0x20.into());
+
+        asm.compile_with_num_regs(&mut cb, 0);
+        assert_disasm!(cb, "ff230091948200b1", "
+            0x0: add sp, sp, #8
+            0x4: adds x20, x20, #0x20
+        ");
+    }
+
+    #[test]
+    fn sub_imm_reg() {
+        let (mut asm, mut cb) = setup_asm();
+
+        let difference = asm.sub(0x8.into(), Opnd::Reg(X5_REG));
+        asm.load_into(Opnd::Reg(X1_REG), difference);
+
+        asm.compile_with_num_regs(&mut cb, 1);
+        assert_disasm!(cb, "000180d2000005ebe10300aa", "
+            0x0: mov x0, #8
+            0x4: subs x0, x0, x5
+            0x8: mov x1, x0
+        ");
     }
 
     #[test]
