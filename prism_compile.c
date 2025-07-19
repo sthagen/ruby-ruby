@@ -887,7 +887,7 @@ pm_compile_logical(rb_iseq_t *iseq, LINK_ANCHOR *const ret, pm_node_t *cond, LAB
 static void
 pm_compile_flip_flop_bound(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, bool popped, pm_scope_node_t *scope_node)
 {
-    const pm_node_location_t location = { .line = ISEQ_BODY(iseq)->location.first_lineno, .node_id = -1 };
+    const pm_node_location_t location = PM_NODE_START_LOCATION(scope_node->parser, node);
 
     if (PM_NODE_TYPE_P(node, PM_INTEGER_NODE)) {
         PM_COMPILE_NOT_POPPED(node);
@@ -906,7 +906,7 @@ pm_compile_flip_flop_bound(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *
 static void
 pm_compile_flip_flop(const pm_flip_flop_node_t *flip_flop_node, LABEL *else_label, LABEL *then_label, rb_iseq_t *iseq, const int lineno, LINK_ANCHOR *const ret, bool popped, pm_scope_node_t *scope_node)
 {
-    const pm_node_location_t location = { .line = ISEQ_BODY(iseq)->location.first_lineno, .node_id = -1 };
+    const pm_node_location_t location = { .line = lineno, .node_id = -1 };
     LABEL *lend = NEW_LABEL(location.line);
 
     int again = !(flip_flop_node->base.flags & PM_RANGE_FLAGS_EXCLUDE_END);
@@ -1762,9 +1762,14 @@ pm_setup_args_core(const pm_arguments_node_t *arguments_node, const pm_node_t *b
                     break;
                 }
 
-                orig_argc += 2;
+                if (has_splat) {
+                    // If we already have a splat, we're concatenating to existing array
+                    orig_argc += 1;
+                } else {
+                    orig_argc += 2;
+                }
 
-                *flags |= VM_CALL_ARGS_SPLAT | VM_CALL_ARGS_SPLAT_MUT | VM_CALL_ARGS_BLOCKARG | VM_CALL_KW_SPLAT;
+                *flags |= VM_CALL_ARGS_SPLAT | VM_CALL_ARGS_BLOCKARG | VM_CALL_KW_SPLAT;
 
                 // Forwarding arguments nodes are treated as foo(*, **, &)
                 // So foo(...) equals foo(*, **, &) and as such the local
@@ -1773,7 +1778,13 @@ pm_setup_args_core(const pm_arguments_node_t *arguments_node, const pm_node_t *b
                 // Push the *
                 pm_local_index_t mult_local = pm_lookup_local_index(iseq, scope_node, PM_CONSTANT_MULT, 0);
                 PUSH_GETLOCAL(ret, location, mult_local.index, mult_local.level);
-                PUSH_INSN1(ret, location, splatarray, Qtrue);
+
+                if (has_splat) {
+                    // If we already have a splat, we need to concatenate arrays
+                    PUSH_INSN(ret, location, concattoarray);
+                } else {
+                    PUSH_INSN1(ret, location, splatarray, Qfalse);
+                }
 
                 // Push the **
                 pm_local_index_t pow_local = pm_lookup_local_index(iseq, scope_node, PM_CONSTANT_POW, 0);
@@ -1782,7 +1793,6 @@ pm_setup_args_core(const pm_arguments_node_t *arguments_node, const pm_node_t *b
                 // Push the &
                 pm_local_index_t and_local = pm_lookup_local_index(iseq, scope_node, PM_CONSTANT_AND, 0);
                 PUSH_INSN2(ret, location, getblockparamproxy, INT2FIX(and_local.index + VM_ENV_DATA_SIZE - 1), INT2FIX(and_local.level));
-                PUSH_INSN(ret, location, splatkw);
 
                 break;
               }
@@ -10613,7 +10623,9 @@ pm_parse_errors_format_sort(const pm_parser_t *parser, const pm_list_t *error_li
     if (errors == NULL) return NULL;
 
     int32_t start_line = parser->start_line;
-    for (pm_diagnostic_t *error = (pm_diagnostic_t *) error_list->head; error != NULL; error = (pm_diagnostic_t *) error->node.next) {
+    pm_diagnostic_t *finish = (pm_diagnostic_t * )error_list->tail->next;
+
+    for (pm_diagnostic_t *error = (pm_diagnostic_t *) error_list->head; error != finish; error = (pm_diagnostic_t *) error->node.next) {
         pm_line_column_t start = pm_newline_list_line_column(newline_list, error->location.start, start_line);
         pm_line_column_t end = pm_newline_list_line_column(newline_list, error->location.end, start_line);
 

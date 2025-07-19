@@ -3,8 +3,8 @@ use std::rc::Rc;
 
 use crate::asm::Label;
 use crate::backend::current::{Reg, ALLOC_REGS};
-use crate::invariants::track_bop_assumption;
-use crate::gc::get_or_create_iseq_payload;
+use crate::invariants::{track_bop_assumption, track_cme_assumption};
+use crate::gc::{get_or_create_iseq_payload, append_gc_offsets};
 use crate::state::ZJITState;
 use crate::{asm::CodeBlock, cruby::*, options::debug, virtualmem::CodePtr};
 use crate::backend::lir::{self, asm_comment, asm_ccall, Assembler, Opnd, SideExitContext, Target, CFP, C_ARG_OPNDS, C_RET_OPND, EC, NATIVE_STACK_PTR, SP};
@@ -96,8 +96,22 @@ pub extern "C" fn rb_zjit_iseq_gen_entry_point(iseq: IseqPtr, _ec: EcPtr) -> *co
     code_ptr
 }
 
-/// Compile an entry point for a given ISEQ
+/// See [gen_iseq_entry_point_body]. This wrapper is to make sure cb.mark_all_executable()
+/// is called even if gen_iseq_entry_point_body() partially fails and returns a null pointer.
 fn gen_iseq_entry_point(iseq: IseqPtr) -> *const u8 {
+    let cb = ZJITState::get_code_block();
+    let code_ptr = gen_iseq_entry_point_body(cb, iseq);
+
+    // Always mark the code region executable if asm.compile() has been used.
+    // We need to do this even if code_ptr is null because, whether gen_entry()
+    // or gen_iseq() fails or not, gen_function() has already used asm.compile().
+    cb.mark_all_executable();
+
+    code_ptr
+}
+
+/// Compile an entry point for a given ISEQ
+fn gen_iseq_entry_point_body(cb: &mut CodeBlock, iseq: IseqPtr) -> *const u8 {
     // Compile ISEQ into High-level IR
     let function = match compile_iseq(iseq) {
         Some(function) => function,
@@ -105,13 +119,12 @@ fn gen_iseq_entry_point(iseq: IseqPtr) -> *const u8 {
     };
 
     // Compile the High-level IR
-    let cb = ZJITState::get_code_block();
     let (start_ptr, mut branch_iseqs) = match gen_function(cb, iseq, &function) {
         Some((start_ptr, gc_offsets, jit)) => {
             // Remember the block address to reuse it later
             let payload = get_or_create_iseq_payload(iseq);
             payload.start_ptr = Some(start_ptr);
-            payload.gc_offsets.extend(gc_offsets);
+            append_gc_offsets(iseq, &gc_offsets);
 
             // Compile an entry point to the JIT code
             (gen_entry(cb, iseq, &function, start_ptr, jit.c_stack_bytes), jit.branch_iseqs)
@@ -137,11 +150,22 @@ fn gen_iseq_entry_point(iseq: IseqPtr) -> *const u8 {
         }
     }
 
-    // Always mark the code region executable if asm.compile() has been used
-    cb.mark_all_executable();
-
     // Return a JIT code address or a null pointer
     start_ptr.map(|start_ptr| start_ptr.raw_ptr(cb)).unwrap_or(std::ptr::null())
+}
+
+/// Write an entry to the perf map in /tmp
+fn register_with_perf(iseq_name: String, start_ptr: usize, code_size: usize) {
+    use std::io::Write;
+    let perf_map = format!("/tmp/perf-{}.map", std::process::id());
+    let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(&perf_map) else {
+        debug!("Failed to open perf map file: {perf_map}");
+        return;
+    };
+    let Ok(_) = writeln!(file, "{:#x} {:#x} zjit::{}", start_ptr, code_size, iseq_name) else {
+        debug!("Failed to write {iseq_name} to perf map file: {perf_map}");
+        return;
+    };
 }
 
 /// Compile a JIT entry
@@ -162,7 +186,17 @@ fn gen_entry(cb: &mut CodeBlock, iseq: IseqPtr, function: &Function, function_pt
     asm.frame_teardown();
     asm.cret(C_RET_OPND);
 
-    asm.compile(cb).map(|(start_ptr, _)| start_ptr)
+    let result = asm.compile(cb).map(|(start_ptr, _)| start_ptr);
+    if let Some(start_addr) = result {
+        if get_option!(perf) {
+            let start_ptr = start_addr.raw_ptr(cb) as usize;
+            let end_ptr = cb.get_write_ptr().raw_ptr(cb) as usize;
+            let code_size = end_ptr - start_ptr;
+            let iseq_name = iseq_get_location(iseq, 0);
+            register_with_perf(format!("entry for {iseq_name}"), start_ptr, code_size);
+        }
+    }
+    result
 }
 
 /// Compile an ISEQ into machine code
@@ -183,7 +217,7 @@ fn gen_iseq(cb: &mut CodeBlock, iseq: IseqPtr) -> Option<(CodePtr, Vec<(Rc<Branc
     let result = gen_function(cb, iseq, &function);
     if let Some((start_ptr, gc_offsets, jit)) = result {
         payload.start_ptr = Some(start_ptr);
-        payload.gc_offsets.extend(gc_offsets);
+        append_gc_offsets(iseq, &gc_offsets);
         Some((start_ptr, jit.branch_iseqs))
     } else {
         None
@@ -245,7 +279,17 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, function: &Function) -> Optio
     }
 
     // Generate code if everything can be compiled
-    asm.compile(cb).map(|(start_ptr, gc_offsets)| (start_ptr, gc_offsets, jit))
+    let result = asm.compile(cb).map(|(start_ptr, gc_offsets)| (start_ptr, gc_offsets, jit));
+    if let Some((start_ptr, _, _)) = result {
+        if get_option!(perf) {
+            let start_usize = start_ptr.raw_ptr(cb) as usize;
+            let end_usize = cb.get_write_ptr().raw_ptr(cb) as usize;
+            let code_size = end_usize - start_usize;
+            let iseq_name = iseq_get_location(iseq, 0);
+            register_with_perf(iseq_name, start_usize, code_size);
+        }
+    }
+    result
 }
 
 /// Compile an instruction
@@ -281,6 +325,9 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
         Insn::IfTrue { val, target } => return gen_if_true(jit, asm, opnd!(val), target),
         Insn::IfFalse { val, target } => return gen_if_false(jit, asm, opnd!(val), target),
         Insn::SendWithoutBlock { call_info, cd, state, self_val, args, .. } => gen_send_without_block(jit, asm, call_info, *cd, &function.frame_state(*state), opnd!(self_val), opnds!(args))?,
+        // Give up SendWithoutBlockDirect for 6+ args since asm.ccall() doesn't support it.
+        Insn::SendWithoutBlockDirect { call_info, cd, state, self_val, args, .. } if args.len() + 1 > C_ARG_OPNDS.len() => // +1 for self
+            gen_send_without_block(jit, asm, call_info, *cd, &function.frame_state(*state), opnd!(self_val), opnds!(args))?,
         Insn::SendWithoutBlockDirect { cme, iseq, self_val, args, state, .. } => gen_send_without_block_direct(cb, jit, asm, *cme, *iseq, opnd!(self_val), opnds!(args), &function.frame_state(*state))?,
         Insn::InvokeBuiltin { bf, args, state } => gen_invokebuiltin(asm, &function.frame_state(*state), bf, opnds!(args))?,
         Insn::Return { val } => return Some(gen_return(jit, asm, opnd!(val))?),
@@ -446,6 +493,10 @@ fn gen_patch_point(jit: &mut JITState, asm: &mut Assembler, invariant: &Invarian
             Invariant::BOPRedefined { klass, bop } => {
                 let side_exit_ptr = cb.resolve_label(label);
                 track_bop_assumption(klass, bop, code_ptr, side_exit_ptr);
+            }
+            Invariant::MethodRedefined { klass: _, method: _, cme } => {
+                let side_exit_ptr = cb.resolve_label(label);
+                track_cme_assumption(cme, code_ptr, side_exit_ptr);
             }
             _ => {
                 debug!("ZJIT: gen_patch_point: unimplemented invariant {invariant:?}");
@@ -989,7 +1040,7 @@ fn gen_guard_type(jit: &mut JITState, asm: &mut Assembler, val: lir::Opnd, guard
 
 /// Compile an identity check with a side exit
 fn gen_guard_bit_equals(jit: &mut JITState, asm: &mut Assembler, val: lir::Opnd, expected: VALUE, state: &FrameState) -> Option<lir::Opnd> {
-    asm.cmp(val, Opnd::UImm(expected.into()));
+    asm.cmp(val, Opnd::Value(expected));
     asm.jnz(side_exit(jit, state, GuardBitEquals(expected))?);
     Some(val)
 }

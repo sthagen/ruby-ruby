@@ -133,6 +133,21 @@ class TestZJIT < Test::Unit::TestCase
     }
   end
 
+  def test_send_with_six_args
+    assert_compiles '[1, 2, 3, 4, 5, 6]', %q{
+      def foo(a1, a2, a3, a4, a5, a6)
+        [a1, a2, a3, a4, a5, a6]
+      end
+
+      def test
+        foo(1, 2, 3, 4, 5, 6)
+      end
+
+      test # profile send
+      test
+    }, call_threshold: 2
+  end
+
   def test_invokebuiltin
     omit 'Test fails at the moment due to not handling optional parameters'
     assert_compiles '["."]', %q{
@@ -1048,6 +1063,31 @@ class TestZJIT < Test::Unit::TestCase
 
       test # profile opt_plus
       [test, Integer.class_eval { def +(_) = 100 }, test]
+    }, call_threshold: 2
+  end
+
+  # ZJIT currently only generates a MethodRedefined patch point when the method
+  # is called on the top-level self.
+  def test_method_redefinition_with_top_self
+    assert_runs '["original", "redefined"]', %q{
+      def foo
+        "original"
+      end
+
+      def test = foo
+
+      test; test
+
+      result1 = test
+
+      # Redefine the method
+      def foo
+        "redefined"
+      end
+
+      result2 = test
+
+      [result1, result2]
     }, call_threshold: 2
   end
 
