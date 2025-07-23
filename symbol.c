@@ -881,10 +881,7 @@ rb_intern3(const char *name, long len, rb_encoding *enc)
     VALUE str = rb_setup_fake_str(&fake_str, name, len, enc);
     OBJ_FREEZE(str);
 
-    VALUE sym;
-    GLOBAL_SYMBOLS_LOCKING(symbols) {
-        sym = sym_find_or_insert_static_symbol(symbols, str);
-    }
+    VALUE sym = sym_find_or_insert_static_symbol(&ruby_global_symbols, str);
     return rb_sym2id(sym);
 }
 
@@ -904,10 +901,7 @@ rb_intern(const char *name)
 ID
 rb_intern_str(VALUE str)
 {
-    VALUE sym;
-    GLOBAL_SYMBOLS_LOCKING(symbols) {
-        sym = sym_find_or_insert_static_symbol(symbols, str);
-    }
+    VALUE sym = sym_find_or_insert_static_symbol(&ruby_global_symbols, str);
     return SYM2ID(sym);
 }
 
@@ -957,9 +951,7 @@ rb_gc_free_dsymbol(VALUE sym)
     VALUE str = RSYMBOL(sym)->fstr;
 
     if (str) {
-        GLOBAL_SYMBOLS_LOCKING(symbols) {
-            rb_concurrent_set_delete_by_identity(symbols->sym_set, sym);
-        }
+        rb_concurrent_set_delete_by_identity(ruby_global_symbols.sym_set, sym);
 
         RSYMBOL(sym)->fstr = 0;
     }
