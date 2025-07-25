@@ -51,7 +51,6 @@
 #define STATIC_SYM2ID(sym) RSHIFT((VALUE)(sym), RUBY_SPECIAL_SHIFT)
 
 static ID register_static_symid(ID, const char *, long, rb_encoding *);
-static ID register_static_symid_str(ID, VALUE);
 #define REGISTER_SYMID(id, name) register_static_symid((id), (name), strlen(name), enc)
 #include "id.c"
 
@@ -452,22 +451,20 @@ rb_id_attrset(ID id)
     }
 
     bool error = false;
-    GLOBAL_SYMBOLS_LOCKING(symbols) {
-        /* make new symbol and ID */
-        VALUE str = lookup_id_str(id);
-        if (str) {
-            str = rb_str_dup(str);
-            rb_str_cat(str, "=", 1);
-            if (sym_check_asciionly(str, false)) {
-                rb_enc_associate(str, rb_usascii_encoding());
-            }
+    /* make new symbol and ID */
+    VALUE str = lookup_id_str(id);
+    if (str) {
+        str = rb_str_dup(str);
+        rb_str_cat(str, "=", 1);
+        if (sym_check_asciionly(str, false)) {
+            rb_enc_associate(str, rb_usascii_encoding());
+        }
 
-            VALUE sym = sym_find_or_insert_static_symbol(symbols, str);
-            id = rb_sym2id(sym);
-        }
-        else {
-            error = true;
-        }
+        VALUE sym = sym_find_or_insert_static_symbol(&ruby_global_symbols, str);
+        id = rb_sym2id(sym);
+    }
+    else {
+        error = true;
     }
 
     if (error) {
@@ -805,21 +802,12 @@ static ID
 register_static_symid(ID id, const char *name, long len, rb_encoding *enc)
 {
     VALUE str = rb_enc_str_new(name, len, enc);
-    return register_static_symid_str(id, str);
-}
-
-static ID
-register_static_symid_str(ID id, VALUE str)
-{
     OBJ_FREEZE(str);
     str = rb_fstring(str);
 
     RUBY_DTRACE_CREATE_HOOK(SYMBOL, RSTRING_PTR(str));
 
-    GLOBAL_SYMBOLS_LOCKING(symbols) {
-        // TODO: remove this function
-        sym_find_or_insert_static_symbol_id(symbols, str, id);
-    }
+    sym_find_or_insert_static_symbol_id(&ruby_global_symbols, str, id);
 
     return id;
 }
@@ -829,12 +817,10 @@ sym_find(VALUE str)
 {
     VALUE sym;
 
-    GLOBAL_SYMBOLS_LOCKING(symbols) {
-        struct sym_set_static_sym_entry static_sym = {
-            .str = str
-        };
-        sym = rb_concurrent_set_find(&symbols->sym_set, sym_set_static_sym_tag(&static_sym));
-    }
+    struct sym_set_static_sym_entry static_sym = {
+        .str = str
+    };
+    sym = rb_concurrent_set_find(&ruby_global_symbols.sym_set, sym_set_static_sym_tag(&static_sym));
 
     if (sym) {
         return sym_set_entry_to_sym(sym);
