@@ -1,5 +1,7 @@
 use std::{ffi::{CStr, CString}, ptr::null};
 use std::os::raw::{c_char, c_int, c_uint};
+use crate::cruby::*;
+use std::collections::HashSet;
 
 /// Number of calls to start profiling YARV instructions.
 /// They are profiled `rb_zjit_call_threshold - rb_zjit_profile_threshold` times,
@@ -14,10 +16,17 @@ pub static mut rb_zjit_profile_threshold: u64 = 1;
 #[allow(non_upper_case_globals)]
 pub static mut rb_zjit_call_threshold: u64 = 2;
 
-#[derive(Clone, Copy, Debug)]
+/// True if --zjit-stats is enabled.
+#[allow(non_upper_case_globals)]
+static mut zjit_stats_enabled_p: bool = false;
+
+#[derive(Clone, Debug)]
 pub struct Options {
     /// Number of times YARV instructions should be profiled.
     pub num_profiles: u8,
+
+    /// Enable YJIT statsitics
+    pub stats: bool,
 
     /// Enable debug logging
     pub debug: bool,
@@ -36,18 +45,27 @@ pub struct Options {
 
     /// Dump code map to /tmp for performance profilers.
     pub perf: bool,
+
+    /// List of ISEQs that can be compiled, identified by their iseq_get_location()
+    pub allowed_iseqs: Option<HashSet<String>>,
+
+    /// Path to a file where compiled ISEQs will be saved.
+    pub log_compiled_iseqs: Option<String>,
 }
 
 /// Return an Options with default values
 pub fn init_options() -> Options {
     Options {
         num_profiles: 1,
+        stats: false,
         debug: false,
         dump_hir_init: None,
         dump_hir_opt: None,
         dump_lir: false,
         dump_disasm: false,
         perf: false,
+        allowed_iseqs: None,
+        log_compiled_iseqs: None,
     }
 }
 
@@ -56,6 +74,10 @@ pub fn init_options() -> Options {
 pub const ZJIT_OPTIONS: &'static [(&str, &str)] = &[
     ("--zjit-call-threshold=num", "Number of calls to trigger JIT (default: 2)."),
     ("--zjit-num-profiles=num",   "Number of profiled calls before JIT (default: 1, max: 255)."),
+    ("--zjit-stats",              "Enable collecting ZJIT statistics."),
+    ("--zjit-perf",               "Dump ISEQ symbols into /tmp/perf-{}.map for Linux perf."),
+    ("--zjit-log-compiled-iseqs=path",
+                     "Log compiled ISEQs to the file. The file will be truncated."),
 ];
 
 #[derive(Clone, Copy, Debug)]
@@ -97,6 +119,26 @@ pub extern "C" fn rb_zjit_parse_option(options: *const u8, str_ptr: *const c_cha
     parse_option(options, str_ptr).is_some()
 }
 
+fn parse_jit_list(path_like: &str) -> HashSet<String> {
+    // Read lines from the file
+    let mut result = HashSet::new();
+    if let Ok(lines) = std::fs::read_to_string(path_like) {
+        for line in lines.lines() {
+            let trimmed = line.trim();
+            if !trimmed.is_empty() {
+                result.insert(trimmed.to_string());
+            }
+        }
+    } else {
+        eprintln!("Failed to read JIT list from '{}'", path_like);
+    }
+    eprintln!("JIT list:");
+    for item in &result {
+        eprintln!("  {}", item);
+    }
+    result
+}
+
 /// Expected to receive what comes after the third dash in "--zjit-*".
 /// Empty string means user passed only "--zjit". C code rejects when
 /// they pass exact "--zjit-".
@@ -132,6 +174,11 @@ fn parse_option(options: &mut Options, str_ptr: *const std::os::raw::c_char) -> 
             Err(_) => return None,
         },
 
+        ("stats", "") => {
+            unsafe { zjit_stats_enabled_p = true; }
+            options.stats = true;
+        }
+
         ("debug", "") => options.debug = true,
 
         // --zjit-dump-hir dumps the actual input to the codegen, which is currently the same as --zjit-dump-hir-opt.
@@ -148,6 +195,19 @@ fn parse_option(options: &mut Options, str_ptr: *const std::os::raw::c_char) -> 
         ("dump-disasm", "") => options.dump_disasm = true,
 
         ("perf", "") => options.perf = true,
+
+        ("allowed-iseqs", _) if opt_val != "" => options.allowed_iseqs = Some(parse_jit_list(opt_val)),
+        ("log-compiled-iseqs", _) if opt_val != "" => {
+            // Truncate the file if it exists
+            std::fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(opt_val)
+                .map_err(|e| eprintln!("Failed to open file '{}': {}", opt_val, e))
+                .ok();
+            options.log_compiled_iseqs = Some(opt_val.into());
+        }
 
         _ => return None, // Option name not recognized
     }
@@ -193,3 +253,15 @@ macro_rules! debug {
     };
 }
 pub(crate) use debug;
+
+/// Return Qtrue if --zjit-stats has been enabled
+#[unsafe(no_mangle)]
+pub extern "C" fn rb_zjit_stats_enabled_p(_ec: EcPtr, _self: VALUE) -> VALUE {
+    // ZJITState is not initialized yet when loading builtins, so this relies
+    // on a separate global variable.
+    if unsafe { zjit_stats_enabled_p } {
+        Qtrue
+    } else {
+        Qfalse
+    }
+}

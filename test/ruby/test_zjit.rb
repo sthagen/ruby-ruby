@@ -819,6 +819,13 @@ class TestZJIT < Test::Unit::TestCase
     }
   end
 
+  def test_spilled_param_new_arary
+    assert_compiles '[:ok]', %q{
+      def a(n1,n2,n3,n4,n5,n6,n7,n8) = [n8]
+      a(0,0,0,0,0,0,0, :ok)
+    }
+  end
+
   def test_opt_aref_with
     assert_compiles ':ok', %q{
       def aref_with(hash) = hash["key"]
@@ -880,6 +887,48 @@ class TestZJIT < Test::Unit::TestCase
         test
       }, call_threshold: 1, insns: [:opt_getconstant_path]
     end
+  end
+
+  def test_constant_invalidation
+    assert_compiles '123', <<~RUBY, call_threshold: 2, insns: [:opt_getconstant_path]
+      class C; end
+      def test = C
+      test
+      test
+
+      C = 123
+      test
+    RUBY
+  end
+
+  def test_constant_path_invalidation
+    assert_compiles '["Foo::C", "Foo::C", "Bar::C"]', <<~RUBY, call_threshold: 2, insns: [:opt_getconstant_path]
+      module A
+        module B; end
+      end
+
+      module Foo
+        C = "Foo::C"
+      end
+
+      module Bar
+        C = "Bar::C"
+      end
+
+      A::B = Foo
+
+      def test = A::B::C
+
+      result = []
+
+      result << test
+      result << test
+
+      A::B = Bar
+
+      result << test
+      result
+    RUBY
   end
 
   def test_dupn
