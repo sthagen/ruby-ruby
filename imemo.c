@@ -273,7 +273,7 @@ rb_imemo_memsize(VALUE obj)
 static bool
 moved_or_living_object_strictly_p(VALUE obj)
 {
-    return obj && (!rb_objspace_garbage_object_p(obj) || BUILTIN_TYPE(obj) == T_MOVED);
+    return !SPECIAL_CONST_P(obj) && (!rb_objspace_garbage_object_p(obj) || BUILTIN_TYPE(obj) == T_MOVED);
 }
 
 static void
@@ -353,25 +353,19 @@ rb_imemo_mark_and_move(VALUE obj, bool reference_updating)
          */
         struct rb_callcache *cc = (struct rb_callcache *)obj;
         if (reference_updating) {
-            if (!cc->klass) {
-                // already invalidated
+            if (moved_or_living_object_strictly_p((VALUE)cc->cme_)) {
+                *((VALUE *)&cc->klass) = rb_gc_location(cc->klass);
+                *((struct rb_callable_method_entry_struct **)&cc->cme_) =
+                    (struct rb_callable_method_entry_struct *)rb_gc_location((VALUE)cc->cme_);
             }
-            else {
-                if (moved_or_living_object_strictly_p(cc->klass) &&
-                        moved_or_living_object_strictly_p((VALUE)cc->cme_)) {
-                    *((VALUE *)&cc->klass) = rb_gc_location(cc->klass);
-                    *((struct rb_callable_method_entry_struct **)&cc->cme_) =
-                        (struct rb_callable_method_entry_struct *)rb_gc_location((VALUE)cc->cme_);
-                }
-                else {
-                    vm_cc_invalidate(cc);
-                }
+            else if (vm_cc_valid(cc)) {
+                vm_cc_invalidate(cc);
             }
         }
         else {
-            if (cc->klass && (vm_cc_super_p(cc) || vm_cc_refinement_p(cc))) {
+            rb_gc_mark_weak((VALUE *)&cc->klass);
+            if ((vm_cc_super_p(cc) || vm_cc_refinement_p(cc))) {
                 rb_gc_mark_movable((VALUE)cc->cme_);
-                rb_gc_mark_movable((VALUE)cc->klass);
             }
         }
 
@@ -519,61 +513,6 @@ rb_free_const_table(struct rb_id_table *tbl)
 {
     rb_id_table_foreach_values(tbl, free_const_entry_i, 0);
     rb_id_table_free(tbl);
-}
-
-// alive: if false, target pointers can be freed already.
-static void
-vm_ccs_free(struct rb_class_cc_entries *ccs, int alive, VALUE klass)
-{
-    if (ccs->entries) {
-        for (int i=0; i<ccs->len; i++) {
-            const struct rb_callcache *cc = ccs->entries[i].cc;
-            if (!alive) {
-                // ccs can be free'ed.
-                if (rb_gc_pointer_to_heap_p((VALUE)cc) &&
-                    !rb_objspace_garbage_object_p((VALUE)cc) &&
-                    IMEMO_TYPE_P(cc, imemo_callcache) &&
-                    cc->klass == klass) {
-                    // OK. maybe target cc.
-                }
-                else {
-                    continue;
-                }
-            }
-
-            VM_ASSERT(!vm_cc_super_p(cc) && !vm_cc_refinement_p(cc));
-            vm_cc_invalidate(cc);
-        }
-        ruby_xfree(ccs->entries);
-    }
-    ruby_xfree(ccs);
-}
-
-void
-rb_vm_ccs_free(struct rb_class_cc_entries *ccs)
-{
-    RB_DEBUG_COUNTER_INC(ccs_free);
-    vm_ccs_free(ccs, true, Qundef);
-}
-
-static enum rb_id_table_iterator_result
-cc_tbl_free_i(VALUE ccs_ptr, void *data)
-{
-    struct rb_class_cc_entries *ccs = (struct rb_class_cc_entries *)ccs_ptr;
-    VALUE klass = (VALUE)data;
-    VM_ASSERT(vm_ccs_p(ccs));
-
-    vm_ccs_free(ccs, false, klass);
-
-    return ID_TABLE_CONTINUE;
-}
-
-void
-rb_cc_tbl_free(struct rb_id_table *cc_tbl, VALUE klass)
-{
-    if (!cc_tbl) return;
-    rb_id_table_foreach_values(cc_tbl, cc_tbl_free_i, (void *)klass);
-    rb_id_table_free(cc_tbl);
 }
 
 static inline void

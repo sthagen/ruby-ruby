@@ -697,10 +697,10 @@ html: PHONY main srcs-doc
 
 rdoc-coverage: PHONY main srcs-doc
 	@echo Generating RDoc coverage report
-	$(Q) $(RDOC) --quiet -C $(RDOCFLAGS) "$(srcdir)"
+	$(Q) $(RDOC) --quiet -C $(RDOCFLAGS) .
 
 undocumented: PHONY main srcs-doc
-	$(Q) $(RDOC) --quiet -C $(RDOCFLAGS) "$(srcdir)" | \
+	$(Q) $(RDOC) --quiet -C $(RDOCFLAGS) . | \
 	sed -n \
 	-e '/^ *# in file /{' -e 's///;N;s/\n/: /p' -e '}' \
 	-e 's/^ *\(.*[^ ]\) *# in file \(.*\)/\2: \1/p' | sort
@@ -1236,8 +1236,9 @@ BUILTIN_RB_SRCS = \
 		$(srcdir)/nilclass.rb \
 		$(srcdir)/prelude.rb \
 		$(srcdir)/gem_prelude.rb \
+		$(srcdir)/jit_hook.rb \
+		$(srcdir)/jit_undef.rb \
 		$(srcdir)/yjit.rb \
-		$(srcdir)/yjit_hook.rb \
 		$(srcdir)/zjit.rb \
 		$(empty)
 BUILTIN_RB_INCS = $(BUILTIN_RB_SRCS:.rb=.rbinc)

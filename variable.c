@@ -1774,7 +1774,9 @@ general_ivar_set(VALUE obj, ID id, VALUE val, void *data,
             shape_resize_fields_func(obj, RSHAPE_CAPACITY(current_shape_id), RSHAPE_CAPACITY(next_shape_id), data);
         }
 
-        RUBY_ASSERT(RSHAPE_TYPE_P(next_shape_id, SHAPE_IVAR));
+        RUBY_ASSERT(RSHAPE_TYPE_P(next_shape_id, SHAPE_IVAR),
+                    "next_shape_id: 0x%" PRIx32 " RSHAPE_TYPE(next_shape_id): %d",
+                    next_shape_id, (int)RSHAPE_TYPE(next_shape_id));
         RUBY_ASSERT(index == (RSHAPE_INDEX(next_shape_id)));
         set_shape_id_func(obj, next_shape_id, data);
     }
@@ -2253,6 +2255,9 @@ each_hash_iv(st_data_t id, st_data_t val, st_data_t data)
 {
     struct iv_itr_data * itr_data = (struct iv_itr_data *)data;
     rb_ivar_foreach_callback_func *callback = itr_data->func;
+    if (is_internal_id((ID)id)) {
+        return ST_CONTINUE;
+    }
     return callback((ID)id, (VALUE)val, itr_data->arg);
 }
 

@@ -826,6 +826,17 @@ class TestZJIT < Test::Unit::TestCase
     }
   end
 
+  def test_forty_param_method
+    # This used to a trigger a miscomp on A64 due
+    # to a memory displacement larger than 9 bits.
+    assert_compiles '1', %Q{
+      def foo(#{'_,' * 39} n40) = n40
+
+      foo(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1)
+    }
+  end
+
+
   def test_opt_aref_with
     assert_compiles ':ok', %q{
       def aref_with(hash) = hash["key"]
@@ -1082,6 +1093,21 @@ class TestZJIT < Test::Unit::TestCase
       GC.auto_compact = true
       require 'rubygems'
     }, call_threshold: 2
+  end
+
+  def test_stats
+    assert_runs 'true', %q{
+      def test = 1
+      test
+      RubyVM::ZJIT.stats[:zjit_insns_count] > 0
+    }, stats: true
+  end
+
+  def test_zjit_option_uses_array_each_in_ruby
+    omit 'ZJIT wrongly compiles Array#each, so it is disabled for now'
+    assert_runs '"<internal:array>"', %q{
+      Array.instance_method(:each).source_location&.first
+    }
   end
 
   def test_profile_under_nested_jit_call
@@ -1396,12 +1422,13 @@ class TestZJIT < Test::Unit::TestCase
   end
 
   # Run a Ruby process with ZJIT options and a pipe for writing test results
-  def eval_with_jit(script, call_threshold: 1, num_profiles: 1, timeout: 1000, pipe_fd:, debug: true)
+  def eval_with_jit(script, call_threshold: 1, num_profiles: 1, stats: false, debug: true, timeout: 1000, pipe_fd:)
     args = [
       "--disable-gems",
       "--zjit-call-threshold=#{call_threshold}",
       "--zjit-num-profiles=#{num_profiles}",
     ]
+    args << "--zjit-stats" if stats
     args << "--zjit-debug" if debug
     args << "-e" << script_shell_encode(script)
     pipe_r, pipe_w = IO.pipe
