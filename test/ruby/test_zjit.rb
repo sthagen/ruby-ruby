@@ -283,6 +283,14 @@ class TestZJIT < Test::Unit::TestCase
     }, insns: [:opt_eq], call_threshold: 2
   end
 
+  def test_opt_eq_with_minus_one
+    assert_compiles '[false, true]', %q{
+      def test(a) = a == -1
+      test(1) # profile opt_eq
+      [test(0), test(-1)]
+    }, insns: [:opt_eq], call_threshold: 2
+  end
+
   def test_opt_neq_dynamic
     # TODO(max): Don't split this test; instead, run all tests with and without
     # profiling.
@@ -879,6 +887,38 @@ class TestZJIT < Test::Unit::TestCase
     }
   end
 
+  def test_attr_reader
+    assert_compiles '[4, 4]', %q{
+      class C
+        attr_reader :foo
+
+        def initialize
+          @foo = 4
+        end
+      end
+
+      def test(c) = c.foo
+      c = C.new
+      [test(c), test(c)]
+    }, call_threshold: 2, insns: [:opt_send_without_block]
+  end
+
+  def test_attr_accessor
+    assert_compiles '[4, 4]', %q{
+      class C
+        attr_accessor :foo
+
+        def initialize
+          @foo = 4
+        end
+      end
+
+      def test(c) = c.foo
+      c = C.new
+      [test(c), test(c)]
+    }, call_threshold: 2, insns: [:opt_send_without_block]
+  end
+
   def test_uncached_getconstant_path
     assert_compiles RUBY_COPYRIGHT.dump, %q{
       def test = RUBY_COPYRIGHT
@@ -939,6 +979,26 @@ class TestZJIT < Test::Unit::TestCase
 
       result << test
       result
+    RUBY
+  end
+
+  def test_single_ractor_mode_invalidation
+    # Without invalidating the single-ractor mode, the test would crash
+    assert_compiles '"errored but not crashed"', <<~RUBY, call_threshold: 2, insns: [:opt_getconstant_path]
+      C = Object.new
+
+      def test
+        C
+      rescue Ractor::IsolationError
+        "errored but not crashed"
+      end
+
+      test
+      test
+
+      Ractor.new {
+        test
+      }.value
     RUBY
   end
 
