@@ -472,7 +472,7 @@ pub enum Insn {
     Test { val: InsnId },
     /// Return C `true` if `val` is `Qnil`, else `false`.
     IsNil { val: InsnId },
-    Defined { op_type: usize, obj: VALUE, pushval: VALUE, v: InsnId },
+    Defined { op_type: usize, obj: VALUE, pushval: VALUE, v: InsnId, state: InsnId },
     GetConstantPath { ic: *const iseq_inline_constant_cache, state: InsnId },
 
     /// Get a global variable named `id`
@@ -843,6 +843,22 @@ impl<'a> FunctionPrinter<'a> {
     }
 }
 
+/// Pretty printer for [`Function`].
+pub struct FunctionGraphvizPrinter<'a> {
+    fun: &'a Function,
+    ptr_map: PtrPrintMap,
+}
+
+impl<'a> FunctionGraphvizPrinter<'a> {
+    pub fn new(fun: &'a Function) -> Self {
+        let mut ptr_map = PtrPrintMap::identity();
+        if cfg!(test) {
+            ptr_map.map_ptrs = true;
+        }
+        Self { fun, ptr_map }
+    }
+}
+
 /// Union-Find (Disjoint-Set) is a data structure for managing disjoint sets that has an interface
 /// of two operations:
 ///
@@ -953,6 +969,7 @@ fn can_direct_send(iseq: *const rb_iseq_t) -> bool {
     else if unsafe { rb_get_iseq_flags_has_kw(iseq) } { false }
     else if unsafe { rb_get_iseq_flags_has_kwrest(iseq) } { false }
     else if unsafe { rb_get_iseq_flags_has_block(iseq) } { false }
+    else if unsafe { rb_get_iseq_flags_forwardable(iseq) } { false }
     else { true }
 }
 
@@ -1173,7 +1190,7 @@ impl Function {
             &ArrayDup { val, state } => ArrayDup { val: find!(val), state },
             &HashDup { val, state } => HashDup { val: find!(val), state },
             &CCall { cfun, ref args, name, return_type, elidable } => CCall { cfun, args: find_vec!(args), name, return_type, elidable },
-            &Defined { op_type, obj, pushval, v } => Defined { op_type, obj, pushval, v: find!(v) },
+            &Defined { op_type, obj, pushval, v, state } => Defined { op_type, obj, pushval, v: find!(v), state: find!(state) },
             &DefinedIvar { self_val, pushval, id, state } => DefinedIvar { self_val: find!(self_val), pushval, id, state },
             &NewArray { ref elements, state } => NewArray { elements: find_vec!(elements), state: find!(state) },
             &NewHash { ref elements, state } => {
@@ -2115,6 +2132,10 @@ impl Function {
             Some(DumpHIR::Debug) => println!("Optimized HIR:\n{:#?}", &self),
             None => {},
         }
+
+        if get_option!(dump_hir_graphviz) {
+            println!("{}", FunctionGraphvizPrinter::new(&self));
+        }
     }
 
 
@@ -2290,6 +2311,87 @@ impl<'a> std::fmt::Display for FunctionPrinter<'a> {
             }
         }
         Ok(())
+    }
+}
+
+struct HtmlEncoder<'a, 'b> {
+    formatter: &'a mut std::fmt::Formatter<'b>,
+}
+
+impl<'a, 'b> std::fmt::Write for HtmlEncoder<'a, 'b> {
+    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+        for ch in s.chars() {
+            match ch {
+                '<' => self.formatter.write_str("&lt;")?,
+                '>' => self.formatter.write_str("&gt;")?,
+                '&' => self.formatter.write_str("&amp;")?,
+                '"' => self.formatter.write_str("&quot;")?,
+                '\'' => self.formatter.write_str("&#39;")?,
+                _ => self.formatter.write_char(ch)?,
+            }
+        }
+        Ok(())
+    }
+}
+
+impl<'a> std::fmt::Display for FunctionGraphvizPrinter<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        macro_rules! write_encoded {
+            ($f:ident, $($arg:tt)*) => {
+                HtmlEncoder { formatter: $f }.write_fmt(format_args!($($arg)*))
+            };
+        }
+        use std::fmt::Write;
+        let fun = &self.fun;
+        let iseq_name = iseq_get_location(fun.iseq, 0);
+        write!(f, "digraph G {{ # ")?;
+        write_encoded!(f, "{iseq_name}")?;
+        write!(f, "\n")?;
+        writeln!(f, "node [shape=plaintext];")?;
+        writeln!(f, "mode=hier; overlap=false; splines=true;")?;
+        for block_id in fun.rpo() {
+            writeln!(f, r#"  {block_id} [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0">"#)?;
+            write!(f, r#"<TR><TD ALIGN="LEFT" PORT="params" BGCOLOR="gray">{block_id}("#)?;
+            if !fun.blocks[block_id.0].params.is_empty() {
+                let mut sep = "";
+                for param in &fun.blocks[block_id.0].params {
+                    write_encoded!(f, "{sep}{param}")?;
+                    let insn_type = fun.type_of(*param);
+                    if !insn_type.is_subtype(types::Empty) {
+                        write_encoded!(f, ":{}", insn_type.print(&self.ptr_map))?;
+                    }
+                    sep = ", ";
+                }
+            }
+            let mut edges = vec![];
+            writeln!(f, ")&nbsp;</TD></TR>")?;
+            for insn_id in &fun.blocks[block_id.0].insns {
+                let insn_id = fun.union_find.borrow().find_const(*insn_id);
+                let insn = fun.find(insn_id);
+                if matches!(insn, Insn::Snapshot {..}) {
+                    continue;
+                }
+                write!(f, r#"<TR><TD ALIGN="left" PORT="{insn_id}">"#)?;
+                if insn.has_output() {
+                    let insn_type = fun.type_of(insn_id);
+                    if insn_type.is_subtype(types::Empty) {
+                        write_encoded!(f, "{insn_id} = ")?;
+                    } else {
+                        write_encoded!(f, "{insn_id}:{} = ", insn_type.print(&self.ptr_map))?;
+                    }
+                }
+                if let Insn::Jump(ref target) | Insn::IfTrue { ref target, .. } | Insn::IfFalse { ref target, .. } = insn {
+                    edges.push((insn_id, target.target));
+                }
+                write_encoded!(f, "{}", insn.print(&self.ptr_map))?;
+                writeln!(f, "&nbsp;</TD></TR>")?;
+            }
+            writeln!(f, "</TABLE>>];")?;
+            for (src, dst) in edges {
+                writeln!(f, "  {block_id}:{src} -> {dst}:params;")?;
+            }
+        }
+        writeln!(f, "}}")
     }
 }
 
@@ -2480,6 +2582,9 @@ pub enum CallType {
 #[derive(Debug, PartialEq)]
 pub enum ParameterType {
     Optional,
+    /// For example, `foo(...)`. Interaction of JIT
+    /// calling convention and side exits currently unsolved.
+    Forwardable,
 }
 
 #[derive(Debug, PartialEq)]
@@ -2549,6 +2654,7 @@ pub const SELF_PARAM_IDX: usize = 0;
 
 fn filter_unknown_parameter_type(iseq: *const rb_iseq_t) -> Result<(), ParseError> {
     if unsafe { rb_get_iseq_body_param_opt_num(iseq) } != 0 { return Err(ParseError::UnknownParameterType(ParameterType::Optional)); }
+    if unsafe { rb_get_iseq_flags_forwardable(iseq) } { return Err(ParseError::UnknownParameterType(ParameterType::Forwardable)); }
     Ok(())
 }
 
@@ -2788,7 +2894,8 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     let obj = get_arg(pc, 1);
                     let pushval = get_arg(pc, 2);
                     let v = state.stack_pop()?;
-                    state.stack_push(fun.push_insn(block, Insn::Defined { op_type, obj, pushval, v }));
+                    let exit_id = fun.push_insn(block, Insn::Snapshot { state: exit_state });
+                    state.stack_push(fun.push_insn(block, Insn::Defined { op_type, obj, pushval, v, state: exit_id }));
                 }
                 YARVINSN_definedivar => {
                     // (ID id, IVC ic, VALUE pushval)
@@ -4061,12 +4168,12 @@ mod tests {
             fn test@<compiled>:2:
             bb0(v0:BasicObject):
               v2:NilClass = Const Value(nil)
-              v3:BasicObject = Defined constant, v2
-              v4:BasicObject = Defined func, v0
-              v5:NilClass = Const Value(nil)
-              v6:BasicObject = Defined global-variable, v5
-              v8:ArrayExact = NewArray v3, v4, v6
-              Return v8
+              v4:BasicObject = Defined constant, v2
+              v6:BasicObject = Defined func, v0
+              v7:NilClass = Const Value(nil)
+              v9:BasicObject = Defined global-variable, v7
+              v11:ArrayExact = NewArray v4, v6, v9
+              Return v11
         "#]]);
     }
 
@@ -4481,11 +4588,13 @@ mod tests {
         eval("
             def test(...) = super(...)
         ");
-        assert_method_hir("test",  expect![[r#"
-            fn test@<compiled>:2:
-            bb0(v0:BasicObject, v1:BasicObject):
-              SideExit UnknownOpcode(invokesuperforward)
-        "#]]);
+        assert_compile_fails("test", ParseError::UnknownParameterType(ParameterType::Forwardable));
+    }
+
+    #[test]
+    fn test_cant_compile_forwardable() {
+        eval("def forwardable(...) = nil");
+        assert_compile_fails("forwardable", ParseError::UnknownParameterType(ParameterType::Forwardable));
     }
 
     // TODO(max): Figure out how to generate a call with OPT_SEND flag
@@ -4529,11 +4638,7 @@ mod tests {
         eval("
             def test(...) = foo(...)
         ");
-        assert_method_hir("test",  expect![[r#"
-            fn test@<compiled>:2:
-            bb0(v0:BasicObject, v1:BasicObject):
-              SideExit UnknownOpcode(sendforward)
-        "#]]);
+        assert_compile_fails("test", ParseError::UnknownParameterType(ParameterType::Forwardable));
     }
 
     #[test]
@@ -5145,6 +5250,81 @@ mod tests {
 }
 
 #[cfg(test)]
+mod graphviz_tests {
+    use super::*;
+    use expect_test::{expect, Expect};
+
+    #[track_caller]
+    fn assert_optimized_graphviz(method: &str, expected: Expect) {
+        let iseq = crate::cruby::with_rubyvm(|| get_method_iseq("self", method));
+        unsafe { crate::cruby::rb_zjit_profile_disable(iseq) };
+        let mut function = iseq_to_hir(iseq).unwrap();
+        function.optimize();
+        function.validate().unwrap();
+        let actual = format!("{}", FunctionGraphvizPrinter::new(&function));
+        expected.assert_eq(&actual);
+    }
+
+    #[test]
+    fn test_guard_fixnum_or_fixnum() {
+        eval(r#"
+            def test(x, y) = x | y
+
+            test(1, 2)
+        "#);
+        assert_optimized_graphviz("test", expect![[r#"
+            digraph G { # test@&lt;compiled&gt;:2
+            node [shape=plaintext];
+            mode=hier; overlap=false; splines=true;
+              bb0 [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0">
+            <TR><TD ALIGN="LEFT" PORT="params" BGCOLOR="gray">bb0(v0:BasicObject, v1:BasicObject, v2:BasicObject)&nbsp;</TD></TR>
+            <TR><TD ALIGN="left" PORT="v7">PatchPoint BOPRedefined(INTEGER_REDEFINED_OP_FLAG, 29)&nbsp;</TD></TR>
+            <TR><TD ALIGN="left" PORT="v8">v8:Fixnum = GuardType v1, Fixnum&nbsp;</TD></TR>
+            <TR><TD ALIGN="left" PORT="v9">v9:Fixnum = GuardType v2, Fixnum&nbsp;</TD></TR>
+            <TR><TD ALIGN="left" PORT="v10">v10:Fixnum = FixnumOr v8, v9&nbsp;</TD></TR>
+            <TR><TD ALIGN="left" PORT="v6">Return v10&nbsp;</TD></TR>
+            </TABLE>>];
+            }
+        "#]]);
+    }
+
+    #[test]
+    fn test_multiple_blocks() {
+        eval(r#"
+            def test(c)
+              if c
+                3
+              else
+                4
+              end
+            end
+
+            test(1)
+            test("x")
+        "#);
+        assert_optimized_graphviz("test", expect![[r#"
+            digraph G { # test@&lt;compiled&gt;:3
+            node [shape=plaintext];
+            mode=hier; overlap=false; splines=true;
+              bb0 [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0">
+            <TR><TD ALIGN="LEFT" PORT="params" BGCOLOR="gray">bb0(v0:BasicObject, v1:BasicObject)&nbsp;</TD></TR>
+            <TR><TD ALIGN="left" PORT="v3">v3:CBool = Test v1&nbsp;</TD></TR>
+            <TR><TD ALIGN="left" PORT="v4">IfFalse v3, bb1(v0, v1)&nbsp;</TD></TR>
+            <TR><TD ALIGN="left" PORT="v5">v5:Fixnum[3] = Const Value(3)&nbsp;</TD></TR>
+            <TR><TD ALIGN="left" PORT="v6">Return v5&nbsp;</TD></TR>
+            </TABLE>>];
+              bb0:v4 -> bb1:params;
+              bb1 [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0">
+            <TR><TD ALIGN="LEFT" PORT="params" BGCOLOR="gray">bb1(v7:BasicObject, v8:BasicObject)&nbsp;</TD></TR>
+            <TR><TD ALIGN="left" PORT="v10">v10:Fixnum[4] = Const Value(4)&nbsp;</TD></TR>
+            <TR><TD ALIGN="left" PORT="v11">Return v10&nbsp;</TD></TR>
+            </TABLE>>];
+            }
+        "#]]);
+    }
+}
+
+#[cfg(test)]
 mod opt_tests {
     use super::*;
     use super::tests::assert_function_hir;
@@ -5514,7 +5694,6 @@ mod opt_tests {
             def kw_rest(**k) = k
             def post(*rest, post) = post
             def block(&b) = nil
-            def forwardable(...) = nil
         ");
 
         assert_optimized_method_hir("rest", expect![[r#"
@@ -5543,12 +5722,6 @@ mod opt_tests {
             fn post@<compiled>:5:
             bb0(v0:BasicObject, v1:ArrayExact, v2:BasicObject):
               Return v2
-        "#]]);
-        assert_optimized_method_hir("forwardable", expect![[r#"
-            fn forwardable@<compiled>:7:
-            bb0(v0:BasicObject, v1:BasicObject):
-              v3:NilClass = Const Value(nil)
-              Return v3
         "#]]);
     }
 

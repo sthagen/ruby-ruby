@@ -70,6 +70,15 @@ class TestZJIT < Test::Unit::TestCase
     }
   end
 
+  def test_call_a_forwardable_method
+    assert_runs '[]', %q{
+      def test_root = forwardable
+      def forwardable(...) = Array.[](...)
+      test_root
+      test_root
+    }, call_threshold: 2
+  end
+
   def test_setlocal_on_eval_with_spill
     assert_compiles '1', %q{
       @b = binding
@@ -145,6 +154,18 @@ class TestZJIT < Test::Unit::TestCase
 
       test # profile send
       test
+    }, call_threshold: 2
+  end
+
+  def test_send_on_heap_object_in_spilled_arg
+    # This leads to a register spill, so not using `assert_compiles`
+    assert_runs 'Hash', %q{
+      def entry(a1, a2, a3, a4, a5, a6, a7, a8, a9)
+        a9.itself.class
+      end
+
+      entry(1, 2, 3, 4, 5, 6, 7, 8, {}) # profile
+      entry(1, 2, 3, 4, 5, 6, 7, 8, {})
     }, call_threshold: 2
   end
 
@@ -1043,6 +1064,26 @@ class TestZJIT < Test::Unit::TestCase
     }
   end
 
+  def test_defined_with_defined_values
+    assert_compiles '["constant", "method", "global-variable"]', %q{
+      class Foo; end
+      def bar; end
+      $ruby = 1
+
+      def test = return defined?(Foo), defined?(bar), defined?($ruby)
+
+      test
+    }, insns: [:defined]
+  end
+
+  def test_defined_with_undefined_values
+    assert_compiles '[nil, nil, nil]', %q{
+      def test = return defined?(Foo), defined?(bar), defined?($ruby)
+
+      test
+    }, insns: [:defined]
+  end
+
   def test_defined_yield
     assert_compiles "nil", "defined?(yield)"
     assert_compiles '[nil, nil, "yield"]', %q{
@@ -1430,6 +1471,30 @@ class TestZJIT < Test::Unit::TestCase
       test(Kernel)
       test(nil)
     }, call_threshold: 2, insns: [:opt_nil_p]
+  end
+
+  def test_basic_object_guard_works_with_immediate
+    assert_compiles 'NilClass', %q{
+      class Foo; end
+
+      def test(val) = val.class
+
+      test(Foo.new)
+      test(Foo.new)
+      test(nil)
+    }, call_threshold: 2
+  end
+
+  def test_basic_object_guard_works_with_false
+    assert_compiles 'FalseClass', %q{
+      class Foo; end
+
+      def test(val) = val.class
+
+      test(Foo.new)
+      test(Foo.new)
+      test(false)
+    }, call_threshold: 2
   end
 
   private
