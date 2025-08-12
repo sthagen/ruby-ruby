@@ -9,6 +9,15 @@ require_relative '../lib/jit_support'
 return unless JITSupport.zjit_supported?
 
 class TestZJIT < Test::Unit::TestCase
+  def test_enabled
+    assert_runs 'false', <<~RUBY, zjit: false
+      RubyVM::ZJIT.enabled?
+    RUBY
+    assert_runs 'true', <<~RUBY, zjit: true
+      RubyVM::ZJIT.enabled?
+    RUBY
+  end
+
   def test_call_itself
     assert_compiles '42', <<~RUBY, call_threshold: 2
       def test = 42.itself
@@ -1497,6 +1506,22 @@ class TestZJIT < Test::Unit::TestCase
     }, call_threshold: 2
   end
 
+  def test_string_concat
+    assert_compiles '"123"', %q{
+      def test = "#{1}#{2}#{3}"
+
+      test
+    }, insns: [:concatstrings]
+  end
+
+  def test_string_concat_empty
+    assert_compiles '""', %q{
+      def test = "#{}"
+
+      test
+    }, insns: [:concatstrings]
+  end
+
   private
 
   # Assert that every method call in `test_script` can be compiled by ZJIT
@@ -1547,14 +1572,23 @@ class TestZJIT < Test::Unit::TestCase
   end
 
   # Run a Ruby process with ZJIT options and a pipe for writing test results
-  def eval_with_jit(script, call_threshold: 1, num_profiles: 1, stats: false, debug: true, timeout: 1000, pipe_fd:)
-    args = [
-      "--disable-gems",
-      "--zjit-call-threshold=#{call_threshold}",
-      "--zjit-num-profiles=#{num_profiles}",
-    ]
-    args << "--zjit-stats" if stats
-    args << "--zjit-debug" if debug
+  def eval_with_jit(
+    script,
+    call_threshold: 1,
+    num_profiles: 1,
+    zjit: true,
+    stats: false,
+    debug: true,
+    timeout: 1000,
+    pipe_fd:
+  )
+    args = ["--disable-gems"]
+    if zjit
+      args << "--zjit-call-threshold=#{call_threshold}"
+      args << "--zjit-num-profiles=#{num_profiles}"
+      args << "--zjit-stats" if stats
+      args << "--zjit-debug" if debug
+    end
     args << "-e" << script_shell_encode(script)
     pipe_r, pipe_w = IO.pipe
     # Separate thread so we don't deadlock when

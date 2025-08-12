@@ -7,7 +7,7 @@ use crate::backend::current::{Reg, ALLOC_REGS};
 use crate::invariants::{track_bop_assumption, track_cme_assumption, track_single_ractor_assumption, track_stable_constant_names_assumption};
 use crate::gc::{append_gc_offsets, get_or_create_iseq_payload, get_or_create_iseq_payload_ptr};
 use crate::state::ZJITState;
-use crate::stats::{counter_ptr, Counter};
+use crate::stats::{counter_ptr, with_time_stat, Counter, Counter::compile_time_ns};
 use crate::{asm::CodeBlock, cruby::*, options::debug, virtualmem::CodePtr};
 use crate::backend::lir::{self, asm_comment, asm_ccall, Assembler, Opnd, SideExitContext, Target, CFP, C_ARG_OPNDS, C_RET_OPND, EC, NATIVE_STACK_PTR, NATIVE_BASE_PTR, SP};
 use crate::hir::{iseq_to_hir, Block, BlockId, BranchEdge, Invariant, RangeType, SideExitReason, SideExitReason::*, SpecialObjectType, SELF_PARAM_IDX};
@@ -86,7 +86,7 @@ pub extern "C" fn rb_zjit_iseq_gen_entry_point(iseq: IseqPtr, _ec: EcPtr) -> *co
     // Take a lock to avoid writing to ISEQ in parallel with Ractors.
     // with_vm_lock() does nothing if the program doesn't use Ractors.
     let code_ptr = with_vm_lock(src_loc!(), || {
-        gen_iseq_entry_point(iseq)
+        with_time_stat(compile_time_ns, || gen_iseq_entry_point(iseq))
     });
 
     // Assert that the ISEQ compiles if RubyVM::ZJIT.assert_compiles is enabled
@@ -330,6 +330,7 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
         Insn::NewRange { low, high, flag, state } => gen_new_range(asm, opnd!(low), opnd!(high), *flag, &function.frame_state(*state)),
         Insn::ArrayDup { val, state } => gen_array_dup(asm, opnd!(val), &function.frame_state(*state)),
         Insn::StringCopy { val, chilled, state } => gen_string_copy(asm, opnd!(val), *chilled, &function.frame_state(*state)),
+        Insn::StringConcat { strings, state } => gen_string_concat(jit, asm, opnds!(strings), &function.frame_state(*state))?,
         Insn::Param { idx } => unreachable!("block.insns should not have Insn::Param({idx})"),
         Insn::Snapshot { .. } => return Some(()), // we don't need to do anything for this instruction at the moment
         Insn::Jump(branch) => return gen_jump(jit, asm, branch),
@@ -1359,7 +1360,8 @@ c_callable! {
         with_vm_lock(src_loc!(), || {
             // Get a pointer to compiled code or the side-exit trampoline
             let cb = ZJITState::get_code_block();
-            let code_ptr = if let Some(code_ptr) = function_stub_hit_body(cb, iseq, branch_ptr) {
+            let code_ptr = with_time_stat(compile_time_ns, || function_stub_hit_body(cb, iseq, branch_ptr));
+            let code_ptr = if let Some(code_ptr) = code_ptr {
                 code_ptr
             } else {
                 // gen_push_frame() doesn't set PC and SP, so we need to set them for side-exit
@@ -1453,6 +1455,56 @@ pub fn gen_stub_exit(cb: &mut CodeBlock) -> Option<CodePtr> {
         assert_eq!(gc_offsets.len(), 0);
         code_ptr
     })
+}
+
+fn gen_string_concat(jit: &mut JITState, asm: &mut Assembler, strings: Vec<Opnd>, state: &FrameState) -> Option<Opnd> {
+    let n = strings.len();
+
+    // concatstrings shouldn't have 0 strings
+    // If it happens we abort the compilation for now
+    if n == 0 {
+        return None;
+    }
+
+    gen_prepare_non_leaf_call(jit, asm, state)?;
+
+    // Calculate the compile-time NATIVE_STACK_PTR offset from NATIVE_BASE_PTR
+    // At this point, frame_setup(&[], jit.c_stack_slots) has been called,
+    // which allocated aligned_stack_bytes(jit.c_stack_slots) on the stack
+    let frame_size = aligned_stack_bytes(jit.c_stack_slots);
+    let allocation_size = aligned_stack_bytes(n);
+
+    asm_comment!(asm, "allocate {} bytes on C stack for {} strings", allocation_size, n);
+    asm.sub_into(NATIVE_STACK_PTR, allocation_size.into());
+
+    // Calculate the total offset from NATIVE_BASE_PTR to our buffer
+    let total_offset_from_base = (frame_size + allocation_size) as i32;
+
+    for (idx, &string_opnd) in strings.iter().enumerate() {
+        let slot_offset = -total_offset_from_base + (idx as i32 * SIZEOF_VALUE_I32);
+        asm.mov(
+            Opnd::mem(VALUE_BITS, NATIVE_BASE_PTR, slot_offset),
+            string_opnd
+        );
+    }
+
+    let first_string_ptr = asm.lea(Opnd::mem(64, NATIVE_BASE_PTR, -total_offset_from_base));
+
+    let result = asm_ccall!(asm, rb_str_concat_literals, n.into(), first_string_ptr);
+
+    asm_comment!(asm, "restore C stack pointer");
+    asm.add_into(NATIVE_STACK_PTR, allocation_size.into());
+
+    Some(result)
+}
+
+/// Given the number of spill slots needed for a function, return the number of bytes
+/// the function needs to allocate on the stack for the stack frame.
+fn aligned_stack_bytes(num_slots: usize) -> usize {
+    // Both x86_64 and arm64 require the stack to be aligned to 16 bytes.
+    // Since SIZEOF_VALUE is 8 bytes, we need to round up the size to the nearest even number.
+    let num_slots = num_slots + (num_slots % 2);
+    num_slots * SIZEOF_VALUE
 }
 
 impl Assembler {

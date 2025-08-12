@@ -549,13 +549,13 @@ pub enum Insn {
 impl Insn {
     /// Create an iterator that will yield a non-mutable reference to each
     /// operand in turn for this instruction.
-    pub(super) fn opnd_iter(&self) -> InsnOpndIterator {
+    pub(super) fn opnd_iter(&self) -> InsnOpndIterator<'_> {
         InsnOpndIterator::new(self)
     }
 
     /// Create an iterator that will yield a mutable reference to each operand
     /// in turn for this instruction.
-    pub(super) fn opnd_iter_mut(&mut self) -> InsnOpndMutIterator {
+    pub(super) fn opnd_iter_mut(&mut self) -> InsnOpndMutIterator<'_> {
         InsnOpndMutIterator::new(self)
     }
 
@@ -2230,6 +2230,12 @@ impl Assembler {
     pub fn sub(&mut self, left: Opnd, right: Opnd) -> Opnd {
         let out = self.new_vreg(Opnd::match_num_bits(&[left, right]));
         self.push_insn(Insn::Sub { left, right, out });
+        out
+    }
+
+    pub fn sub_into(&mut self, left: Opnd, right: Opnd) -> Opnd {
+        let out = self.sub(left, right);
+        self.mov(left, out);
         out
     }
 

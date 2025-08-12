@@ -2734,21 +2734,12 @@ struct autoload_data {
 };
 
 static void
-autoload_data_compact(void *ptr)
+autoload_data_mark_and_move(void *ptr)
 {
     struct autoload_data *p = ptr;
 
-    p->feature = rb_gc_location(p->feature);
-    p->mutex = rb_gc_location(p->mutex);
-}
-
-static void
-autoload_data_mark(void *ptr)
-{
-    struct autoload_data *p = ptr;
-
-    rb_gc_mark_movable(p->feature);
-    rb_gc_mark_movable(p->mutex);
+    rb_gc_mark_and_move(&p->feature);
+    rb_gc_mark_and_move(&p->mutex);
 }
 
 static void
@@ -2772,32 +2763,20 @@ autoload_data_memsize(const void *ptr)
 
 static const rb_data_type_t autoload_data_type = {
     "autoload_data",
-    {autoload_data_mark, autoload_data_free, autoload_data_memsize, autoload_data_compact},
+    {autoload_data_mark_and_move, autoload_data_free, autoload_data_memsize, autoload_data_mark_and_move},
     0, 0, RUBY_TYPED_FREE_IMMEDIATELY | RUBY_TYPED_WB_PROTECTED
 };
 
 static void
-autoload_const_compact(void *ptr)
+autoload_const_mark_and_move(void *ptr)
 {
     struct autoload_const *ac = ptr;
 
-    ac->module = rb_gc_location(ac->module);
-    ac->autoload_data_value = rb_gc_location(ac->autoload_data_value);
-    ac->value = rb_gc_location(ac->value);
-    ac->file = rb_gc_location(ac->file);
-    ac->namespace = rb_gc_location(ac->namespace);
-}
-
-static void
-autoload_const_mark(void *ptr)
-{
-    struct autoload_const *ac = ptr;
-
-    rb_gc_mark_movable(ac->module);
-    rb_gc_mark_movable(ac->autoload_data_value);
-    rb_gc_mark_movable(ac->value);
-    rb_gc_mark_movable(ac->file);
-    rb_gc_mark_movable(ac->namespace);
+    rb_gc_mark_and_move(&ac->module);
+    rb_gc_mark_and_move(&ac->autoload_data_value);
+    rb_gc_mark_and_move(&ac->value);
+    rb_gc_mark_and_move(&ac->file);
+    rb_gc_mark_and_move(&ac->namespace);
 }
 
 static size_t
@@ -2817,7 +2796,7 @@ autoload_const_free(void *ptr)
 
 static const rb_data_type_t autoload_const_type = {
     "autoload_const",
-    {autoload_const_mark, autoload_const_free, autoload_const_memsize, autoload_const_compact,},
+    {autoload_const_mark_and_move, autoload_const_free, autoload_const_memsize, autoload_const_mark_and_move,},
     0, 0, RUBY_TYPED_FREE_IMMEDIATELY
 };
 
