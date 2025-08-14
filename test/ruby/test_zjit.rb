@@ -18,6 +18,14 @@ class TestZJIT < Test::Unit::TestCase
     RUBY
   end
 
+  def test_enable_through_env
+    child_env = {'RUBY_YJIT_ENABLE' => nil, 'RUBY_ZJIT_ENABLE' => '1'}
+    assert_in_out_err([child_env, '-v'], '') do |stdout, stderr|
+      assert_includes(stdout.first, '+ZJIT')
+      assert_equal([], stderr)
+    end
+  end
+
   def test_call_itself
     assert_compiles '42', <<~RUBY, call_threshold: 2
       def test = 42.itself
@@ -70,6 +78,16 @@ class TestZJIT < Test::Unit::TestCase
 
       test
     }, insns: [:setglobal]
+  end
+
+  def test_string_intern
+    assert_compiles ':foo123', %q{
+      def test
+        :"foo#{123}"
+      end
+
+      test
+    }, insns: [:intern]
   end
 
   def test_setglobal_with_trace_var_exception
@@ -1341,6 +1359,71 @@ class TestZJIT < Test::Unit::TestCase
 
       results
     }, call_threshold: 2
+  end
+
+  def test_objtostring_calls_to_s_on_non_strings
+    assert_compiles '["foo", "foo"]', %q{
+      results = []
+
+      class Foo
+        def to_s
+          "foo"
+        end
+      end
+
+      def test(str)
+        "#{str}"
+      end
+
+      results << test(Foo.new)
+      results << test(Foo.new)
+
+      results
+    }
+  end
+
+  def test_objtostring_rewrite_does_not_call_to_s_on_strings
+    assert_compiles '["foo", "foo"]', %q{
+      results = []
+
+      class String
+        def to_s
+          "bad"
+        end
+      end
+
+      def test(foo)
+        "#{foo}"
+      end
+
+      results << test("foo")
+      results << test("foo")
+
+      results
+    }
+  end
+
+  def test_objtostring_rewrite_does_not_call_to_s_on_string_subclasses
+    assert_compiles '["foo", "foo"]', %q{
+      results = []
+
+      class StringSubclass < String
+        def to_s
+          "bad"
+        end
+      end
+
+      foo = StringSubclass.new("foo")
+
+      def test(str)
+        "#{str}"
+      end
+
+      results << test(foo)
+      results << test(foo)
+
+      results
+    }
   end
 
   def test_string_bytesize_with_guard
