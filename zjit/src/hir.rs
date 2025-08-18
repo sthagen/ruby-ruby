@@ -439,6 +439,7 @@ pub enum SideExitReason {
     CalleeSideExit,
     ObjToStringFallback,
     UnknownSpecialVariable(u64),
+    UnhandledDefinedType(usize),
 }
 
 impl std::fmt::Display for SideExitReason {
@@ -1330,7 +1331,7 @@ impl Function {
             Insn::SendWithoutBlockDirect { .. } => types::BasicObject,
             Insn::Send { .. } => types::BasicObject,
             Insn::InvokeBuiltin { return_type, .. } => return_type.unwrap_or(types::BasicObject),
-            Insn::Defined { .. } => types::BasicObject,
+            Insn::Defined { pushval, .. } => Type::from_value(*pushval).union(types::NilClass),
             Insn::DefinedIvar { .. } => types::BasicObject,
             Insn::GetConstantPath { .. } => types::BasicObject,
             Insn::ArrayMax { .. } => types::BasicObject,
@@ -1940,12 +1941,12 @@ impl Function {
             }
             | &Insn::Return { val }
             | &Insn::Throw { val, .. }
-            | &Insn::Defined { v: val, .. }
             | &Insn::Test { val }
             | &Insn::SetLocal { val, .. }
             | &Insn::IsNil { val } =>
                 worklist.push_back(val),
             &Insn::SetGlobal { val, state, .. }
+            | &Insn::Defined { v: val, state, .. }
             | &Insn::StringIntern { val, state }
             | &Insn::StringCopy { val, state, .. }
             | &Insn::GuardType { val, state, .. }
@@ -2957,6 +2958,11 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     let pushval = get_arg(pc, 2);
                     let v = state.stack_pop()?;
                     let exit_id = fun.push_insn(block, Insn::Snapshot { state: exit_state });
+                    if op_type == DEFINED_METHOD.try_into().unwrap() {
+                        // TODO(Shopify/ruby#703): Fix codegen for defined?(method call expr)
+                        fun.push_insn(block, Insn::SideExit { state: exit_id, reason: SideExitReason::UnhandledDefinedType(op_type)});
+                        break; // End the block
+                    }
                     state.stack_push(fun.push_insn(block, Insn::Defined { op_type, obj, pushval, v, state: exit_id }));
                 }
                 YARVINSN_definedivar => {
@@ -4204,10 +4210,10 @@ mod tests {
             fn test@<compiled>:2:
             bb0(v0:BasicObject):
               v2:NilClass = Const Value(nil)
-              v4:BasicObject = Defined constant, v2
-              v6:BasicObject = Defined func, v0
+              v4:StringExact|NilClass = Defined constant, v2
+              v6:StringExact|NilClass = Defined func, v0
               v7:NilClass = Const Value(nil)
-              v9:BasicObject = Defined global-variable, v7
+              v9:StringExact|NilClass = Defined global-variable, v7
               v11:ArrayExact = NewArray v4, v6, v9
               Return v11
         "#]]);
