@@ -737,25 +737,26 @@ fn gen_entry_params(asm: &mut Assembler, iseq: IseqPtr, entry_block: &Block) {
 }
 
 /// Set branch params to basic block arguments
-fn gen_branch_params(jit: &mut JITState, asm: &mut Assembler, branch: &BranchEdge) -> Option<()> {
-    if !branch.args.is_empty() {
-        asm_comment!(asm, "set branch params: {}", branch.args.len());
-        let mut moves: Vec<(Reg, Opnd)> = vec![];
-        for (idx, &arg) in branch.args.iter().enumerate() {
-            match param_opnd(idx) {
-                Opnd::Reg(reg) => {
-                    // If a parameter is a register, we need to parallel-move it
-                    moves.push((reg, jit.get_opnd(arg)));
-                },
-                param => {
-                    // If a parameter is memory, we set it beforehand
-                    asm.mov(param, jit.get_opnd(arg));
-                }
+fn gen_branch_params(jit: &mut JITState, asm: &mut Assembler, branch: &BranchEdge) {
+    if branch.args.is_empty() {
+        return;
+    }
+
+    asm_comment!(asm, "set branch params: {}", branch.args.len());
+    let mut moves: Vec<(Reg, Opnd)> = vec![];
+    for (idx, &arg) in branch.args.iter().enumerate() {
+        match param_opnd(idx) {
+            Opnd::Reg(reg) => {
+                // If a parameter is a register, we need to parallel-move it
+                moves.push((reg, jit.get_opnd(arg)));
+            },
+            param => {
+                // If a parameter is memory, we set it beforehand
+                asm.mov(param, jit.get_opnd(arg));
             }
         }
-        asm.parallel_mov(moves);
     }
-    Some(())
+    asm.parallel_mov(moves);
 }
 
 /// Get a method parameter on JIT entry. As of entry, whether EP is escaped or not solely
@@ -1004,35 +1005,11 @@ fn gen_new_hash(
             pairs.push(val);
         }
 
-        let n = pairs.len();
-
-        // Calculate the compile-time NATIVE_STACK_PTR offset from NATIVE_BASE_PTR
-        // At this point, frame_setup(&[], jit.c_stack_slots) has been called,
-        // which allocated aligned_stack_bytes(jit.c_stack_slots) on the stack
-        let frame_size = aligned_stack_bytes(jit.c_stack_slots);
-        let allocation_size = aligned_stack_bytes(n);
-
-        asm_comment!(asm, "allocate {} bytes on C stack for {} hash elements", allocation_size, n);
-        asm.sub_into(NATIVE_STACK_PTR, allocation_size.into());
-
-        // Calculate the total offset from NATIVE_BASE_PTR to our buffer
-        let total_offset_from_base = (frame_size + allocation_size) as i32;
-
-        for (idx, &pair_opnd) in pairs.iter().enumerate() {
-            let slot_offset = -total_offset_from_base + (idx as i32 * SIZEOF_VALUE_I32);
-            asm.mov(
-                Opnd::mem(VALUE_BITS, NATIVE_BASE_PTR, slot_offset),
-                pair_opnd
-            );
-        }
-
-        let argv = asm.lea(Opnd::mem(64, NATIVE_BASE_PTR, -total_offset_from_base));
-
+        let argv = gen_push_opnds(jit, asm, &pairs);
         let argc = (elements.len() * 2) as ::std::os::raw::c_long;
         asm_ccall!(asm, rb_hash_bulk_insert, lir::Opnd::Imm(argc), argv, new_hash);
 
-        asm_comment!(asm, "restore C stack pointer");
-        asm.add_into(NATIVE_STACK_PTR, allocation_size.into());
+        gen_pop_opnds(asm, &pairs);
     }
 
     new_hash

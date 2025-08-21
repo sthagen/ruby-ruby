@@ -428,6 +428,8 @@ clear_method_cache_by_id_in_class(VALUE klass, ID mid)
     if (rb_objspace_garbage_object_p(klass)) return;
 
     RB_VM_LOCKING() {
+        rb_vm_barrier();
+
         if (LIKELY(RCLASS_SUBCLASSES_FIRST(klass) == NULL)) {
             // no subclasses
             // check only current class
@@ -1752,6 +1754,8 @@ cached_callable_method_entry(VALUE klass, ID mid)
             return ccs->cme;
         }
         else {
+            rb_vm_barrier();
+
             rb_managed_id_table_delete(cc_tbl, mid);
             rb_vm_ccs_invalidate_and_free(ccs);
         }
@@ -1782,7 +1786,14 @@ cache_callable_method_entry(VALUE klass, ID mid, const rb_callable_method_entry_
 #endif
     }
     else {
-        vm_ccs_create(klass, cc_tbl, mid, cme);
+        if (rb_multi_ractor_p()) {
+            VALUE new_cc_tbl = rb_vm_cc_table_dup(cc_tbl);
+            vm_ccs_create(klass, new_cc_tbl, mid, cme);
+            RB_OBJ_ATOMIC_WRITE(klass, &RCLASSEXT_CC_TBL(RCLASS_EXT_WRITABLE(klass)), new_cc_tbl);
+        }
+        else {
+            vm_ccs_create(klass, cc_tbl, mid, cme);
+        }
     }
 }
 
@@ -2948,13 +2959,14 @@ rb_mod_ruby2_keywords(int argc, VALUE *argv, VALUE module)
             switch (me->def->type) {
               case VM_METHOD_TYPE_ISEQ:
                 if (ISEQ_BODY(me->def->body.iseq.iseqptr)->param.flags.has_rest &&
+                        !ISEQ_BODY(me->def->body.iseq.iseqptr)->param.flags.has_post &&
                         !ISEQ_BODY(me->def->body.iseq.iseqptr)->param.flags.has_kw &&
                         !ISEQ_BODY(me->def->body.iseq.iseqptr)->param.flags.has_kwrest) {
                     ISEQ_BODY(me->def->body.iseq.iseqptr)->param.flags.ruby2_keywords = 1;
                     rb_clear_method_cache(module, name);
                 }
                 else {
-                    rb_warn("Skipping set of ruby2_keywords flag for %"PRIsVALUE" (method accepts keywords or method does not accept argument splat)", QUOTE_ID(name));
+                    rb_warn("Skipping set of ruby2_keywords flag for %"PRIsVALUE" (method accepts keywords or post arguments or method does not accept argument splat)", QUOTE_ID(name));
                 }
                 break;
               case VM_METHOD_TYPE_BMETHOD: {
@@ -2967,13 +2979,14 @@ rb_mod_ruby2_keywords(int argc, VALUE *argv, VALUE module)
                     const struct rb_captured_block *captured = VM_BH_TO_ISEQ_BLOCK(procval);
                     const rb_iseq_t *iseq = rb_iseq_check(captured->code.iseq);
                     if (ISEQ_BODY(iseq)->param.flags.has_rest &&
+                            !ISEQ_BODY(iseq)->param.flags.has_post &&
                             !ISEQ_BODY(iseq)->param.flags.has_kw &&
                             !ISEQ_BODY(iseq)->param.flags.has_kwrest) {
                         ISEQ_BODY(iseq)->param.flags.ruby2_keywords = 1;
                         rb_clear_method_cache(module, name);
                     }
                     else {
-                        rb_warn("Skipping set of ruby2_keywords flag for %"PRIsVALUE" (method accepts keywords or method does not accept argument splat)", QUOTE_ID(name));
+                        rb_warn("Skipping set of ruby2_keywords flag for %"PRIsVALUE" (method accepts keywords or post arguments or method does not accept argument splat)", QUOTE_ID(name));
                     }
                     break;
                 }
