@@ -1,6 +1,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::ffi::{c_int, c_long, c_void};
+use std::slice;
 
 use crate::asm::Label;
 use crate::backend::current::{Reg, ALLOC_REGS};
@@ -352,10 +353,10 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
         Insn::Jump(branch) => no_output!(gen_jump(jit, asm, branch)),
         Insn::IfTrue { val, target } => no_output!(gen_if_true(jit, asm, opnd!(val), target)),
         Insn::IfFalse { val, target } => no_output!(gen_if_false(jit, asm, opnd!(val), target)),
-        Insn::SendWithoutBlock { cd, state, self_val, args, .. } => gen_send_without_block(jit, asm, *cd, &function.frame_state(*state), opnd!(self_val), opnds!(args)),
+        Insn::SendWithoutBlock { cd, state, .. } => gen_send_without_block(jit, asm, *cd, &function.frame_state(*state)),
         // Give up SendWithoutBlockDirect for 6+ args since asm.ccall() doesn't support it.
-        Insn::SendWithoutBlockDirect { cd, state, self_val, args, .. } if args.len() + 1 > C_ARG_OPNDS.len() => // +1 for self
-            gen_send_without_block(jit, asm, *cd, &function.frame_state(*state), opnd!(self_val), opnds!(args)),
+        Insn::SendWithoutBlockDirect { cd, state, args, .. } if args.len() + 1 > C_ARG_OPNDS.len() => // +1 for self
+            gen_send_without_block(jit, asm, *cd, &function.frame_state(*state)),
         Insn::SendWithoutBlockDirect { cme, iseq, self_val, args, state, .. } => gen_send_without_block_direct(cb, jit, asm, *cme, *iseq, opnd!(self_val), opnds!(args), &function.frame_state(*state)),
         // Ensure we have enough room fit ec, self, and arguments
         // TODO remove this check when we have stack args (we can use Time.new to test it)
@@ -394,6 +395,7 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
         Insn::GetSpecialNumber { nth, state } => gen_getspecial_number(asm, *nth, &function.frame_state(*state)),
         &Insn::IncrCounter(counter) => no_output!(gen_incr_counter(asm, counter)),
         Insn::ObjToString { val, cd, state, .. } => gen_objtostring(jit, asm, opnd!(val), *cd, &function.frame_state(*state)),
+        &Insn::CheckInterrupts { state } => no_output!(gen_check_interrupts(jit, asm, &function.frame_state(state))),
         Insn::ArrayExtend { .. }
         | Insn::ArrayMax { .. }
         | Insn::ArrayPush { .. }
@@ -673,6 +675,17 @@ fn gen_getspecial_number(asm: &mut Assembler, nth: u64, state: &FrameState) -> O
     asm_ccall!(asm, rb_reg_nth_match, Opnd::Imm((nth >> 1).try_into().unwrap()), backref)
 }
 
+fn gen_check_interrupts(jit: &mut JITState, asm: &mut Assembler, state: &FrameState) {
+    // Check for interrupts
+    // see RUBY_VM_CHECK_INTS(ec) macro
+    asm_comment!(asm, "RUBY_VM_CHECK_INTS(ec)");
+    // Not checking interrupt_mask since it's zero outside finalize_deferred_heap_pages,
+    // signal_exec, or rb_postponed_job_flush.
+    let interrupt_flag = asm.load(Opnd::mem(32, EC, RUBY_OFFSET_EC_INTERRUPT_FLAG));
+    asm.test(interrupt_flag, interrupt_flag);
+    asm.jnz(side_exit(jit, state, SideExitReason::Interrupt));
+}
+
 /// Compile an interpreter entry block to be inserted into an ISEQ
 fn gen_entry_prologue(asm: &mut Assembler, iseq: IseqPtr) {
     asm_comment!(asm, "ZJIT entry point: {}", iseq_get_location(iseq, 0));
@@ -846,26 +859,19 @@ fn gen_send_without_block(
     asm: &mut Assembler,
     cd: *const rb_call_data,
     state: &FrameState,
-    self_val: Opnd,
-    args: Vec<Opnd>,
 ) -> lir::Opnd {
-    gen_spill_locals(jit, asm, state);
-    // Spill the receiver and the arguments onto the stack.
-    // They need to be on the interpreter stack to let the interpreter access them.
-    // TODO: Avoid spilling operands that have been spilled before.
-    // TODO: Despite https://github.com/ruby/ruby/pull/13468, Kokubun thinks this should
-    // spill the whole stack in case it raises an exception. The HIR might need to change
-    // for opt_aref_with, which pushes to the stack in the middle of the instruction.
-    asm_comment!(asm, "spill receiver and arguments");
-    for (idx, &val) in [self_val].iter().chain(args.iter()).enumerate() {
-        // Currently, we don't move the SP register. So it's equal to the base pointer.
-        let stack_opnd = Opnd::mem(64, SP, idx as i32 * SIZEOF_VALUE_I32);
-        asm.mov(stack_opnd, val);
-    }
+    // Note that it's incorrect to use this frame state to side exit because
+    // the state might not be on the boundary of an interpreter instruction.
+    // For example, `opt_aref_with` pushes to the stack and then sends.
+    asm_comment!(asm, "spill frame state");
 
     // Save PC and SP
     gen_save_pc(asm, state);
-    gen_save_sp(asm, 1 + args.len()); // +1 for receiver
+    gen_save_sp(asm, state.stack().len());
+
+    // Spill locals and stack
+    gen_spill_locals(jit, asm, state);
+    gen_spill_stack(jit, asm, state);
 
     asm_comment!(asm, "call #{} with dynamic dispatch", ruby_call_method_name(cd));
     unsafe extern "C" {
@@ -1348,9 +1354,15 @@ fn local_idx_to_ep_offset(iseq: IseqPtr, local_idx: usize) -> i32 {
     local_size_and_idx_to_ep_offset(local_size as usize, local_idx)
 }
 
-/// Convert the number of locals and a local index to an offset in the EP
+/// Convert the number of locals and a local index to an offset from the EP
 pub fn local_size_and_idx_to_ep_offset(local_size: usize, local_idx: usize) -> i32 {
     local_size as i32 - local_idx as i32 - 1 + VM_ENV_DATA_SIZE as i32
+}
+
+/// Convert the number of locals and a local index to an offset from the BP.
+/// We don't move the SP register after entry, so we often use SP as BP.
+pub fn local_size_and_idx_to_bp_offset(local_size: usize, local_idx: usize) -> i32 {
+    local_size_and_idx_to_ep_offset(local_size, local_idx) + 1
 }
 
 /// Convert ISEQ into High-level IR
@@ -1448,26 +1460,41 @@ c_callable! {
     /// This function is expected to be called repeatedly when ZJIT fails to compile the stub.
     /// We should be able to compile most (if not all) function stubs by side-exiting at unsupported
     /// instructions, so this should be used primarily for cb.has_dropped_bytes() situations.
-    fn function_stub_hit(iseq_call_ptr: *const c_void, ec: EcPtr, sp: *mut VALUE) -> *const u8 {
+    fn function_stub_hit(iseq_call_ptr: *const c_void, cfp: CfpPtr, sp: *mut VALUE) -> *const u8 {
         with_vm_lock(src_loc!(), || {
-            // gen_push_frame() doesn't set PC and SP, so we need to set them before exit.
+            // gen_push_frame() doesn't set PC, so we need to set them before exit.
             // function_stub_hit_body() may allocate and call gc_validate_pc(), so we always set PC.
             let iseq_call = unsafe { Rc::from_raw(iseq_call_ptr as *const RefCell<IseqCall>) };
-            let cfp = unsafe { get_ec_cfp(ec) };
-            let pc = unsafe { rb_iseq_pc_at_idx(iseq_call.borrow().iseq, 0) }; // TODO: handle opt_pc once supported
+            let iseq = iseq_call.borrow().iseq;
+            let pc = unsafe { rb_iseq_pc_at_idx(iseq, 0) }; // TODO: handle opt_pc once supported
             unsafe { rb_set_cfp_pc(cfp, pc) };
-            unsafe { rb_set_cfp_sp(cfp, sp) };
+
+            // JIT-to-JIT calls don't set SP or fill nils to uninitialized (non-argument) locals.
+            // We need to set them if we side-exit from function_stub_hit.
+            fn spill_stack(iseq: IseqPtr, cfp: CfpPtr, sp: *mut VALUE) {
+                unsafe {
+                    // Set SP which gen_push_frame() doesn't set
+                    rb_set_cfp_sp(cfp, sp);
+
+                    // Fill nils to uninitialized (non-argument) locals
+                    let local_size = get_iseq_body_local_table_size(iseq) as usize;
+                    let num_params = get_iseq_body_param_size(iseq) as usize;
+                    let base = sp.offset(-local_size_and_idx_to_bp_offset(local_size, num_params) as isize);
+                    slice::from_raw_parts_mut(base, local_size - num_params).fill(Qnil);
+                }
+            }
 
             // If we already know we can't compile the ISEQ, fail early without cb.mark_all_executable().
             // TODO: Alan thinks the payload status part of this check can happen without the VM lock, since the whole
             // code path can be made read-only. But you still need the check as is while holding the VM lock in any case.
             let cb = ZJITState::get_code_block();
-            let payload = get_or_create_iseq_payload(iseq_call.borrow().iseq);
+            let payload = get_or_create_iseq_payload(iseq);
             if cb.has_dropped_bytes() || payload.status == IseqStatus::CantCompile {
                 // We'll use this Rc again, so increment the ref count decremented by from_raw.
                 unsafe { Rc::increment_strong_count(iseq_call_ptr as *const RefCell<IseqCall>); }
 
                 // Exit to the interpreter
+                spill_stack(iseq, cfp, sp);
                 return ZJITState::get_exit_trampoline().raw_ptr(cb);
             }
 
@@ -1477,6 +1504,7 @@ c_callable! {
                 code_ptr
             } else {
                 // Exit to the interpreter
+                spill_stack(iseq, cfp, sp);
                 ZJITState::get_exit_trampoline()
             };
             cb.mark_all_executable();
@@ -1540,7 +1568,7 @@ pub fn gen_function_stub_hit_trampoline(cb: &mut CodeBlock) -> Option<CodePtr> {
     const { assert!(ALLOC_REGS.len() % 2 == 0, "x86_64 would need to push one more if we push an odd number of regs"); }
 
     // Compile the stubbed ISEQ
-    let jump_addr = asm_ccall!(asm, function_stub_hit, SCRATCH_OPND, EC, SP);
+    let jump_addr = asm_ccall!(asm, function_stub_hit, SCRATCH_OPND, CFP, SP);
     asm.mov(SCRATCH_OPND, jump_addr);
 
     asm_comment!(asm, "restore argument registers");
