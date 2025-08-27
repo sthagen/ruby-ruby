@@ -7303,12 +7303,7 @@ rb_str_escape(VALUE str)
  *  call-seq:
  *    inspect -> string
  *
- *  Returns a printable version of +self+, enclosed in double-quotes,
- *  and with special characters escaped:
- *
- *    s = "foo\tbar\tbaz\n"
- *    s.inspect
- *    # => "\"foo\\tbar\\tbaz\\n\""
+ *  :include: doc/string/inspect.rdoc
  *
  */
 
@@ -11075,11 +11070,9 @@ rb_str_justify(int argc, VALUE *argv, VALUE str, char jflag)
 
 /*
  *  call-seq:
- *    ljust(size, pad_string = ' ') -> new_string
+ *    ljust(width, pad_string = ' ') -> new_string
  *
  *  :include: doc/string/ljust.rdoc
- *
- *  Related: String#rjust, String#center.
  *
  */
 

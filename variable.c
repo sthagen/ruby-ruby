@@ -1480,11 +1480,11 @@ obj_transition_too_complex(VALUE obj, st_table *table)
       case T_OBJECT:
         {
             VALUE *old_fields = NULL;
-            if (FL_TEST_RAW(obj, ROBJECT_EMBED)) {
-                FL_UNSET_RAW(obj, ROBJECT_EMBED);
+            if (FL_TEST_RAW(obj, ROBJECT_HEAP)) {
+                old_fields = ROBJECT_FIELDS(obj);
             }
             else {
-                old_fields = ROBJECT_FIELDS(obj);
+                FL_SET_RAW(obj, ROBJECT_HEAP);
             }
             RBASIC_SET_SHAPE_ID(obj, shape_id);
             ROBJECT_SET_FIELDS_HASH(obj, table);
@@ -1614,12 +1614,12 @@ rb_ivar_delete(VALUE obj, ID id, VALUE undef)
     }
 
     if (RB_TYPE_P(obj, T_OBJECT) &&
-        !RB_FL_TEST_RAW(obj, ROBJECT_EMBED) &&
+        FL_TEST_RAW(obj, ROBJECT_HEAP) &&
         rb_obj_embedded_size(new_fields_count) <= rb_gc_obj_slot_size(obj)) {
         // Re-embed objects when instances become small enough
         // This is necessary because YJIT assumes that objects with the same shape
         // have the same embeddedness for efficiency (avoid extra checks)
-        RB_FL_SET_RAW(obj, ROBJECT_EMBED);
+        FL_UNSET_RAW(obj, ROBJECT_HEAP);
         MEMCPY(ROBJECT_FIELDS(obj), fields, VALUE, new_fields_count);
         xfree(fields);
     }
@@ -1813,15 +1813,15 @@ rb_ensure_iv_list_size(VALUE obj, uint32_t current_len, uint32_t new_capacity)
 {
     RUBY_ASSERT(!rb_shape_obj_too_complex_p(obj));
 
-    if (RBASIC(obj)->flags & ROBJECT_EMBED) {
+    if (FL_TEST_RAW(obj, ROBJECT_HEAP)) {
+        REALLOC_N(ROBJECT(obj)->as.heap.fields, VALUE, new_capacity);
+    }
+    else {
         VALUE *ptr = ROBJECT_FIELDS(obj);
         VALUE *newptr = ALLOC_N(VALUE, new_capacity);
         MEMCPY(newptr, ptr, VALUE, current_len);
-        RB_FL_UNSET_RAW(obj, ROBJECT_EMBED);
+        FL_SET_RAW(obj, ROBJECT_HEAP);
         ROBJECT(obj)->as.heap.fields = newptr;
-    }
-    else {
-        REALLOC_N(ROBJECT(obj)->as.heap.fields, VALUE, new_capacity);
     }
 }
 
@@ -4490,13 +4490,13 @@ class_fields_ivar_set(VALUE klass, VALUE fields_obj, ID id, VALUE val, bool conc
     fields_obj = original_fields_obj ? original_fields_obj : rb_imemo_fields_new(klass, 1);
 
     shape_id_t current_shape_id = RBASIC_SHAPE_ID(fields_obj);
-
+    shape_id_t next_shape_id = current_shape_id; // for too_complex
     if (UNLIKELY(rb_shape_too_complex_p(current_shape_id))) {
         goto too_complex;
     }
 
     bool new_ivar;
-    shape_id_t next_shape_id = generic_shape_ivar(fields_obj, id, &new_ivar);
+    next_shape_id = generic_shape_ivar(fields_obj, id, &new_ivar);
 
     if (UNLIKELY(rb_shape_too_complex_p(next_shape_id))) {
         fields_obj = imemo_fields_complex_from_obj(klass, fields_obj, next_shape_id);
