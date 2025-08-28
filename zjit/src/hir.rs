@@ -431,7 +431,9 @@ pub enum SideExitReason {
     UnknownNewarraySend(vm_opt_newarray_send_type),
     UnknownCallType,
     UnknownOpcode(u32),
+    UnknownSpecialVariable(u64),
     UnhandledInstruction(InsnId),
+    UnhandledDefinedType(usize),
     FixnumAddOverflow,
     FixnumSubOverflow,
     FixnumMultOverflow,
@@ -440,8 +442,6 @@ pub enum SideExitReason {
     PatchPoint(Invariant),
     CalleeSideExit,
     ObjToStringFallback,
-    UnknownSpecialVariable(u64),
-    UnhandledDefinedType(usize),
     Interrupt,
 }
 
@@ -1671,6 +1671,15 @@ impl Function {
                                 self_val = self.push_insn(block, Insn::GuardType { val: self_val, guard_type: Type::from_profiled_type(profiled_type), state });
                             }
                             let id = unsafe { get_cme_def_body_attr_id(cme) };
+
+                            // Check if we're accessing ivars of a Class or Module object as they require single-ractor mode.
+                            // We omit gen_prepare_non_leaf_call on gen_getivar, so it's unsafe to raise for multi-ractor mode.
+                            if unsafe { rb_zjit_singleton_class_p(klass) } {
+                                let attached = unsafe { rb_class_attached_object(klass) };
+                                if unsafe { RB_TYPE_P(attached, RUBY_T_CLASS) || RB_TYPE_P(attached, RUBY_T_MODULE) } {
+                                    self.push_insn(block, Insn::PatchPoint { invariant: Invariant::SingleRactorMode, state });
+                                }
+                            }
                             let getivar = self.push_insn(block, Insn::GetIvar { self_val, id, state });
                             self.make_equal_to(insn_id, getivar);
                         } else {
@@ -2661,10 +2670,16 @@ fn insn_idx_at_offset(idx: u32, offset: i64) -> u32 {
     ((idx as isize) + (offset as isize)) as u32
 }
 
-fn compute_jump_targets(iseq: *const rb_iseq_t) -> Vec<u32> {
+struct BytecodeInfo {
+    jump_targets: Vec<u32>,
+    has_send: bool,
+}
+
+fn compute_bytecode_info(iseq: *const rb_iseq_t) -> BytecodeInfo {
     let iseq_size = unsafe { get_iseq_encoded_size(iseq) };
     let mut insn_idx = 0;
     let mut jump_targets = HashSet::new();
+    let mut has_send = false;
     while insn_idx < iseq_size {
         // Get the current pc and opcode
         let pc = unsafe { rb_iseq_pc_at_idx(iseq, insn_idx) };
@@ -2688,12 +2703,13 @@ fn compute_jump_targets(iseq: *const rb_iseq_t) -> Vec<u32> {
                     jump_targets.insert(insn_idx);
                 }
             }
+            YARVINSN_send => has_send = true,
             _ => {}
         }
     }
     let mut result = jump_targets.into_iter().collect::<Vec<_>>();
     result.sort();
-    result
+    BytecodeInfo { jump_targets: result, has_send }
 }
 
 #[derive(Debug, PartialEq)]
@@ -2800,7 +2816,7 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
     let mut profiles = ProfileOracle::new(payload);
     let mut fun = Function::new(iseq);
     // Compute a map of PC->Block by finding jump targets
-    let jump_targets = compute_jump_targets(iseq);
+    let BytecodeInfo { jump_targets, has_send } = compute_bytecode_info(iseq);
     let mut insn_idx_to_block = HashMap::new();
     for insn_idx in jump_targets {
         if insn_idx == 0 {
@@ -3120,7 +3136,7 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                 }
                 YARVINSN_getlocal_WC_0 => {
                     let ep_offset = get_arg(pc, 0).as_u32();
-                    if iseq_type == ISEQ_TYPE_EVAL {
+                    if iseq_type == ISEQ_TYPE_EVAL || has_send {
                         // On eval, the locals are always on the heap, so read the local using EP.
                         state.stack_push(fun.push_insn(block, Insn::GetLocal { ep_offset, level: 0 }));
                     } else {
@@ -3138,7 +3154,7 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     let ep_offset = get_arg(pc, 0).as_u32();
                     let val = state.stack_pop()?;
                     state.setlocal(ep_offset, val);
-                    if iseq_type == ISEQ_TYPE_EVAL {
+                    if iseq_type == ISEQ_TYPE_EVAL || has_send {
                         // On eval, the locals are always on the heap, so write the local using EP.
                         fun.push_insn(block, Insn::SetLocal { val, ep_offset, level: 0 });
                     }
@@ -3325,6 +3341,9 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     let id = ID(get_arg(pc, 0).as_u64());
                     // ic is in arg 1
                     let exit_id = fun.push_insn(block, Insn::Snapshot { state: exit_state });
+                    // Assume single-Ractor mode to omit gen_prepare_non_leaf_call on gen_getivar
+                    // TODO: We only really need this if self_val is a class/module
+                    fun.push_insn(block, Insn::PatchPoint { invariant: Invariant::SingleRactorMode, state: exit_id });
                     let result = fun.push_insn(block, Insn::GetIvar { self_val: self_param, id, state: exit_id });
                     state.stack_push(result);
                 }
@@ -3332,6 +3351,9 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     let id = ID(get_arg(pc, 0).as_u64());
                     // ic is in arg 1
                     let exit_id = fun.push_insn(block, Insn::Snapshot { state: exit_state });
+                    // Assume single-Ractor mode to omit gen_prepare_non_leaf_call on gen_setivar
+                    // TODO: We only really need this if self_val is a class/module
+                    fun.push_insn(block, Insn::PatchPoint { invariant: Invariant::SingleRactorMode, state: exit_id });
                     let val = state.stack_pop()?;
                     fun.push_insn(block, Insn::SetIvar { self_val: self_param, id, val, state: exit_id });
                 }
@@ -4674,9 +4696,10 @@ mod tests {
         assert_snapshot!(hir_string("test"), @r"
         fn test@<compiled>:3:
         bb0(v0:BasicObject, v1:BasicObject):
-          v4:BasicObject = Send v1, 0x1000, :each
+          v3:BasicObject = GetLocal l0, EP@3
+          v5:BasicObject = Send v3, 0x1000, :each
           CheckInterrupts
-          Return v4
+          Return v5
         ");
     }
 
@@ -4742,11 +4765,12 @@ mod tests {
         eval("
             def test(a) = foo(&a)
         ");
-        assert_snapshot!(hir_string("test"), @r#"
-            fn test@<compiled>:2:
-            bb0(v0:BasicObject, v1:BasicObject):
-              SideExit UnknownCallType
-        "#);
+        assert_snapshot!(hir_string("test"), @r"
+        fn test@<compiled>:2:
+        bb0(v0:BasicObject, v1:BasicObject):
+          v3:BasicObject = GetLocal l0, EP@3
+          SideExit UnknownCallType
+        ");
     }
 
     #[test]
@@ -5044,9 +5068,10 @@ mod tests {
         assert_snapshot!(hir_string("test"), @r"
         fn test@<compiled>:2:
         bb0(v0:BasicObject):
-          v3:BasicObject = GetIvar v0, :@foo
+          PatchPoint SingleRactorMode
+          v4:BasicObject = GetIvar v0, :@foo
           CheckInterrupts
-          Return v3
+          Return v4
         ");
     }
 
@@ -5061,6 +5086,7 @@ mod tests {
         fn test@<compiled>:2:
         bb0(v0:BasicObject):
           v2:Fixnum[1] = Const Value(1)
+          PatchPoint SingleRactorMode
           SetIvar v0, :@foo, v2
           CheckInterrupts
           Return v2
@@ -5336,12 +5362,15 @@ mod tests {
           v1:NilClass = Const Value(nil)
           v2:NilClass = Const Value(nil)
           v3:NilClass = Const Value(nil)
-          v6:BasicObject = GetIvar v0, :@a
-          v8:BasicObject = GetIvar v0, :@b
-          v10:BasicObject = GetIvar v0, :@c
-          v12:ArrayExact = NewArray v6, v8, v10
+          PatchPoint SingleRactorMode
+          v7:BasicObject = GetIvar v0, :@a
+          PatchPoint SingleRactorMode
+          v10:BasicObject = GetIvar v0, :@b
+          PatchPoint SingleRactorMode
+          v13:BasicObject = GetIvar v0, :@c
+          v15:ArrayExact = NewArray v7, v10, v13
           CheckInterrupts
-          Return v12
+          Return v15
         ");
         assert_contains_opcode("reverse_even", YARVINSN_opt_reverse);
         assert_snapshot!(hir_string("reverse_even"), @r"
@@ -5351,13 +5380,17 @@ mod tests {
           v2:NilClass = Const Value(nil)
           v3:NilClass = Const Value(nil)
           v4:NilClass = Const Value(nil)
-          v7:BasicObject = GetIvar v0, :@a
-          v9:BasicObject = GetIvar v0, :@b
-          v11:BasicObject = GetIvar v0, :@c
-          v13:BasicObject = GetIvar v0, :@d
-          v15:ArrayExact = NewArray v7, v9, v11, v13
+          PatchPoint SingleRactorMode
+          v8:BasicObject = GetIvar v0, :@a
+          PatchPoint SingleRactorMode
+          v11:BasicObject = GetIvar v0, :@b
+          PatchPoint SingleRactorMode
+          v14:BasicObject = GetIvar v0, :@c
+          PatchPoint SingleRactorMode
+          v17:BasicObject = GetIvar v0, :@d
+          v19:ArrayExact = NewArray v8, v11, v14, v17
           CheckInterrupts
-          Return v15
+          Return v19
         ");
     }
 
@@ -7196,6 +7229,30 @@ mod opt_tests {
     }
 
     #[test]
+    fn reload_local_across_send() {
+        eval("
+            def foo(&block) = 1
+            def test
+              a = 1
+              foo {|| }
+              a
+            end
+            test
+            test
+        ");
+        assert_snapshot!(hir_string("test"), @r"
+        fn test@<compiled>:4:
+        bb0(v0:BasicObject):
+          v3:Fixnum[1] = Const Value(1)
+          SetLocal l0, EP@3, v3
+          v6:BasicObject = Send v0, 0x1000, :foo
+          v7:BasicObject = GetLocal l0, EP@3
+          CheckInterrupts
+          Return v7
+        ");
+    }
+
+    #[test]
     fn dont_specialize_call_to_iseq_with_rest() {
         eval("
             def foo(*args) = 1
@@ -7421,9 +7478,10 @@ mod opt_tests {
         assert_snapshot!(hir_string("test"), @r"
         fn test@<compiled>:2:
         bb0(v0:BasicObject):
-          v3:BasicObject = GetIvar v0, :@foo
+          PatchPoint SingleRactorMode
+          v4:BasicObject = GetIvar v0, :@foo
           CheckInterrupts
-          Return v3
+          Return v4
         ");
     }
 
@@ -7436,6 +7494,7 @@ mod opt_tests {
         fn test@<compiled>:2:
         bb0(v0:BasicObject):
           v2:Fixnum[1] = Const Value(1)
+          PatchPoint SingleRactorMode
           SetIvar v0, :@foo, v2
           CheckInterrupts
           Return v2

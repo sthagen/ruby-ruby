@@ -78,6 +78,27 @@ class TestZJIT < Test::Unit::TestCase
     }
   end
 
+  def test_getglobal_with_warning
+    assert_compiles('"rescued"', %q{
+      Warning[:deprecated] = true
+
+      module Warning
+        def warn(message)
+          raise
+        end
+      end
+
+      def test
+        $=
+      rescue
+        "rescued"
+      end
+
+      $VERBOSE = true
+      test
+    }, insns: [:getglobal])
+  end
+
   def test_setglobal
     assert_compiles '1', %q{
       def test
@@ -97,6 +118,69 @@ class TestZJIT < Test::Unit::TestCase
 
       test
     }, insns: [:intern]
+  end
+
+  def test_duphash
+    assert_compiles '{a: 1}', %q{
+      def test
+        {a: 1}
+      end
+
+      test
+    }, insns: [:duphash]
+  end
+
+  def test_pushtoarray
+    assert_compiles '[1, 2, 3]', %q{
+      def test
+        [*[], 1, 2, 3]
+      end
+      test
+    }, insns: [:pushtoarray]
+  end
+
+  def test_splatarray_new_array
+    assert_compiles '[1, 2, 3]', %q{
+      def test a
+        [*a, 3]
+      end
+      test [1, 2]
+    }, insns: [:splatarray]
+  end
+
+  def test_splatarray_existing_array
+    assert_compiles '[1, 2, 3]', %q{
+      def foo v
+        [1, 2, v]
+      end
+      def test a
+        foo(*a)
+      end
+      test [3]
+    }, insns: [:splatarray]
+  end
+
+  def test_concattoarray
+    assert_compiles '[1, 2, 3]', %q{
+      def test(*a)
+        [1, 2, *a]
+      end
+      test 3
+    }, insns: [:concattoarray]
+  end
+
+  def test_definedivar
+    assert_compiles '[nil, "instance-variable", nil]', %q{
+      def test
+        v0 = defined?(@a)
+        @a = nil
+        v1 = defined?(@a)
+        remove_instance_variable :@a
+        v2 = defined?(@a)
+        [v0, v1, v2]
+      end
+      test
+    }, insns: [:definedivar]
   end
 
   def test_setglobal_with_trace_var_exception
@@ -1485,7 +1569,7 @@ class TestZJIT < Test::Unit::TestCase
     }, call_threshold: 2
   end
 
-  def test_stats
+  def test_stats_availability
     assert_runs '[true, true]', %q{
       def test = 1
       test
@@ -1493,6 +1577,21 @@ class TestZJIT < Test::Unit::TestCase
         RubyVM::ZJIT.stats[:zjit_insn_count] > 0,
         RubyVM::ZJIT.stats(:zjit_insn_count) > 0,
       ]
+    }, stats: true
+  end
+
+  def test_stats_consistency
+    assert_runs '[]', %q{
+      def test = 1
+      test # increment some counters
+
+      RubyVM::ZJIT.stats.to_a.filter_map do |key, value|
+        # The value may be incremented, but the class should stay the same
+        other_value = RubyVM::ZJIT.stats(key)
+        if value.class != other_value.class
+          [key, value, other_value]
+        end
+      end
     }, stats: true
   end
 
@@ -1901,6 +2000,85 @@ class TestZJIT < Test::Unit::TestCase
       end
 
       write({}, :ok)
+    }
+  end
+
+  def test_ivar_attr_reader_optimization_with_multi_ractor_mode
+    assert_compiles '42', %q{
+      class Foo
+        class << self
+          attr_accessor :bar
+
+          def get_bar
+            bar
+          rescue Ractor::IsolationError
+            42
+          end
+        end
+      end
+
+      Foo.bar = [] # needs to be a ractor unshareable object
+
+      def test
+        Foo.get_bar
+      end
+
+      test
+      test
+
+      Ractor.new { test }.value
+    }, call_threshold: 2
+  end
+
+  def test_ivar_get_with_multi_ractor_mode
+    assert_compiles '42', %q{
+      class Foo
+        def self.set_bar
+          @bar = [] # needs to be a ractor unshareable object
+        end
+
+        def self.bar
+          @bar
+        rescue Ractor::IsolationError
+          42
+        end
+      end
+
+      Foo.set_bar
+
+      def test
+        Foo.bar
+      end
+
+      test
+      test
+
+      Ractor.new { test }.value
+    }
+  end
+
+  def test_ivar_set_with_multi_ractor_mode
+    assert_compiles '42', %q{
+      class Foo
+        def self.bar
+          _foo = 1
+          _bar = 2
+          begin
+            @bar = _foo + _bar
+          rescue Ractor::IsolationError
+            42
+          end
+        end
+      end
+
+      def test
+        Foo.bar
+      end
+
+      test
+      test
+
+      Ractor.new { test }.value
     }
   end
 

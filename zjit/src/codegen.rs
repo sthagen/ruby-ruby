@@ -384,7 +384,7 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
         Insn::CCall { cfun, args, name: _, return_type: _, elidable: _ } => gen_ccall(asm, *cfun, opnds!(args)),
         Insn::GetIvar { self_val, id, state: _ } => gen_getivar(asm, opnd!(self_val), *id),
         Insn::SetGlobal { id, val, state } => no_output!(gen_setglobal(jit, asm, *id, opnd!(val), &function.frame_state(*state))),
-        Insn::GetGlobal { id, state: _ } => gen_getglobal(asm, *id),
+        Insn::GetGlobal { id, state } => gen_getglobal(jit, asm, *id, &function.frame_state(*state)),
         &Insn::GetLocal { ep_offset, level } => gen_getlocal_with_ep(asm, ep_offset, level),
         &Insn::SetLocal { val, ep_offset, level } => no_output!(gen_setlocal_with_ep(asm, opnd!(val), function.type_of(val), ep_offset, level)),
         Insn::GetConstantPath { ic, state } => gen_get_constant_path(jit, asm, *ic, &function.frame_state(*state)),
@@ -398,17 +398,17 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
         &Insn::IncrCounter(counter) => no_output!(gen_incr_counter(asm, counter)),
         Insn::ObjToString { val, cd, state, .. } => gen_objtostring(jit, asm, opnd!(val), *cd, &function.frame_state(*state)),
         &Insn::CheckInterrupts { state } => no_output!(gen_check_interrupts(jit, asm, &function.frame_state(state))),
-        &Insn::ArrayExtend { state, .. }
-        | &Insn::ArrayMax { state, .. }
-        | &Insn::ArrayPush { state, .. }
-        | &Insn::DefinedIvar { state, .. }
+        &Insn::HashDup { val, state } => { gen_hash_dup(asm, opnd!(val), &function.frame_state(state)) },
+        &Insn::ArrayPush { array, val, state } => { no_output!(gen_array_push(asm, opnd!(array), opnd!(val), &function.frame_state(state))) },
+        &Insn::ToNewArray { val, state } => { gen_to_new_array(jit, asm, opnd!(val), &function.frame_state(state)) },
+        &Insn::ToArray { val, state } => { gen_to_array(jit, asm, opnd!(val), &function.frame_state(state)) },
+        &Insn::DefinedIvar { self_val, id, pushval, .. } => { gen_defined_ivar(asm, opnd!(self_val), id, pushval) },
+        &Insn::ArrayExtend { left, right, state } => { no_output!(gen_array_extend(jit, asm, opnd!(left), opnd!(right), &function.frame_state(state))) },
+        &Insn::ArrayMax { state, .. }
         | &Insn::FixnumDiv { state, .. }
         | &Insn::FixnumMod { state, .. }
-        | &Insn::HashDup { state, .. }
         | &Insn::Send { state, .. }
         | &Insn::Throw { state, .. }
-        | &Insn::ToArray { state, .. }
-        | &Insn::ToNewArray { state, .. }
         => return Err(state),
     };
 
@@ -609,7 +609,10 @@ fn gen_setivar(asm: &mut Assembler, recv: Opnd, id: ID, val: Opnd) {
 }
 
 /// Look up global variables
-fn gen_getglobal(asm: &mut Assembler, id: ID) -> Opnd {
+fn gen_getglobal(jit: &mut JITState, asm: &mut Assembler, id: ID, state: &FrameState) -> Opnd {
+    // `Warning` module's method `warn` can be called when reading certain global variables
+    gen_prepare_non_leaf_call(jit, asm, state);
+
     asm_ccall!(asm, rb_gvar_get, id.0.into())
 }
 
@@ -682,6 +685,35 @@ fn gen_check_interrupts(jit: &mut JITState, asm: &mut Assembler, state: &FrameSt
     let interrupt_flag = asm.load(Opnd::mem(32, EC, RUBY_OFFSET_EC_INTERRUPT_FLAG));
     asm.test(interrupt_flag, interrupt_flag);
     asm.jnz(side_exit(jit, state, SideExitReason::Interrupt));
+}
+
+fn gen_hash_dup(asm: &mut Assembler, val: Opnd, state: &FrameState) -> lir::Opnd {
+    gen_prepare_call_with_gc(asm, state);
+    asm_ccall!(asm, rb_hash_resurrect, val)
+}
+
+fn gen_array_push(asm: &mut Assembler, array: Opnd, val: Opnd, state: &FrameState) {
+    gen_prepare_call_with_gc(asm, state);
+    asm_ccall!(asm, rb_ary_push, array, val);
+}
+
+fn gen_to_new_array(jit: &mut JITState, asm: &mut Assembler, val: Opnd, state: &FrameState) -> lir::Opnd {
+    gen_prepare_non_leaf_call(jit, asm, state);
+    asm_ccall!(asm, rb_vm_splat_array, Opnd::Value(Qtrue), val)
+}
+
+fn gen_to_array(jit: &mut JITState, asm: &mut Assembler, val: Opnd, state: &FrameState) -> lir::Opnd {
+    gen_prepare_non_leaf_call(jit, asm, state);
+    asm_ccall!(asm, rb_vm_splat_array, Opnd::Value(Qfalse), val)
+}
+
+fn gen_defined_ivar(asm: &mut Assembler, self_val: Opnd, id: ID, pushval: VALUE) -> lir::Opnd {
+    asm_ccall!(asm, rb_zjit_defined_ivar, self_val, id.0.into(), Opnd::Value(pushval))
+}
+
+fn gen_array_extend(jit: &mut JITState, asm: &mut Assembler, left: Opnd, right: Opnd, state: &FrameState) {
+    gen_prepare_non_leaf_call(jit, asm, state);
+    asm_ccall!(asm, rb_ary_concat, left, right);
 }
 
 /// Compile an interpreter entry block to be inserted into an ISEQ
@@ -858,6 +890,8 @@ fn gen_send_without_block(
     cd: *const rb_call_data,
     state: &FrameState,
 ) -> lir::Opnd {
+    gen_incr_counter(asm, Counter::dynamic_send_count);
+
     // Note that it's incorrect to use this frame state to side exit because
     // the state might not be on the boundary of an interpreter instruction.
     // For example, `opt_str_uminus` pushes to the stack and then sends.
@@ -1219,14 +1253,16 @@ fn gen_guard_bit_equals(jit: &mut JITState, asm: &mut Assembler, val: lir::Opnd,
     val
 }
 
-/// Generate code that increments a counter in ZJIT stats
+/// Generate code that increments a counter if --zjit-stats
 fn gen_incr_counter(asm: &mut Assembler, counter: Counter) {
-    let ptr = counter_ptr(counter);
-    let ptr_reg = asm.load(Opnd::const_ptr(ptr as *const u8));
-    let counter_opnd = Opnd::mem(64, ptr_reg, 0);
+    if get_option!(stats) {
+        let ptr = counter_ptr(counter);
+        let ptr_reg = asm.load(Opnd::const_ptr(ptr as *const u8));
+        let counter_opnd = Opnd::mem(64, ptr_reg, 0);
 
-    // Increment and store the updated value
-    asm.incr_counter(counter_opnd, Opnd::UImm(1));
+        // Increment and store the updated value
+        asm.incr_counter(counter_opnd, Opnd::UImm(1));
+    }
 }
 
 /// Save the incremented PC on the CFP.
@@ -1365,6 +1401,9 @@ pub fn local_size_and_idx_to_bp_offset(local_size: usize, local_idx: usize) -> i
 
 /// Convert ISEQ into High-level IR
 fn compile_iseq(iseq: IseqPtr) -> Option<Function> {
+    // Convert ZJIT instructions back to bare instructions
+    unsafe { crate::cruby::rb_zjit_profile_disable(iseq) };
+
     // Reject ISEQs with very large temp stacks.
     // We cannot encode too large offsets to access locals in arm64.
     let stack_max = unsafe { rb_get_iseq_body_stack_max(iseq) };
