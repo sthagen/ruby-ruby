@@ -4,7 +4,7 @@
 #![allow(non_upper_case_globals)]
 
 use crate::{
-    cast::IntoUsize, cruby::*, gc::{get_or_create_iseq_payload, IseqPayload}, options::{get_option, DumpHIR}, state::ZJITState
+    cast::IntoUsize, codegen::local_idx_to_ep_offset, cruby::*, gc::{get_or_create_iseq_payload, IseqPayload}, options::{get_option, DumpHIR}, state::ZJITState
 };
 use std::{
     cell::RefCell, collections::{HashMap, HashSet, VecDeque}, ffi::{c_int, c_void, CStr}, fmt::Display, mem::{align_of, size_of}, ptr, slice::Iter
@@ -424,20 +424,30 @@ impl PtrPrintMap {
     fn map_id(&self, id: u64) -> *const c_void {
         self.map_ptr(id as *const c_void)
     }
+
+    /// Map an index into a Ruby object (e.g. for an ivar) for printing
+    fn map_index(&self, id: u64) -> *const c_void {
+        self.map_ptr(id as *const c_void)
+    }
+
+    /// Map shape ID into a pointer for printing
+    fn map_shape(&self, id: ShapeId) -> *const c_void {
+        self.map_ptr(id.0 as *const c_void)
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
 pub enum SideExitReason {
     UnknownNewarraySend(vm_opt_newarray_send_type),
-    UnknownCallType,
-    UnknownOpcode(u32),
+    UnhandledCallType(CallType),
     UnknownSpecialVariable(u64),
-    UnhandledInstruction(InsnId),
-    UnhandledDefinedType(usize),
+    UnhandledHIRInsn(InsnId),
+    UnhandledYARVInsn(u32),
     FixnumAddOverflow,
     FixnumSubOverflow,
     FixnumMultOverflow,
     GuardType(Type),
+    GuardShape(ShapeId),
     GuardBitEquals(VALUE),
     PatchPoint(Invariant),
     CalleeSideExit,
@@ -448,7 +458,7 @@ pub enum SideExitReason {
 impl std::fmt::Display for SideExitReason {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            SideExitReason::UnknownOpcode(opcode) => write!(f, "UnknownOpcode({})", insn_name(*opcode as usize)),
+            SideExitReason::UnhandledYARVInsn(opcode) => write!(f, "UnhandledYARVInsn({})", insn_name(*opcode as usize)),
             SideExitReason::UnknownNewarraySend(VM_OPT_NEWARRAY_SEND_MAX) => write!(f, "UnknownNewarraySend(MAX)"),
             SideExitReason::UnknownNewarraySend(VM_OPT_NEWARRAY_SEND_MIN) => write!(f, "UnknownNewarraySend(MIN)"),
             SideExitReason::UnknownNewarraySend(VM_OPT_NEWARRAY_SEND_HASH) => write!(f, "UnknownNewarraySend(HASH)"),
@@ -520,6 +530,11 @@ pub enum Insn {
     SetIvar { self_val: InsnId, id: ID, val: InsnId, state: InsnId },
     /// Check whether an instance variable exists on `self_val`
     DefinedIvar { self_val: InsnId, id: ID, pushval: VALUE, state: InsnId },
+
+    /// Read an instance variable at the given index, embedded in the object
+    LoadIvarEmbedded { self_val: InsnId, id: ID, index: u16 },
+    /// Read an instance variable at the given index, from the extended table
+    LoadIvarExtended { self_val: InsnId, id: ID, index: u16 },
 
     /// Get a local variable from a higher scope or the heap
     GetLocal { level: u32, ep_offset: u32 },
@@ -593,6 +608,8 @@ pub enum Insn {
     GuardType { val: InsnId, guard_type: Type, state: InsnId },
     /// Side-exit if val is not the expected VALUE.
     GuardBitEquals { val: InsnId, expected: VALUE, state: InsnId },
+    /// Side-exit if val doesn't have the expected shape.
+    GuardShape { val: InsnId, shape: ShapeId, state: InsnId },
 
     /// Generate no code (or padding if necessary) and insert a patch point
     /// that can be rewritten to a side exit when the Invariant is broken.
@@ -666,6 +683,8 @@ impl Insn {
             Insn::FixnumOr   { .. } => false,
             Insn::GetLocal   { .. } => false,
             Insn::IsNil      { .. } => false,
+            Insn::LoadIvarEmbedded { .. } => false,
+            Insn::LoadIvarExtended { .. } => false,
             Insn::CCall { elidable, .. } => !elidable,
             // TODO: NewRange is effects free if we can prove the two ends to be Fixnum,
             // but we don't have type information here in `impl Insn`. See rb_range_new().
@@ -811,6 +830,7 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
             Insn::FixnumOr   { left, right, .. } => { write!(f, "FixnumOr {left}, {right}") },
             Insn::GuardType { val, guard_type, .. } => { write!(f, "GuardType {val}, {}", guard_type.print(self.ptr_map)) },
             Insn::GuardBitEquals { val, expected, .. } => { write!(f, "GuardBitEquals {val}, {}", expected.print(self.ptr_map)) },
+            &Insn::GuardShape { val, shape, .. } => { write!(f, "GuardShape {val}, {:p}", self.ptr_map.map_shape(shape)) },
             Insn::PatchPoint { invariant, .. } => { write!(f, "PatchPoint {}", invariant.print(self.ptr_map)) },
             Insn::GetConstantPath { ic, .. } => { write!(f, "GetConstantPath {:p}", self.ptr_map.map_ptr(ic)) },
             Insn::CCall { cfun, args, name, return_type: _, elidable: _ } => {
@@ -839,6 +859,8 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
             }
             Insn::DefinedIvar { self_val, id, .. } => write!(f, "DefinedIvar {self_val}, :{}", id.contents_lossy()),
             Insn::GetIvar { self_val, id, .. } => write!(f, "GetIvar {self_val}, :{}", id.contents_lossy()),
+            &Insn::LoadIvarEmbedded { self_val, id, index } => write!(f, "LoadIvarEmbedded {self_val}, :{}@{:p}", id.contents_lossy(), self.ptr_map.map_index(index as u64)),
+            &Insn::LoadIvarExtended { self_val, id, index } => write!(f, "LoadIvarExtended {self_val}, :{}@{:p}", id.contents_lossy(), self.ptr_map.map_index(index as u64)),
             Insn::SetIvar { self_val, id, val, .. } => write!(f, "SetIvar {self_val}, :{}, {val}", id.contents_lossy()),
             Insn::GetGlobal { id, .. } => write!(f, "GetGlobal :{}", id.contents_lossy()),
             Insn::SetGlobal { id, val, .. } => write!(f, "SetGlobal :{}, {val}", id.contents_lossy()),
@@ -1231,6 +1253,7 @@ impl Function {
             &IfFalse { val, ref target } => IfFalse { val: find!(val), target: find_branch_edge!(target) },
             &GuardType { val, guard_type, state } => GuardType { val: find!(val), guard_type: guard_type, state },
             &GuardBitEquals { val, expected, state } => GuardBitEquals { val: find!(val), expected: expected, state },
+            &GuardShape { val, shape, state } => GuardShape { val: find!(val), shape, state },
             &FixnumAdd { left, right, state } => FixnumAdd { left: find!(left), right: find!(right), state },
             &FixnumSub { left, right, state } => FixnumSub { left: find!(left), right: find!(right), state },
             &FixnumMult { left, right, state } => FixnumMult { left: find!(left), right: find!(right), state },
@@ -1293,6 +1316,8 @@ impl Function {
             &ArrayMax { ref elements, state } => ArrayMax { elements: find_vec!(elements), state: find!(state) },
             &SetGlobal { id, val, state } => SetGlobal { id, val: find!(val), state },
             &GetIvar { self_val, id, state } => GetIvar { self_val: find!(self_val), id, state },
+            &LoadIvarEmbedded { self_val, id, index } => LoadIvarEmbedded { self_val: find!(self_val), id, index },
+            &LoadIvarExtended { self_val, id, index } => LoadIvarExtended { self_val: find!(self_val), id, index },
             &SetIvar { self_val, id, val, state } => SetIvar { self_val: find!(self_val), id, val: find!(val), state },
             &SetLocal { val, ep_offset, level } => SetLocal { val: find!(val), ep_offset, level },
             &GetSpecialSymbol { symbol_type, state } => GetSpecialSymbol { symbol_type, state },
@@ -1361,6 +1386,7 @@ impl Function {
             Insn::CCall { return_type, .. } => *return_type,
             Insn::GuardType { val, guard_type, .. } => self.type_of(*val).intersection(*guard_type),
             Insn::GuardBitEquals { val, expected, .. } => self.type_of(*val).intersection(Type::from_value(*expected)),
+            Insn::GuardShape { val, .. } => self.type_of(*val),
             Insn::FixnumAdd  { .. } => types::Fixnum,
             Insn::FixnumSub  { .. } => types::Fixnum,
             Insn::FixnumMult { .. } => types::Fixnum,
@@ -1385,6 +1411,8 @@ impl Function {
             Insn::ArrayMax { .. } => types::BasicObject,
             Insn::GetGlobal { .. } => types::BasicObject,
             Insn::GetIvar { .. } => types::BasicObject,
+            Insn::LoadIvarEmbedded { .. } => types::BasicObject,
+            Insn::LoadIvarExtended { .. } => types::BasicObject,
             Insn::GetSpecialSymbol { .. } => types::BasicObject,
             Insn::GetSpecialNumber { .. } => types::BasicObject,
             Insn::ToNewArray { .. } => types::ArrayExact,
@@ -1469,14 +1497,25 @@ impl Function {
         }
     }
 
+    fn chase_insn(&self, insn: InsnId) -> InsnId {
+        let id = self.union_find.borrow().find_const(insn);
+        match self.insns[id.0] {
+            Insn::GuardType { val, .. } => self.chase_insn(val),
+            Insn::GuardShape { val, .. } => self.chase_insn(val),
+            Insn::GuardBitEquals { val, .. } => self.chase_insn(val),
+            _ => id,
+        }
+    }
+
     /// Return the interpreter-profiled type of the HIR instruction at the given ISEQ instruction
     /// index, if it is known. This historical type record is not a guarantee and must be checked
     /// with a GuardType or similar.
     fn profiled_type_of_at(&self, insn: InsnId, iseq_insn_idx: usize) -> Option<ProfiledType> {
         let Some(ref profiles) = self.profiles else { return None };
         let Some(entries) = profiles.types.get(&iseq_insn_idx) else { return None };
+        let insn = self.chase_insn(insn);
         for (entry_insn, entry_type_summary) in entries {
-            if self.union_find.borrow().find_const(*entry_insn) == self.union_find.borrow().find_const(insn) {
+            if self.union_find.borrow().find_const(*entry_insn) == insn {
                 if entry_type_summary.is_monomorphic() || entry_type_summary.is_skewed_polymorphic() {
                     return Some(entry_type_summary.bucket(0));
                 } else {
@@ -1693,7 +1732,7 @@ impl Function {
                             self.push_insn_id(block, insn_id); continue;
                         }
                         let cref_sensitive = !unsafe { (*ice).ic_cref }.is_null();
-                        let multi_ractor_mode = unsafe { rb_zjit_multi_ractor_p() };
+                        let multi_ractor_mode = unsafe { rb_jit_multi_ractor_p() };
                         if cref_sensitive || multi_ractor_mode {
                             self.push_insn_id(block, insn_id); continue;
                         }
@@ -1720,6 +1759,56 @@ impl Function {
                         } else {
                             self.push_insn_id(block, insn_id);
                         }
+                    }
+                    _ => { self.push_insn_id(block, insn_id); }
+                }
+            }
+        }
+        self.infer_types();
+    }
+
+    fn optimize_getivar(&mut self) {
+        for block in self.rpo() {
+            let old_insns = std::mem::take(&mut self.blocks[block.0].insns);
+            assert!(self.blocks[block.0].insns.is_empty());
+            for insn_id in old_insns {
+                match self.find(insn_id) {
+                    Insn::GetIvar { self_val, id, state } => {
+                        let frame_state = self.frame_state(state);
+                        let Some(recv_type) = self.profiled_type_of_at(self_val, frame_state.insn_idx) else {
+                            // No (monomorphic) profile info
+                            self.push_insn_id(block, insn_id); continue;
+                        };
+                        if recv_type.flags().is_immediate() {
+                            // Instance variable lookups on immediate values are always nil
+                            self.push_insn_id(block, insn_id); continue;
+                        }
+                        assert!(recv_type.shape().is_valid());
+                        if !recv_type.flags().is_t_object() {
+                            // Check if the receiver is a T_OBJECT
+                            self.push_insn_id(block, insn_id); continue;
+                        }
+                        if recv_type.shape().is_too_complex() {
+                            // too-complex shapes can't use index access
+                            self.push_insn_id(block, insn_id); continue;
+                        }
+                        let self_val = self.push_insn(block, Insn::GuardType { val: self_val, guard_type: types::HeapObject, state });
+                        let self_val = self.push_insn(block, Insn::GuardShape { val: self_val, shape: recv_type.shape(), state });
+                        let mut ivar_index: u16 = 0;
+                        let replacement = if ! unsafe { rb_shape_get_iv_index(recv_type.shape().0, id, &mut ivar_index) } {
+                            // If there is no IVAR index, then the ivar was undefined when we
+                            // entered the compiler.  That means we can just return nil for this
+                            // shape + iv name
+                            Insn::Const { val: Const::Value(Qnil) }
+                        } else {
+                            if recv_type.flags().is_embedded() {
+                                Insn::LoadIvarEmbedded { self_val, id, index: ivar_index }
+                            } else {
+                                Insn::LoadIvarExtended { self_val, id, index: ivar_index }
+                            }
+                        };
+                        let replacement = self.push_insn(block, replacement);
+                        self.make_equal_to(insn_id, replacement);
                     }
                     _ => { self.push_insn_id(block, insn_id); }
                 }
@@ -2012,6 +2101,7 @@ impl Function {
             | &Insn::StringCopy { val, state, .. }
             | &Insn::GuardType { val, state, .. }
             | &Insn::GuardBitEquals { val, state, .. }
+            | &Insn::GuardShape { val, state, .. }
             | &Insn::ToArray { val, state }
             | &Insn::ToNewArray { val, state } => {
                 worklist.push_back(val);
@@ -2089,6 +2179,10 @@ impl Function {
                 worklist.push_back(val);
                 worklist.push_back(str);
                 worklist.push_back(state);
+            }
+            &Insn::LoadIvarEmbedded { self_val, .. }
+            | &Insn::LoadIvarExtended { self_val, .. } => {
+                worklist.push_back(self_val);
             }
             &Insn::GetGlobal { state, .. } |
             &Insn::GetSpecialSymbol { state, .. } |
@@ -2232,6 +2326,8 @@ impl Function {
     pub fn optimize(&mut self) {
         // Function is assumed to have types inferred already
         self.optimize_direct_sends();
+        #[cfg(debug_assertions)] self.assert_validates();
+        self.optimize_getivar();
         #[cfg(debug_assertions)] self.assert_validates();
         self.optimize_c_calls();
         #[cfg(debug_assertions)] self.assert_validates();
@@ -2712,7 +2808,7 @@ fn compute_bytecode_info(iseq: *const rb_iseq_t) -> BytecodeInfo {
     BytecodeInfo { jump_targets: result, has_send }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum CallType {
     Splat,
     BlockArg,
@@ -2750,19 +2846,19 @@ fn num_locals(iseq: *const rb_iseq_t) -> usize {
 }
 
 /// If we can't handle the type of send (yet), bail out.
-fn unknown_call_type(flag: u32) -> bool {
-    if (flag & VM_CALL_KW_SPLAT_MUT) != 0 { return true; }
-    if (flag & VM_CALL_ARGS_SPLAT_MUT) != 0 { return true; }
-    if (flag & VM_CALL_ARGS_SPLAT) != 0 { return true; }
-    if (flag & VM_CALL_KW_SPLAT) != 0 { return true; }
-    if (flag & VM_CALL_ARGS_BLOCKARG) != 0 { return true; }
-    if (flag & VM_CALL_KWARG) != 0 { return true; }
-    if (flag & VM_CALL_TAILCALL) != 0 { return true; }
-    if (flag & VM_CALL_SUPER) != 0 { return true; }
-    if (flag & VM_CALL_ZSUPER) != 0 { return true; }
-    if (flag & VM_CALL_OPT_SEND) != 0 { return true; }
-    if (flag & VM_CALL_FORWARDING) != 0 { return true; }
-    false
+fn unknown_call_type(flag: u32) -> Result<(), CallType> {
+    if (flag & VM_CALL_KW_SPLAT_MUT) != 0 { return Err(CallType::KwSplatMut); }
+    if (flag & VM_CALL_ARGS_SPLAT_MUT) != 0 { return Err(CallType::SplatMut); }
+    if (flag & VM_CALL_ARGS_SPLAT) != 0 { return Err(CallType::Splat); }
+    if (flag & VM_CALL_KW_SPLAT) != 0 { return Err(CallType::KwSplat); }
+    if (flag & VM_CALL_ARGS_BLOCKARG) != 0 { return Err(CallType::BlockArg); }
+    if (flag & VM_CALL_KWARG) != 0 { return Err(CallType::Kwarg); }
+    if (flag & VM_CALL_TAILCALL) != 0 { return Err(CallType::Tailcall); }
+    if (flag & VM_CALL_SUPER) != 0 { return Err(CallType::Super); }
+    if (flag & VM_CALL_ZSUPER) != 0 { return Err(CallType::Zsuper); }
+    if (flag & VM_CALL_OPT_SEND) != 0 { return Err(CallType::OptSend); }
+    if (flag & VM_CALL_FORWARDING) != 0 { return Err(CallType::Forwarding); }
+    Ok(())
 }
 
 /// We have IseqPayload, which keeps track of HIR Types in the interpreter, but this is not useful
@@ -2794,6 +2890,18 @@ impl ProfileOracle {
             let insn = state.stack_topn(idx).expect("Unexpected stack underflow in profiling");
             entry.push((insn, TypeDistributionSummary::new(insn_type_distribution)))
         }
+    }
+
+    /// Map the interpreter-recorded types of self onto the HIR self
+    fn profile_self(&mut self, state: &FrameState, self_param: InsnId) {
+        let iseq_insn_idx = state.insn_idx;
+        let Some(operand_types) = self.payload.profile.get_operand_types(iseq_insn_idx) else { return };
+        let entry = self.types.entry(iseq_insn_idx).or_insert_with(|| vec![]);
+        if operand_types.is_empty() {
+           return;
+        }
+        let self_type_distribution = &operand_types[0];
+        entry.push((self_param, TypeDistributionSummary::new(self_type_distribution)))
     }
 }
 
@@ -2892,17 +3000,22 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
             let pc = unsafe { rb_iseq_pc_at_idx(iseq, insn_idx) };
             state.pc = pc;
             let exit_state = state.clone();
-            profiles.profile_stack(&exit_state);
-
-            // Increment zjit_insn_count for each YARV instruction if --zjit-stats is enabled.
-            if get_option!(stats) {
-                fun.push_insn(block, Insn::IncrCounter(Counter::zjit_insn_count));
-            }
 
             // try_into() call below is unfortunate. Maybe pick i32 instead of usize for opcodes.
             let opcode: u32 = unsafe { rb_iseq_opcode_at_pc(iseq, pc) }
                 .try_into()
                 .unwrap();
+
+            if opcode == YARVINSN_getinstancevariable {
+                profiles.profile_self(&exit_state, self_param);
+            } else {
+                profiles.profile_stack(&exit_state);
+            }
+
+            // Increment zjit_insn_count for each YARV instruction if --zjit-stats is enabled.
+            if get_option!(stats) {
+                fun.push_insn(block, Insn::IncrCounter(Counter::zjit_insn_count));
+            }
             // Move to the next instruction to compile
             insn_idx += insn_len(opcode as usize);
 
@@ -3049,11 +3162,6 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     let pushval = get_arg(pc, 2);
                     let v = state.stack_pop()?;
                     let exit_id = fun.push_insn(block, Insn::Snapshot { state: exit_state });
-                    if op_type == DEFINED_METHOD.try_into().unwrap() {
-                        // TODO(Shopify/ruby#703): Fix codegen for defined?(method call expr)
-                        fun.push_insn(block, Insn::SideExit { state: exit_id, reason: SideExitReason::UnhandledDefinedType(op_type)});
-                        break; // End the block
-                    }
                     state.stack_push(fun.push_insn(block, Insn::Defined { op_type, obj, pushval, v, state: exit_id }));
                 }
                 YARVINSN_definedivar => {
@@ -3138,7 +3246,9 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     let ep_offset = get_arg(pc, 0).as_u32();
                     if iseq_type == ISEQ_TYPE_EVAL || has_send {
                         // On eval, the locals are always on the heap, so read the local using EP.
-                        state.stack_push(fun.push_insn(block, Insn::GetLocal { ep_offset, level: 0 }));
+                        let val = fun.push_insn(block, Insn::GetLocal { ep_offset, level: 0 });
+                        state.setlocal(ep_offset, val);
+                        state.stack_push(val);
                     } else {
                         // TODO(alan): This implementation doesn't read from EP, so will miss writes
                         // from nested ISeqs. This will need to be amended when we add codegen for
@@ -3214,10 +3324,10 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     // NB: opt_neq has two cd; get_arg(0) is for eq and get_arg(1) is for neq
                     let cd: *const rb_call_data = get_arg(pc, 1).as_ptr();
                     let call_info = unsafe { rb_get_call_data_ci(cd) };
-                    if unknown_call_type(unsafe { rb_vm_ci_flag(call_info) }) {
+                    if let Err(call_type) = unknown_call_type(unsafe { rb_vm_ci_flag(call_info) }) {
                         // Unknown call type; side-exit into the interpreter
                         let exit_id = fun.push_insn(block, Insn::Snapshot { state: exit_state });
-                        fun.push_insn(block, Insn::SideExit { state: exit_id, reason: SideExitReason::UnknownCallType });
+                        fun.push_insn(block, Insn::SideExit { state: exit_id, reason: SideExitReason::UnhandledCallType(call_type) });
                         break;  // End the block
                     }
                     let argc = unsafe { vm_ci_argc((*cd).ci) };
@@ -3235,10 +3345,10 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     // NB: these instructions have the recv for the call at get_arg(0)
                     let cd: *const rb_call_data = get_arg(pc, 1).as_ptr();
                     let call_info = unsafe { rb_get_call_data_ci(cd) };
-                    if unknown_call_type(unsafe { rb_vm_ci_flag(call_info) }) {
+                    if let Err(call_type) = unknown_call_type(unsafe { rb_vm_ci_flag(call_info) }) {
                         // Unknown call type; side-exit into the interpreter
                         let exit_id = fun.push_insn(block, Insn::Snapshot { state: exit_state });
-                        fun.push_insn(block, Insn::SideExit { state: exit_id, reason: SideExitReason::UnknownCallType });
+                        fun.push_insn(block, Insn::SideExit { state: exit_id, reason: SideExitReason::UnhandledCallType(call_type) });
                         break;  // End the block
                     }
                     let argc = unsafe { vm_ci_argc((*cd).ci) };
@@ -3293,10 +3403,10 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                 YARVINSN_opt_send_without_block => {
                     let cd: *const rb_call_data = get_arg(pc, 0).as_ptr();
                     let call_info = unsafe { rb_get_call_data_ci(cd) };
-                    if unknown_call_type(unsafe { rb_vm_ci_flag(call_info) }) {
+                    if let Err(call_type) = unknown_call_type(unsafe { rb_vm_ci_flag(call_info) }) {
                         // Unknown call type; side-exit into the interpreter
                         let exit_id = fun.push_insn(block, Insn::Snapshot { state: exit_state });
-                        fun.push_insn(block, Insn::SideExit { state: exit_id, reason: SideExitReason::UnknownCallType });
+                        fun.push_insn(block, Insn::SideExit { state: exit_id, reason: SideExitReason::UnhandledCallType(call_type) });
                         break;  // End the block
                     }
                     let argc = unsafe { vm_ci_argc((*cd).ci) };
@@ -3311,10 +3421,10 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     let cd: *const rb_call_data = get_arg(pc, 0).as_ptr();
                     let blockiseq: IseqPtr = get_arg(pc, 1).as_iseq();
                     let call_info = unsafe { rb_get_call_data_ci(cd) };
-                    if unknown_call_type(unsafe { rb_vm_ci_flag(call_info) }) {
+                    if let Err(call_type) = unknown_call_type(unsafe { rb_vm_ci_flag(call_info) }) {
                         // Unknown call type; side-exit into the interpreter
                         let exit_id = fun.push_insn(block, Insn::Snapshot { state: exit_state });
-                        fun.push_insn(block, Insn::SideExit { state: exit_id, reason: SideExitReason::UnknownCallType });
+                        fun.push_insn(block, Insn::SideExit { state: exit_id, reason: SideExitReason::UnhandledCallType(call_type) });
                         break;  // End the block
                     }
                     let argc = unsafe { vm_ci_argc((*cd).ci) };
@@ -3324,6 +3434,15 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     let exit_id = fun.push_insn(block, Insn::Snapshot { state: exit_state });
                     let send = fun.push_insn(block, Insn::Send { self_val: recv, cd, blockiseq, args, state: exit_id });
                     state.stack_push(send);
+
+                    // Reload locals that may have been modified by the blockiseq.
+                    // TODO: Avoid reloading locals that are not referenced by the blockiseq
+                    // or not used after this. Max thinks we could eventually DCE them.
+                    for local_idx in 0..state.locals.len() {
+                        let ep_offset = local_idx_to_ep_offset(iseq, local_idx) as u32;
+                        let val = fun.push_insn(block, Insn::GetLocal { ep_offset, level: 0 });
+                        state.setlocal(ep_offset, val);
+                    }
                 }
                 YARVINSN_getglobal => {
                     let id = ID(get_arg(pc, 0).as_u64());
@@ -3430,8 +3549,8 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     let cd: *const rb_call_data = get_arg(pc, 0).as_ptr();
                     let call_info = unsafe { rb_get_call_data_ci(cd) };
 
-                    if unknown_call_type(unsafe { rb_vm_ci_flag(call_info) }) {
-                        assert!(false, "objtostring should not have unknown call type");
+                    if let Err(call_type) = unknown_call_type(unsafe { rb_vm_ci_flag(call_info) }) {
+                        assert!(false, "objtostring should not have unknown call type {call_type:?}");
                     }
                     let argc = unsafe { vm_ci_argc((*cd).ci) };
                     assert_eq!(0, argc, "objtostring should not have args");
@@ -3473,9 +3592,9 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     }
                 }
                 _ => {
-                    // Unknown opcode; side-exit into the interpreter
+                    // Unhandled opcode; side-exit into the interpreter
                     let exit_id = fun.push_insn(block, Insn::Snapshot { state: exit_state });
-                    fun.push_insn(block, Insn::SideExit { state: exit_id, reason: SideExitReason::UnknownOpcode(opcode) });
+                    fun.push_insn(block, Insn::SideExit { state: exit_id, reason: SideExitReason::UnhandledYARVInsn(opcode) });
                     break;  // End the block
                 }
             }
@@ -4698,6 +4817,7 @@ mod tests {
         bb0(v0:BasicObject, v1:BasicObject):
           v3:BasicObject = GetLocal l0, EP@3
           v5:BasicObject = Send v3, 0x1000, :each
+          v6:BasicObject = GetLocal l0, EP@3
           CheckInterrupts
           Return v5
         ");
@@ -4752,12 +4872,12 @@ mod tests {
         eval("
             def test(a) = foo(*a)
         ");
-        assert_snapshot!(hir_string("test"), @r#"
-            fn test@<compiled>:2:
-            bb0(v0:BasicObject, v1:BasicObject):
-              v4:ArrayExact = ToArray v1
-              SideExit UnknownCallType
-        "#);
+        assert_snapshot!(hir_string("test"), @r"
+        fn test@<compiled>:2:
+        bb0(v0:BasicObject, v1:BasicObject):
+          v4:ArrayExact = ToArray v1
+          SideExit UnhandledCallType(Splat)
+        ");
     }
 
     #[test]
@@ -4769,7 +4889,7 @@ mod tests {
         fn test@<compiled>:2:
         bb0(v0:BasicObject, v1:BasicObject):
           v3:BasicObject = GetLocal l0, EP@3
-          SideExit UnknownCallType
+          SideExit UnhandledCallType(BlockArg)
         ");
     }
 
@@ -4778,12 +4898,12 @@ mod tests {
         eval("
             def test(a) = foo(a: 1)
         ");
-        assert_snapshot!(hir_string("test"), @r#"
-            fn test@<compiled>:2:
-            bb0(v0:BasicObject, v1:BasicObject):
-              v3:Fixnum[1] = Const Value(1)
-              SideExit UnknownCallType
-        "#);
+        assert_snapshot!(hir_string("test"), @r"
+        fn test@<compiled>:2:
+        bb0(v0:BasicObject, v1:BasicObject):
+          v3:Fixnum[1] = Const Value(1)
+          SideExit UnhandledCallType(Kwarg)
+        ");
     }
 
     #[test]
@@ -4791,11 +4911,11 @@ mod tests {
         eval("
             def test(a) = foo(**a)
         ");
-        assert_snapshot!(hir_string("test"), @r#"
-            fn test@<compiled>:2:
-            bb0(v0:BasicObject, v1:BasicObject):
-              SideExit UnknownCallType
-        "#);
+        assert_snapshot!(hir_string("test"), @r"
+        fn test@<compiled>:2:
+        bb0(v0:BasicObject, v1:BasicObject):
+          SideExit UnhandledCallType(KwSplat)
+        ");
     }
 
     // TODO(max): Figure out how to generate a call with TAILCALL flag
@@ -4805,11 +4925,11 @@ mod tests {
         eval("
             def test = super()
         ");
-        assert_snapshot!(hir_string("test"), @r#"
-            fn test@<compiled>:2:
-            bb0(v0:BasicObject):
-              SideExit UnknownOpcode(invokesuper)
-        "#);
+        assert_snapshot!(hir_string("test"), @r"
+        fn test@<compiled>:2:
+        bb0(v0:BasicObject):
+          SideExit UnhandledYARVInsn(invokesuper)
+        ");
     }
 
     #[test]
@@ -4817,11 +4937,11 @@ mod tests {
         eval("
             def test = super
         ");
-        assert_snapshot!(hir_string("test"), @r#"
-            fn test@<compiled>:2:
-            bb0(v0:BasicObject):
-              SideExit UnknownOpcode(invokesuper)
-        "#);
+        assert_snapshot!(hir_string("test"), @r"
+        fn test@<compiled>:2:
+        bb0(v0:BasicObject):
+          SideExit UnhandledYARVInsn(invokesuper)
+        ");
     }
 
     #[test]
@@ -4845,18 +4965,18 @@ mod tests {
         eval("
             def test(a) = foo **a, b: 1
         ");
-        assert_snapshot!(hir_string("test"), @r#"
-            fn test@<compiled>:2:
-            bb0(v0:BasicObject, v1:BasicObject):
-              v3:Class[VMFrozenCore] = Const Value(VALUE(0x1000))
-              v5:HashExact = NewHash
-              v7:BasicObject = SendWithoutBlock v3, :core#hash_merge_kwd, v5, v1
-              v8:Class[VMFrozenCore] = Const Value(VALUE(0x1000))
-              v9:StaticSymbol[:b] = Const Value(VALUE(0x1008))
-              v10:Fixnum[1] = Const Value(1)
-              v12:BasicObject = SendWithoutBlock v8, :core#hash_merge_ptr, v7, v9, v10
-              SideExit UnknownCallType
-        "#);
+        assert_snapshot!(hir_string("test"), @r"
+        fn test@<compiled>:2:
+        bb0(v0:BasicObject, v1:BasicObject):
+          v3:Class[VMFrozenCore] = Const Value(VALUE(0x1000))
+          v5:HashExact = NewHash
+          v7:BasicObject = SendWithoutBlock v3, :core#hash_merge_kwd, v5, v1
+          v8:Class[VMFrozenCore] = Const Value(VALUE(0x1000))
+          v9:StaticSymbol[:b] = Const Value(VALUE(0x1008))
+          v10:Fixnum[1] = Const Value(1)
+          v12:BasicObject = SendWithoutBlock v8, :core#hash_merge_ptr, v7, v9, v10
+          SideExit UnhandledCallType(KwSplatMut)
+        ");
     }
 
     #[test]
@@ -4864,14 +4984,14 @@ mod tests {
         eval("
             def test(*) = foo *, 1
         ");
-        assert_snapshot!(hir_string("test"), @r#"
-            fn test@<compiled>:2:
-            bb0(v0:BasicObject, v1:ArrayExact):
-              v4:ArrayExact = ToNewArray v1
-              v5:Fixnum[1] = Const Value(1)
-              ArrayPush v4, v5
-              SideExit UnknownCallType
-        "#);
+        assert_snapshot!(hir_string("test"), @r"
+        fn test@<compiled>:2:
+        bb0(v0:BasicObject, v1:ArrayExact):
+          v4:ArrayExact = ToNewArray v1
+          v5:Fixnum[1] = Const Value(1)
+          ArrayPush v4, v5
+          SideExit UnhandledCallType(SplatMut)
+        ");
     }
 
     #[test]
@@ -5448,13 +5568,13 @@ mod tests {
         let iseq = crate::cruby::with_rubyvm(|| get_method_iseq("Dir", "open"));
         assert!(iseq_contains_opcode(iseq, YARVINSN_opt_invokebuiltin_delegate), "iseq Dir.open does not contain invokebuiltin");
         let function = iseq_to_hir(iseq).unwrap();
-        assert_snapshot!(hir_string_function(&function), @r#"
-            fn open@<internal:dir>:
-            bb0(v0:BasicObject, v1:BasicObject, v2:BasicObject, v3:BasicObject, v4:BasicObject):
-              v5:NilClass = Const Value(nil)
-              v8:BasicObject = InvokeBuiltin dir_s_open, v0, v1, v2
-              SideExit UnknownOpcode(getblockparamproxy)
-        "#);
+        assert_snapshot!(hir_string_function(&function), @r"
+        fn open@<internal:dir>:
+        bb0(v0:BasicObject, v1:BasicObject, v2:BasicObject, v3:BasicObject, v4:BasicObject):
+          v5:NilClass = Const Value(nil)
+          v8:BasicObject = InvokeBuiltin dir_s_open, v0, v1, v2
+          SideExit UnhandledYARVInsn(getblockparamproxy)
+        ");
     }
 
     #[test]
@@ -7246,9 +7366,9 @@ mod opt_tests {
           v3:Fixnum[1] = Const Value(1)
           SetLocal l0, EP@3, v3
           v6:BasicObject = Send v0, 0x1000, :foo
-          v7:BasicObject = GetLocal l0, EP@3
+          v8:BasicObject = GetLocal l0, EP@3
           CheckInterrupts
-          Return v7
+          Return v8
         ");
     }
 
@@ -7278,12 +7398,12 @@ mod opt_tests {
             test
             test
         ");
-        assert_snapshot!(hir_string("test"), @r#"
-            fn test@<compiled>:3:
-            bb0(v0:BasicObject):
-              v2:Fixnum[1] = Const Value(1)
-              SideExit UnknownCallType
-        "#);
+        assert_snapshot!(hir_string("test"), @r"
+        fn test@<compiled>:3:
+        bb0(v0:BasicObject):
+          v2:Fixnum[1] = Const Value(1)
+          SideExit UnhandledCallType(Kwarg)
+        ");
     }
 
     #[test]
@@ -7294,12 +7414,12 @@ mod opt_tests {
             test
             test
         ");
-        assert_snapshot!(hir_string("test"), @r#"
-            fn test@<compiled>:3:
-            bb0(v0:BasicObject):
-              v2:Fixnum[1] = Const Value(1)
-              SideExit UnknownCallType
-        "#);
+        assert_snapshot!(hir_string("test"), @r"
+        fn test@<compiled>:3:
+        bb0(v0:BasicObject):
+          v2:Fixnum[1] = Const Value(1)
+          SideExit UnhandledCallType(Kwarg)
+        ");
     }
 
     #[test]
@@ -8308,6 +8428,96 @@ mod opt_tests {
     }
 
     #[test]
+    fn test_optimize_getivar_embedded() {
+        eval("
+            class C
+              attr_reader :foo
+              def initialize
+                @foo = 42
+              end
+            end
+
+            O = C.new
+            def test(o) = o.foo
+            test O
+            test O
+        ");
+        assert_snapshot!(hir_string("test"), @r"
+        fn test@<compiled>:10:
+        bb0(v0:BasicObject, v1:BasicObject):
+          PatchPoint MethodRedefined(C@0x1000, foo@0x1008, cme:0x1010)
+          v9:HeapObject[class_exact:C] = GuardType v1, HeapObject[class_exact:C]
+          v12:HeapObject[class_exact:C] = GuardShape v9, 0x1038
+          v13:BasicObject = LoadIvarEmbedded v12, :@foo@0x1039
+          CheckInterrupts
+          Return v13
+        ");
+    }
+
+    #[test]
+    fn test_optimize_getivar_extended() {
+        eval("
+            class C
+              attr_reader :foo
+              def initialize
+                @foo = 42
+              end
+            end
+
+            O = C.new
+            def test(o) = o.foo
+            test O
+            test O
+        ");
+        assert_snapshot!(hir_string("test"), @r"
+        fn test@<compiled>:10:
+        bb0(v0:BasicObject, v1:BasicObject):
+          PatchPoint MethodRedefined(C@0x1000, foo@0x1008, cme:0x1010)
+          v9:HeapObject[class_exact:C] = GuardType v1, HeapObject[class_exact:C]
+          v12:HeapObject[class_exact:C] = GuardShape v9, 0x1038
+          v13:BasicObject = LoadIvarEmbedded v12, :@foo@0x1039
+          CheckInterrupts
+          Return v13
+        ");
+    }
+
+    #[test]
+    fn test_dont_optimize_getivar_polymorphic() {
+        crate::options::rb_zjit_prepare_options();
+        crate::options::internal_set_num_profiles(3);
+        eval("
+            class C
+              attr_reader :foo, :bar
+
+              def foo_then_bar
+                @foo = 1
+                @bar = 2
+              end
+
+              def bar_then_foo
+                @bar = 3
+                @foo = 4
+              end
+            end
+
+            O1 = C.new
+            O1.foo_then_bar
+            O2 = C.new
+            O2.bar_then_foo
+            def test(o) = o.foo
+            test O1
+            test O2
+        ");
+        assert_snapshot!(hir_string("test"), @r"
+        fn test@<compiled>:20:
+        bb0(v0:BasicObject, v1:BasicObject):
+          v4:BasicObject = SendWithoutBlock v1, :foo
+          CheckInterrupts
+          Return v4
+        ");
+    }
+
+    #[test]
     fn test_inline_attr_reader_constant() {
         eval("
             class C
@@ -8326,9 +8536,11 @@ mod opt_tests {
           PatchPoint StableConstantNames(0x1000, O)
           v11:BasicObject[VALUE(0x1008)] = Const Value(VALUE(0x1008))
           PatchPoint MethodRedefined(C@0x1010, foo@0x1018, cme:0x1020)
-          v13:BasicObject = GetIvar v11, :@foo
+          v14:HeapObject[VALUE(0x1008)] = GuardType v11, HeapObject
+          v15:HeapObject[VALUE(0x1008)] = GuardShape v14, 0x1048
+          v16:NilClass = Const Value(nil)
           CheckInterrupts
-          Return v13
+          Return v16
         ");
     }
 
@@ -8351,9 +8563,11 @@ mod opt_tests {
           PatchPoint StableConstantNames(0x1000, O)
           v11:BasicObject[VALUE(0x1008)] = Const Value(VALUE(0x1008))
           PatchPoint MethodRedefined(C@0x1010, foo@0x1018, cme:0x1020)
-          v13:BasicObject = GetIvar v11, :@foo
+          v14:HeapObject[VALUE(0x1008)] = GuardType v11, HeapObject
+          v15:HeapObject[VALUE(0x1008)] = GuardShape v14, 0x1048
+          v16:NilClass = Const Value(nil)
           CheckInterrupts
-          Return v13
+          Return v16
         ");
     }
 
@@ -8373,9 +8587,10 @@ mod opt_tests {
         bb0(v0:BasicObject, v1:BasicObject):
           PatchPoint MethodRedefined(C@0x1000, foo@0x1008, cme:0x1010)
           v9:HeapObject[class_exact:C] = GuardType v1, HeapObject[class_exact:C]
-          v10:BasicObject = GetIvar v9, :@foo
+          v12:HeapObject[class_exact:C] = GuardShape v9, 0x1038
+          v13:NilClass = Const Value(nil)
           CheckInterrupts
-          Return v10
+          Return v13
         ");
     }
 
@@ -8395,9 +8610,10 @@ mod opt_tests {
         bb0(v0:BasicObject, v1:BasicObject):
           PatchPoint MethodRedefined(C@0x1000, foo@0x1008, cme:0x1010)
           v9:HeapObject[class_exact:C] = GuardType v1, HeapObject[class_exact:C]
-          v10:BasicObject = GetIvar v9, :@foo
+          v12:HeapObject[class_exact:C] = GuardShape v9, 0x1038
+          v13:NilClass = Const Value(nil)
           CheckInterrupts
-          Return v10
+          Return v13
         ");
     }
 }

@@ -251,8 +251,6 @@ class TestZJIT < Test::Unit::TestCase
   end
 
   def test_read_local_written_by_children_iseqs
-    omit "This test fails right now because Send doesn't compile."
-
     assert_compiles '[1, 2]', %q{
       def test
         l1 = nil
@@ -1164,6 +1162,36 @@ class TestZJIT < Test::Unit::TestCase
     }
   end
 
+  def test_getinstancevariable_miss
+    assert_compiles '[1, 1, 4]', %q{
+      class C
+        def foo
+          @foo
+        end
+
+        def foo_then_bar
+          @foo = 1
+          @bar = 2
+        end
+
+        def bar_then_foo
+          @bar = 3
+          @foo = 4
+        end
+      end
+
+      o1 = C.new
+      o1.foo_then_bar
+      result = []
+      result << o1.foo
+      result << o1.foo
+      o2 = C.new
+      o2.bar_then_foo
+      result << o2.foo
+      result
+    }
+  end
+
   def test_setinstancevariable
     assert_compiles '1', %q{
       def test() = @foo = 1
@@ -1357,6 +1385,29 @@ class TestZJIT < Test::Unit::TestCase
     }, insns: [:defined]
   end
 
+  def test_defined_method_raise
+    assert_compiles '[nil, nil, nil]', %q{
+      class C
+        def assert_equal expected, actual
+          if expected != actual
+            raise "NO"
+          end
+        end
+
+        def test_defined_method
+          assert_equal(nil, defined?("x".reverse(1).reverse))
+        end
+      end
+
+      c = C.new
+      result = []
+      result << c.test_defined_method
+      result << c.test_defined_method
+      result << c.test_defined_method
+      result
+    }
+  end
+
   def test_defined_yield
     assert_compiles "nil", "defined?(yield)"
     assert_compiles '[nil, nil, "yield"]', %q{
@@ -1369,15 +1420,13 @@ class TestZJIT < Test::Unit::TestCase
     # This will do some EP hopping to find the local EP,
     # so it's slightly different than doing it outside of a block.
 
-    omit 'Test fails at the moment due to missing Send codegen'
-
     assert_compiles '[nil, nil, "yield"]', %q{
       def test
         yield_self { yield_self { defined?(yield) } }
       end
 
       [test, test, test{}]
-    }, call_threshold: 2, insns: [:defined]
+    }, call_threshold: 2
   end
 
   def test_invokeblock_without_block_after_jit_call
@@ -1663,6 +1712,23 @@ class TestZJIT < Test::Unit::TestCase
         "redefined"
       end
 
+      result2 = test
+
+      [result1, result2]
+    }, call_threshold: 2
+  end
+
+  def test_method_redefinition_with_module
+    assert_runs '["original", "redefined"]', %q{
+      module Foo
+        def self.foo = "original"
+      end
+
+      def test = Foo.foo
+      test
+      result1 = test
+
+      def Foo.foo = "redefined"
       result2 = test
 
       [result1, result2]

@@ -274,7 +274,7 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, function: &Function) -> Optio
             let insn = function.find(insn_id);
             if let Err(last_snapshot) = gen_insn(cb, &mut jit, &mut asm, function, insn_id, &insn) {
                 debug!("ZJIT: gen_function: Failed to compile insn: {insn_id} {insn}. Generating side-exit.");
-                gen_side_exit(&mut jit, &mut asm, &SideExitReason::UnhandledInstruction(insn_id), &function.frame_state(last_snapshot));
+                gen_side_exit(&mut jit, &mut asm, &SideExitReason::UnhandledHIRInsn(insn_id), &function.frame_state(last_snapshot));
                 // Don't bother generating code after a side-exit. We won't run it.
                 // TODO(max): Generate ud2 or equivalent.
                 break;
@@ -355,6 +355,7 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
         Insn::Jump(branch) => no_output!(gen_jump(jit, asm, branch)),
         Insn::IfTrue { val, target } => no_output!(gen_if_true(jit, asm, opnd!(val), target)),
         Insn::IfFalse { val, target } => no_output!(gen_if_false(jit, asm, opnd!(val), target)),
+        &Insn::Send { cd, blockiseq, state, .. } => gen_send(jit, asm, cd, blockiseq, &function.frame_state(state)),
         Insn::SendWithoutBlock { cd, state, .. } => gen_send_without_block(jit, asm, *cd, &function.frame_state(*state)),
         // Give up SendWithoutBlockDirect for 6+ args since asm.ccall() doesn't support it.
         Insn::SendWithoutBlockDirect { cd, state, args, .. } if args.len() + 1 > C_ARG_OPNDS.len() => // +1 for self
@@ -404,10 +405,12 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
         &Insn::ToArray { val, state } => { gen_to_array(jit, asm, opnd!(val), &function.frame_state(state)) },
         &Insn::DefinedIvar { self_val, id, pushval, .. } => { gen_defined_ivar(asm, opnd!(self_val), id, pushval) },
         &Insn::ArrayExtend { left, right, state } => { no_output!(gen_array_extend(jit, asm, opnd!(left), opnd!(right), &function.frame_state(state))) },
+        &Insn::GuardShape { val, shape, state } => gen_guard_shape(jit, asm, opnd!(val), shape, &function.frame_state(state)),
+        &Insn::LoadIvarEmbedded { self_val, id, index } => gen_load_ivar_embedded(asm, opnd!(self_val), id, index),
+        &Insn::LoadIvarExtended { self_val, id, index } => gen_load_ivar_extended(asm, opnd!(self_val), id, index),
         &Insn::ArrayMax { state, .. }
         | &Insn::FixnumDiv { state, .. }
         | &Insn::FixnumMod { state, .. }
-        | &Insn::Send { state, .. }
         | &Insn::Throw { state, .. }
         => return Err(state),
     };
@@ -716,6 +719,38 @@ fn gen_array_extend(jit: &mut JITState, asm: &mut Assembler, left: Opnd, right: 
     asm_ccall!(asm, rb_ary_concat, left, right);
 }
 
+fn gen_guard_shape(jit: &mut JITState, asm: &mut Assembler, val: Opnd, shape: ShapeId, state: &FrameState) -> Opnd {
+    let shape_id_offset = unsafe { rb_shape_id_offset() };
+    let val = asm.load(val);
+    let shape_opnd = Opnd::mem(SHAPE_ID_NUM_BITS as u8, val, shape_id_offset);
+    asm.cmp(shape_opnd, Opnd::UImm(shape.0 as u64));
+    asm.jne(side_exit(jit, state, SideExitReason::GuardShape(shape)));
+    val
+}
+
+fn gen_load_ivar_embedded(asm: &mut Assembler, self_val: Opnd, id: ID, index: u16) -> Opnd {
+    // See ROBJECT_FIELDS() from include/ruby/internal/core/robject.h
+
+    asm_comment!(asm, "Load embedded ivar id={} index={}", id.contents_lossy(), index);
+    let offs = ROBJECT_OFFSET_AS_ARY as i32 + (SIZEOF_VALUE * index as usize) as i32;
+    let self_val = asm.load(self_val);
+    let ivar_opnd = Opnd::mem(64, self_val, offs);
+    asm.load(ivar_opnd)
+}
+
+fn gen_load_ivar_extended(asm: &mut Assembler, self_val: Opnd, id: ID, index: u16) -> Opnd {
+    asm_comment!(asm, "Load extended ivar id={} index={}", id.contents_lossy(), index);
+    // Compile time value is *not* embedded.
+
+    // Get a pointer to the extended table
+    let self_val = asm.load(self_val);
+    let tbl_opnd = asm.load(Opnd::mem(64, self_val, ROBJECT_OFFSET_AS_HEAP_FIELDS as i32));
+
+    // Read the ivar from the extended table
+    let ivar_opnd = Opnd::mem(64, tbl_opnd, (SIZEOF_VALUE * index as usize) as i32);
+    asm.load(ivar_opnd)
+}
+
 /// Compile an interpreter entry block to be inserted into an ISEQ
 fn gen_entry_prologue(asm: &mut Assembler, iseq: IseqPtr) {
     asm_comment!(asm, "ZJIT entry point: {}", iseq_get_location(iseq, 0));
@@ -881,6 +916,38 @@ fn gen_if_false(jit: &mut JITState, asm: &mut Assembler, val: lir::Opnd, branch:
     asm.jmp(if_false);
 
     asm.write_label(if_true);
+}
+
+/// Compile a dynamic dispatch with block
+fn gen_send(
+    jit: &mut JITState,
+    asm: &mut Assembler,
+    cd: *const rb_call_data,
+    blockiseq: IseqPtr,
+    state: &FrameState,
+) -> lir::Opnd {
+    gen_incr_counter(asm, Counter::dynamic_send_count);
+
+    // Save PC and SP
+    gen_save_pc(asm, state);
+    gen_save_sp(asm, state.stack().len());
+
+    // Spill locals and stack
+    gen_spill_locals(jit, asm, state);
+    gen_spill_stack(jit, asm, state);
+
+    asm_comment!(asm, "call #{} with dynamic dispatch", ruby_call_method_name(cd));
+    unsafe extern "C" {
+        fn rb_vm_send(ec: EcPtr, cfp: CfpPtr, cd: VALUE, blockiseq: IseqPtr) -> VALUE;
+    }
+    let ret = asm.ccall(
+        rb_vm_send as *const u8,
+        vec![EC, CFP, (cd as usize).into(), VALUE(blockiseq as usize).into()],
+    );
+    // TODO: Add a PatchPoint here that can side-exit the function if the callee messed with
+    // the frame's locals
+
+    ret
 }
 
 /// Compile a dynamic dispatch without block
@@ -1240,6 +1307,12 @@ fn gen_guard_type(jit: &mut JITState, asm: &mut Assembler, val: lir::Opnd, guard
 
         asm.cmp(klass, Opnd::Value(expected_class));
         asm.jne(side_exit);
+    } else if guard_type.bit_equal(types::HeapObject) {
+        let side_exit = side_exit(jit, state, GuardType(guard_type));
+        asm.cmp(val, Opnd::Value(Qfalse));
+        asm.je(side_exit.clone());
+        asm.test(val, (RUBY_IMMEDIATE_MASK as u64).into());
+        asm.jnz(side_exit);
     } else {
         unimplemented!("unsupported type: {guard_type}");
     }
@@ -1383,7 +1456,7 @@ fn param_opnd(idx: usize) -> Opnd {
 }
 
 /// Inverse of ep_offset_to_local_idx(). See ep_offset_to_local_idx() for details.
-fn local_idx_to_ep_offset(iseq: IseqPtr, local_idx: usize) -> i32 {
+pub fn local_idx_to_ep_offset(iseq: IseqPtr, local_idx: usize) -> i32 {
     let local_size = unsafe { get_iseq_body_local_table_size(iseq) };
     local_size_and_idx_to_ep_offset(local_size as usize, local_idx)
 }

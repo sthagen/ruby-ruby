@@ -681,24 +681,25 @@ pub const YARVINSN_trace_setlocal_WC_0: ruby_vminsn_type = 214;
 pub const YARVINSN_trace_setlocal_WC_1: ruby_vminsn_type = 215;
 pub const YARVINSN_trace_putobject_INT2FIX_0_: ruby_vminsn_type = 216;
 pub const YARVINSN_trace_putobject_INT2FIX_1_: ruby_vminsn_type = 217;
-pub const YARVINSN_zjit_opt_send_without_block: ruby_vminsn_type = 218;
-pub const YARVINSN_zjit_opt_nil_p: ruby_vminsn_type = 219;
-pub const YARVINSN_zjit_opt_plus: ruby_vminsn_type = 220;
-pub const YARVINSN_zjit_opt_minus: ruby_vminsn_type = 221;
-pub const YARVINSN_zjit_opt_mult: ruby_vminsn_type = 222;
-pub const YARVINSN_zjit_opt_div: ruby_vminsn_type = 223;
-pub const YARVINSN_zjit_opt_mod: ruby_vminsn_type = 224;
-pub const YARVINSN_zjit_opt_eq: ruby_vminsn_type = 225;
-pub const YARVINSN_zjit_opt_neq: ruby_vminsn_type = 226;
-pub const YARVINSN_zjit_opt_lt: ruby_vminsn_type = 227;
-pub const YARVINSN_zjit_opt_le: ruby_vminsn_type = 228;
-pub const YARVINSN_zjit_opt_gt: ruby_vminsn_type = 229;
-pub const YARVINSN_zjit_opt_ge: ruby_vminsn_type = 230;
-pub const YARVINSN_zjit_opt_and: ruby_vminsn_type = 231;
-pub const YARVINSN_zjit_opt_or: ruby_vminsn_type = 232;
-pub const YARVINSN_zjit_opt_empty_p: ruby_vminsn_type = 233;
-pub const YARVINSN_zjit_opt_not: ruby_vminsn_type = 234;
-pub const VM_INSTRUCTION_SIZE: ruby_vminsn_type = 235;
+pub const YARVINSN_zjit_getinstancevariable: ruby_vminsn_type = 218;
+pub const YARVINSN_zjit_opt_send_without_block: ruby_vminsn_type = 219;
+pub const YARVINSN_zjit_opt_nil_p: ruby_vminsn_type = 220;
+pub const YARVINSN_zjit_opt_plus: ruby_vminsn_type = 221;
+pub const YARVINSN_zjit_opt_minus: ruby_vminsn_type = 222;
+pub const YARVINSN_zjit_opt_mult: ruby_vminsn_type = 223;
+pub const YARVINSN_zjit_opt_div: ruby_vminsn_type = 224;
+pub const YARVINSN_zjit_opt_mod: ruby_vminsn_type = 225;
+pub const YARVINSN_zjit_opt_eq: ruby_vminsn_type = 226;
+pub const YARVINSN_zjit_opt_neq: ruby_vminsn_type = 227;
+pub const YARVINSN_zjit_opt_lt: ruby_vminsn_type = 228;
+pub const YARVINSN_zjit_opt_le: ruby_vminsn_type = 229;
+pub const YARVINSN_zjit_opt_gt: ruby_vminsn_type = 230;
+pub const YARVINSN_zjit_opt_ge: ruby_vminsn_type = 231;
+pub const YARVINSN_zjit_opt_and: ruby_vminsn_type = 232;
+pub const YARVINSN_zjit_opt_or: ruby_vminsn_type = 233;
+pub const YARVINSN_zjit_opt_empty_p: ruby_vminsn_type = 234;
+pub const YARVINSN_zjit_opt_not: ruby_vminsn_type = 235;
+pub const VM_INSTRUCTION_SIZE: ruby_vminsn_type = 236;
 pub type ruby_vminsn_type = u32;
 pub type rb_iseq_callback = ::std::option::Option<
     unsafe extern "C" fn(arg1: *const rb_iseq_t, arg2: *mut ::std::os::raw::c_void),
@@ -724,6 +725,9 @@ pub const DEFINED_CONST_FROM: defined_type = 17;
 pub type defined_type = u32;
 pub const RB_INVALID_SHAPE_ID: _bindgen_ty_38 = 4294967295;
 pub type _bindgen_ty_38 = u32;
+pub const ROBJECT_OFFSET_AS_HEAP_FIELDS: robject_offsets = 16;
+pub const ROBJECT_OFFSET_AS_ARY: robject_offsets = 16;
+pub type robject_offsets = u32;
 pub type rb_iseq_param_keyword_struct = rb_iseq_constant_body__bindgen_ty_1_rb_iseq_param_keyword;
 unsafe extern "C" {
     pub fn ruby_xfree(ptr: *mut ::std::os::raw::c_void);
@@ -916,24 +920,13 @@ unsafe extern "C" {
     pub fn rb_zjit_reserve_addr_space(mem_size: u32) -> *mut u8;
     pub fn rb_zjit_profile_disable(iseq: *const rb_iseq_t);
     pub fn rb_vm_base_ptr(cfp: *mut rb_control_frame_struct) -> *mut VALUE;
-    pub fn rb_zjit_multi_ractor_p() -> bool;
     pub fn rb_zjit_constcache_shareable(ice: *const iseq_inline_constant_cache_entry) -> bool;
-    pub fn rb_zjit_vm_unlock(
-        recursive_lock_level: *mut ::std::os::raw::c_uint,
-        file: *const ::std::os::raw::c_char,
-        line: ::std::os::raw::c_int,
-    );
     pub fn rb_zjit_mark_writable(mem_block: *mut ::std::os::raw::c_void, mem_size: u32) -> bool;
     pub fn rb_zjit_mark_executable(mem_block: *mut ::std::os::raw::c_void, mem_size: u32);
     pub fn rb_zjit_mark_unused(mem_block: *mut ::std::os::raw::c_void, mem_size: u32) -> bool;
     pub fn rb_zjit_icache_invalidate(
         start: *mut ::std::os::raw::c_void,
         end: *mut ::std::os::raw::c_void,
-    );
-    pub fn rb_zjit_vm_lock_then_barrier(
-        recursive_lock_level: *mut ::std::os::raw::c_uint,
-        file: *const ::std::os::raw::c_char,
-        line: ::std::os::raw::c_int,
     );
     pub fn rb_zjit_iseq_insn_set(
         iseq: *const rb_iseq_t,
@@ -943,7 +936,6 @@ unsafe extern "C" {
     pub fn rb_iseq_get_zjit_payload(iseq: *const rb_iseq_t) -> *mut ::std::os::raw::c_void;
     pub fn rb_iseq_set_zjit_payload(iseq: *const rb_iseq_t, payload: *mut ::std::os::raw::c_void);
     pub fn rb_zjit_print_exception();
-    pub fn rb_zjit_shape_obj_too_complex_p(obj: VALUE) -> bool;
     pub fn rb_zjit_singleton_class_p(klass: VALUE) -> bool;
     pub fn rb_zjit_defined_ivar(obj: VALUE, id: ID, pushval: VALUE) -> VALUE;
     pub fn rb_iseq_encoded_size(iseq: *const rb_iseq_t) -> ::std::os::raw::c_uint;
@@ -1025,4 +1017,16 @@ unsafe extern "C" {
     pub fn rb_yarv_ary_entry_internal(ary: VALUE, offset: ::std::os::raw::c_long) -> VALUE;
     pub fn rb_set_cfp_pc(cfp: *mut rb_control_frame_struct, pc: *const VALUE);
     pub fn rb_set_cfp_sp(cfp: *mut rb_control_frame_struct, sp: *mut VALUE);
+    pub fn rb_jit_shape_too_complex_p(shape_id: shape_id_t) -> bool;
+    pub fn rb_jit_multi_ractor_p() -> bool;
+    pub fn rb_jit_vm_lock_then_barrier(
+        recursive_lock_level: *mut ::std::os::raw::c_uint,
+        file: *const ::std::os::raw::c_char,
+        line: ::std::os::raw::c_int,
+    );
+    pub fn rb_jit_vm_unlock(
+        recursive_lock_level: *mut ::std::os::raw::c_uint,
+        file: *const ::std::os::raw::c_char,
+        line: ::std::os::raw::c_int,
+    );
 }

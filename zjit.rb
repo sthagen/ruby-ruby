@@ -35,6 +35,7 @@ class << RubyVM::ZJIT
     stats = self.stats
 
     print_counters_with_prefix(prefix: 'failed_', prompt: 'compilation failure reasons', buf:, stats:)
+    print_counters_with_prefix(prefix: 'unhandled_call_', prompt: 'unhandled call types', buf:, stats:, limit: 20)
     print_counters([
       :dynamic_send_count,
 
@@ -53,8 +54,8 @@ class << RubyVM::ZJIT
       :zjit_insn_count,
       :ratio_in_zjit,
     ], buf:, stats:)
+    print_counters_with_prefix(prefix: 'unhandled_yarv_insn_', prompt: 'unhandled YARV insns', buf:, stats:, limit: 20)
     print_counters_with_prefix(prefix: 'exit_', prompt: 'side exit reasons', buf:, stats:, limit: 20)
-    print_counters_with_prefix(prefix: 'specific_exit_', prompt: 'specific side exit reasons', buf:, stats:, limit: 20)
 
     buf
   end
@@ -96,7 +97,6 @@ class << RubyVM::ZJIT
     left_pad = counters.keys.map(&:size).max
     right_pad = counters.values.map { |value| number_with_delimiter(value).size }.max
     total = counters.values.sum
-    count = counters.size
 
     counters = counters.to_a
     counters.sort_by! { |_, value| -value }
@@ -104,7 +104,7 @@ class << RubyVM::ZJIT
 
     buf << "Top-#{counters.size} " if limit
     buf << "#{prompt}"
-    buf << " (%.1f%% of all #{count})" % (100.0 * counters.map(&:last).sum / total) if limit
+    buf << " (%.1f%% of total #{number_with_delimiter(total)})" % (100.0 * counters.map(&:last).sum / total) if limit
     buf << ":\n"
     counters.each do |key, value|
       padded_key = key.rjust(left_pad, ' ')

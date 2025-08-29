@@ -2864,7 +2864,7 @@ fn gen_get_ivar(
 
     // NOTE: This assumes T_OBJECT can't ever have the same shape_id as any other type.
     // too-complex shapes can't use index access, so we use rb_ivar_get for them too.
-    if !receiver_t_object || comptime_receiver.shape_too_complex() || megamorphic {
+    if !comptime_receiver.heap_object_p() || comptime_receiver.shape_too_complex() || megamorphic {
         // General case. Call rb_ivar_get().
         // VALUE rb_ivar_get(VALUE obj, ID id)
         asm_comment!(asm, "call rb_ivar_get()");
@@ -2900,9 +2900,6 @@ fn gen_get_ivar(
     // Guard heap object (recv_opnd must be used before stack_pop)
     guard_object_is_heap(asm, recv, recv_opnd, Counter::getivar_not_heap);
 
-    // Compile time self is embedded and the ivar index lands within the object
-    let embed_test_result = comptime_receiver.embedded_p();
-
     let expected_shape = unsafe { rb_obj_shape_id(comptime_receiver) };
     let shape_id_offset = unsafe { rb_shape_id_offset() };
     let shape_opnd = Opnd::mem(SHAPE_ID_NUM_BITS as u8, recv, shape_id_offset);
@@ -2931,28 +2928,37 @@ fn gen_get_ivar(
             asm.mov(out_opnd, Qnil.into());
         }
         Some(ivar_index) => {
-            if embed_test_result {
-                // See ROBJECT_FIELDS() from include/ruby/internal/core/robject.h
+            let ivar_opnd = if receiver_t_object {
+                if comptime_receiver.embedded_p() {
+                   // See ROBJECT_FIELDS() from include/ruby/internal/core/robject.h
 
-                // Load the variable
-                let offs = ROBJECT_OFFSET_AS_ARY as i32 + (ivar_index * SIZEOF_VALUE) as i32;
-                let ivar_opnd = Opnd::mem(64, recv, offs);
+                   // Load the variable
+                   let offs = ROBJECT_OFFSET_AS_ARY as i32 + (ivar_index * SIZEOF_VALUE) as i32;
+                   Opnd::mem(64, recv, offs)
+               } else {
+                   // Compile time value is *not* embedded.
 
-                // Push the ivar on the stack
-                let out_opnd = asm.stack_push(Type::Unknown);
-                asm.mov(out_opnd, ivar_opnd);
+                   // Get a pointer to the extended table
+                   let tbl_opnd = asm.load(Opnd::mem(64, recv, ROBJECT_OFFSET_AS_HEAP_FIELDS as i32));
+
+                   // Read the ivar from the extended table
+                   Opnd::mem(64, tbl_opnd, (SIZEOF_VALUE * ivar_index) as i32)
+               }
             } else {
-                // Compile time value is *not* embedded.
+                asm_comment!(asm, "call rb_ivar_get_at()");
 
-                // Get a pointer to the extended table
-                let tbl_opnd = asm.load(Opnd::mem(64, recv, ROBJECT_OFFSET_AS_HEAP_FIELDS as i32));
+                if assume_single_ractor_mode(jit, asm) {
+                    asm.ccall(rb_ivar_get_at_no_ractor_check as *const u8, vec![recv, Opnd::UImm((ivar_index as u32).into())])
+                } else {
+                    // The function could raise RactorIsolationError.
+                    jit_prepare_non_leaf_call(jit, asm);
+                    asm.ccall(rb_ivar_get_at as *const u8, vec![recv, Opnd::UImm((ivar_index as u32).into()), Opnd::UImm(ivar_name)])
+                }
+            };
 
-                // Read the ivar from the extended table
-                let ivar_opnd = Opnd::mem(64, tbl_opnd, (SIZEOF_VALUE * ivar_index) as i32);
-
-                let out_opnd = asm.stack_push(Type::Unknown);
-                asm.mov(out_opnd, ivar_opnd);
-            }
+            // Push the ivar on the stack
+            let out_opnd = asm.stack_push(Type::Unknown);
+            asm.mov(out_opnd, ivar_opnd);
         }
     }
 
@@ -3097,7 +3103,7 @@ fn gen_set_ivar(
 
         // If the VM ran out of shapes, or this class generated too many leaf,
         // it may be de-optimized into OBJ_TOO_COMPLEX_SHAPE (hash-table).
-        new_shape_too_complex = unsafe { rb_yjit_shape_too_complex_p(next_shape_id) };
+        new_shape_too_complex = unsafe { rb_jit_shape_too_complex_p(next_shape_id) };
         if new_shape_too_complex {
             Some((next_shape_id, None, 0_usize))
         } else {
@@ -9558,7 +9564,24 @@ fn gen_sendforward(
     jit: &mut JITState,
     asm: &mut Assembler,
 ) -> Option<CodegenStatus> {
-    return gen_send(jit, asm);
+    // Generate specialized code if possible
+    let cd = jit.get_arg(0).as_ptr();
+    let block = jit.get_arg(1).as_optional_ptr().map(|iseq| BlockHandler::BlockISeq(iseq));
+    if let Some(status) = perf_call! { gen_send_general(jit, asm, cd, block) } {
+        return Some(status);
+    }
+
+    // Otherwise, fallback to dynamic dispatch using the interpreter's implementation of sendforward
+    let blockiseq = jit.get_arg(1).as_iseq();
+    gen_send_dynamic(jit, asm, cd, unsafe { rb_yjit_sendish_sp_pops((*cd).ci) }, |asm| {
+        extern "C" {
+            fn rb_vm_sendforward(ec: EcPtr, cfp: CfpPtr, cd: VALUE, blockiseq: IseqPtr) -> VALUE;
+        }
+        asm.ccall(
+            rb_vm_sendforward as *const u8,
+            vec![EC, CFP, (cd as usize).into(), VALUE(blockiseq as usize).into()],
+        )
+    })
 }
 
 fn gen_invokeblock(
