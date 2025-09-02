@@ -807,6 +807,60 @@ class TestZJIT < Test::Unit::TestCase
     }
   end
 
+  def test_new_range_fixnum_both_literals_inclusive
+    assert_compiles '1..2', %q{
+      def test()
+        (1..2)
+      end
+      test; test
+    }, call_threshold: 2
+  end
+
+  def test_new_range_fixnum_both_literals_exclusive
+    assert_compiles '1...2', %q{
+      def test()
+        (1...2)
+      end
+      test; test
+    }, call_threshold: 2
+  end
+
+  def test_new_range_fixnum_low_literal_inclusive
+    assert_compiles '1..3', %q{
+      def test(a)
+        (1..a)
+      end
+      test(2); test(3)
+    }, call_threshold: 2
+  end
+
+  def test_new_range_fixnum_low_literal_exclusive
+    assert_compiles '1...3', %q{
+      def test(a)
+        (1...a)
+      end
+      test(2); test(3)
+    }, call_threshold: 2
+  end
+
+  def test_new_range_fixnum_high_literal_inclusive
+    assert_compiles '3..10', %q{
+      def test(a)
+        (a..10)
+      end
+      test(2); test(3)
+    }, call_threshold: 2
+  end
+
+  def test_new_range_fixnum_high_literal_exclusive
+    assert_compiles '3...10', %q{
+      def test(a)
+        (a...10)
+      end
+      test(2); test(3)
+    }, call_threshold: 2
+  end
+
   def test_if
     assert_compiles '[0, nil]', %q{
       def test(n)
@@ -2145,6 +2199,44 @@ class TestZJIT < Test::Unit::TestCase
       test
 
       Ractor.new { test }.value
+    }
+  end
+
+  def test_global_tracepoint
+    assert_compiles 'true', %q{
+      def foo = 1
+
+      foo
+      foo
+
+      called = false
+
+      tp = TracePoint.new(:return) { |event|
+        if event.method_id == :foo
+          called = true
+        end
+      }
+      tp.enable do
+        foo
+      end
+      called
+    }
+  end
+
+  def test_local_tracepoint
+    assert_compiles 'true', %q{
+      def foo = 1
+
+      foo
+      foo
+
+      called = false
+
+      tp = TracePoint.new(:return) { |_| called = true }
+      tp.enable(target: method(:foo)) do
+        foo
+      end
+      called
     }
   end
 

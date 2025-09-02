@@ -88,7 +88,7 @@
 #![allow(unused_imports)]
 
 use std::convert::From;
-use std::ffi::{CString, CStr};
+use std::ffi::{c_void, CString, CStr};
 use std::fmt::{Debug, Formatter};
 use std::os::raw::{c_char, c_int, c_uint};
 use std::panic::{catch_unwind, UnwindSafe};
@@ -291,6 +291,17 @@ pub fn iseq_pc_to_insn_idx(iseq: IseqPtr, pc: *mut VALUE) -> Option<u16> {
 pub fn iseq_opcode_at_idx(iseq: IseqPtr, insn_idx: u32) -> u32 {
     let pc = unsafe { rb_iseq_pc_at_idx(iseq, insn_idx) };
     unsafe { rb_iseq_opcode_at_pc(iseq, pc) as u32 }
+}
+
+/// Iterate over all existing ISEQs
+pub fn for_each_iseq<F: FnMut(IseqPtr)>(mut callback: F) {
+    unsafe extern "C" fn callback_wrapper(iseq: IseqPtr, data: *mut c_void) {
+        // SAFETY: points to the local below
+        let callback: &mut &mut dyn FnMut(IseqPtr) -> bool = unsafe { std::mem::transmute(&mut *data) };
+        callback(iseq);
+    }
+    let mut data: &mut dyn FnMut(IseqPtr) = &mut callback;
+    unsafe { rb_jit_for_each_iseq(Some(callback_wrapper), (&mut data) as *mut _ as *mut c_void) };
 }
 
 /// Return a poison value to be set above the stack top to verify leafness.
@@ -979,7 +990,7 @@ pub use manual_defs::*;
 pub mod test_utils {
     use std::{ptr::null, sync::Once};
 
-    use crate::{options::rb_zjit_prepare_options, state::rb_zjit_enabled_p, state::ZJITState};
+    use crate::{options::{internal_set_num_profiles, rb_zjit_call_threshold, rb_zjit_prepare_options, DEFAULT_CALL_THRESHOLD}, state::{rb_zjit_enabled_p, ZJITState}};
 
     use super::*;
 
@@ -1003,6 +1014,11 @@ pub mod test_utils {
             ruby_init_stack(&mut var as *mut VALUE as *mut _);
             rb_zjit_prepare_options(); // enable `#with_jit` on builtins
             ruby_init();
+
+            // The default rb_zjit_profile_threshold is too high, so lower it for HIR tests.
+            if rb_zjit_call_threshold == DEFAULT_CALL_THRESHOLD {
+                internal_set_num_profiles(1);
+            }
 
             // Pass command line options so the VM loads core library methods defined in
             // ruby such as from `kernel.rb`.
