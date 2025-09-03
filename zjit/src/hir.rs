@@ -1012,7 +1012,7 @@ impl<T: Copy + Into<usize> + PartialEq> UnionFind<T> {
 
     /// Private. Return the internal representation of the forwarding pointer for a given element.
     fn at(&self, idx: T) -> Option<T> {
-        self.forwarded.get(idx.into()).map(|x| *x).flatten()
+        self.forwarded.get(idx.into()).copied().flatten()
     }
 
     /// Private. Set the internal representation of the forwarding pointer for the given element
@@ -3273,6 +3273,12 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                         target: BranchEdge { target, args: state.as_args(self_param) }
                     });
                     queue.push_back((state.clone(), target, target_idx));
+                }
+                YARVINSN_opt_case_dispatch => {
+                    // TODO: Some keys are visible at compile time, so in the future we can
+                    // compile jump targets for certain cases
+                    // Pop the key from the stack and fallback to the === branches for now
+                    state.stack_pop()?;
                 }
                 YARVINSN_opt_new => {
                     let exit_id = fun.push_insn(block, Insn::Snapshot { state: exit_state });

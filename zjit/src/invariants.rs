@@ -1,3 +1,5 @@
+//! Code invalidation and patching for speculative optimizations.
+
 use std::{collections::{HashMap, HashSet}, mem};
 
 use crate::{backend::lir::{asm_comment, Assembler}, cruby::{rb_callable_method_entry_t, rb_gc_location, ruby_basic_operators, src_loc, with_vm_lock, IseqPtr, RedefinitionFlag, ID, VALUE}, gc::IseqPayload, hir::Invariant, options::debug, state::{zjit_enabled_p, ZJITState}, virtualmem::CodePtr};
@@ -63,7 +65,7 @@ impl Invariants {
         Self::update_iseq_references(&mut self.no_ep_escape_iseqs);
     }
 
-    /// Update ISEQ references in a given HashSet<IseqPtr>
+    /// Update ISEQ references in a given `HashSet<IseqPtr>`
     fn update_iseq_references(iseqs: &mut HashSet<IseqPtr>) {
         let mut moved: Vec<IseqPtr> = Vec::with_capacity(iseqs.len());
 

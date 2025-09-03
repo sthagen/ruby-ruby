@@ -1,3 +1,5 @@
+//! This module is for native code generation.
+
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::ffi::{c_int, c_long, c_void};
@@ -65,9 +67,11 @@ impl JITState {
     }
 }
 
-/// CRuby API to compile a given ISEQ
+/// CRuby API to compile a given ISEQ.
+/// If jit_exception is true, compile JIT code for handling exceptions.
+/// See jit_compile_exception() for details.
 #[unsafe(no_mangle)]
-pub extern "C" fn rb_zjit_iseq_gen_entry_point(iseq: IseqPtr, _ec: EcPtr) -> *const u8 {
+pub extern "C" fn rb_zjit_iseq_gen_entry_point(iseq: IseqPtr, jit_exception: bool) -> *const u8 {
     // Do not test the JIT code in HIR tests
     if cfg!(test) {
         return std::ptr::null();
@@ -77,11 +81,12 @@ pub extern "C" fn rb_zjit_iseq_gen_entry_point(iseq: IseqPtr, _ec: EcPtr) -> *co
     // with_vm_lock() does nothing if the program doesn't use Ractors.
     with_vm_lock(src_loc!(), || {
         let cb = ZJITState::get_code_block();
-        let mut code_ptr = with_time_stat(compile_time_ns, || gen_iseq_entry_point(cb, iseq));
+        let mut code_ptr = with_time_stat(compile_time_ns, || gen_iseq_entry_point(cb, iseq, jit_exception));
 
         if let Err(err) = &code_ptr {
-            // Assert that the ISEQ compiles if RubyVM::ZJIT.assert_compiles is enabled
-            if ZJITState::assert_compiles_enabled() {
+            // Assert that the ISEQ compiles if RubyVM::ZJIT.assert_compiles is enabled.
+            // We assert only `jit_exception: false` cases until we support exception handlers.
+            if ZJITState::assert_compiles_enabled() && !jit_exception {
                 let iseq_location = iseq_get_location(iseq, 0);
                 panic!("Failed to compile: {iseq_location}");
             }
@@ -102,50 +107,35 @@ pub extern "C" fn rb_zjit_iseq_gen_entry_point(iseq: IseqPtr, _ec: EcPtr) -> *co
 }
 
 /// Compile an entry point for a given ISEQ
-fn gen_iseq_entry_point(cb: &mut CodeBlock, iseq: IseqPtr) -> Result<CodePtr, CompileError> {
+fn gen_iseq_entry_point(cb: &mut CodeBlock, iseq: IseqPtr, jit_exception: bool) -> Result<CodePtr, CompileError> {
+    // We don't support exception handlers yet
+    if jit_exception {
+        return Err(CompileError::ExceptionHandler);
+    }
+
     // Compile ISEQ into High-level IR
-    let function = match compile_iseq(iseq) {
-        Ok(function) => function,
-        Err(err) => {
-            incr_counter!(failed_iseq_count);
-            return Err(err);
-        }
-    };
+    let function = compile_iseq(iseq).inspect_err(|_| {
+        incr_counter!(failed_iseq_count);
+    })?;
 
     // Compile the High-level IR
-    let start_ptr = match gen_iseq(cb, iseq, Some(&function)) {
-        Ok(start_ptr) => start_ptr,
-        Err(err) => {
-            debug!("Failed to compile iseq: gen_iseq failed: {}", iseq_get_location(iseq, 0));
-            return Err(err);
-        }
-    };
+    let start_ptr = gen_iseq(cb, iseq, Some(&function)).inspect_err(|err| {
+        debug!("{err:?}: gen_iseq failed: {}", iseq_get_location(iseq, 0));
+    })?;
 
     // Compile an entry point to the JIT code
-    let entry_ptr = match gen_entry(cb, iseq, &function, start_ptr) {
-        Ok(entry_ptr) => entry_ptr,
-        Err(err) => {
-            debug!("Failed to compile iseq: gen_entry failed: {}", iseq_get_location(iseq, 0));
-            return Err(err);
-        }
-    };
-
-    // Return a JIT code address
-    Ok(entry_ptr)
+    gen_entry(cb, iseq, &function, start_ptr).inspect_err(|err| {
+        debug!("{err:?}: gen_entry failed: {}", iseq_get_location(iseq, 0));
+    })
 }
 
 /// Stub a branch for a JIT-to-JIT call
 fn gen_iseq_call(cb: &mut CodeBlock, caller_iseq: IseqPtr, iseq_call: &Rc<RefCell<IseqCall>>) -> Result<(), CompileError> {
     // Compile a function stub
-    let stub_ptr = match gen_function_stub(cb, iseq_call.clone()) {
-        Ok(stub_ptr) => stub_ptr,
-        Err(err) => {
-            // Failed to compile the stub. Bail out of compiling the caller ISEQ.
-            debug!("Failed to compile iseq: could not compile stub: {} -> {}",
-                   iseq_get_location(caller_iseq, 0), iseq_get_location(iseq_call.borrow().iseq, 0));
-            return Err(err);
-        }
-    };
+    let stub_ptr = gen_function_stub(cb, iseq_call.clone()).inspect_err(|err| {
+        debug!("{err:?}: gen_function_stub failed: {} -> {}",
+               iseq_get_location(caller_iseq, 0), iseq_get_location(iseq_call.borrow().iseq, 0));
+    })?;
 
     // Update the JIT-to-JIT call to call the stub
     let stub_addr = stub_ptr.raw_ptr(cb);
@@ -505,7 +495,7 @@ fn gen_defined(jit: &JITState, asm: &mut Assembler, op_type: usize, obj: VALUE, 
                 let block_handler = asm.load(Opnd::mem(64, lep, SIZEOF_VALUE_I32 * VM_ENV_DATA_INDEX_SPECVAL));
                 let pushval = asm.load(pushval.into());
                 asm.cmp(block_handler, VM_BLOCK_HANDLER_NONE.into());
-                asm.csel_e(Qnil.into(), pushval.into())
+                asm.csel_e(Qnil.into(), pushval)
             } else {
                 Qnil.into()
             }
@@ -581,7 +571,7 @@ fn gen_invokebuiltin(jit: &JITState, asm: &mut Assembler, state: &FrameState, bf
 fn gen_patch_point(jit: &mut JITState, asm: &mut Assembler, invariant: &Invariant, state: &FrameState) {
     let payload_ptr = get_or_create_iseq_payload_ptr(jit.iseq);
     let label = asm.new_label("patch_point").unwrap_label();
-    let invariant = invariant.clone();
+    let invariant = *invariant;
 
     // Compile a side exit. Fill nop instructions if the last patch point is too close.
     asm.patch_point(build_side_exit(jit, state, PatchPoint(invariant), Some(label)));
@@ -1542,14 +1532,13 @@ fn build_side_exit(jit: &mut JITState, state: &FrameState, reason: SideExitReaso
         locals.push(jit.get_opnd(insn_id));
     }
 
-    let target = Target::SideExit {
+    Target::SideExit {
         pc: state.pc,
         stack,
         locals,
         reason,
         label,
-    };
-    target
+    }
 }
 
 /// Return true if a given ISEQ is known to escape EP to the heap on entry.
@@ -1647,13 +1636,10 @@ c_callable! {
 
             // Otherwise, attempt to compile the ISEQ. We have to mark_all_executable() beyond this point.
             let code_ptr = with_time_stat(compile_time_ns, || function_stub_hit_body(cb, &iseq_call));
-            let code_ptr = match code_ptr {
-                Ok(code_ptr) => code_ptr,
-                Err(compile_error) => {
-                    prepare_for_exit(iseq, cfp, sp, &compile_error);
-                    ZJITState::get_exit_trampoline_with_counter()
-                }
-            };
+            let code_ptr = code_ptr.unwrap_or_else(|compile_error| {
+                prepare_for_exit(iseq, cfp, sp, &compile_error);
+                ZJITState::get_exit_trampoline_with_counter()
+            });
             cb.mark_all_executable();
             code_ptr.raw_ptr(cb)
         })
@@ -1663,13 +1649,9 @@ c_callable! {
 /// Compile an ISEQ for a function stub
 fn function_stub_hit_body(cb: &mut CodeBlock, iseq_call: &Rc<RefCell<IseqCall>>) -> Result<CodePtr, CompileError> {
     // Compile the stubbed ISEQ
-    let code_ptr = match gen_iseq(cb, iseq_call.borrow().iseq, None) {
-        Ok(code_ptr) => code_ptr,
-        Err(err) => {
-            debug!("Failed to compile iseq: gen_iseq failed: {}", iseq_get_location(iseq_call.borrow().iseq, 0));
-            return Err(err);
-        }
-    };
+    let code_ptr = gen_iseq(cb, iseq_call.borrow().iseq, None).inspect_err(|err| {
+        debug!("{err:?}: gen_iseq failed: {}", iseq_get_location(iseq_call.borrow().iseq, 0));
+    })?;
 
     // Update the stub to call the code pointer
     let code_addr = code_ptr.raw_ptr(cb);
@@ -1689,7 +1671,7 @@ fn gen_function_stub(cb: &mut CodeBlock, iseq_call: Rc<RefCell<IseqCall>>) -> Re
 
     // Call function_stub_hit using the shared trampoline. See `gen_function_stub_hit_trampoline`.
     // Use load_into instead of mov, which is split on arm64, to avoid clobbering ALLOC_REGS.
-    asm.load_into(SCRATCH_OPND, Opnd::const_ptr(Rc::into_raw(iseq_call).into()));
+    asm.load_into(SCRATCH_OPND, Opnd::const_ptr(Rc::into_raw(iseq_call)));
     asm.jmp(ZJITState::get_function_stub_hit_trampoline().into());
 
     asm.compile(cb).map(|(code_ptr, gc_offsets)| {

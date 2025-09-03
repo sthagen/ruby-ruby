@@ -1,3 +1,5 @@
+//! Model for creating generating textual assembler code.
+
 use std::collections::BTreeMap;
 use std::fmt;
 use std::ops::Range;
@@ -330,7 +332,7 @@ pub fn imm_num_bits(imm: i64) -> u8
         return 32;
     }
 
-    return 64;
+    64
 }
 
 /// Compute the number of bits needed to encode an unsigned value
@@ -347,7 +349,7 @@ pub fn uimm_num_bits(uimm: u64) -> u8
         return 32;
     }
 
-    return 64;
+    64
 }
 
 #[cfg(test)]
