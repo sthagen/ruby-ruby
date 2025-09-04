@@ -101,6 +101,7 @@ make_counters! {
         exit_callee_side_exit,
         exit_obj_to_string_fallback,
         exit_interrupt,
+        exit_optional_arguments,
     }
 
     // unhanded_call_: Unhandled call types
@@ -126,7 +127,6 @@ make_counters! {
     compile_error_parse_malformed_iseq,
     compile_error_parse_validation,
     compile_error_parse_not_allowed,
-    compile_error_parse_parameter_type_optional,
     compile_error_parse_parameter_type_forwardable,
 
     // The number of times YARV instructions are executed on JIT code
@@ -208,7 +208,6 @@ pub fn exit_counter_for_compile_error(compile_error: &CompileError) -> Counter {
             Validation(_)     => compile_error_parse_validation,
             NotAllowed        => compile_error_parse_not_allowed,
             UnknownParameterType(parameter_type) => match parameter_type {
-                Optional      => compile_error_parse_parameter_type_optional,
                 Forwardable   => compile_error_parse_parameter_type_forwardable,
             }
         }
@@ -304,11 +303,10 @@ pub extern "C" fn rb_zjit_stats(_ec: EcPtr, _self: VALUE, target_key: VALUE) -> 
 
     // Set side-exit counters for UnhandledYARVInsn
     let exit_counters = ZJITState::get_exit_counters();
-    for op_idx in 0..VM_INSTRUCTION_SIZE as usize {
+    for (op_idx, count) in exit_counters.iter().enumerate().take(VM_INSTRUCTION_SIZE as usize) {
         let op_name = insn_name(op_idx);
         let key_string = "unhandled_yarv_insn_".to_owned() + &op_name;
-        let count = exit_counters[op_idx];
-        set_stat_usize!(hash, &key_string, count);
+        set_stat_usize!(hash, &key_string, *count);
     }
 
     // Only ZJIT_STATS builds support rb_vm_insn_count

@@ -327,6 +327,22 @@ class TestZJIT < Test::Unit::TestCase
     }, call_threshold: 2, allowed_iseqs: 'entry@-e:2'
   end
 
+  def test_send_optional_arguments
+    assert_compiles '[[1, 2], [3, 4]]', %q{
+      def test(a, b = 2) = [a, b]
+      def entry = [test(1), test(3, 4)]
+      entry
+      entry
+    }, call_threshold: 2
+  end
+
+  def test_iseq_with_optional_arguments
+    assert_compiles '[[1, 2], [3, 4]]', %q{
+      def test(a, b = 2) = [a, b]
+      [test(1), test(3, 4)]
+    }
+  end
+
   def test_invokebuiltin
     omit 'Test fails at the moment due to not handling optional parameters'
     assert_compiles '["."]', %q{
@@ -2237,6 +2253,52 @@ class TestZJIT < Test::Unit::TestCase
         foo
       end
       called
+    }
+  end
+
+  def test_line_tracepoint_on_c_method
+    assert_compiles '"[[:line, true]]"', %q{
+      events = []
+      events.instance_variable_set(
+        :@tp,
+        TracePoint.new(:line) { |tp| events << [tp.event, tp.lineno] if tp.path == __FILE__ }
+      )
+      def events.to_str
+        @tp.enable; ''
+      end
+
+      # Stay in generated code while enabling tracing
+      def events.compiled(obj)
+        String(obj)
+        @tp.disable; __LINE__
+      end
+
+      line = events.compiled(events)
+      events[0][-1] = (events[0][-1] == line)
+
+      events.to_s # can't dump events as it's a singleton object AND it has a TracePoint instance variable, which also can't be dumped
+    }
+  end
+
+  def test_targeted_line_tracepoint_in_c_method_call
+    assert_compiles '"[true]"', %q{
+      events = []
+      events.instance_variable_set(:@tp, TracePoint.new(:line) { |tp| events << tp.lineno })
+      def events.to_str
+        @tp.enable(target: method(:compiled))
+        ''
+      end
+
+      # Stay in generated code while enabling tracing
+      def events.compiled(obj)
+        String(obj)
+        __LINE__
+      end
+
+      line = events.compiled(events)
+      events[0] = (events[0] == line)
+
+      events.to_s # can't dump events as it's a singleton object AND it has a TracePoint instance variable, which also can't be dumped
     }
   end
 

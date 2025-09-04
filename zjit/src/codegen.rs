@@ -1,5 +1,7 @@
 //! This module is for native code generation.
 
+#![allow(clippy::let_and_return)]
+
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::ffi::{c_int, c_long, c_void};
@@ -7,7 +9,7 @@ use std::slice;
 
 use crate::asm::Label;
 use crate::backend::current::{Reg, ALLOC_REGS};
-use crate::invariants::{track_bop_assumption, track_cme_assumption, track_single_ractor_assumption, track_stable_constant_names_assumption};
+use crate::invariants::{track_bop_assumption, track_cme_assumption, track_single_ractor_assumption, track_stable_constant_names_assumption, track_no_trace_point_assumption};
 use crate::gc::{append_gc_offsets, get_or_create_iseq_payload, get_or_create_iseq_payload_ptr, IseqPayload, IseqStatus};
 use crate::state::ZJITState;
 use crate::stats::{exit_counter_for_compile_error, incr_counter, incr_counter_by, CompileError};
@@ -15,7 +17,7 @@ use crate::stats::{counter_ptr, with_time_stat, Counter, Counter::{compile_time_
 use crate::{asm::CodeBlock, cruby::*, options::debug, virtualmem::CodePtr};
 use crate::backend::lir::{self, asm_comment, asm_ccall, Assembler, Opnd, Target, CFP, C_ARG_OPNDS, C_RET_OPND, EC, NATIVE_STACK_PTR, NATIVE_BASE_PTR, SCRATCH_OPND, SP};
 use crate::hir::{iseq_to_hir, Block, BlockId, BranchEdge, Invariant, RangeType, SideExitReason, SideExitReason::*, SpecialObjectType, SpecialBackrefSymbol, SELF_PARAM_IDX};
-use crate::hir::{Const, FrameState, Function, Insn, InsnId, ParseError};
+use crate::hir::{Const, FrameState, Function, Insn, InsnId};
 use crate::hir_type::{types, Type};
 use crate::options::get_option;
 
@@ -51,7 +53,7 @@ impl JITState {
 
     /// Retrieve the output of a given instruction that has been compiled
     fn get_opnd(&self, insn_id: InsnId) -> lir::Opnd {
-        self.opnds[insn_id.0].expect(&format!("Failed to get_opnd({insn_id})"))
+        self.opnds[insn_id.0].unwrap_or_else(|| panic!("Failed to get_opnd({insn_id})"))
     }
 
     /// Find or create a label for a given BlockId
@@ -169,7 +171,7 @@ fn gen_entry(cb: &mut CodeBlock, iseq: IseqPtr, function: &Function, function_pt
     gen_entry_params(&mut asm, iseq, function.block(BlockId(0)));
 
     // Jump to the first block using a call instruction
-    asm.ccall(function_ptr.raw_ptr(cb) as *const u8, vec![]);
+    asm.ccall(function_ptr.raw_ptr(cb), vec![]);
 
     // Restore registers for CFP, EC, and SP after use
     asm_comment!(asm, "return to the interpreter");
@@ -240,7 +242,7 @@ fn gen_iseq_body(cb: &mut CodeBlock, iseq: IseqPtr, function: Option<&Function>,
 }
 
 /// Compile a function
-fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, function: &Function) -> Result<(CodePtr, Vec<CodePtr>, Vec<Rc<RefCell<IseqCall>>>), CompileError> {
+fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, function: &Function) -> Result<(CodePtr, Vec<CodePtr>, Vec<IseqCallRef>), CompileError> {
     let c_stack_slots = max_num_params(function).saturating_sub(ALLOC_REGS.len());
     let mut jit = JITState::new(iseq, function.num_insns(), function.num_blocks(), c_stack_slots);
     let mut asm = Assembler::new();
@@ -519,7 +521,7 @@ fn gen_defined(jit: &JITState, asm: &mut Assembler, op_type: usize, obj: VALUE, 
 /// can't optimize the level=0 case using the SP register.
 fn gen_getlocal_with_ep(asm: &mut Assembler, local_ep_offset: u32, level: u32) -> lir::Opnd {
     let ep = gen_get_ep(asm, level);
-    let offset = -(SIZEOF_VALUE_I32 * i32::try_from(local_ep_offset).expect(&format!("Could not convert local_ep_offset {local_ep_offset} to i32")));
+    let offset = -(SIZEOF_VALUE_I32 * i32::try_from(local_ep_offset).unwrap_or_else(|_| panic!("Could not convert local_ep_offset {local_ep_offset} to i32")));
     asm.load(Opnd::mem(64, ep, offset))
 }
 
@@ -532,12 +534,12 @@ fn gen_setlocal_with_ep(asm: &mut Assembler, val: Opnd, val_type: Type, local_ep
     // When we've proved that we're writing an immediate,
     // we can skip the write barrier.
     if val_type.is_immediate() {
-        let offset = -(SIZEOF_VALUE_I32 * i32::try_from(local_ep_offset).expect(&format!("Could not convert local_ep_offset {local_ep_offset} to i32")));
+        let offset = -(SIZEOF_VALUE_I32 * i32::try_from(local_ep_offset).unwrap_or_else(|_| panic!("Could not convert local_ep_offset {local_ep_offset} to i32")));
         asm.mov(Opnd::mem(64, ep, offset), val);
     } else {
         // We're potentially writing a reference to an IMEMO/env object,
         // so take care of the write barrier with a function.
-        let local_index = c_int::try_from(local_ep_offset).ok().and_then(|idx| idx.checked_mul(-1)).expect(&format!("Could not turn {local_ep_offset} into a negative c_int"));
+        let local_index = c_int::try_from(local_ep_offset).ok().and_then(|idx| idx.checked_mul(-1)).unwrap_or_else(|| panic!("Could not turn {local_ep_offset} into a negative c_int"));
         asm_ccall!(asm, rb_vm_env_write, ep, local_index.into(), val);
     }
 }
@@ -590,6 +592,10 @@ fn gen_patch_point(jit: &mut JITState, asm: &mut Assembler, invariant: &Invarian
             Invariant::StableConstantNames { idlist } => {
                 let side_exit_ptr = cb.resolve_label(label);
                 track_stable_constant_names_assumption(idlist, code_ptr, side_exit_ptr, payload_ptr);
+            }
+            Invariant::NoTracePoint => {
+                let side_exit_ptr = cb.resolve_label(label);
+                track_no_trace_point_assumption(code_ptr, side_exit_ptr, payload_ptr);
             }
             Invariant::SingleRactorMode => {
                 let side_exit_ptr = cb.resolve_label(label);
@@ -768,7 +774,22 @@ fn gen_entry_prologue(asm: &mut Assembler, iseq: IseqPtr) {
     // Load the current SP from the CFP into REG_SP
     asm.mov(SP, Opnd::mem(64, CFP, RUBY_OFFSET_CFP_SP));
 
-    // TODO: Support entry chain guard when ISEQ has_opt
+    // Currently, we support only the case that no optional arguments are given.
+    // Bail out if any optional argument is supplied.
+    let opt_num = unsafe { get_iseq_body_param_opt_num(iseq) };
+    if opt_num > 0 {
+        asm_comment!(asm, "guard no optional arguments");
+        let no_opts_pc = unsafe { rb_iseq_pc_at_idx(iseq, 0) };
+        asm.cmp(Opnd::mem(64, CFP, RUBY_OFFSET_CFP_PC), Opnd::const_ptr(no_opts_pc));
+        let no_opts_label = asm.new_label("no_opts");
+        asm.je(no_opts_label.clone());
+
+        gen_incr_counter(asm, Counter::exit_optional_arguments);
+        asm.frame_teardown(lir::JIT_PRESERVED_REGS);
+        asm.cret(Qundef.into());
+
+        asm.write_label(no_opts_label);
+    }
 }
 
 /// Assign method arguments to basic block arguments at JIT entry
@@ -1097,7 +1118,7 @@ fn gen_new_array(
 fn gen_new_hash(
     jit: &mut JITState,
     asm: &mut Assembler,
-    elements: &Vec<(InsnId, InsnId)>,
+    elements: &[(InsnId, InsnId)],
     state: &FrameState,
 ) -> lir::Opnd {
     gen_prepare_non_leaf_call(jit, asm, state);
@@ -1510,6 +1531,7 @@ fn compile_iseq(iseq: IseqPtr) -> Result<Function, CompileError> {
     #[cfg(debug_assertions)]
     if let Err(err) = function.validate() {
         debug!("ZJIT: compile_iseq: {err:?}");
+        use crate::hir::ParseError;
         return Err(CompileError::ParseError(ParseError::Validation(err)));
     }
     Ok(function)
@@ -1853,6 +1875,8 @@ pub struct IseqCall {
     /// Position where the call instruction ends (exclusive)
     end_addr: Cell<Option<CodePtr>>,
 }
+
+type IseqCallRef = Rc<RefCell<IseqCall>>;
 
 impl IseqCall {
     /// Allocate a new IseqCall
