@@ -9,7 +9,7 @@ use std::slice;
 
 use crate::asm::Label;
 use crate::backend::current::{Reg, ALLOC_REGS};
-use crate::invariants::{track_bop_assumption, track_cme_assumption, track_single_ractor_assumption, track_stable_constant_names_assumption, track_no_trace_point_assumption};
+use crate::invariants::{track_bop_assumption, track_cme_assumption, track_no_ep_escape_assumption, track_no_trace_point_assumption, track_single_ractor_assumption, track_stable_constant_names_assumption};
 use crate::gc::{append_gc_offsets, get_or_create_iseq_payload, get_or_create_iseq_payload_ptr, IseqPayload, IseqStatus};
 use crate::state::ZJITState;
 use crate::stats::{exit_counter_for_compile_error, incr_counter, incr_counter_by, CompileError};
@@ -367,6 +367,7 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
         Insn::SendWithoutBlockDirect { cd, state, args, .. } if args.len() + 1 > C_ARG_OPNDS.len() => // +1 for self
             gen_send_without_block(jit, asm, *cd, &function.frame_state(*state)),
         Insn::SendWithoutBlockDirect { cme, iseq, self_val, args, state, .. } => gen_send_without_block_direct(cb, jit, asm, *cme, *iseq, opnd!(self_val), opnds!(args), &function.frame_state(*state)),
+        &Insn::InvokeSuper { cd, blockiseq, state, .. } => gen_invokesuper(jit, asm, cd, blockiseq, &function.frame_state(state)),
         // Ensure we have enough room fit ec, self, and arguments
         // TODO remove this check when we have stack args (we can use Time.new to test it)
         Insn::InvokeBuiltin { bf, state, .. } if bf.argc + 2 > (C_ARG_OPNDS.len() as i32) => return Err(*state),
@@ -580,25 +581,24 @@ fn gen_patch_point(jit: &mut JITState, asm: &mut Assembler, invariant: &Invarian
 
     // Remember the current address as a patch point
     asm.pos_marker(move |code_ptr, cb| {
+        let side_exit_ptr = cb.resolve_label(label);
         match invariant {
             Invariant::BOPRedefined { klass, bop } => {
-                let side_exit_ptr = cb.resolve_label(label);
                 track_bop_assumption(klass, bop, code_ptr, side_exit_ptr, payload_ptr);
             }
             Invariant::MethodRedefined { klass: _, method: _, cme } => {
-                let side_exit_ptr = cb.resolve_label(label);
                 track_cme_assumption(cme, code_ptr, side_exit_ptr, payload_ptr);
             }
             Invariant::StableConstantNames { idlist } => {
-                let side_exit_ptr = cb.resolve_label(label);
                 track_stable_constant_names_assumption(idlist, code_ptr, side_exit_ptr, payload_ptr);
             }
             Invariant::NoTracePoint => {
-                let side_exit_ptr = cb.resolve_label(label);
                 track_no_trace_point_assumption(code_ptr, side_exit_ptr, payload_ptr);
             }
+            Invariant::NoEPEscape(iseq) => {
+                track_no_ep_escape_assumption(iseq, code_ptr, side_exit_ptr, payload_ptr);
+            }
             Invariant::SingleRactorMode => {
-                let side_exit_ptr = cb.resolve_label(label);
                 track_single_ractor_assumption(code_ptr, side_exit_ptr, payload_ptr);
             }
         }
@@ -870,7 +870,7 @@ fn gen_entry_param(asm: &mut Assembler, iseq: IseqPtr, local_idx: usize) -> lir:
     // If the ISEQ does not escape EP, we can optimize the local variable access using the SP register.
     if !iseq_entry_escapes_ep(iseq) {
         // Create a reference to the local variable using the SP register. We assume EP == BP.
-        // TODO: Implement the invalidation in rb_zjit_invalidate_ep_is_bp()
+        // TODO: Implement the invalidation in rb_zjit_invalidate_no_ep_escape()
         let offs = -(SIZEOF_VALUE_I32 * (ep_offset + 1));
         Opnd::mem(64, SP, offs)
     } else {
@@ -965,14 +965,10 @@ fn gen_send(
     unsafe extern "C" {
         fn rb_vm_send(ec: EcPtr, cfp: CfpPtr, cd: VALUE, blockiseq: IseqPtr) -> VALUE;
     }
-    let ret = asm.ccall(
+    asm.ccall(
         rb_vm_send as *const u8,
         vec![EC, CFP, (cd as usize).into(), VALUE(blockiseq as usize).into()],
-    );
-    // TODO: Add a PatchPoint here that can side-exit the function if the callee messed with
-    // the frame's locals
-
-    ret
+    )
 }
 
 /// Compile a dynamic dispatch without block
@@ -1001,14 +997,10 @@ fn gen_send_without_block(
     unsafe extern "C" {
         fn rb_vm_opt_send_without_block(ec: EcPtr, cfp: CfpPtr, cd: VALUE) -> VALUE;
     }
-    let ret = asm.ccall(
+    asm.ccall(
         rb_vm_opt_send_without_block as *const u8,
         vec![EC, CFP, (cd as usize).into()],
-    );
-    // TODO(max): Add a PatchPoint here that can side-exit the function if the callee messed with
-    // the frame's locals
-
-    ret
+    )
 }
 
 /// Compile a direct jump to an ISEQ call without block
@@ -1057,8 +1049,6 @@ fn gen_send_without_block_direct(
     let iseq_call = IseqCall::new(iseq);
     let dummy_ptr = cb.get_write_ptr().raw_ptr(cb);
     jit.iseq_calls.push(iseq_call.clone());
-    // TODO(max): Add a PatchPoint here that can side-exit the function if the callee messed with
-    // the frame's locals
     let ret = asm.ccall_with_iseq_call(dummy_ptr, c_args, &iseq_call);
 
     // If a callee side-exits, i.e. returns Qundef, propagate the return value to the caller.
@@ -1074,6 +1064,34 @@ fn gen_send_without_block_direct(
     asm.mov(SP, new_sp);
 
     ret
+}
+
+/// Compile a dynamic dispatch for `super`
+fn gen_invokesuper(
+    jit: &mut JITState,
+    asm: &mut Assembler,
+    cd: *const rb_call_data,
+    blockiseq: IseqPtr,
+    state: &FrameState,
+) -> lir::Opnd {
+    gen_incr_counter(asm, Counter::dynamic_send_count);
+
+    // Save PC and SP
+    gen_prepare_call_with_gc(asm, state);
+    gen_save_sp(asm, state.stack().len());
+
+    // Spill locals and stack
+    gen_spill_locals(jit, asm, state);
+    gen_spill_stack(jit, asm, state);
+
+    asm_comment!(asm, "call super with dynamic dispatch");
+    unsafe extern "C" {
+        fn rb_vm_invokesuper(ec: EcPtr, cfp: CfpPtr, cd: VALUE, blockiseq: IseqPtr) -> VALUE;
+    }
+    asm.ccall(
+        rb_vm_invokesuper as *const u8,
+        vec![EC, CFP, (cd as usize).into(), VALUE(blockiseq as usize).into()],
+    )
 }
 
 /// Compile a string resurrection
