@@ -8,7 +8,7 @@
 # for which CRuby is built.
 module RubyVM::ZJIT
   # Avoid calling a Ruby method here to avoid interfering with compilation tests
-  if Primitive.rb_zjit_stats_enabled_p
+  if Primitive.rb_zjit_print_stats_p
     at_exit { print_stats }
   end
 end
@@ -27,6 +27,11 @@ class << RubyVM::ZJIT
   # Return ZJIT statistics as a Hash
   def stats(target_key = nil)
     Primitive.rb_zjit_stats(target_key)
+  end
+
+  # Discard statistics collected for `--zjit-stats`.
+  def reset_stats!
+    Primitive.rb_zjit_reset_stats_bang
   end
 
   # Get the summary of ZJIT statistics as a String

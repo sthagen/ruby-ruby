@@ -27,6 +27,30 @@ class TestZJIT < Test::Unit::TestCase
     RUBY
   end
 
+  def test_stats_quiet
+    # Test that --zjit-stats=quiet collects stats but doesn't print them
+    script = <<~RUBY
+      def test = 42
+      test
+      test
+      puts RubyVM::ZJIT.stats_enabled?
+    RUBY
+
+    stats_header = "***ZJIT: Printing ZJIT statistics on exit***"
+
+    # With --zjit-stats, stats should be printed to stderr
+    out, err, status = eval_with_jit(script, stats: true)
+    assert_success(out, err, status)
+    assert_includes(err, stats_header)
+    assert_equal("true\n", out)
+
+    # With --zjit-stats=quiet, stats should NOT be printed but still enabled
+    out, err, status = eval_with_jit(script, stats: :quiet)
+    assert_success(out, err, status)
+    refute_includes(err, stats_header)
+    assert_equal("true\n", out)
+  end
+
   def test_enable_through_env
     child_env = {'RUBY_YJIT_ENABLE' => nil, 'RUBY_ZJIT_ENABLE' => '1'}
     assert_in_out_err([child_env, '-v'], '') do |stdout, stderr|
@@ -740,6 +764,37 @@ class TestZJIT < Test::Unit::TestCase
       test(2, 3) # profile opt_ge
       [test(0, 1), test(0, 0), test(1, 0)]
     }, insns: [:opt_ge], call_threshold: 2
+  end
+
+  def test_opt_new_does_not_push_frame
+    assert_compiles 'nil', %q{
+      class Foo
+        attr_reader :backtrace
+
+        def initialize
+          @backtrace = caller
+        end
+      end
+      def test = Foo.new
+
+      foo = test
+      foo.backtrace.find do |frame|
+        frame.include?('Class#new')
+      end
+    }, insns: [:opt_new]
+  end
+
+  def test_opt_new_with_redefinition
+    assert_compiles '"foo"', %q{
+      class Foo
+        def self.new = "foo"
+
+        def initialize = raise("unreachable")
+      end
+      def test = Foo.new
+
+      test
+    }, insns: [:opt_new]
   end
 
   def test_new_hash_empty
@@ -1823,6 +1878,28 @@ class TestZJIT < Test::Unit::TestCase
     }, stats: true
   end
 
+  def test_reset_stats
+    assert_runs 'true', %q{
+      def test = 1
+      100.times { test }
+
+      # Get initial stats and verify they're non-zero
+      initial_stats = RubyVM::ZJIT.stats
+
+      # Reset the stats
+      RubyVM::ZJIT.reset_stats!
+
+      # Get stats after reset
+      reset_stats = RubyVM::ZJIT.stats
+
+      [
+        # After reset, counters should be zero or at least much smaller
+        # (some instructions might execute between reset and reading stats)
+        :zjit_insn_count.then { |s| initial_stats[s] > 0 && reset_stats[s] < initial_stats[s] },
+      ].all?
+    }, stats: true
+  end
+
   def test_zjit_option_uses_array_each_in_ruby
     omit 'ZJIT wrongly compiles Array#each, so it is disabled for now'
     assert_runs '"<internal:array>"', %q{
@@ -2490,7 +2567,7 @@ class TestZJIT < Test::Unit::TestCase
     if zjit
       args << "--zjit-call-threshold=#{call_threshold}"
       args << "--zjit-num-profiles=#{num_profiles}"
-      args << "--zjit-stats" if stats
+      args << "--zjit-stats#{"=#{stats}" unless stats == true}" if stats
       args << "--zjit-debug" if debug
       if allowed_iseqs
         jitlist = Tempfile.new("jitlist")
