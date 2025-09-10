@@ -583,8 +583,9 @@ pub enum Insn {
     /// Un-optimized fallback implementation (dynamic dispatch) for send-ish instructions
     /// Ignoring keyword arguments etc for now
     SendWithoutBlock { self_val: InsnId, cd: *const rb_call_data, args: Vec<InsnId>, state: InsnId },
-    Send { self_val: InsnId, cd: *const rb_call_data, blockiseq: IseqPtr, args: Vec<InsnId>, state: InsnId },
-    InvokeSuper { self_val: InsnId, cd: *const rb_call_data, blockiseq: IseqPtr, args: Vec<InsnId>, state: InsnId },
+    Send { cd: *const rb_call_data, blockiseq: IseqPtr, args: Vec<InsnId>, state: InsnId },
+    InvokeSuper { cd: *const rb_call_data, blockiseq: IseqPtr, args: Vec<InsnId>, state: InsnId },
+    InvokeBlock { cd: *const rb_call_data, args: Vec<InsnId>, state: InsnId },
 
     /// Optimized ISEQ call
     SendWithoutBlockDirect {
@@ -828,18 +829,25 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
                 }
                 Ok(())
             }
-            Insn::Send { self_val, cd, args, blockiseq, .. } => {
+            Insn::Send { cd, args, blockiseq, .. } => {
                 // For tests, we want to check HIR snippets textually. Addresses change
                 // between runs, making tests fail. Instead, pick an arbitrary hex value to
                 // use as a "pointer" so we can check the rest of the HIR.
-                write!(f, "Send {self_val}, {:p}, :{}", self.ptr_map.map_ptr(blockiseq), ruby_call_method_name(*cd))?;
+                write!(f, "Send {:p}, :{}", self.ptr_map.map_ptr(blockiseq), ruby_call_method_name(*cd))?;
                 for arg in args {
                     write!(f, ", {arg}")?;
                 }
                 Ok(())
             }
-            Insn::InvokeSuper { self_val, blockiseq, args, .. } => {
-                write!(f, "InvokeSuper {self_val}, {:p}", self.ptr_map.map_ptr(blockiseq))?;
+            Insn::InvokeSuper { blockiseq, args, .. } => {
+                write!(f, "InvokeSuper {:p}", self.ptr_map.map_ptr(blockiseq))?;
+                for arg in args {
+                    write!(f, ", {arg}")?;
+                }
+                Ok(())
+            }
+            Insn::InvokeBlock { args, .. } => {
+                write!(f, "InvokeBlock")?;
                 for arg in args {
                     write!(f, ", {arg}")?;
                 }
@@ -1335,17 +1343,20 @@ impl Function {
                 args: find_vec!(args),
                 state,
             },
-            &Send { self_val, cd, blockiseq, ref args, state } => Send {
-                self_val: find!(self_val),
+            &Send { cd, blockiseq, ref args, state } => Send {
                 cd,
                 blockiseq,
                 args: find_vec!(args),
                 state,
             },
-            &InvokeSuper { self_val, cd, blockiseq, ref args, state } => InvokeSuper {
-                self_val: find!(self_val),
+            &InvokeSuper { cd, blockiseq, ref args, state } => InvokeSuper {
                 cd,
                 blockiseq,
+                args: find_vec!(args),
+                state,
+            },
+            &InvokeBlock { cd, ref args, state } => InvokeBlock {
+                cd,
                 args: find_vec!(args),
                 state,
             },
@@ -1463,6 +1474,7 @@ impl Function {
             Insn::SendWithoutBlockDirect { .. } => types::BasicObject,
             Insn::Send { .. } => types::BasicObject,
             Insn::InvokeSuper { .. } => types::BasicObject,
+            Insn::InvokeBlock { .. } => types::BasicObject,
             Insn::InvokeBuiltin { return_type, .. } => return_type.unwrap_or(types::BasicObject),
             Insn::Defined { pushval, .. } => Type::from_value(*pushval).union(types::NilClass),
             Insn::DefinedIvar { .. } => types::BasicObject,
@@ -2268,15 +2280,16 @@ impl Function {
                 worklist.push_back(val);
                 worklist.push_back(state);
             }
-            &Insn::Send { self_val, ref args, state, .. }
             | &Insn::SendWithoutBlock { self_val, ref args, state, .. }
-            | &Insn::SendWithoutBlockDirect { self_val, ref args, state, .. }
-            | &Insn::InvokeSuper { self_val, ref args, state, .. } => {
+            | &Insn::SendWithoutBlockDirect { self_val, ref args, state, .. } => {
                 worklist.push_back(self_val);
                 worklist.extend(args);
                 worklist.push_back(state);
             }
-            &Insn::InvokeBuiltin { ref args, state, .. } => {
+            &Insn::InvokeSuper { ref args, state, .. }
+            | &Insn::Send { ref args, state, .. }
+            | &Insn::InvokeBuiltin { ref args, state, .. }
+            | &Insn::InvokeBlock { ref args, state, .. } => {
                 worklist.extend(args);
                 worklist.push_back(state)
             }
@@ -2966,16 +2979,8 @@ pub enum CallType {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum ParameterType {
-    /// For example, `foo(...)`. Interaction of JIT
-    /// calling convention and side exits currently unsolved.
-    Forwardable,
-}
-
-#[derive(Clone, Debug, PartialEq)]
 pub enum ParseError {
     StackUnderflow(FrameState),
-    UnknownParameterType(ParameterType),
     MalformedIseq(u32), // insn_idx into iseq_encoded
     Validation(ValidationError),
     NotAllowed,
@@ -3049,17 +3054,11 @@ impl ProfileOracle {
 /// The index of the self parameter in the HIR function
 pub const SELF_PARAM_IDX: usize = 0;
 
-fn filter_unknown_parameter_type(iseq: *const rb_iseq_t) -> Result<(), ParseError> {
-    if unsafe { rb_get_iseq_flags_forwardable(iseq) } { return Err(ParseError::UnknownParameterType(ParameterType::Forwardable)); }
-    Ok(())
-}
-
 /// Compile ISEQ into High-level IR
 pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
     if !ZJITState::can_compile_iseq(iseq) {
         return Err(ParseError::NotAllowed);
     }
-    filter_unknown_parameter_type(iseq)?;
     let payload = get_or_create_iseq_payload(iseq);
     let mut profiles = ProfileOracle::new(payload);
     let mut fun = Function::new(iseq);
@@ -3623,9 +3622,9 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     let argc = unsafe { vm_ci_argc((*cd).ci) };
 
                     let args = state.stack_pop_n(argc as usize)?;
-                    let recv = state.stack_pop()?;
+                    let _recv = state.stack_pop()?;
                     let exit_id = fun.push_insn(block, Insn::Snapshot { state: exit_state });
-                    let send = fun.push_insn(block, Insn::Send { self_val: recv, cd, blockiseq, args, state: exit_id });
+                    let send = fun.push_insn(block, Insn::Send { cd, blockiseq, args, state: exit_id });
                     state.stack_push(send);
 
                     // Reload locals that may have been modified by the blockiseq.
@@ -3648,10 +3647,10 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     }
                     let argc = unsafe { vm_ci_argc((*cd).ci) };
                     let args = state.stack_pop_n(argc as usize)?;
-                    let recv = state.stack_pop()?;
+                    let _recv = state.stack_pop()?;
                     let blockiseq: IseqPtr = get_arg(pc, 1).as_ptr();
                     let exit_id = fun.push_insn(block, Insn::Snapshot { state: exit_state });
-                    let result = fun.push_insn(block, Insn::InvokeSuper { self_val: recv, cd, blockiseq, args, state: exit_id });
+                    let result = fun.push_insn(block, Insn::InvokeSuper { cd, blockiseq, args, state: exit_id });
                     state.stack_push(result);
 
                     if !blockiseq.is_null() {
@@ -3664,6 +3663,21 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                             state.setlocal(ep_offset, val);
                         }
                     }
+                }
+                YARVINSN_invokeblock => {
+                    let cd: *const rb_call_data = get_arg(pc, 0).as_ptr();
+                    let call_info = unsafe { rb_get_call_data_ci(cd) };
+                    if let Err(call_type) = unknown_call_type(unsafe { rb_vm_ci_flag(call_info) }) {
+                        // Unknown call type; side-exit into the interpreter
+                        let exit_id = fun.push_insn(block, Insn::Snapshot { state: exit_state });
+                        fun.push_insn(block, Insn::SideExit { state: exit_id, reason: SideExitReason::UnhandledCallType(call_type) });
+                        break;  // End the block
+                    }
+                    let argc = unsafe { vm_ci_argc((*cd).ci) };
+                    let args = state.stack_pop_n(argc as usize)?;
+                    let exit_id = fun.push_insn(block, Insn::Snapshot { state: exit_state });
+                    let result = fun.push_insn(block, Insn::InvokeBlock { cd, args, state: exit_id });
+                    state.stack_push(result);
                 }
                 YARVINSN_getglobal => {
                     let id = ID(get_arg(pc, 0).as_u64());
@@ -5049,7 +5063,7 @@ mod tests {
         fn test@<compiled>:3:
         bb0(v0:BasicObject, v1:BasicObject):
           v5:BasicObject = GetLocal l0, EP@3
-          v7:BasicObject = Send v5, 0x1000, :each
+          v7:BasicObject = Send 0x1000, :each
           v8:BasicObject = GetLocal l0, EP@3
           CheckInterrupts
           Return v7
@@ -5160,7 +5174,7 @@ mod tests {
         assert_snapshot!(hir_string("test"), @r"
         fn test@<compiled>:2:
         bb0(v0:BasicObject):
-          v5:BasicObject = InvokeSuper v0, 0x1000
+          v5:BasicObject = InvokeSuper 0x1000
           CheckInterrupts
           Return v5
         ");
@@ -5174,7 +5188,7 @@ mod tests {
         assert_snapshot!(hir_string("test"), @r"
         fn test@<compiled>:2:
         bb0(v0:BasicObject):
-          v5:BasicObject = InvokeSuper v0, 0x1000
+          v5:BasicObject = InvokeSuper 0x1000
           CheckInterrupts
           Return v5
         ");
@@ -5198,13 +5212,23 @@ mod tests {
         eval("
             def test(...) = super(...)
         ");
-        assert_compile_fails("test", ParseError::UnknownParameterType(ParameterType::Forwardable));
+        assert_snapshot!(hir_string("test"), @r"
+        fn test@<compiled>:2:
+        bb0(v0:BasicObject, v1:BasicObject):
+          SideExit UnhandledYARVInsn(invokesuperforward)
+        ");
     }
 
     #[test]
-    fn test_cant_compile_forwardable() {
+    fn test_compile_forwardable() {
         eval("def forwardable(...) = nil");
-        assert_compile_fails("forwardable", ParseError::UnknownParameterType(ParameterType::Forwardable));
+        assert_snapshot!(hir_string("forwardable"), @r"
+        fn forwardable@<compiled>:1:
+        bb0(v0:BasicObject, v1:BasicObject):
+          v5:NilClass = Const Value(nil)
+          CheckInterrupts
+          Return v5
+        ");
     }
 
     // TODO(max): Figure out how to generate a call with OPT_SEND flag
@@ -5249,7 +5273,11 @@ mod tests {
         eval("
             def test(...) = foo(...)
         ");
-        assert_compile_fails("test", ParseError::UnknownParameterType(ParameterType::Forwardable));
+        assert_snapshot!(hir_string("test"), @r"
+        fn test@<compiled>:2:
+        bb0(v0:BasicObject, v1:BasicObject):
+          SideExit UnhandledYARVInsn(sendforward)
+        ");
     }
 
     #[test]
@@ -5835,11 +5863,14 @@ mod tests {
           v19:CBool = Test v16
           IfFalse v19, bb1(v0, v1, v2, v3, v4, v10)
           PatchPoint NoEPEscape(open)
-          SideExit UnhandledYARVInsn(invokeblock)
-        bb1(v27:BasicObject, v28:BasicObject, v29:BasicObject, v30:BasicObject, v31:BasicObject, v32:BasicObject):
+          v26:BasicObject = InvokeBlock, v10
+          v30:BasicObject = InvokeBuiltin dir_s_close, v0, v10
+          CheckInterrupts
+          Return v26
+        bb1(v36:BasicObject, v37:BasicObject, v38:BasicObject, v39:BasicObject, v40:BasicObject, v41:BasicObject):
           PatchPoint NoEPEscape(open)
           CheckInterrupts
-          Return v32
+          Return v41
         ");
     }
 
@@ -6026,6 +6057,38 @@ mod tests {
         bb0(v0:BasicObject):
           v6:Fixnum[2] = Const Value(2)
           Throw TAG_BREAK, v6
+        ");
+    }
+
+    #[test]
+    fn test_invokeblock() {
+        eval(r#"
+            def test
+              yield
+            end
+        "#);
+        assert_snapshot!(hir_string("test"), @r"
+        fn test@<compiled>:3:
+        bb0(v0:BasicObject):
+          v5:BasicObject = InvokeBlock
+          CheckInterrupts
+          Return v5
+        ");
+    }
+
+    #[test]
+    fn test_invokeblock_with_args() {
+        eval(r#"
+            def test(x, y)
+              yield x, y
+            end
+        "#);
+        assert_snapshot!(hir_string("test"), @r"
+        fn test@<compiled>:3:
+        bb0(v0:BasicObject, v1:BasicObject, v2:BasicObject):
+          v7:BasicObject = InvokeBlock, v1, v2
+          CheckInterrupts
+          Return v7
         ");
     }
 }
@@ -7735,7 +7798,7 @@ mod opt_tests {
         assert_snapshot!(hir_string("test"), @r"
         fn test@<compiled>:3:
         bb0(v0:BasicObject):
-          v5:BasicObject = Send v0, 0x1000, :foo
+          v5:BasicObject = Send 0x1000, :foo
           CheckInterrupts
           Return v5
         ");
@@ -7759,7 +7822,7 @@ mod opt_tests {
           v1:NilClass = Const Value(nil)
           v5:Fixnum[1] = Const Value(1)
           SetLocal l0, EP@3, v5
-          v10:BasicObject = Send v0, 0x1000, :foo
+          v10:BasicObject = Send 0x1000, :foo
           v11:BasicObject = GetLocal l0, EP@3
           v14:BasicObject = GetLocal l0, EP@3
           CheckInterrupts

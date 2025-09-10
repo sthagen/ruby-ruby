@@ -439,6 +439,21 @@ class TestZJIT < Test::Unit::TestCase
     }, call_threshold: 2
   end
 
+  def test_forwardable_iseq
+    assert_compiles '1', %q{
+      def test(...) = 1
+      test
+    }
+  end
+
+  def test_sendforward
+    assert_runs '[1, 2]', %q{
+      def callee(a, b) = [a, b]
+      def test(...) = callee(...)
+      test(1, 2)
+    }, insns: [:sendforward]
+  end
+
   def test_iseq_with_optional_arguments
     assert_compiles '[[1, 2], [3, 4]]', %q{
       def test(a, b = 2) = [a, b]
@@ -487,7 +502,6 @@ class TestZJIT < Test::Unit::TestCase
   end
 
   def test_invokebuiltin
-    omit 'Test fails at the moment due to not handling optional parameters'
     assert_compiles '["."]', %q{
       def test = Dir.glob(".")
       test
@@ -2568,6 +2582,46 @@ class TestZJIT < Test::Unit::TestCase
       results << test(1)
       results
     }, insns: [:opt_case_dispatch]
+  end
+
+  def test_invokeblock
+    assert_compiles '42', %q{
+      def test
+        yield
+      end
+      test { 42 }
+    }, insns: [:invokeblock]
+  end
+
+  def test_invokeblock_with_args
+    assert_compiles '3', %q{
+      def test(x, y)
+        yield x, y
+      end
+      test(1, 2) { |a, b| a + b }
+    }, insns: [:invokeblock]
+  end
+
+  def test_invokeblock_no_block_given
+    assert_compiles ':error', %q{
+      def test
+        yield rescue :error
+      end
+      test
+    }, insns: [:invokeblock]
+  end
+
+  def test_invokeblock_multiple_yields
+    assert_compiles "[1, 2, 3]", %q{
+      results = []
+      def test
+        yield 1
+        yield 2
+        yield 3
+      end
+      test { |x| results << x }
+      results
+    }, insns: [:invokeblock]
   end
 
   private
