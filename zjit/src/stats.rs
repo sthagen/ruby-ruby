@@ -1,6 +1,11 @@
 //! Counters and associated methods for events when ZJIT is run.
 
 use std::time::Instant;
+use std::sync::atomic::Ordering;
+
+#[cfg(feature = "stats_allocator")]
+#[path = "../../jit/src/lib.rs"]
+mod jit;
 
 use crate::{cruby::*, hir::ParseError, options::get_option, state::{zjit_enabled_p, ZJITState}};
 
@@ -102,23 +107,15 @@ make_counters! {
         exit_callee_side_exit,
         exit_obj_to_string_fallback,
         exit_interrupt,
+        exit_stackoverflow,
         exit_optional_arguments,
         exit_block_param_proxy_modified,
         exit_block_param_proxy_not_iseq_or_ifunc,
     }
 
     // unhanded_call_: Unhandled call types
-    unhandled_call_splat,
     unhandled_call_block_arg,
-    unhandled_call_kwarg,
-    unhandled_call_kw_splat,
     unhandled_call_tailcall,
-    unhandled_call_super,
-    unhandled_call_zsuper,
-    unhandled_call_optsend,
-    unhandled_call_kw_splat_mut,
-    unhandled_call_splat_mut,
-    unhandled_call_forwarding,
 
     // compile_error_: Compile error reasons
     compile_error_iseq_stack_too_large,
@@ -136,6 +133,10 @@ make_counters! {
 
     // The number of times we do a dynamic dispatch from JIT code
     dynamic_send_count,
+    dynamic_send_type_send_without_block,
+    dynamic_send_type_send,
+    dynamic_send_type_invokeblock,
+    dynamic_send_type_invokesuper,
 }
 
 /// Increase a counter by a specified amount
@@ -166,17 +167,8 @@ pub fn exit_counter_ptr_for_call_type(call_type: crate::hir::CallType) -> *mut u
     use crate::hir::CallType::*;
     use crate::stats::Counter::*;
     let counter = match call_type {
-        Splat      => unhandled_call_splat,
-        BlockArg   => unhandled_call_block_arg,
-        Kwarg      => unhandled_call_kwarg,
-        KwSplat    => unhandled_call_kw_splat,
-        Tailcall   => unhandled_call_tailcall,
-        Super      => unhandled_call_super,
-        Zsuper     => unhandled_call_zsuper,
-        OptSend    => unhandled_call_optsend,
-        KwSplatMut => unhandled_call_kw_splat_mut,
-        SplatMut   => unhandled_call_splat_mut,
-        Forwarding => unhandled_call_forwarding,
+        BlockArg => unhandled_call_block_arg,
+        Tailcall => unhandled_call_tailcall,
     };
     counter_ptr(counter)
 }
@@ -232,6 +224,7 @@ pub fn exit_counter_ptr(reason: crate::hir::SideExitReason) -> *mut u64 {
         CalleeSideExit                => exit_callee_side_exit,
         ObjToStringFallback           => exit_obj_to_string_fallback,
         Interrupt                     => exit_interrupt,
+        StackOverflow                 => exit_stackoverflow,
         BlockParamProxyModified       => exit_block_param_proxy_modified,
         BlockParamProxyNotIseqOrIfunc => exit_block_param_proxy_not_iseq_or_ifunc,
     };
@@ -351,5 +344,5 @@ pub fn with_time_stat<F, R>(counter: Counter, func: F) -> R where F: FnOnce() ->
 
 /// The number of bytes ZJIT has allocated on the Rust heap.
 pub fn zjit_alloc_size() -> usize {
-    0 // TODO: report the actual memory usage to support --zjit-mem-size (Shopify/ruby#686)
+    jit::GLOBAL_ALLOCATOR.alloc_size.load(Ordering::SeqCst)
 }
