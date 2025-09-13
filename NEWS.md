@@ -10,6 +10,25 @@ Note that each entry is kept to a minimum, see links for details.
 * `*nil` no longer calls `nil.to_a`, similar to how `**nil` does
   not call `nil.to_hash`.  [[Feature #21047]]
 
+* Logical binary operators (`||`, `&&`, `and` and `or`) at the
+  beginning of a line continue the previous line, like fluent dot.
+  The following two code are equal:
+
+    ```ruby
+    if condition1
+       && condition2
+      ...
+    end
+    ```
+
+    ```ruby
+    if condition1 && condition2
+      ...
+    end
+    ```
+
+    [[Feature #20925]]
+
 ## Core classes updates
 
 Note: We're only listing outstanding class updates.
@@ -98,9 +117,9 @@ Note: We're only listing outstanding class updates.
 
     * `Ractor#close_incoming` and `Ractor#close_outgoing` were removed.
 
-* Set
+* `Set`
 
-    * Set is now a core class, instead of an autoloaded stdlib class.
+    * `Set` is now a core class, instead of an autoloaded stdlib class.
       [[Feature #21216]]
 
 * String
@@ -167,7 +186,7 @@ The following default gems are updated.
 * io-wait 0.3.2
 * json 2.13.2
 * optparse 0.7.0.dev.2
-* prism 1.5.0
+* prism 1.5.1
 * psych 5.2.6
 * resolv 0.6.2
 * stringio 3.1.8.dev
@@ -285,6 +304,7 @@ A lot of work has gone into making Ractors more stable, performant, and usable. 
 [Feature #19908]: https://bugs.ruby-lang.org/issues/19908
 [Feature #20610]: https://bugs.ruby-lang.org/issues/20610
 [Feature #20724]: https://bugs.ruby-lang.org/issues/20724
+[Feature #20925]: https://bugs.ruby-lang.org/issues/20925
 [Feature #21047]: https://bugs.ruby-lang.org/issues/21047
 [Bug #21049]:     https://bugs.ruby-lang.org/issues/21049
 [Feature #21166]: https://bugs.ruby-lang.org/issues/21166

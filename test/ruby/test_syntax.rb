@@ -1259,6 +1259,56 @@ eom
     assert_valid_syntax("a #\n#\n&.foo\n")
   end
 
+  def test_fluent_and
+    omit if /\+PRISM\b/ =~ RUBY_DESCRIPTION
+
+    assert_valid_syntax("a\n" "&& foo")
+    assert_valid_syntax("a\n" "and foo")
+
+    assert_equal(:ok, eval("#{<<~"begin;"}\n#{<<~'end;'}"))
+    begin;
+      a = true
+      if a
+      && (a = :ok; true)
+        a
+      end
+    end;
+
+    assert_equal(:ok, eval("#{<<~"begin;"}\n#{<<~'end;'}"))
+    begin;
+      a = true
+      if a
+      and (a = :ok; true)
+        a
+      end
+    end;
+  end
+
+  def test_fluent_or
+    omit if /\+PRISM\b/ =~ RUBY_DESCRIPTION
+
+    assert_valid_syntax("a\n" "|| foo")
+    assert_valid_syntax("a\n" "or foo")
+
+    assert_equal(:ok, eval("#{<<~"begin;"}\n#{<<~'end;'}"))
+    begin;
+      a = false
+      if a
+      || (a = :ok; true)
+        a
+      end
+    end;
+
+    assert_equal(:ok, eval("#{<<~"begin;"}\n#{<<~'end;'}"))
+    begin;
+      a = false
+      if a
+      or (a = :ok; true)
+        a
+      end
+    end;
+  end
+
   def test_safe_call_in_massign_lhs
     assert_syntax_error("*a&.x=0", /multiple assignment destination/)
     assert_syntax_error("a&.x,=0", /multiple assignment destination/)
@@ -1952,6 +2002,19 @@ eom
     assert_equal(7, eval('a = 0; 7.then { begin; raise; ensure; a = it; end } rescue a'))
     assert_equal(8, eval('a = 0; 8.then { begin; raise; rescue; ensure; a = it; end }; a'))
     assert_equal(/9/, eval('9.then { /#{it}/o }'))
+  end
+
+  def test_it_with_splat_super_method
+    bug21256 = '[ruby-core:121592] [Bug #21256]'
+
+    a = Class.new do
+      define_method(:foo) { it }
+    end
+    b = Class.new(a) do
+      def foo(*args) = super
+    end
+
+    assert_equal(1, b.new.foo(1), bug21256)
   end
 
   def test_value_expr_in_condition
