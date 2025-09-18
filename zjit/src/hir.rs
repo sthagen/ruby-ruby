@@ -467,6 +467,42 @@ pub enum SideExitReason {
     StackOverflow,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum MethodType {
+    Iseq,
+    Cfunc,
+    Attrset,
+    Ivar,
+    Bmethod,
+    Zsuper,
+    Alias,
+    Undefined,
+    NotImplemented,
+    Optimized,
+    Missing,
+    Refined,
+}
+
+impl From<u32> for MethodType {
+    fn from(value: u32) -> Self {
+        match value {
+            VM_METHOD_TYPE_ISEQ => MethodType::Iseq,
+            VM_METHOD_TYPE_CFUNC => MethodType::Cfunc,
+            VM_METHOD_TYPE_ATTRSET => MethodType::Attrset,
+            VM_METHOD_TYPE_IVAR => MethodType::Ivar,
+            VM_METHOD_TYPE_BMETHOD => MethodType::Bmethod,
+            VM_METHOD_TYPE_ZSUPER => MethodType::Zsuper,
+            VM_METHOD_TYPE_ALIAS => MethodType::Alias,
+            VM_METHOD_TYPE_UNDEF => MethodType::Undefined,
+            VM_METHOD_TYPE_NOTIMPLEMENTED => MethodType::NotImplemented,
+            VM_METHOD_TYPE_OPTIMIZED => MethodType::Optimized,
+            VM_METHOD_TYPE_MISSING => MethodType::Missing,
+            VM_METHOD_TYPE_REFINED => MethodType::Refined,
+            _ => unreachable!("unknown send_without_block def_type: {}", value),
+        }
+    }
+}
+
 impl std::fmt::Display for SideExitReason {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
@@ -524,8 +560,15 @@ pub enum Insn {
 
     HashDup { val: InsnId, state: InsnId },
 
-    /// Allocate an instance of the `val` class without calling `#initialize` on it.
+    /// Allocate an instance of the `val` object without calling `#initialize` on it.
+    /// This can:
+    /// * raise an exception if `val` is not a class
+    /// * run arbitrary code if `val` is a class with a custom allocator
     ObjectAlloc { val: InsnId, state: InsnId },
+    /// Allocate an instance of the `val` class without calling `#initialize` on it.
+    /// This requires that `class` has the default allocator (for example via `IsMethodCfunc`).
+    /// This won't raise or run arbitrary code because `class` has the default allocator.
+    ObjectAllocClass { class: VALUE, state: InsnId },
 
     /// Check if the value is truthy and "return" a C boolean. In reality, we will likely fuse this
     /// with IfTrue/IfFalse in the backend to generate jcc.
@@ -533,7 +576,7 @@ pub enum Insn {
     /// Return C `true` if `val` is `Qnil`, else `false`.
     IsNil { val: InsnId },
     /// Return C `true` if `val`'s method on cd resolves to the cfunc.
-    IsMethodCfunc { val: InsnId, cd: *const rb_call_data, cfunc: *const u8 },
+    IsMethodCfunc { val: InsnId, cd: *const rb_call_data, cfunc: *const u8, state: InsnId },
     Defined { op_type: usize, obj: VALUE, pushval: VALUE, v: InsnId, state: InsnId },
     GetConstantPath { ic: *const iseq_inline_constant_cache, state: InsnId },
 
@@ -559,9 +602,6 @@ pub enum Insn {
     GetLocal { level: u32, ep_offset: u32 },
     /// Set a local variable in a higher scope or the heap
     SetLocal { level: u32, ep_offset: u32, val: InsnId },
-    /// Get a special singleton instance `rb_block_param_proxy` if the block
-    /// handler for the EP specified by `level` is an ISEQ or an ifunc.
-    GetBlockParamProxy { level: u32, state: InsnId },
     GetSpecialSymbol { symbol_type: SpecialBackrefSymbol, state: InsnId },
     GetSpecialNumber { nth: u64, state: InsnId },
 
@@ -583,7 +623,13 @@ pub enum Insn {
 
     /// Un-optimized fallback implementation (dynamic dispatch) for send-ish instructions
     /// Ignoring keyword arguments etc for now
-    SendWithoutBlock { recv: InsnId, cd: *const rb_call_data, args: Vec<InsnId>, state: InsnId },
+    SendWithoutBlock {
+        recv: InsnId,
+        cd: *const rb_call_data,
+        args: Vec<InsnId>,
+        def_type: Option<MethodType>, // Assigned in `optimize_direct_sends` if it's not optimized
+        state: InsnId,
+    },
     Send { recv: InsnId, cd: *const rb_call_data, blockiseq: IseqPtr, args: Vec<InsnId>, state: InsnId },
     InvokeSuper { recv: InsnId, cd: *const rb_call_data, blockiseq: IseqPtr, args: Vec<InsnId>, state: InsnId },
     InvokeBlock { cd: *const rb_call_data, args: Vec<InsnId>, state: InsnId },
@@ -637,6 +683,9 @@ pub enum Insn {
     GuardBitEquals { val: InsnId, expected: VALUE, state: InsnId },
     /// Side-exit if val doesn't have the expected shape.
     GuardShape { val: InsnId, shape: ShapeId, state: InsnId },
+    /// Side-exit if the block param has been modified or the block handler for the frame
+    /// is neither ISEQ nor ifunc, which makes it incompatible with rb_block_param_proxy.
+    GuardBlockParamProxy { level: u32, state: InsnId },
 
     /// Generate no code (or padding if necessary) and insert a patch point
     /// that can be rewritten to a side exit when the Invariant is broken.
@@ -662,7 +711,7 @@ impl Insn {
             | Insn::PatchPoint { .. } | Insn::SetIvar { .. } | Insn::ArrayExtend { .. }
             | Insn::ArrayPush { .. } | Insn::SideExit { .. } | Insn::SetGlobal { .. }
             | Insn::SetLocal { .. } | Insn::Throw { .. } | Insn::IncrCounter(_)
-            | Insn::CheckInterrupts { .. } => false,
+            | Insn::CheckInterrupts { .. } | Insn::GuardBlockParamProxy { .. } => false,
             _ => true,
         }
     }
@@ -713,6 +762,7 @@ impl Insn {
             Insn::LoadIvarEmbedded { .. } => false,
             Insn::LoadIvarExtended { .. } => false,
             Insn::CCall { elidable, .. } => !elidable,
+            Insn::ObjectAllocClass { .. } => false,
             // TODO: NewRange is effects free if we can prove the two ends to be Fixnum,
             // but we don't have type information here in `impl Insn`. See rb_range_new().
             Insn::NewRange { .. } => true,
@@ -777,6 +827,7 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
             Insn::ArrayDup { val, .. } => { write!(f, "ArrayDup {val}") }
             Insn::HashDup { val, .. } => { write!(f, "HashDup {val}") }
             Insn::ObjectAlloc { val, .. } => { write!(f, "ObjectAlloc {val}") }
+            Insn::ObjectAllocClass { class, .. } => { write!(f, "ObjectAllocClass {}", class.print(self.ptr_map)) }
             Insn::StringCopy { val, .. } => { write!(f, "StringCopy {val}") }
             Insn::StringConcat { strings, .. } => {
                 write!(f, "StringConcat")?;
@@ -879,6 +930,7 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
             Insn::GuardTypeNot { val, guard_type, .. } => { write!(f, "GuardTypeNot {val}, {}", guard_type.print(self.ptr_map)) },
             Insn::GuardBitEquals { val, expected, .. } => { write!(f, "GuardBitEquals {val}, {}", expected.print(self.ptr_map)) },
             &Insn::GuardShape { val, shape, .. } => { write!(f, "GuardShape {val}, {:p}", self.ptr_map.map_shape(shape)) },
+            Insn::GuardBlockParamProxy { level, .. } => write!(f, "GuardBlockParamProxy l{level}"),
             Insn::PatchPoint { invariant, .. } => { write!(f, "PatchPoint {}", invariant.print(self.ptr_map)) },
             Insn::GetConstantPath { ic, .. } => { write!(f, "GetConstantPath {:p}", self.ptr_map.map_ptr(ic)) },
             Insn::CCall { cfun, args, name, return_type: _, elidable: _ } => {
@@ -914,7 +966,6 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
             Insn::SetGlobal { id, val, .. } => write!(f, "SetGlobal :{}, {val}", id.contents_lossy()),
             Insn::GetLocal { level, ep_offset } => write!(f, "GetLocal l{level}, EP@{ep_offset}"),
             Insn::SetLocal { val, level, ep_offset } => write!(f, "SetLocal l{level}, EP@{ep_offset}, {val}"),
-            Insn::GetBlockParamProxy { level, .. } => write!(f, "GetBlockParamProxy l{level}"),
             Insn::GetSpecialSymbol { symbol_type, .. } => write!(f, "GetSpecialSymbol {symbol_type:?}"),
             Insn::GetSpecialNumber { nth, .. } => write!(f, "GetSpecialNumber {nth}"),
             Insn::ToArray { val, .. } => write!(f, "ToArray {val}"),
@@ -1299,7 +1350,7 @@ impl Function {
             &ToRegexp { opt, ref values, state } => ToRegexp { opt, values: find_vec!(values), state },
             &Test { val } => Test { val: find!(val) },
             &IsNil { val } => IsNil { val: find!(val) },
-            &IsMethodCfunc { val, cd, cfunc } => IsMethodCfunc { val: find!(val), cd, cfunc },
+            &IsMethodCfunc { val, cd, cfunc, state } => IsMethodCfunc { val: find!(val), cd, cfunc, state },
             Jump(target) => Jump(find_branch_edge!(target)),
             &IfTrue { val, ref target } => IfTrue { val: find!(val), target: find_branch_edge!(target) },
             &IfFalse { val, ref target } => IfFalse { val: find!(val), target: find_branch_edge!(target) },
@@ -1307,6 +1358,7 @@ impl Function {
             &GuardTypeNot { val, guard_type, state } => GuardTypeNot { val: find!(val), guard_type, state },
             &GuardBitEquals { val, expected, state } => GuardBitEquals { val: find!(val), expected, state },
             &GuardShape { val, shape, state } => GuardShape { val: find!(val), shape, state },
+            &GuardBlockParamProxy { level, state } => GuardBlockParamProxy { level, state: find!(state) },
             &FixnumAdd { left, right, state } => FixnumAdd { left: find!(left), right: find!(right), state },
             &FixnumSub { left, right, state } => FixnumSub { left: find!(left), right: find!(right), state },
             &FixnumMult { left, right, state } => FixnumMult { left: find!(left), right: find!(right), state },
@@ -1330,10 +1382,11 @@ impl Function {
                 str: find!(str),
                 state,
             },
-            &SendWithoutBlock { recv, cd, ref args, state } => SendWithoutBlock {
+            &SendWithoutBlock { recv, cd, ref args, def_type, state } => SendWithoutBlock {
                 recv: find!(recv),
                 cd,
                 args: find_vec!(args),
+                def_type,
                 state,
             },
             &SendWithoutBlockDirect { recv, cd, cme, iseq, ref args, state } => SendWithoutBlockDirect {
@@ -1367,6 +1420,7 @@ impl Function {
             &ArrayDup { val, state } => ArrayDup { val: find!(val), state },
             &HashDup { val, state } => HashDup { val: find!(val), state },
             &ObjectAlloc { val, state } => ObjectAlloc { val: find!(val), state },
+            &ObjectAllocClass { class, state } => ObjectAllocClass { class, state: find!(state) },
             &CCall { cfun, ref args, name, return_type, elidable } => CCall { cfun, args: find_vec!(args), name, return_type, elidable },
             &Defined { op_type, obj, pushval, v, state } => Defined { op_type, obj, pushval, v: find!(v), state: find!(state) },
             &DefinedIvar { self_val, pushval, id, state } => DefinedIvar { self_val: find!(self_val), pushval, id, state },
@@ -1381,7 +1435,6 @@ impl Function {
             &NewRange { low, high, flag, state } => NewRange { low: find!(low), high: find!(high), flag, state: find!(state) },
             &NewRangeFixnum { low, high, flag, state } => NewRangeFixnum { low: find!(low), high: find!(high), flag, state: find!(state) },
             &ArrayMax { ref elements, state } => ArrayMax { elements: find_vec!(elements), state: find!(state) },
-            &GetBlockParamProxy { level, state } => GetBlockParamProxy { level, state: find!(state) },
             &SetGlobal { id, val, state } => SetGlobal { id, val: find!(val), state },
             &GetIvar { self_val, id, state } => GetIvar { self_val: find!(self_val), id, state },
             &LoadIvarEmbedded { self_val, id, index } => LoadIvarEmbedded { self_val: find!(self_val), id, index },
@@ -1422,7 +1475,7 @@ impl Function {
             | Insn::IfTrue { .. } | Insn::IfFalse { .. } | Insn::Return { .. } | Insn::Throw { .. }
             | Insn::PatchPoint { .. } | Insn::SetIvar { .. } | Insn::ArrayExtend { .. }
             | Insn::ArrayPush { .. } | Insn::SideExit { .. } | Insn::SetLocal { .. } | Insn::IncrCounter(_)
-            | Insn::CheckInterrupts { .. } =>
+            | Insn::CheckInterrupts { .. } | Insn::GuardBlockParamProxy { .. } =>
                 panic!("Cannot infer type of instruction with no output: {}", self.insns[insn.0]),
             Insn::Const { val: Const::Value(val) } => Type::from_value(*val),
             Insn::Const { val: Const::CBool(val) } => Type::from_cbool(*val),
@@ -1454,6 +1507,7 @@ impl Function {
             Insn::NewRange { .. } => types::RangeExact,
             Insn::NewRangeFixnum { .. } => types::RangeExact,
             Insn::ObjectAlloc { .. } => types::HeapObject,
+            Insn::ObjectAllocClass { class, .. } => Type::from_class(*class),
             Insn::CCall { return_type, .. } => *return_type,
             Insn::GuardType { val, guard_type, .. } => self.type_of(*val).intersection(*guard_type),
             Insn::GuardTypeNot { .. } => types::BasicObject,
@@ -1494,7 +1548,6 @@ impl Function {
             Insn::ObjToString { .. } => types::BasicObject,
             Insn::AnyToString { .. } => types::String,
             Insn::GetLocal { .. } => types::BasicObject,
-            Insn::GetBlockParamProxy { .. } => types::BasicObject,
             // The type of Snapshot doesn't really matter; it's never materialized. It's used only
             // as a reference for FrameState, which we use to generate side-exit code.
             Insn::Snapshot { .. } => types::Any,
@@ -1704,7 +1757,8 @@ impl Function {
 
     /// Rewrite SendWithoutBlock opcodes into SendWithoutBlockDirect opcodes if we know the target
     /// ISEQ statically. This removes run-time method lookups and opens the door for inlining.
-    fn optimize_direct_sends(&mut self) {
+    /// Also try and inline constant caches, specialize object allocations, and more.
+    fn type_specialize(&mut self) {
         for block in self.rpo() {
             let old_insns = std::mem::take(&mut self.blocks[block.0].insns);
             assert!(self.blocks[block.0].insns.is_empty());
@@ -1742,7 +1796,7 @@ impl Function {
                         self.try_rewrite_uminus(block, insn_id, recv, state),
                     Insn::SendWithoutBlock { recv, args, state, cd, .. } if ruby_call_method_id(cd) == ID!(aref) && args.len() == 1 =>
                         self.try_rewrite_aref(block, insn_id, recv, args[0], state),
-                    Insn::SendWithoutBlock { mut recv, cd, args, state } => {
+                    Insn::SendWithoutBlock { mut recv, cd, args, state, .. } => {
                         let frame_state = self.frame_state(state);
                         let (klass, profiled_type) = if let Some(klass) = self.type_of(recv).runtime_exact_ruby_class() {
                             // If we know the class statically, use it to fold the lookup at compile-time.
@@ -1798,6 +1852,9 @@ impl Function {
                             let getivar = self.push_insn(block, Insn::GetIvar { self_val: recv, id, state });
                             self.make_equal_to(insn_id, getivar);
                         } else {
+                            if let Insn::SendWithoutBlock { def_type: insn_def_type, .. } = &mut self.insns[insn_id.0] {
+                                *insn_def_type = Some(MethodType::from(def_type));
+                            }
                             self.push_insn_id(block, insn_id); continue;
                         }
                     }
@@ -1839,7 +1896,7 @@ impl Function {
                             self.make_equal_to(insn_id, guard);
                         } else {
                             self.push_insn(block, Insn::GuardTypeNot { val, guard_type: types::String, state});
-                            let send_to_s = self.push_insn(block, Insn::SendWithoutBlock { recv: val, cd, args: vec![], state});
+                            let send_to_s = self.push_insn(block, Insn::SendWithoutBlock { recv: val, cd, args: vec![], def_type: None, state});
                             self.make_equal_to(insn_id, send_to_s);
                         }
                     }
@@ -1849,6 +1906,43 @@ impl Function {
                         } else {
                             self.push_insn_id(block, insn_id);
                         }
+                    }
+                    Insn::IsMethodCfunc { val, cd, cfunc, state } if self.type_of(val).ruby_object_known() => {
+                        let class = self.type_of(val).ruby_object().unwrap();
+                        let cme = unsafe { rb_zjit_vm_search_method(self.iseq.into(), cd as *mut rb_call_data, class) };
+                        let is_expected_cfunc = unsafe { rb_zjit_cme_is_cfunc(cme, cfunc as *const c_void) };
+                        let method = unsafe { rb_vm_ci_mid((*cd).ci) };
+                        self.push_insn(block, Insn::PatchPoint { invariant: Invariant::MethodRedefined { klass: class, method, cme }, state });
+                        let replacement = self.push_insn(block, Insn::Const { val: Const::CBool(is_expected_cfunc) });
+                        self.insn_types[replacement.0] = self.infer_type(replacement);
+                        self.make_equal_to(insn_id, replacement);
+                    }
+                    Insn::ObjectAlloc { val, state } => {
+                        let val_type = self.type_of(val);
+                        if !val_type.is_subtype(types::Class) {
+                            self.push_insn_id(block, insn_id); continue;
+                        }
+                        let Some(class) = val_type.ruby_object() else {
+                            self.push_insn_id(block, insn_id); continue;
+                        };
+                        // See class_get_alloc_func in object.c; if the class isn't initialized, is
+                        // a singleton class, or has a custom allocator, ObjectAlloc might raise an
+                        // exception or run arbitrary code.
+                        //
+                        // We also need to check if the class is initialized or a singleton before trying to read the allocator, otherwise it might raise.
+                        if !unsafe { rb_zjit_class_initialized_p(class) } {
+                            self.push_insn_id(block, insn_id); continue;
+                        }
+                        if unsafe { rb_zjit_singleton_class_p(class) } {
+                            self.push_insn_id(block, insn_id); continue;
+                        }
+                        if !unsafe { rb_zjit_class_has_default_allocator(class) } {
+                            // Custom or NULL allocator; could run arbitrary code.
+                            self.push_insn_id(block, insn_id); continue;
+                        }
+                        let replacement = self.push_insn(block, Insn::ObjectAllocClass { class, state });
+                        self.insn_types[replacement.0] = self.infer_type(replacement);
+                        self.make_equal_to(insn_id, replacement);
                     }
                     _ => { self.push_insn_id(block, insn_id); }
                 }
@@ -2228,8 +2322,7 @@ impl Function {
             | &Insn::Return { val }
             | &Insn::Test { val }
             | &Insn::SetLocal { val, .. }
-            | &Insn::IsNil { val }
-            | &Insn::IsMethodCfunc { val, .. } =>
+            | &Insn::IsNil { val } =>
                 worklist.push_back(val),
             &Insn::SetGlobal { val, state, .. }
             | &Insn::Defined { v: val, state, .. }
@@ -2241,6 +2334,7 @@ impl Function {
             | &Insn::GuardBitEquals { val, state, .. }
             | &Insn::GuardShape { val, state, .. }
             | &Insn::ToArray { val, state }
+            | &Insn::IsMethodCfunc { val, state, .. }
             | &Insn::ToNewArray { val, state } => {
                 worklist.push_back(val);
                 worklist.push_back(state);
@@ -2324,10 +2418,11 @@ impl Function {
             | &Insn::LoadIvarExtended { self_val, .. } => {
                 worklist.push_back(self_val);
             }
-            &Insn::GetBlockParamProxy { state, .. } |
+            &Insn::GuardBlockParamProxy { state, .. } |
             &Insn::GetGlobal { state, .. } |
             &Insn::GetSpecialSymbol { state, .. } |
             &Insn::GetSpecialNumber { state, .. } |
+            &Insn::ObjectAllocClass { state, .. } |
             &Insn::SideExit { state, .. } => worklist.push_back(state),
         }
     }
@@ -2466,7 +2561,7 @@ impl Function {
     /// Run all the optimization passes we have.
     pub fn optimize(&mut self) {
         // Function is assumed to have types inferred already
-        self.optimize_direct_sends();
+        self.type_specialize();
         #[cfg(debug_assertions)] self.assert_validates();
         self.optimize_getivar();
         #[cfg(debug_assertions)] self.assert_validates();
@@ -3382,7 +3477,8 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     // TODO: Guard on a profiled class and add a patch point for #new redefinition
                     let argc = unsafe { vm_ci_argc((*cd).ci) } as usize;
                     let val = state.stack_topn(argc)?;
-                    let test_id = fun.push_insn(block, Insn::IsMethodCfunc { val, cd, cfunc: rb_class_new_instance_pass_kw as *const u8 });
+                    let exit_id = fun.push_insn(block, Insn::Snapshot { state: exit_state });
+                    let test_id = fun.push_insn(block, Insn::IsMethodCfunc { val, cd, cfunc: rb_class_new_instance_pass_kw as *const u8, state: exit_id });
 
                     // Jump to the fallback block if it's not the expected function.
                     // Skip CheckInterrupts since the #new call will do it very soon anyway.
@@ -3395,7 +3491,6 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     queue.push_back((state.clone(), target, target_idx, local_inval));
 
                     // Move on to the fast path
-                    let exit_id = fun.push_insn(block, Insn::Snapshot { state: exit_state });
                     let insn_id = fun.push_insn(block, Insn::ObjectAlloc { val, state: exit_id });
                     state.stack_setn(argc, insn_id);
                     state.stack_setn(argc + 1, insn_id);
@@ -3469,7 +3564,9 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                 YARVINSN_getblockparamproxy => {
                     let level = get_arg(pc, 1).as_u32();
                     let exit_id = fun.push_insn(block, Insn::Snapshot { state: exit_state });
-                    state.stack_push(fun.push_insn(block, Insn::GetBlockParamProxy { level, state: exit_id }));
+                    fun.push_insn(block, Insn::GuardBlockParamProxy { level, state: exit_id });
+                    // TODO(Shopify/ruby#753): GC root, so we should be able to avoid unnecessary GC tracing
+                    state.stack_push(fun.push_insn(block, Insn::Const { val: Const::Value(unsafe { rb_block_param_proxy }) }));
                 }
                 YARVINSN_pop => { state.stack_pop()?; }
                 YARVINSN_dup => { state.stack_push(state.stack_top()?); }
@@ -3520,7 +3617,7 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     let args = state.stack_pop_n(argc as usize)?;
                     let recv = state.stack_pop()?;
                     let exit_id = fun.push_insn(block, Insn::Snapshot { state: exit_state });
-                    let send = fun.push_insn(block, Insn::SendWithoutBlock { recv, cd, args, state: exit_id });
+                    let send = fun.push_insn(block, Insn::SendWithoutBlock { recv, cd, args, def_type: None, state: exit_id });
                     state.stack_push(send);
                 }
                 YARVINSN_opt_hash_freeze |
@@ -3544,7 +3641,7 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
 
                     let exit_id = fun.push_insn(block, Insn::Snapshot { state: exit_state });
                     let recv = fun.push_insn(block, Insn::Const { val: Const::Value(get_arg(pc, 0)) });
-                    let send = fun.push_insn(block, Insn::SendWithoutBlock { recv, cd, args, state: exit_id });
+                    let send = fun.push_insn(block, Insn::SendWithoutBlock { recv, cd, args, def_type: None, state: exit_id });
                     state.stack_push(send);
                 }
 
@@ -3601,7 +3698,7 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     let args = state.stack_pop_n(argc as usize)?;
                     let recv = state.stack_pop()?;
                     let exit_id = fun.push_insn(block, Insn::Snapshot { state: exit_state });
-                    let send = fun.push_insn(block, Insn::SendWithoutBlock { recv, cd, args, state: exit_id });
+                    let send = fun.push_insn(block, Insn::SendWithoutBlock { recv, cd, args, def_type: None, state: exit_id });
                     state.stack_push(send);
                 }
                 YARVINSN_send => {
@@ -5330,8 +5427,8 @@ mod tests {
         bb0(v0:BasicObject):
           v5:BasicObject = GetConstantPath 0x1000
           v6:NilClass = Const Value(nil)
-          v7:CBool = IsMethodCFunc v5, :new
-          IfFalse v7, bb1(v0, v6, v5)
+          v8:CBool = IsMethodCFunc v5, :new
+          IfFalse v8, bb1(v0, v6, v5)
           v10:HeapObject = ObjectAlloc v5
           v12:BasicObject = SendWithoutBlock v10, :initialize
           CheckInterrupts
@@ -5896,19 +5993,20 @@ mod tests {
           v5:NilClass = Const Value(nil)
           v10:BasicObject = InvokeBuiltin dir_s_open, v0, v1, v2
           PatchPoint NoEPEscape(open)
-          v16:BasicObject = GetBlockParamProxy l0
+          GuardBlockParamProxy l0
+          v17:BasicObject[BlockParamProxy] = Const Value(VALUE(0x1000))
           CheckInterrupts
-          v19:CBool = Test v16
-          IfFalse v19, bb1(v0, v1, v2, v3, v4, v10)
+          v20:CBool = Test v17
+          IfFalse v20, bb1(v0, v1, v2, v3, v4, v10)
           PatchPoint NoEPEscape(open)
-          v26:BasicObject = InvokeBlock, v10
-          v30:BasicObject = InvokeBuiltin dir_s_close, v0, v10
+          v27:BasicObject = InvokeBlock, v10
+          v31:BasicObject = InvokeBuiltin dir_s_close, v0, v10
           CheckInterrupts
-          Return v26
-        bb1(v36:BasicObject, v37:BasicObject, v38:BasicObject, v39:BasicObject, v40:BasicObject, v41:BasicObject):
+          Return v27
+        bb1(v37:BasicObject, v38:BasicObject, v39:BasicObject, v40:BasicObject, v41:BasicObject, v42:BasicObject):
           PatchPoint NoEPEscape(open)
           CheckInterrupts
-          Return v41
+          Return v42
         ");
     }
 
@@ -8021,18 +8119,13 @@ mod opt_tests {
           PatchPoint StableConstantNames(0x1000, C)
           v34:Class[VALUE(0x1008)] = Const Value(VALUE(0x1008))
           v6:NilClass = Const Value(nil)
-          v7:CBool = IsMethodCFunc v34, :new
-          IfFalse v7, bb1(v0, v6, v34)
-          v10:HeapObject = ObjectAlloc v34
-          v12:BasicObject = SendWithoutBlock v10, :initialize
+          PatchPoint MethodRedefined(C@0x1008, new@0x1010, cme:0x1018)
+          v37:HeapObject[class_exact:C] = ObjectAllocClass VALUE(0x1008)
+          PatchPoint MethodRedefined(C@0x1008, initialize@0x1040, cme:0x1048)
+          v39:NilClass = CCall initialize@0x1070, v37
           CheckInterrupts
-          Jump bb2(v0, v10, v12)
-        bb1(v16:BasicObject, v17:NilClass, v18:Class[VALUE(0x1008)]):
-          v21:BasicObject = SendWithoutBlock v18, :new
-          Jump bb2(v16, v21, v17)
-        bb2(v23:BasicObject, v24:BasicObject, v25:BasicObject):
           CheckInterrupts
-          Return v24
+          Return v37
         ");
     }
 
@@ -8055,20 +8148,13 @@ mod opt_tests {
           v36:Class[VALUE(0x1008)] = Const Value(VALUE(0x1008))
           v6:NilClass = Const Value(nil)
           v7:Fixnum[1] = Const Value(1)
-          v8:CBool = IsMethodCFunc v36, :new
-          IfFalse v8, bb1(v0, v6, v36, v7)
-          v11:HeapObject = ObjectAlloc v36
-          PatchPoint MethodRedefined(C@0x1008, initialize@0x1010, cme:0x1018)
-          v38:HeapObject[class_exact:C] = GuardType v11, HeapObject[class_exact:C]
-          v39:BasicObject = SendWithoutBlockDirect v38, :initialize (0x1040), v7
+          PatchPoint MethodRedefined(C@0x1008, new@0x1010, cme:0x1018)
+          v39:HeapObject[class_exact:C] = ObjectAllocClass VALUE(0x1008)
+          PatchPoint MethodRedefined(C@0x1008, initialize@0x1040, cme:0x1048)
+          v41:BasicObject = SendWithoutBlockDirect v39, :initialize (0x1070), v7
           CheckInterrupts
-          Jump bb2(v0, v11, v39)
-        bb1(v17:BasicObject, v18:NilClass, v19:Class[VALUE(0x1008)], v20:Fixnum[1]):
-          v23:BasicObject = SendWithoutBlock v19, :new, v20
-          Jump bb2(v17, v23, v18)
-        bb2(v25:BasicObject, v26:BasicObject, v27:BasicObject):
           CheckInterrupts
-          Return v26
+          Return v39
         ");
     }
 
@@ -8112,11 +8198,12 @@ mod opt_tests {
         assert_snapshot!(hir_string("test"), @r"
         fn test@<compiled>:2:
         bb0(v0:BasicObject, v1:BasicObject):
-          v6:BasicObject = GetBlockParamProxy l0
-          v8:BasicObject = Send v0, 0x1000, :tap, v6
-          v9:BasicObject = GetLocal l0, EP@3
+          GuardBlockParamProxy l0
+          v7:BasicObject[BlockParamProxy] = Const Value(VALUE(0x1000))
+          v9:BasicObject = Send v0, 0x1008, :tap, v7
+          v10:BasicObject = GetLocal l0, EP@3
           CheckInterrupts
-          Return v8
+          Return v9
         ");
     }
 

@@ -138,6 +138,9 @@ rb_class_allocate_instance(VALUE klass)
     for (size_t i = 0; i < ROBJECT_FIELDS_CAPACITY(obj); i++) {
         ptr[i] = Qundef;
     }
+    if (rb_obj_class(obj) != rb_class_real(klass)) {
+        rb_bug("Expected rb_class_allocate_instance to set the class correctly");
+    }
 #endif
 
     return obj;
@@ -2190,6 +2193,15 @@ class_get_alloc_func(VALUE klass)
         rb_undefined_alloc(klass);
     }
     return allocator;
+}
+
+// Might return NULL.
+rb_alloc_func_t
+rb_zjit_class_get_alloc_func(VALUE klass)
+{
+    assert(RCLASS_INITIALIZED_P(klass));
+    assert(!RCLASS_SINGLETON_P(klass));
+    return rb_get_alloc_func(klass);
 }
 
 static VALUE

@@ -851,6 +851,41 @@ class TestZJIT < Test::Unit::TestCase
     }, insns: [:opt_new]
   end
 
+  def test_opt_new_invalidate_new
+    assert_compiles '["Foo", "foo"]', %q{
+      class Foo; end
+      def test = Foo.new
+      test; test
+      result = [test.class.name]
+      def Foo.new = "foo"
+      result << test
+      result
+    }, insns: [:opt_new], call_threshold: 2
+  end
+
+  def test_opt_new_with_custom_allocator
+    assert_compiles '"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"', %q{
+      require "digest"
+      def test = Digest::SHA256.new.hexdigest
+      test; test
+    }, insns: [:opt_new], call_threshold: 2
+  end
+
+  def test_opt_new_with_custom_allocator_raises
+    assert_compiles '[42, 42]', %q{
+      require "digest"
+      class C < Digest::Base; end
+      def test
+        begin
+          Digest::Base.new
+        rescue NotImplementedError
+          42
+        end
+      end
+      [test, test]
+    }, insns: [:opt_new], call_threshold: 2
+  end
+
   def test_new_hash_empty
     assert_compiles '{}', %q{
       def test = {}

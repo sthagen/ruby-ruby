@@ -1,7 +1,7 @@
 //! High-level intermediate representation types.
 
 #![allow(non_upper_case_globals)]
-use crate::cruby::{Qfalse, Qnil, Qtrue, VALUE, RUBY_T_ARRAY, RUBY_T_STRING, RUBY_T_HASH, RUBY_T_CLASS, RUBY_T_MODULE};
+use crate::cruby::{rb_block_param_proxy, Qfalse, Qnil, Qtrue, RUBY_T_ARRAY, RUBY_T_CLASS, RUBY_T_HASH, RUBY_T_MODULE, RUBY_T_STRING, VALUE};
 use crate::cruby::{rb_cInteger, rb_cFloat, rb_cArray, rb_cHash, rb_cString, rb_cSymbol, rb_cObject, rb_cTrueClass, rb_cFalseClass, rb_cNilClass, rb_cRange, rb_cSet, rb_cRegexp, rb_cClass, rb_cModule, rb_zjit_singleton_class_p};
 use crate::cruby::ClassRelationship;
 use crate::cruby::get_class_name;
@@ -75,6 +75,7 @@ fn write_spec(f: &mut std::fmt::Formatter, printer: &TypePrinter) -> std::fmt::R
     match ty.spec {
         Specialization::Any | Specialization::Empty => { Ok(()) },
         Specialization::Object(val) if val == unsafe { rb_mRubyVMFrozenCore } => write!(f, "[VMFrozenCore]"),
+        Specialization::Object(val) if val == unsafe { rb_block_param_proxy } => write!(f, "[BlockParamProxy]"),
         Specialization::Object(val) if ty.is_subtype(types::Symbol) => write!(f, "[:{}]", ruby_sym_to_rust_string(val)),
         Specialization::Object(val) => write!(f, "[{}]", val.print(printer.ptr_map)),
         // TODO(max): Ensure singleton classes never have Type specialization
@@ -253,6 +254,20 @@ impl Type {
         else {
             // TODO(max): Add more cases for inferring type bits from built-in types
             Type { bits: bits::HeapObject, spec: Specialization::TypeExact(val.class()) }
+        }
+    }
+
+    pub fn from_class(class: VALUE) -> Type {
+        if class == unsafe { rb_cArray } { types::ArrayExact }
+        else if class == unsafe { rb_cFalseClass } { types::FalseClass }
+        else if class == unsafe { rb_cHash } { types::HashExact }
+        else if class == unsafe { rb_cInteger } { types::Integer}
+        else if class == unsafe { rb_cNilClass } { types::NilClass }
+        else if class == unsafe { rb_cString } { types::StringExact }
+        else if class == unsafe { rb_cTrueClass } { types::TrueClass }
+        else {
+            // TODO(max): Add more cases for inferring type bits from built-in types
+            Type { bits: bits::HeapObject, spec: Specialization::TypeExact(class) }
         }
     }
 
@@ -668,10 +683,27 @@ mod tests {
     }
 
     #[test]
+    fn from_class() {
+        crate::cruby::with_rubyvm(|| {
+            assert_bit_equal(Type::from_class(unsafe { rb_cInteger }), types::Integer);
+            assert_bit_equal(Type::from_class(unsafe { rb_cString }), types::StringExact);
+            assert_bit_equal(Type::from_class(unsafe { rb_cArray }), types::ArrayExact);
+            assert_bit_equal(Type::from_class(unsafe { rb_cHash }), types::HashExact);
+            assert_bit_equal(Type::from_class(unsafe { rb_cNilClass }), types::NilClass);
+            assert_bit_equal(Type::from_class(unsafe { rb_cTrueClass }), types::TrueClass);
+            assert_bit_equal(Type::from_class(unsafe { rb_cFalseClass }), types::FalseClass);
+            let c_class = define_class("C", unsafe { rb_cObject });
+            assert_bit_equal(Type::from_class(c_class), Type { bits: bits::HeapObject, spec: Specialization::TypeExact(c_class) });
+        });
+    }
+
+    #[test]
     fn integer_has_ruby_class() {
-        assert_eq!(Type::fixnum(3).inexact_ruby_class(), Some(unsafe { rb_cInteger }));
-        assert_eq!(types::Fixnum.inexact_ruby_class(), None);
-        assert_eq!(types::Integer.inexact_ruby_class(), None);
+        crate::cruby::with_rubyvm(|| {
+            assert_eq!(Type::fixnum(3).inexact_ruby_class(), Some(unsafe { rb_cInteger }));
+            assert_eq!(types::Fixnum.inexact_ruby_class(), None);
+            assert_eq!(types::Integer.inexact_ruby_class(), None);
+        });
     }
 
     #[test]
