@@ -39,12 +39,14 @@ class << RubyVM::ZJIT
     buf = +"***ZJIT: Printing ZJIT statistics on exit***\n"
     stats = self.stats
 
-    # Show exit reasons, ordered by the typical amount of exits for the prefix at the time
+    # Show non-exit counters
+    print_counters_with_prefix(prefix: 'dynamic_send_type_', prompt: 'dynamic send types', buf:, stats:, limit: 20)
+    print_counters_with_prefix(prefix: 'send_fallback_', prompt: 'send fallback def_types', buf:, stats:, limit: 20)
+
+    # Show exit counters, ordered by the typical amount of exits for the prefix at the time
     print_counters_with_prefix(prefix: 'unhandled_yarv_insn_', prompt: 'unhandled YARV insns', buf:, stats:, limit: 20)
     print_counters_with_prefix(prefix: 'compile_error_', prompt: 'compile error reasons', buf:, stats:, limit: 20)
     print_counters_with_prefix(prefix: 'exit_', prompt: 'side exit reasons', buf:, stats:, limit: 20)
-    print_counters_with_prefix(prefix: 'dynamic_send_type_', prompt: 'dynamic send types', buf:, stats:, limit: 20)
-    print_counters_with_prefix(prefix: 'send_fallback_', prompt: 'send fallback def_types', buf:, stats:, limit: 20)
 
     # Show the most important stats ratio_in_zjit at the end
     print_counters([
@@ -57,6 +59,13 @@ class << RubyVM::ZJIT
       :profile_time_ns,
       :gc_time_ns,
       :invalidation_time_ns,
+
+      :vm_write_pc_count,
+      :vm_write_sp_count,
+      :vm_write_locals_count,
+      :vm_write_stack_count,
+      :vm_write_to_parent_iseq_local_count,
+      :vm_read_from_parent_iseq_local_count,
 
       :code_region_bytes,
       :side_exit_count,

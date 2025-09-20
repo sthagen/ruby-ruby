@@ -478,7 +478,7 @@ class TestZJIT < Test::Unit::TestCase
   end
 
   def test_sendforward
-    assert_runs '[1, 2]', %q{
+    assert_compiles '[1, 2]', %q{
       def callee(a, b) = [a, b]
       def test(...) = callee(...)
       test(1, 2)
@@ -997,31 +997,87 @@ class TestZJIT < Test::Unit::TestCase
   end
 
   def test_opt_hash_freeze
-    assert_compiles '{}', <<~RUBY, insns: [:opt_hash_freeze]
+    assert_compiles "[{}, 5]", %q{
+      def test = {}.freeze
+      result = [test]
+      class Hash
+        def freeze = 5
+      end
+      result << test
+    }, insns: [:opt_hash_freeze], call_threshold: 1
+  end
+
+  def test_opt_hash_freeze_rewritten
+    assert_compiles "5", %q{
+      class Hash
+        def freeze = 5
+      end
       def test = {}.freeze
       test
-    RUBY
+    }, insns: [:opt_hash_freeze], call_threshold: 1
   end
 
   def test_opt_ary_freeze
-    assert_compiles '[]', <<~RUBY, insns: [:opt_ary_freeze]
+    assert_compiles "[[], 5]", %q{
+      def test = [].freeze
+      result = [test]
+      class Array
+        def freeze = 5
+      end
+      result << test
+    }, insns: [:opt_ary_freeze], call_threshold: 1
+  end
+
+  def test_opt_ary_freeze_rewritten
+    assert_compiles "5", %q{
+      class Array
+        def freeze = 5
+      end
       def test = [].freeze
       test
-    RUBY
+    }, insns: [:opt_ary_freeze], call_threshold: 1
   end
 
   def test_opt_str_freeze
-    assert_compiles '""', <<~RUBY, insns: [:opt_str_freeze]
-      def test = "".freeze
+    assert_compiles "[\"\", 5]", %q{
+      def test = ''.freeze
+      result = [test]
+      class String
+        def freeze = 5
+      end
+      result << test
+    }, insns: [:opt_str_freeze], call_threshold: 1
+  end
+
+  def test_opt_str_freeze_rewritten
+    assert_compiles "5", %q{
+      class String
+        def freeze = 5
+      end
+      def test = ''.freeze
       test
-    RUBY
+    }, insns: [:opt_str_freeze], call_threshold: 1
   end
 
   def test_opt_str_uminus
-    assert_compiles '""', <<~RUBY, insns: [:opt_str_uminus]
-      def test = -""
+    assert_compiles "[\"\", 5]", %q{
+      def test = -''
+      result = [test]
+      class String
+        def -@ = 5
+      end
+      result << test
+    }, insns: [:opt_str_uminus], call_threshold: 1
+  end
+
+  def test_opt_str_uminus_rewritten
+    assert_compiles "5", %q{
+      class String
+        def -@ = 5
+      end
+      def test = -''
       test
-    RUBY
+    }, insns: [:opt_str_uminus], call_threshold: 1
   end
 
   def test_new_array_empty
@@ -2708,6 +2764,44 @@ class TestZJIT < Test::Unit::TestCase
       test { |x| results << x }
       results
     }, insns: [:invokeblock]
+  end
+
+  def test_ccall_variadic_with_multiple_args
+    assert_compiles "[1, 2, 3]", %q{
+      def test
+        a = []
+        a.push(1, 2, 3)
+        a
+      end
+
+      test
+      test
+    }, insns: [:opt_send_without_block]
+  end
+
+  def test_ccall_variadic_with_no_args
+    assert_compiles "[1]", %q{
+      def test
+        a = [1]
+        a.push
+      end
+
+      test
+      test
+    }, insns: [:opt_send_without_block]
+  end
+
+  def test_ccall_variadic_with_no_args_causing_argument_error
+    assert_compiles ":error", %q{
+      def test
+        format
+      rescue ArgumentError
+        :error
+      end
+
+      test
+      test
+    }, insns: [:opt_send_without_block]
   end
 
   private

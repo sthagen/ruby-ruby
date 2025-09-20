@@ -647,14 +647,12 @@ RSpec.describe "major deprecations" do
 
     context "with --outdated flag" do
       before do
-        bundle "show --outdated"
+        bundle "show --outdated", raise_on_error: false
       end
 
-      it "prints a deprecation warning informing about its removal" do
-        expect(deprecations).to include("the `--outdated` flag to `bundle show` will be removed in favor of `bundle show --verbose`")
+      it "fails with a helpful message" do
+        expect(err).to include("the `--outdated` flag to `bundle show` has been removed in favor of `bundle show --verbose`")
       end
-
-      pending "fails with a helpful message", bundler: "4"
     end
   end
 
@@ -702,14 +700,11 @@ RSpec.describe "major deprecations" do
       end
     end
 
-    it "prints a deprecation warning" do
-      bundle "plugin install foo --local_git #{lib_path("foo-1.0")}"
+    it "fails with a helpful message" do
+      bundle "plugin install foo --local_git #{lib_path("foo-1.0")}", raise_on_error: false
 
-      expect(out).to include("Installed plugin foo")
-      expect(deprecations).to include "--local_git is deprecated, use --git"
+      expect(err).to include "--local_git has been removed, use --git"
     end
-
-    pending "fails with a helpful message", bundler: "4"
   end
 
   describe "removing rubocop" do
@@ -738,6 +733,18 @@ RSpec.describe "major deprecations" do
         expect(err).to include \
           "--no-rubocop has been removed, use --no-linter"
       end
+    end
+  end
+
+  context " bundle gem --ext parameter with no value" do
+    it "prints error when used before gem name" do
+      bundle "gem --ext foo", raise_on_error: false
+      expect(err).to include "Extensions can now be generated using C or Rust, so `--ext` with no arguments has been removed. Please select a language, e.g. `--ext=rust` to generate a Rust extension."
+    end
+
+    it "prints error when used after gem name" do
+      bundle "gem foo --ext", raise_on_error: false
+      expect(err).to include "Extensions can now be generated using C or Rust, so `--ext` with no arguments has been removed. Please select a language, e.g. `--ext=rust` to generate a Rust extension."
     end
   end
 end
