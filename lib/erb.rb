@@ -1095,13 +1095,31 @@ class ERB
   end
   private :new_toplevel
 
-  # Define _methodname_ as instance method of _mod_ from compiled Ruby source.
+  # :markup: markdown
   #
-  # example:
-  #   filename = 'example.rhtml'   # 'arg1' and 'arg2' are used in example.rhtml
-  #   erb = ERB.new(File.read(filename))
-  #   erb.def_method(MyClass, 'render(arg1, arg2)', filename)
-  #   print MyClass.new.render('foo', 123)
+  # :call-seq:
+  #   def_method(module, method_signature, filename = '(ERB)') -> method_name
+  #
+  # Creates and returns a new instance method in the given module `module`;
+  # returns the method name as a symbol.
+  #
+  # The method is created from the given `method_signature`,
+  # which consists of the method name and its argument names (if any).
+  #
+  # The `filename` sets the value of #filename;
+  # see [Error Reporting][error reporting].
+  #
+  # [error reporting]: rdoc-ref:ERB@Error+Reporting
+  #
+  # ```
+  # s = '<%= arg1 %> <%= arg2 %>'
+  # template = ERB.new(s)
+  # MyModule = Module.new
+  # template.def_method(MyModule, 'render(arg1, arg2)') # => :render
+  # class MyClass; include MyModule; end
+  # MyClass.new.render('foo', 123)                      # => "foo 123"
+  # ```
+  #
   def def_method(mod, methodname, fname='(ERB)')
     src = self.src.sub(/^(?!#|$)/) {"def #{methodname}\n"} << "\nend\n"
     mod.module_eval do
@@ -1109,35 +1127,82 @@ class ERB
     end
   end
 
-  # Create unnamed module, define _methodname_ as instance method of it, and return it.
+  # :markup: markdown
   #
-  # example:
-  #   filename = 'example.rhtml'   # 'arg1' and 'arg2' are used in example.rhtml
-  #   erb = ERB.new(File.read(filename))
-  #   erb.filename = filename
-  #   MyModule = erb.def_module('render(arg1, arg2)')
-  #   class MyClass
-  #     include MyModule
-  #   end
+  # :call-seq:
+  #    def_module(method_name = 'erb') -> new_module
+  #
+  # Returns a new nameless module that has instance method `method_name`.
+  #
+  # ```
+  # s = '<%= arg1 %> <%= arg2 %>'
+  # template = ERB.new(s)
+  # MyModule = template.def_module('render(arg1, arg2)')
+  # class MyClass
+  #   include MyModule
+  # end
+  # MyClass.new.render('foo', 123)
+  # # => "foo 123"
+  # ```
+  #
   def def_module(methodname='erb')
     mod = Module.new
     def_method(mod, methodname, @filename || '(ERB)')
     mod
   end
 
-  # Define unnamed class which has _methodname_ as instance method, and return it.
+  # :markup: markdown
   #
-  # example:
-  #   class MyClass_
-  #     def initialize(arg1, arg2)
-  #       @arg1 = arg1;  @arg2 = arg2
-  #     end
+  # :call-seq:
+  #   def_class(super_class = Object, method_name = 'result') -> new_class
+  #
+  # Returns a new nameless class whose superclass is `super_class`,
+  # and which has instance method `method_name`.
+  #
+  # Create a template from HTML that has embedded expression tags that use `@arg1` and `@arg2`:
+  #
+  # ```
+  # html = <<EOT
+  # <html>
+  # <body>
+  #   <p><%= @arg1 %></p>
+  #   <p><%= @arg2 %></p>
+  # </body>
+  # </html>
+  # EOT
+  # template = ERB.new(html)
+  # ```
+  #
+  # Create a base class that has `@arg1` and `arg2`:
+  #
+  # ```
+  # class MyBaseClass
+  #   def initialize(arg1, arg2)
+  #     @arg1 = arg1;
+  #     @arg2 = arg2
   #   end
-  #   filename = 'example.rhtml'  # @arg1 and @arg2 are used in example.rhtml
-  #   erb = ERB.new(File.read(filename))
-  #   erb.filename = filename
-  #   MyClass = erb.def_class(MyClass_, 'render()')
-  #   print MyClass.new('foo', 123).render()
+  # end
+  # ```
+  #
+  # Use method #def_class to create a subclass that has method `:render`:
+  #
+  # ```
+  # MySubClass = template.def_class(MyBaseClass, :render)
+  # ```
+  #
+  # Generate the result:
+  #
+  # ```
+  # puts MySubClass.new('foo', 123).render
+  # <html>
+  # <body>
+  #   <p>foo</p>
+  #   <p>123</p>
+  # </body>
+  # </html>
+  # ```
+  #
+  #
   def def_class(superklass=Object, methodname='result')
     cls = Class.new(superklass)
     def_method(cls, methodname, @filename || '(ERB)')
