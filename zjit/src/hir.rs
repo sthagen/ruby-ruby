@@ -286,6 +286,7 @@ impl Const {
     }
 }
 
+#[derive(Clone, Copy)]
 pub enum RangeType {
     Inclusive = 0, // include the end value
     Exclusive = 1, // exclude the end value
@@ -306,14 +307,6 @@ impl std::fmt::Debug for RangeType {
     }
 }
 
-impl Clone for RangeType {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl Copy for RangeType {}
-
 impl From<u32> for RangeType {
     fn from(flag: u32) -> Self {
         match flag {
@@ -321,12 +314,6 @@ impl From<u32> for RangeType {
             1 => RangeType::Exclusive,
             _ => panic!("Invalid range flag: {}", flag),
         }
-    }
-}
-
-impl From<RangeType> for u32 {
-    fn from(range_type: RangeType) -> Self {
-        range_type as u32
     }
 }
 
@@ -1569,7 +1556,7 @@ impl Function {
             Insn::InvokeBlock { .. } => types::BasicObject,
             Insn::InvokeBuiltin { return_type, .. } => return_type.unwrap_or(types::BasicObject),
             Insn::Defined { pushval, .. } => Type::from_value(*pushval).union(types::NilClass),
-            Insn::DefinedIvar { .. } => types::BasicObject,
+            Insn::DefinedIvar { pushval, .. } => Type::from_value(*pushval).union(types::NilClass),
             Insn::GetConstantPath { .. } => types::BasicObject,
             Insn::ArrayMax { .. } => types::BasicObject,
             Insn::GetGlobal { .. } => types::BasicObject,
@@ -1684,6 +1671,28 @@ impl Function {
                     return Some(entry_type_summary.bucket(0));
                 } else {
                     return None;
+                }
+            }
+        }
+        None
+    }
+
+    /// Return whether a given HIR instruction as profiled by the interpreter is polymorphic or
+    /// whether it lacks a profile entirely.
+    ///
+    /// * `Some(true)` if polymorphic
+    /// * `Some(false)` if monomorphic
+    /// * `None` if no profiled information so far
+    fn is_polymorphic_at(&self, insn: InsnId, iseq_insn_idx: usize) -> Option<bool> {
+        let profiles = self.profiles.as_ref()?;
+        let entries = profiles.types.get(&iseq_insn_idx)?;
+        let insn = self.chase_insn(insn);
+        for (entry_insn, entry_type_summary) in entries {
+            if self.union_find.borrow().find_const(*entry_insn) == insn {
+                if !entry_type_summary.is_monomorphic() && !entry_type_summary.is_skewed_polymorphic() {
+                    return Some(true);
+                } else {
+                    return Some(false);
                 }
             }
         }
@@ -1840,6 +1849,15 @@ impl Function {
                             // If we know that self is reasonably monomorphic from profile information, guard and use it to fold the lookup at compile-time.
                             // TODO(max): Figure out how to handle top self?
                             let Some(recv_type) = self.profiled_type_of_at(recv, frame_state.insn_idx) else {
+                                if get_option!(stats) {
+                                    match self.is_polymorphic_at(recv, frame_state.insn_idx) {
+                                        Some(true) => self.push_insn(block, Insn::IncrCounter(Counter::send_fallback_polymorphic)),
+                                        // If the class isn't known statically, then it should not also be monomorphic
+                                        Some(false) => panic!("Should not have monomorphic profile at this point in this branch"),
+                                        None => self.push_insn(block, Insn::IncrCounter(Counter::send_fallback_no_profiles)),
+
+                                    };
+                                }
                                 self.push_insn_id(block, insn_id); continue;
                             };
                             (recv_type.class(), Some(recv_type))
@@ -2150,6 +2168,11 @@ impl Function {
                             },
                             state
                         });
+
+                        if let Some(profiled_type) = profiled_type {
+                            // Guard receiver class
+                            recv = fun.push_insn(block, Insn::GuardType { val: recv, guard_type: Type::from_profiled_type(profiled_type), state });
+                        }
 
                         let cfun = unsafe { get_mct_func(cfunc) }.cast();
                         let ccall = fun.push_insn(block, Insn::CCallVariadic {
@@ -4971,9 +4994,38 @@ mod tests {
         assert_snapshot!(hir_string("test"), @r"
         fn test@<compiled>:2:
         bb0(v0:BasicObject):
-          v5:BasicObject = DefinedIvar v0, :@foo
+          v5:StringExact|NilClass = DefinedIvar v0, :@foo
           CheckInterrupts
           Return v5
+        ");
+    }
+
+    #[test]
+    fn if_defined_ivar() {
+        eval("
+            def test
+              if defined?(@foo)
+                3
+              else
+                4
+              end
+            end
+        ");
+        assert_contains_opcode("test", YARVINSN_definedivar);
+        assert_snapshot!(hir_string("test"), @r"
+        fn test@<compiled>:3:
+        bb0(v0:BasicObject):
+          v5:TrueClass|NilClass = DefinedIvar v0, :@foo
+          CheckInterrupts
+          v8:CBool = Test v5
+          IfFalse v8, bb1(v0)
+          v12:Fixnum[3] = Const Value(3)
+          CheckInterrupts
+          Return v12
+        bb1(v18:BasicObject):
+          v22:Fixnum[4] = Const Value(4)
+          CheckInterrupts
+          Return v22
         ");
     }
 
@@ -7084,9 +7136,10 @@ mod opt_tests {
           v4:StringExact[VALUE(0x1000)] = Const Value(VALUE(0x1000))
           v6:StringExact = StringCopy v4
           PatchPoint MethodRedefined(Object@0x1008, puts@0x1010, cme:0x1018)
-          v16:BasicObject = CCallVariadic puts@0x1040, v0, v6
+          v16:HeapObject[class_exact*:Object@VALUE(0x1008)] = GuardType v0, HeapObject[class_exact*:Object@VALUE(0x1008)]
+          v17:BasicObject = CCallVariadic puts@0x1040, v16, v6
           CheckInterrupts
-          Return v16
+          Return v17
         ");
     }
 
@@ -8468,7 +8521,8 @@ mod opt_tests {
           PatchPoint MethodRedefined(Set@0x1008, new@0x1010, cme:0x1018)
           v10:HeapObject = ObjectAlloc v34
           PatchPoint MethodRedefined(Set@0x1008, initialize@0x1040, cme:0x1048)
-          v39:BasicObject = CCallVariadic initialize@0x1070, v10
+          v39:HeapObject[class_exact:Set] = GuardType v10, HeapObject[class_exact:Set]
+          v40:BasicObject = CCallVariadic initialize@0x1070, v39
           CheckInterrupts
           CheckInterrupts
           Return v10

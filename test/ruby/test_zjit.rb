@@ -470,6 +470,13 @@ class TestZJIT < Test::Unit::TestCase
     }
   end
 
+  def test_send_ccall_variadic_with_different_receiver_classes
+    assert_compiles '[true, true]', %q{
+      def test(obj) = obj.start_with?("a")
+      [test("abc"), test(:abc)]
+    }, call_threshold: 2
+  end
+
   def test_forwardable_iseq
     assert_compiles '1', %q{
       def test(...) = 1
@@ -2806,6 +2813,28 @@ class TestZJIT < Test::Unit::TestCase
     }, insns: [:opt_send_without_block]
   end
 
+  def test_allocating_in_hir_c_method_is
+    assert_compiles ":k", %q{
+      # Put opt_new in a frame JIT code sets up that doesn't set cfp->pc
+      def a(f) = test(f)
+      def test(f) = (f.new if f)
+      # A parallel couple methods that will set PC at the same stack height
+      def second = third
+      def third = nil
+
+      a(nil)
+      a(nil)
+
+      class Foo
+        def self.new = :k
+      end
+
+      second
+
+      a(Foo)
+    }, call_threshold: 2, insns: [:opt_new]
+  end
+
   private
 
   # Assert that every method call in `test_script` can be compiled by ZJIT
@@ -2819,13 +2848,14 @@ class TestZJIT < Test::Unit::TestCase
   # allows ZJIT to skip compiling methods.
   def assert_runs(expected, test_script, insns: [], assert_compiles: false, **opts)
     pipe_fd = 3
+    disasm_method = :test
 
     script = <<~RUBY
       ret_val = (_test_proc = -> { #{('RubyVM::ZJIT.assert_compiles; ' if assert_compiles)}#{test_script.lstrip} }).call
       result = {
         ret_val:,
         #{ unless insns.empty?
-          'insns: RubyVM::InstructionSequence.of(method(:test)).to_a'
+           "insns: RubyVM::InstructionSequence.of(method(#{disasm_method.inspect})).to_a"
         end}
       }
       IO.open(#{pipe_fd}).write(Marshal.dump(result))
@@ -2839,7 +2869,12 @@ class TestZJIT < Test::Unit::TestCase
 
     unless insns.empty?
       iseq = result.fetch(:insns)
-      assert_equal("YARVInstructionSequence/SimpleDataFormat", iseq.first, "failed to get iseq disassembly")
+      assert_equal(
+        "YARVInstructionSequence/SimpleDataFormat",
+        iseq.first,
+        "Failed to get ISEQ disassembly. " \
+        "Make sure to put code directly under the '#{disasm_method}' method."
+      )
       iseq_insns = iseq.last
 
       expected_insns = Set.new(insns)
