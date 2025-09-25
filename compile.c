@@ -14002,7 +14002,11 @@ struct ibf_object_symbol {
 
 #define IBF_ALIGNED_OFFSET(align, offset) /* offset > 0 */ \
     ((((offset) - 1) / (align) + 1) * (align))
-#define IBF_OBJBODY(type, offset) (const type *)\
+/* No cast, since it's UB to create an unaligned pointer.
+ * Leave as void* for use with memcpy in those cases.
+ * We align the offset, but the buffer pointer is only VALUE aligned,
+ * so the returned pointer may be unaligned for `type` .*/
+#define IBF_OBJBODY(type, offset) \
     ibf_load_check_offset(load, IBF_ALIGNED_OFFSET(RUBY_ALIGNOF(type), offset))
 
 static const void *
@@ -14097,8 +14101,10 @@ ibf_dump_object_float(struct ibf_dump *dump, VALUE obj)
 static VALUE
 ibf_load_object_float(const struct ibf_load *load, const struct ibf_object_header *header, ibf_offset_t offset)
 {
-    const double *dblp = IBF_OBJBODY(double, offset);
-    return DBL2NUM(*dblp);
+    double d;
+    /* Avoid unaligned VFP load on ARMv7; IBF payload may be unaligned (C99 6.3.2.3 p7). */
+    memcpy(&d, IBF_OBJBODY(double, offset), sizeof(d));
+    return DBL2NUM(d);
 }
 
 static void
