@@ -1,6 +1,6 @@
 #!/usr/bin/env ruby
 # Usage:
-#   auto-style.rb [oldrev] [newrev] [pushref]
+#   auto-style.rb oldrev newrev [pushref]
 
 require 'shellwords'
 require 'tmpdir'
@@ -71,9 +71,9 @@ class Git
   private
 
   def git(*args, **opts)
-    cmd = ['git', *args].shelljoin
-    puts "+ #{cmd}"
-    ret = with_clean_env { system('git', *args, **opts) }
+    cmd = ['git', *args]
+    puts "+ #{cmd.shelljoin}"
+    ret = with_clean_env { system(*cmd, **opts) }
     unless ret or opts[:err]
       abort "Failed to run: #{cmd}"
     end
@@ -251,7 +251,7 @@ if (dry_run = oldrev == '-n') or oldrev == '--'
   _, *updated_files = ARGV
   git = Git.new(nil, nil)
 else
-  unless dry_run = pushref.empty?
+  unless dry_run = pushref.nil?
     branch = IO.popen(['git', 'rev-parse', '--symbolic', '--abbrev-ref', pushref], &:read).strip
   end
   git = Git.new(oldrev, newrev, branch)
