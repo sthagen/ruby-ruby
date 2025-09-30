@@ -6983,12 +6983,16 @@ rb_str_bytesplice(int argc, VALUE *argv, VALUE str)
 
 /*
  *  call-seq:
- *    reverse -> string
+ *    reverse -> new_string
  *
  *  Returns a new string with the characters from +self+ in reverse order.
  *
- *    'stressed'.reverse # => "desserts"
+ *    'drawer'.reverse       # => "reward"
+ *    'reviled'.reverse      # => "deliver"
+ *    'stressed'.reverse     # => "desserts"
+ *    'semordnilaps'.reverse # => "spalindromes"
  *
+ *  Related: see {Converting to New String}[rdoc-ref:String@Converting+to+New+String].
  */
 
 static VALUE
@@ -11217,7 +11221,7 @@ rb_str_center(int argc, VALUE *argv, VALUE str)
 
 /*
  *  call-seq:
- *    partition(string_or_regexp) -> [head, match, tail]
+ *    partition(pattern) -> [pre_match, first_match, post_match]
  *
  *  :include: doc/string/partition.rdoc
  *

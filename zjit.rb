@@ -9,7 +9,10 @@
 module RubyVM::ZJIT
   # Avoid calling a Ruby method here to avoid interfering with compilation tests
   if Primitive.rb_zjit_print_stats_p
-    at_exit { print_stats }
+    at_exit {
+      print_stats
+      dump_locations
+    }
   end
 end
 
@@ -17,6 +20,113 @@ class << RubyVM::ZJIT
   # Check if ZJIT is enabled
   def enabled?
     Primitive.cexpr! 'RBOOL(rb_zjit_enabled_p)'
+  end
+
+  # Check if `--zjit-trace-exits` is used
+  def trace_exit_locations_enabled?
+    Primitive.rb_zjit_trace_exit_locations_enabled_p
+  end
+
+  # If --zjit-trace-exits is enabled parse the hashes from
+  # Primitive.rb_zjit_get_exit_locations into a format readable
+  # by Stackprof. This will allow us to find the exact location of a
+  # side exit in ZJIT based on the instruction that is exiting.
+  def exit_locations
+    return unless trace_exit_locations_enabled?
+
+    results = Primitive.rb_zjit_get_exit_locations
+    raw_samples = results[:raw].dup
+    line_samples = results[:lines].dup
+    frames = results[:frames].dup
+    samples_count = 0
+
+    # Loop through the instructions and set the frame hash with the data.
+    # We use nonexistent.def for the file name, otherwise insns.def will be displayed
+    # and that information isn't useful in this context.
+    RubyVM::INSTRUCTION_NAMES.each_with_index do |name, frame_id|
+      frame_hash = { samples: 0, total_samples: 0, edges: {}, name: name, file: "nonexistent.def", line: nil, lines: {} }
+      results[:frames][frame_id] = frame_hash
+      frames[frame_id] = frame_hash
+    end
+
+    # Loop through the raw_samples and build the hashes for StackProf.
+    # The loop is based off an example in the StackProf documentation and therefore
+    # this functionality can only work with that library.
+    #
+    # Raw Samples:
+    # [ length, frame1, frame2, frameN, ..., instruction, count
+    #
+    # Line Samples
+    # [ length, line_1, line_2, line_n, ..., dummy value, count
+    i = 0
+    while i < raw_samples.length
+      stack_length = raw_samples[i]
+      i += 1 # consume the stack length
+
+      sample_count = raw_samples[i + stack_length]
+
+      prev_frame_id = nil
+      stack_length.times do |idx|
+        idx += i
+        frame_id = raw_samples[idx]
+
+        if prev_frame_id
+          prev_frame = frames[prev_frame_id]
+          prev_frame[:edges][frame_id] ||= 0
+          prev_frame[:edges][frame_id] += sample_count
+        end
+
+        frame_info = frames[frame_id]
+        frame_info[:total_samples] += sample_count
+
+        frame_info[:lines][line_samples[idx]] ||= [0, 0]
+        frame_info[:lines][line_samples[idx]][0] += sample_count
+
+        prev_frame_id = frame_id
+      end
+
+      i += stack_length # consume the stack
+
+      top_frame_id = prev_frame_id
+      top_frame_line = 1
+
+      frames[top_frame_id][:samples] += sample_count
+      frames[top_frame_id][:lines] ||= {}
+      frames[top_frame_id][:lines][top_frame_line] ||= [0, 0]
+      frames[top_frame_id][:lines][top_frame_line][1] += sample_count
+
+      samples_count += sample_count
+      i += 1
+    end
+
+    results[:samples] = samples_count
+    # Set missed_samples and gc_samples to 0 as their values
+    # don't matter to us in this context.
+    results[:missed_samples] = 0
+    results[:gc_samples] = 0
+    results
+  end
+
+  # Marshal dumps exit locations to the given filename.
+  #
+  # Usage:
+  #
+  # In a script call:
+  #
+  #   RubyVM::ZJIT.dump_exit_locations("my_file.dump")
+  #
+  # Then run the file with the following options:
+  #
+  #   ruby --zjit --zjit-stats --zjit-trace-exits test.rb
+  #
+  # Once the code is done running, use Stackprof to read the dump file.
+  # See Stackprof documentation for options.
+  def dump_exit_locations(filename)
+    unless trace_exit_locations_enabled?
+      raise ArgumentError, "--zjit-trace-exits must be enabled to use dump_exit_locations."
+    end
+
+    File.binwrite(filename, Marshal.dump(RubyVM::ZJIT.exit_locations))
   end
 
   # Check if `--zjit-stats` is used
@@ -39,11 +149,13 @@ class << RubyVM::ZJIT
     buf = +"***ZJIT: Printing ZJIT statistics on exit***\n"
     stats = self.stats
 
-    # Show non-exit counters
-    print_counters_with_prefix(prefix: 'dynamic_send_type_', prompt: 'dynamic send types', buf:, stats:, limit: 20)
-    print_counters_with_prefix(prefix: 'unspecialized_def_type_', prompt: 'send fallback unspecialized def_types', buf:, stats:, limit: 20)
-    print_counters_with_prefix(prefix: 'send_fallback_', prompt: 'dynamic send types', buf:, stats:, limit: 20)
+    # Show counters independent from exit_* or dynamic_send_*
     print_counters_with_prefix(prefix: 'not_optimized_cfuncs_', prompt: 'unoptimized sends to C functions', buf:, stats:, limit: 20)
+
+    # Show fallback counters, ordered by the typical amount of fallbacks for the prefix at the time
+    print_counters_with_prefix(prefix: 'unspecialized_def_type_', prompt: 'not optimized method types', buf:, stats:, limit: 20)
+    print_counters_with_prefix(prefix: 'not_optimized_yarv_insn_', prompt: 'not optimized instructions', buf:, stats:, limit: 20)
+    print_counters_with_prefix(prefix: 'send_fallback_', prompt: 'send fallback reasons', buf:, stats:, limit: 20)
 
     # Show exit counters, ordered by the typical amount of exits for the prefix at the time
     print_counters_with_prefix(prefix: 'unhandled_yarv_insn_', prompt: 'unhandled YARV insns', buf:, stats:, limit: 20)
@@ -53,6 +165,8 @@ class << RubyVM::ZJIT
     # Show the most important stats ratio_in_zjit at the end
     print_counters([
       :dynamic_send_count,
+      :dynamic_getivar_count,
+      :dynamic_setivar_count,
 
       :compiled_iseq_count,
       :failed_iseq_count,
@@ -114,8 +228,8 @@ class << RubyVM::ZJIT
     return if stats.empty?
 
     counters.transform_keys! { |key| key.to_s.delete_prefix(prefix) }
-    left_pad = counters.keys.map(&:size).max
-    right_pad = counters.values.map { |value| number_with_delimiter(value).size }.max
+    key_pad = counters.keys.map(&:size).max
+    value_pad = counters.values.map { |value| number_with_delimiter(value).size }.max
     total = counters.values.sum
 
     counters = counters.to_a
@@ -127,9 +241,7 @@ class << RubyVM::ZJIT
     buf << " (%.1f%% of total #{number_with_delimiter(total)})" % (100.0 * counters.map(&:last).sum / total) if limit
     buf << ":\n"
     counters.each do |key, value|
-      padded_key = key.rjust(left_pad, ' ')
-      padded_value = number_with_delimiter(value).rjust(right_pad, ' ')
-      buf << "  #{padded_key}: #{padded_value} (%4.1f%%)\n" % (100.0 * value / total)
+      buf << "  %*s: %*s (%4.1f%%)\n" % [key_pad, key, value_pad, number_with_delimiter(value), (100.0 * value / total)]
     end
   end
 
@@ -143,5 +255,14 @@ class << RubyVM::ZJIT
   # Print ZJIT stats
   def print_stats
     $stderr.write stats_string
+  end
+
+  def dump_locations # :nodoc:
+    return unless trace_exit_locations_enabled?
+
+    filename = "zjit_exit_locations.dump"
+    dump_exit_locations(filename)
+
+    $stderr.puts("ZJIT exit locations dumped to `#{filename}`.")
   end
 end
