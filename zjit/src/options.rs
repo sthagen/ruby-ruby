@@ -6,7 +6,7 @@ use crate::cruby::*;
 use std::collections::HashSet;
 
 /// Default --zjit-num-profiles
-const DEFAULT_NUM_PROFILES: u8 = 5;
+const DEFAULT_NUM_PROFILES: u32 = 5;
 
 /// Default --zjit-call-threshold. This should be large enough to avoid compiling
 /// warmup code, but small enough to perform well on micro-benchmarks.
@@ -40,7 +40,7 @@ pub struct Options {
     pub mem_bytes: usize,
 
     /// Number of times YARV instructions should be profiled.
-    pub num_profiles: u8,
+    pub num_profiles: u32,
 
     /// Enable YJIT statsitics
     pub stats: bool,
@@ -72,6 +72,9 @@ pub struct Options {
     /// Trace and write side exit source maps to /tmp for stackprof.
     pub trace_side_exits: bool,
 
+    /// Frequency of tracing side exits.
+    pub trace_side_exits_sample_interval: usize,
+
     /// Dump code map to /tmp for performance profilers.
     pub perf: bool,
 
@@ -98,6 +101,7 @@ impl Default for Options {
             dump_lir: false,
             dump_disasm: false,
             trace_side_exits: false,
+            trace_side_exits_sample_interval: 0,
             perf: false,
             allowed_iseqs: None,
             log_compiled_iseqs: None,
@@ -112,15 +116,17 @@ pub const ZJIT_OPTIONS: &[(&str, &str)] = &[
     ("--zjit-mem-size=num",
                      "Max amount of memory that ZJIT can use (in MiB)."),
     ("--zjit-call-threshold=num",
-                     "Number of calls to trigger JIT (default: 2)."),
+                     "Number of calls to trigger JIT (default: 30)."),
     ("--zjit-num-profiles=num",
-                     "Number of profiled calls before JIT (default: 1, max: 255)."),
+                     "Number of profiled calls before JIT (default: 5)."),
     ("--zjit-stats[=quiet]", "Enable collecting ZJIT statistics (=quiet to suppress output)."),
     ("--zjit-perf",  "Dump ISEQ symbols into /tmp/perf-{}.map for Linux perf."),
     ("--zjit-log-compiled-iseqs=path",
                      "Log compiled ISEQs to the file. The file will be truncated."),
     ("--zjit-trace-exits",
-                     "Record Ruby source location when side-exiting.")
+                     "Record Ruby source location when side-exiting."),
+    ("--zjit-trace-exits-sample-rate",
+                     "Frequency at which to record side exits. Must be `usize`.")
 ];
 
 #[derive(Clone, Copy, Debug)]
@@ -243,6 +249,13 @@ fn parse_option(str_ptr: *const std::os::raw::c_char) -> Option<()> {
 
         ("trace-exits", "") => {
             options.trace_side_exits = true;
+        }
+
+        ("trace-exits-sample-rate", sample_interval) => {
+            // Even if `trace_side_exits` is already set, set it.
+            options.trace_side_exits = true;
+            // `sample_interval ` must provide a string that can be validly parsed to a `usize`.
+            options.trace_side_exits_sample_interval = sample_interval.parse::<usize>().ok()?;
         }
 
         ("debug", "") => options.debug = true,

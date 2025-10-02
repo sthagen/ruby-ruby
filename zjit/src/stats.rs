@@ -2,6 +2,7 @@
 
 use std::time::Instant;
 use std::sync::atomic::Ordering;
+use crate::options::OPTIONS;
 
 #[cfg(feature = "stats_allocator")]
 #[path = "../../jit/src/lib.rs"]
@@ -20,6 +21,9 @@ macro_rules! make_counters {
         dynamic_send {
             $($dynamic_send_counter_name:ident,)+
         }
+        optimized_send {
+            $($optimized_send_counter_name:ident,)+
+        }
         $($counter_name:ident,)+
     ) => {
         /// Struct containing the counter values
@@ -28,6 +32,7 @@ macro_rules! make_counters {
             $(pub $default_counter_name: u64,)+
             $(pub $exit_counter_name: u64,)+
             $(pub $dynamic_send_counter_name: u64,)+
+            $(pub $optimized_send_counter_name: u64,)+
             $(pub $counter_name: u64,)+
         }
 
@@ -38,6 +43,7 @@ macro_rules! make_counters {
             $($default_counter_name,)+
             $($exit_counter_name,)+
             $($dynamic_send_counter_name,)+
+            $($optimized_send_counter_name,)+
             $($counter_name,)+
         }
 
@@ -47,6 +53,7 @@ macro_rules! make_counters {
                     $( Counter::$default_counter_name => stringify!($default_counter_name).to_string(), )+
                     $( Counter::$exit_counter_name => stringify!($exit_counter_name).to_string(), )+
                     $( Counter::$dynamic_send_counter_name => stringify!($dynamic_send_counter_name).to_string(), )+
+                    $( Counter::$optimized_send_counter_name => stringify!($optimized_send_counter_name).to_string(), )+
                     $( Counter::$counter_name => stringify!($counter_name).to_string(), )+
                 }
             }
@@ -59,6 +66,7 @@ macro_rules! make_counters {
                 $( Counter::$default_counter_name => std::ptr::addr_of_mut!(counters.$default_counter_name), )+
                 $( Counter::$exit_counter_name => std::ptr::addr_of_mut!(counters.$exit_counter_name), )+
                 $( Counter::$dynamic_send_counter_name => std::ptr::addr_of_mut!(counters.$dynamic_send_counter_name), )+
+                $( Counter::$optimized_send_counter_name => std::ptr::addr_of_mut!(counters.$optimized_send_counter_name), )+
                 $( Counter::$counter_name => std::ptr::addr_of_mut!(counters.$counter_name), )+
             }
         }
@@ -77,6 +85,11 @@ macro_rules! make_counters {
         /// List of other counters that are summed as dynamic_send_count.
         pub const DYNAMIC_SEND_COUNTERS: &'static [Counter] = &[
             $( Counter::$dynamic_send_counter_name, )+
+        ];
+
+        /// List of other counters that are summed as optimized_send_count.
+        pub const OPTIMIZED_SEND_COUNTERS: &'static [Counter] = &[
+            $( Counter::$optimized_send_counter_name, )+
         ];
 
         /// List of other counters that are available only for --zjit-stats.
@@ -137,6 +150,13 @@ make_counters! {
         send_fallback_send_without_block_direct_too_many_args,
         send_fallback_obj_to_string_not_string,
         send_fallback_not_optimized_instruction,
+    }
+
+    // Optimized send counters that are summed as optimized_send_count
+    optimized_send {
+        iseq_optimized_send_count,
+        inline_cfunc_optimized_send_count,
+        variadic_cfunc_optimized_send_count,
     }
 
     // compile_error_: Compile error reasons
@@ -420,6 +440,16 @@ pub extern "C" fn rb_zjit_stats(_ec: EcPtr, _self: VALUE, target_key: VALUE) -> 
     }
     set_stat_usize!(hash, "dynamic_send_count", dynamic_send_count);
 
+    // Set optimized send counters
+    let mut optimized_send_count = 0;
+    for &counter in OPTIMIZED_SEND_COUNTERS {
+        let count = unsafe { *counter_ptr(counter) };
+        optimized_send_count += count;
+        set_stat_usize!(hash, &counter.name(), count);
+    }
+    set_stat_usize!(hash, "optimized_send_count", optimized_send_count);
+    set_stat_usize!(hash, "send_count", dynamic_send_count + optimized_send_count);
+
     // Set send fallback counters for NotOptimizedInstruction
     let send_fallback_counters = ZJITState::get_send_fallback_counters();
     for (op_idx, count) in send_fallback_counters.iter().enumerate().take(VM_INSTRUCTION_SIZE as usize) {
@@ -471,15 +501,17 @@ pub struct SideExitLocations {
     pub raw_samples: Vec<VALUE>,
     /// Line numbers of the iseq caller.
     pub line_samples: Vec<i32>,
+    /// Skipped samples
+    pub skipped_samples: usize
 }
 
 /// Primitive called in zjit.rb
 ///
-/// Check if trace_exits generation is enabled. Requires the stats feature
-/// to be enabled.
+/// Check if trace_exits generation is enabled.
 #[unsafe(no_mangle)]
 pub extern "C" fn rb_zjit_trace_exit_locations_enabled_p(_ec: EcPtr, _ruby_self: VALUE) -> VALUE {
-    if get_option!(stats) && get_option!(trace_side_exits) {
+    // Builtin zjit.rb calls this even if ZJIT is disabled, so OPTIONS may not be set.
+    if unsafe { OPTIONS.as_ref() }.is_some_and(|opts| opts.trace_side_exits) {
         Qtrue
     } else {
         Qfalse
@@ -490,7 +522,7 @@ pub extern "C" fn rb_zjit_trace_exit_locations_enabled_p(_ec: EcPtr, _ruby_self:
 /// into raw, lines, and frames hash for RubyVM::YJIT.exit_locations.
 #[unsafe(no_mangle)]
 pub extern "C" fn rb_zjit_get_exit_locations(_ec: EcPtr, _ruby_self: VALUE) -> VALUE {
-    if !zjit_enabled_p() || !get_option!(stats) || !get_option!(trace_side_exits) {
+    if !zjit_enabled_p() || !get_option!(trace_side_exits) {
         return Qnil;
     }
 

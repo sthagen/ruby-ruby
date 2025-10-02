@@ -1642,7 +1642,7 @@ class TestZJIT < Test::Unit::TestCase
     }, call_threshold: 2, insns: [:opt_send_without_block]
   end
 
-  def test_attr_accessor
+  def test_attr_accessor_getivar
     assert_compiles '[4, 4]', %q{
       class C
         attr_accessor :foo
@@ -1653,6 +1653,47 @@ class TestZJIT < Test::Unit::TestCase
       end
 
       def test(c) = c.foo
+      c = C.new
+      [test(c), test(c)]
+    }, call_threshold: 2, insns: [:opt_send_without_block]
+  end
+
+  def test_attr_accessor_setivar
+    assert_compiles '[5, 5]', %q{
+      class C
+        attr_accessor :foo
+
+        def initialize
+          @foo = 4
+        end
+      end
+
+      def test(c)
+        c.foo = 5
+        c.foo
+      end
+
+      c = C.new
+      [test(c), test(c)]
+    }, call_threshold: 2, insns: [:opt_send_without_block]
+  end
+
+  def test_attr_writer
+    assert_compiles '[5, 5]', %q{
+      class C
+        attr_writer :foo
+
+        def initialize
+          @foo = 4
+        end
+
+        def get_foo = @foo
+      end
+
+      def test(c)
+        c.foo = 5
+        c.get_foo
+      end
       c = C.new
       [test(c), test(c)]
     }, call_threshold: 2, insns: [:opt_send_without_block]
@@ -2869,6 +2910,65 @@ class TestZJIT < Test::Unit::TestCase
 
       a(Foo)
     }, call_threshold: 2, insns: [:opt_new]
+  end
+
+  def test_singleton_class_invalidation_annotated_ccall
+    assert_compiles '[false, true]', %q{
+      def define_singleton(obj, define)
+        if define
+          # Wrap in C method frame to avoid exiting JIT on defineclass
+          [nil].reverse_each do
+            class << obj
+              def ==(_)
+                true
+              end
+            end
+          end
+        end
+        false
+      end
+
+      def test(define)
+        obj = BasicObject.new
+        # This == call gets compiled to a CCall
+        obj == define_singleton(obj, define)
+      end
+
+      result = []
+      result << test(false)  # Compiles BasicObject#==
+      result << test(true)   # Should use singleton#== now
+      result
+    }, call_threshold: 2
+  end
+
+  def test_singleton_class_invalidation_optimized_variadic_ccall
+    assert_compiles '[1, 1000]', %q{
+      def define_singleton(arr, define)
+        if define
+          # Wrap in C method frame to avoid exiting JIT on defineclass
+          [nil].reverse_each do
+            class << arr
+              def push(x)
+                super(x * 1000)
+              end
+            end
+          end
+        end
+        1
+      end
+
+      def test(define)
+        arr = []
+        val = define_singleton(arr, define)
+        arr.push(val)  # This CCall should be invalidated if singleton was defined
+        arr[0]
+      end
+
+      result = []
+      result << test(false)  # Compiles Array#push as CCall
+      result << test(true)   # Singleton defined, CCall should be invalidated
+      result
+    }, call_threshold: 2
   end
 
   private

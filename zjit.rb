@@ -9,10 +9,10 @@
 module RubyVM::ZJIT
   # Avoid calling a Ruby method here to avoid interfering with compilation tests
   if Primitive.rb_zjit_print_stats_p
-    at_exit {
-      print_stats
-      dump_locations
-    }
+    at_exit { print_stats }
+  end
+  if Primitive.rb_zjit_trace_exit_locations_enabled_p
+    at_exit { dump_locations }
   end
 end
 
@@ -126,7 +126,10 @@ class << RubyVM::ZJIT
       raise ArgumentError, "--zjit-trace-exits must be enabled to use dump_exit_locations."
     end
 
-    File.binwrite(filename, Marshal.dump(RubyVM::ZJIT.exit_locations))
+    File.open(filename, "wb") do |file|
+      Marshal.dump(RubyVM::ZJIT.exit_locations, file)
+      file.size
+    end
   end
 
   # Check if `--zjit-stats` is used
@@ -162,9 +165,16 @@ class << RubyVM::ZJIT
     print_counters_with_prefix(prefix: 'compile_error_', prompt: 'compile error reasons', buf:, stats:, limit: 20)
     print_counters_with_prefix(prefix: 'exit_', prompt: 'side exit reasons', buf:, stats:, limit: 20)
 
-    # Show the most important stats ratio_in_zjit at the end
+    # Show no-prefix counters, having the most important stat `ratio_in_zjit` at the end
     print_counters([
+      :send_count,
       :dynamic_send_count,
+      :optimized_send_count,
+      :iseq_optimized_send_count,
+      :inline_cfunc_optimized_send_count,
+      :variadic_cfunc_optimized_send_count,
+    ], buf:, stats:, right_align: true, base: :send_count)
+    print_counters([
       :dynamic_getivar_count,
       :dynamic_setivar_count,
 
@@ -202,12 +212,18 @@ class << RubyVM::ZJIT
   # :stopdoc:
   private
 
-  def print_counters(keys, buf:, stats:)
-    left_pad = keys.map { |key| key.to_s.sub(/_time_ns\z/, '_time').size }.max + 1
+  def print_counters(keys, buf:, stats:, right_align: false, base: nil)
+    key_pad = keys.map { |key| key.to_s.sub(/_time_ns\z/, '_time').size }.max + 1
+    key_align = '-' unless right_align
+    value_pad = keys.filter_map { |key| stats[key] }.map { |value| number_with_delimiter(value).size }.max
+
     keys.each do |key|
       # Some stats like vm_insn_count and ratio_in_zjit are not supported on the release build
       next unless stats.key?(key)
       value = stats[key]
+      if base && key != base
+        ratio = " (%4.1f%%)" % (100.0 * value / stats[base])
+      end
 
       case key
       when :ratio_in_zjit
@@ -219,7 +235,7 @@ class << RubyVM::ZJIT
         value = number_with_delimiter(value)
       end
 
-      buf << "#{"%-#{left_pad}s" % "#{key}:"} #{value}\n"
+      buf << "%#{key_align}*s %*s%s\n" % [key_pad, "#{key}:", value_pad, value, ratio]
     end
   end
 
@@ -260,9 +276,9 @@ class << RubyVM::ZJIT
   def dump_locations # :nodoc:
     return unless trace_exit_locations_enabled?
 
-    filename = "zjit_exit_locations.dump"
-    dump_exit_locations(filename)
+    filename = "zjit_exits_#{Time.now.to_i}.dump"
+    n_bytes = dump_exit_locations(filename)
 
-    $stderr.puts("ZJIT exit locations dumped to `#{filename}`.")
+    $stderr.puts("#{n_bytes} bytes written to #{filename}.")
   end
 end

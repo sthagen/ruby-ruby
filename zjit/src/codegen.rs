@@ -9,7 +9,10 @@ use std::slice;
 
 use crate::asm::Label;
 use crate::backend::current::{Reg, ALLOC_REGS};
-use crate::invariants::{track_bop_assumption, track_cme_assumption, track_no_ep_escape_assumption, track_no_trace_point_assumption, track_single_ractor_assumption, track_stable_constant_names_assumption};
+use crate::invariants::{
+    track_bop_assumption, track_cme_assumption, track_no_ep_escape_assumption, track_no_trace_point_assumption,
+    track_single_ractor_assumption, track_stable_constant_names_assumption, track_no_singleton_class_assumption
+};
 use crate::gc::{append_gc_offsets, get_or_create_iseq_payload, get_or_create_iseq_payload_ptr, IseqCodePtrs, IseqPayload, IseqStatus};
 use crate::state::ZJITState;
 use crate::stats::{send_fallback_counter, exit_counter_for_compile_error, incr_counter, incr_counter_by, send_fallback_counter_for_method_type, send_fallback_counter_ptr_for_opcode, CompileError};
@@ -654,6 +657,9 @@ fn gen_patch_point(jit: &mut JITState, asm: &mut Assembler, invariant: &Invarian
             Invariant::SingleRactorMode => {
                 track_single_ractor_assumption(code_ptr, side_exit_ptr, payload_ptr);
             }
+            Invariant::NoSingletonClass { klass } => {
+                track_no_singleton_class_assumption(klass, code_ptr, side_exit_ptr, payload_ptr);
+            }
         }
     });
 }
@@ -661,6 +667,7 @@ fn gen_patch_point(jit: &mut JITState, asm: &mut Assembler, invariant: &Invarian
 /// Lowering for [`Insn::CCall`]. This is a low-level raw call that doesn't know
 /// anything about the callee, so handling for e.g. GC safety is dealt with elsewhere.
 fn gen_ccall(asm: &mut Assembler, cfun: *const u8, args: Vec<Opnd>) -> lir::Opnd {
+    gen_incr_counter(asm, Counter::inline_cfunc_optimized_send_count);
     asm.ccall(cfun, args)
 }
 
@@ -675,6 +682,8 @@ fn gen_ccall_variadic(
     cme: *const rb_callable_method_entry_t,
     state: &FrameState,
 ) -> lir::Opnd {
+    gen_incr_counter(asm, Counter::variadic_cfunc_optimized_send_count);
+
     gen_prepare_non_leaf_call(jit, asm, state);
 
     let stack_growth = state.stack_size();
@@ -1051,6 +1060,8 @@ fn gen_send_without_block_direct(
     args: Vec<Opnd>,
     state: &FrameState,
 ) -> lir::Opnd {
+    gen_incr_counter(asm, Counter::iseq_optimized_send_count);
+
     let local_size = unsafe { get_iseq_body_local_table_size(iseq) }.as_usize();
     let stack_growth = state.stack_size() + local_size + unsafe { get_iseq_body_stack_max(iseq) }.as_usize();
     gen_stack_overflow_check(jit, asm, state, stack_growth);
