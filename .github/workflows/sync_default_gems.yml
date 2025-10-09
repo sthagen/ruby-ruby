@@ -17,7 +17,7 @@ on:
 
 jobs:
   sync_default_gems:
-    name: Sync default gems
+    name: Sync default gem ${{ github.event.inputs.gem }}
 
     permissions:
       contents: write # for Git to git push
@@ -62,4 +62,7 @@ jobs:
       - uses: ./.github/actions/slack
         with:
           SLACK_WEBHOOK_URL: ${{ secrets.SIMPLER_ALERTS_URL }} # ruby-lang slack: ruby/simpler-alerts-bot
+          label: "${{ github.event.inputs.gem }} (<https://github.com/${{ github.event.inputs.gem == 'rubygems' && 'rubygems' || 'ruby' }}/${{ github.event.inputs.gem }}/compare/${{ github.event.inputs.before }}...${{ github.event.inputs.after }}|diff>)"
+          event_name: workflow_dispatch
+          extra_channel_id: C05FPKAU743 # alerts-sync
         if: ${{ failure() }}
