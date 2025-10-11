@@ -121,7 +121,7 @@ class GitInfoBuilder
   end
 
   def git_show(revision, format:)
-    git('show', "--pretty=#{format}", '--no-patch', revision).strip
+    git('show', '--no-show-signature', "--pretty=#{format}", '--no-patch', revision).strip
   end
 
   def git(*args)
@@ -180,7 +180,7 @@ class << CommitEmail
     args, options = parse(rest)
 
     infos = args.each_slice(3).flat_map do |oldrev, newrev, refname|
-      revisions = IO.popen(['git', 'log', '--reverse', '--pretty=%H', "#{oldrev}^..#{newrev}"], &:read).lines.map(&:strip)
+      revisions = IO.popen(['git', 'log', '--no-show-signature', '--reverse', '--pretty=%H', "#{oldrev}^..#{newrev}"], &:read).lines.map(&:strip)
       revisions[0..-2].zip(revisions[1..-1]).map do |old, new|
         GitInfoBuilder.new(repo_path).build(old, new, refname)
       end
@@ -211,7 +211,7 @@ class << CommitEmail
   end
 
   def make_body(info, viewer_uri:)
-    body = ''
+    body = +''
     body << "#{info.author}\t#{format_time(info.date)}\n"
     body << "\n"
     body << "  New Revision: #{info.revision}\n"
@@ -276,7 +276,6 @@ class << CommitEmail
   end
 
   def changed_dirs_info(info, uri)
-    rev = info.revision
     (info.added_dirs.collect do |dir|
        "  Added: #{dir}\n"
      end + info.deleted_dirs.collect do |dir|
@@ -293,14 +292,11 @@ class << CommitEmail
         values.collect do |type, value|
           case type
           when :added
-            command = 'cat'
             rev = "?revision=#{info.revision}&view=markup"
           when :modified, :property_changed
-            command = 'diff'
             prev_revision = (info.revision.is_a?(Integer) ? info.revision - 1 : "#{info.revision}^")
             rev = "?r1=#{info.revision}&r2=#{prev_revision}&diff_format=u"
           when :deleted, :copied
-            command = 'cat'
             rev = ''
           else
             raise "unknown diff type: #{value[:type]}"
@@ -328,7 +324,7 @@ class << CommitEmail
   end
 
   def make_subject(info)
-    subject = ''
+    subject = +''
     subject << "#{info.revision}"
     subject << " (#{info.branch})"
     subject << ': '
