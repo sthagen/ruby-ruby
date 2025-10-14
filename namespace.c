@@ -118,6 +118,12 @@ namespace_generate_id(void)
     return id;
 }
 
+static VALUE
+namespace_main_to_s(VALUE obj)
+{
+    return rb_str_new2("main");
+}
+
 static void
 namespace_entry_initialize(rb_namespace_t *ns)
 {
@@ -128,9 +134,8 @@ namespace_entry_initialize(rb_namespace_t *ns)
     ns->ns_id = 0;
 
     ns->top_self = rb_obj_alloc(rb_cObject);
-    // TODO:
-    // rb_define_singleton_method(rb_vm_top_self(), "to_s", main_to_s, 0);
-    // rb_define_alias(rb_singleton_class(rb_vm_top_self()), "inspect", "to_s");
+    rb_define_singleton_method(ns->top_self, "to_s", namespace_main_to_s, 0);
+    rb_define_alias(rb_singleton_class(ns->top_self), "inspect", "to_s");
     ns->load_path = rb_ary_dup(root->load_path);
     ns->expanded_load_path = rb_ary_dup(root->expanded_load_path);
     ns->load_path_snapshot = rb_ary_new();
@@ -347,20 +352,6 @@ rb_namespace_s_current(VALUE recv)
     ns = rb_vm_current_namespace(GET_EC());
     VM_ASSERT(ns && ns->ns_object);
     return ns->ns_object;
-}
-
-/*
- *  call-seq:
- *    Namespace.is_builtin?(klass) -> true or false
- *
- *  Returns +true+ if +klass+ is only in a user namespace.
- */
-static VALUE
-rb_namespace_s_is_builtin_p(VALUE recv, VALUE klass)
-{
-    if (RCLASS_PRIME_CLASSEXT_READABLE_P(klass) && !RCLASS_PRIME_CLASSEXT_WRITABLE_P(klass))
-        return Qtrue;
-    return Qfalse;
 }
 
 /*
@@ -1056,7 +1047,6 @@ Init_Namespace(void)
 
     rb_define_singleton_method(rb_cNamespace, "enabled?", rb_namespace_s_getenabled, 0);
     rb_define_singleton_method(rb_cNamespace, "current", rb_namespace_s_current, 0);
-    rb_define_singleton_method(rb_cNamespace, "is_builtin?", rb_namespace_s_is_builtin_p, 1);
 
     rb_define_method(rb_cNamespace, "load_path", rb_namespace_load_path, 0);
     rb_define_method(rb_cNamespace, "load", rb_namespace_load, -1);

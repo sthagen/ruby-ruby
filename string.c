@@ -11177,11 +11177,9 @@ rb_str_ljust(int argc, VALUE *argv, VALUE str)
 
 /*
  *  call-seq:
- *    rjust(size, pad_string = ' ') -> new_string
+ *    rjust(width, pad_string = ' ') -> new_string
  *
  *  :include: doc/string/rjust.rdoc
- *
- *  Related: String#ljust, String#center.
  *
  */
 
