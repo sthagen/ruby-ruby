@@ -557,6 +557,8 @@ pub enum Insn {
     StringCopy { val: InsnId, chilled: bool, state: InsnId },
     StringIntern { val: InsnId, state: InsnId },
     StringConcat { strings: Vec<InsnId>, state: InsnId },
+    /// Call rb_str_getbyte with known-Fixnum index
+    StringGetbyteFixnum { string: InsnId, index: InsnId },
 
     /// Combine count stack values into a regexp
     ToRegexp { opt: usize, values: Vec<InsnId>, state: InsnId },
@@ -582,6 +584,7 @@ pub enum Insn {
     ArrayPush { array: InsnId, val: InsnId, state: InsnId },
     ArrayArefFixnum { array: InsnId, index: InsnId },
 
+    HashAref { hash: InsnId, key: InsnId, state: InsnId },
     HashDup { val: InsnId, state: InsnId },
 
     /// Allocate an instance of the `val` object without calling `#initialize` on it.
@@ -859,6 +862,7 @@ impl Insn {
             // but we don't have type information here in `impl Insn`. See rb_range_new().
             Insn::NewRange { .. } => true,
             Insn::NewRangeFixnum { .. } => false,
+            Insn::StringGetbyteFixnum { .. } => false,
             _ => true,
         }
     }
@@ -923,6 +927,7 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
             }
             Insn::ArrayDup { val, .. } => { write!(f, "ArrayDup {val}") }
             Insn::HashDup { val, .. } => { write!(f, "HashDup {val}") }
+            Insn::HashAref { hash, key, .. } => { write!(f, "HashAref {hash}, {key}")}
             Insn::ObjectAlloc { val, .. } => { write!(f, "ObjectAlloc {val}") }
             &Insn::ObjectAllocClass { class, .. } => {
                 let class_name = get_class_name(class);
@@ -938,6 +943,9 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
                 }
 
                 Ok(())
+            }
+            Insn::StringGetbyteFixnum { string, index, .. } => {
+                write!(f, "StringGetbyteFixnum {string}, {index}")
             }
             Insn::ToRegexp { values, opt, .. } => {
                 write!(f, "ToRegexp")?;
@@ -1496,6 +1504,7 @@ impl Function {
             &StringCopy { val, chilled, state } => StringCopy { val: find!(val), chilled, state },
             &StringIntern { val, state } => StringIntern { val: find!(val), state: find!(state) },
             &StringConcat { ref strings, state } => StringConcat { strings: find_vec!(strings), state: find!(state) },
+            &StringGetbyteFixnum { string, index } => StringGetbyteFixnum { string: find!(string), index: find!(index) },
             &ToRegexp { opt, ref values, state } => ToRegexp { opt, values: find_vec!(values), state },
             &Test { val } => Test { val: find!(val) },
             &IsNil { val } => IsNil { val: find!(val) },
@@ -1580,6 +1589,7 @@ impl Function {
             &InvokeBuiltin { bf, ref args, state, return_type } => InvokeBuiltin { bf, args: find_vec!(args), state, return_type },
             &ArrayDup { val, state } => ArrayDup { val: find!(val), state },
             &HashDup { val, state } => HashDup { val: find!(val), state },
+            &HashAref { hash, key, state } => HashAref { hash: find!(hash), key: find!(key), state },
             &ObjectAlloc { val, state } => ObjectAlloc { val: find!(val), state },
             &ObjectAllocClass { class, state } => ObjectAllocClass { class, state: find!(state) },
             &CCall { cfunc, ref args, name, return_type, elidable } => CCall { cfunc, args: find_vec!(args), name, return_type, elidable },
@@ -1676,10 +1686,12 @@ impl Function {
             Insn::StringCopy { .. } => types::StringExact,
             Insn::StringIntern { .. } => types::Symbol,
             Insn::StringConcat { .. } => types::StringExact,
+            Insn::StringGetbyteFixnum { .. } => types::Fixnum.union(types::NilClass),
             Insn::ToRegexp { .. } => types::RegexpExact,
             Insn::NewArray { .. } => types::ArrayExact,
             Insn::ArrayDup { .. } => types::ArrayExact,
             Insn::ArrayArefFixnum { .. } => types::BasicObject,
+            Insn::HashAref { .. } => types::BasicObject,
             Insn::NewHash { .. } => types::HashExact,
             Insn::HashDup { .. } => types::HashExact,
             Insn::NewRange { .. } => types::RangeExact,
@@ -2630,9 +2642,13 @@ impl Function {
                     Insn::ArrayArefFixnum { array, index } if self.type_of(array).ruby_object_known()
                                                            && self.type_of(index).ruby_object_known() => {
                         let array_obj = self.type_of(array).ruby_object().unwrap();
-                        let index = self.type_of(index).fixnum_value().unwrap();
-                        let val = unsafe { rb_yarv_ary_entry_internal(array_obj, index) };
-                        self.new_insn(Insn::Const { val: Const::Value(val) })
+                        if array_obj.is_frozen() {
+                            let index = self.type_of(index).fixnum_value().unwrap();
+                            let val = unsafe { rb_yarv_ary_entry_internal(array_obj, index) };
+                            self.new_insn(Insn::Const { val: Const::Value(val) })
+                        } else {
+                            insn_id
+                        }
                     }
                     Insn::Test { val } if self.type_of(val).is_known_falsy() => {
                         self.new_insn(Insn::Const { val: Const::CBool(false) })
@@ -2704,6 +2720,10 @@ impl Function {
                 worklist.extend(strings);
                 worklist.push_back(state);
             }
+            &Insn::StringGetbyteFixnum { string, index } => {
+                worklist.push_back(string);
+                worklist.push_back(index);
+            }
             &Insn::ToRegexp { ref values, state, .. } => {
                 worklist.extend(values);
                 worklist.push_back(state);
@@ -2770,6 +2790,11 @@ impl Function {
             &Insn::ArrayArefFixnum { array, index } => {
                 worklist.push_back(array);
                 worklist.push_back(index);
+            }
+            &Insn::HashAref { hash, key, state } => {
+                worklist.push_back(hash);
+                worklist.push_back(key);
+                worklist.push_back(state);
             }
             &Insn::Send { recv, ref args, state, .. }
             | &Insn::SendForward { recv, ref args, state, .. }
@@ -9238,7 +9263,7 @@ mod opt_tests {
           PatchPoint MethodRedefined(Hash@0x1000, []@0x1008, cme:0x1010)
           PatchPoint NoSingletonClass(Hash@0x1000)
           v26:HashExact = GuardType v9, HashExact
-          v27:BasicObject = CCallWithFrame []@0x1038, v26, v13
+          v27:BasicObject = HashAref v26, v13
           CheckInterrupts
           Return v27
         ");
@@ -10601,7 +10626,7 @@ mod opt_tests {
           v43:HeapObject[class_exact:C] = ObjectAllocClass C:VALUE(0x1008)
           PatchPoint MethodRedefined(C@0x1008, initialize@0x1040, cme:0x1048)
           PatchPoint NoSingletonClass(C@0x1008)
-          v47:NilClass = CCall initialize@0x1070, v43
+          v47:NilClass = Const Value(nil)
           CheckInterrupts
           CheckInterrupts
           Return v43
@@ -10669,7 +10694,7 @@ mod opt_tests {
           v43:ObjectExact = ObjectAllocClass Object:VALUE(0x1008)
           PatchPoint MethodRedefined(Object@0x1008, initialize@0x1040, cme:0x1048)
           PatchPoint NoSingletonClass(Object@0x1008)
-          v47:NilClass = CCall initialize@0x1070, v43
+          v47:NilClass = Const Value(nil)
           CheckInterrupts
           CheckInterrupts
           Return v43
@@ -10700,7 +10725,7 @@ mod opt_tests {
           v43:BasicObjectExact = ObjectAllocClass BasicObject:VALUE(0x1008)
           PatchPoint MethodRedefined(BasicObject@0x1008, initialize@0x1040, cme:0x1048)
           PatchPoint NoSingletonClass(BasicObject@0x1008)
-          v47:NilClass = CCall initialize@0x1070, v43
+          v47:NilClass = Const Value(nil)
           CheckInterrupts
           CheckInterrupts
           Return v43
@@ -11554,6 +11579,37 @@ mod opt_tests {
           CheckInterrupts
           Return v13
         ");
+    }
+
+    #[test]
+    fn test_dont_eliminate_load_from_non_frozen_array() {
+        eval(r##"
+            S = [4,5,6]
+            def test = S[0]
+            test
+        "##);
+        assert_snapshot!(hir_string("test"), @r"
+        fn test@<compiled>:3:
+        bb0():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          Jump bb2(v1)
+        bb1(v4:BasicObject):
+          EntryPoint JIT(0)
+          Jump bb2(v4)
+        bb2(v6:BasicObject):
+          PatchPoint SingleRactorMode
+          PatchPoint StableConstantNames(0x1000, S)
+          v24:ArrayExact[VALUE(0x1008)] = Const Value(VALUE(0x1008))
+          v12:Fixnum[0] = Const Value(0)
+          PatchPoint MethodRedefined(Array@0x1010, []@0x1018, cme:0x1020)
+          PatchPoint NoSingletonClass(Array@0x1010)
+          v28:BasicObject = ArrayArefFixnum v24, v12
+          CheckInterrupts
+          Return v28
+        ");
+       // TODO(max): Check the result of `S[0] = 5; test` using `inspect` to make sure that we
+       // actually do the load at run-time.
     }
 
     #[test]
@@ -12793,6 +12849,125 @@ mod opt_tests {
     }
 
     #[test]
+    fn test_hash_aref_literal() {
+        eval("
+            def test
+              arr = {1 => 3}
+              arr[1]
+            end
+        ");
+        assert_snapshot!(hir_string("test"), @r"
+        fn test@<compiled>:3:
+        bb0():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          v2:NilClass = Const Value(nil)
+          Jump bb2(v1, v2)
+        bb1(v5:BasicObject):
+          EntryPoint JIT(0)
+          v6:NilClass = Const Value(nil)
+          Jump bb2(v5, v6)
+        bb2(v8:BasicObject, v9:NilClass):
+          v13:HashExact[VALUE(0x1000)] = Const Value(VALUE(0x1000))
+          v15:HashExact = HashDup v13
+          v18:Fixnum[1] = Const Value(1)
+          PatchPoint MethodRedefined(Hash@0x1008, []@0x1010, cme:0x1018)
+          PatchPoint NoSingletonClass(Hash@0x1008)
+          v31:BasicObject = HashAref v15, v18
+          CheckInterrupts
+          Return v31
+        ");
+    }
+
+    #[test]
+    fn test_hash_aref_profiled() {
+        eval("
+            def test(hash, key)
+              hash[key]
+            end
+            test({1 => 3}, 1)
+        ");
+        assert_snapshot!(hir_string("test"), @r"
+        fn test@<compiled>:3:
+        bb0():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          v2:BasicObject = GetLocal l0, SP@5
+          v3:BasicObject = GetLocal l0, SP@4
+          Jump bb2(v1, v2, v3)
+        bb1(v6:BasicObject, v7:BasicObject, v8:BasicObject):
+          EntryPoint JIT(0)
+          Jump bb2(v6, v7, v8)
+        bb2(v10:BasicObject, v11:BasicObject, v12:BasicObject):
+          PatchPoint MethodRedefined(Hash@0x1000, []@0x1008, cme:0x1010)
+          PatchPoint NoSingletonClass(Hash@0x1000)
+          v28:HashExact = GuardType v11, HashExact
+          v29:BasicObject = HashAref v28, v12
+          CheckInterrupts
+          Return v29
+        ");
+    }
+
+    #[test]
+    fn test_hash_aref_subclass() {
+        eval("
+            class C < Hash; end
+            def test(hash, key)
+              hash[key]
+            end
+            test(C.new({0 => 3}), 0)
+        ");
+        assert_snapshot!(hir_string("test"), @r"
+        fn test@<compiled>:4:
+        bb0():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          v2:BasicObject = GetLocal l0, SP@5
+          v3:BasicObject = GetLocal l0, SP@4
+          Jump bb2(v1, v2, v3)
+        bb1(v6:BasicObject, v7:BasicObject, v8:BasicObject):
+          EntryPoint JIT(0)
+          Jump bb2(v6, v7, v8)
+        bb2(v10:BasicObject, v11:BasicObject, v12:BasicObject):
+          PatchPoint MethodRedefined(C@0x1000, []@0x1008, cme:0x1010)
+          PatchPoint NoSingletonClass(C@0x1000)
+          v28:HeapObject[class_exact:C] = GuardType v11, HeapObject[class_exact:C]
+          v29:BasicObject = HashAref v28, v12
+          CheckInterrupts
+          Return v29
+        ");
+    }
+
+    #[test]
+    fn test_does_not_fold_hash_aref_with_frozen_hash() {
+        eval("
+            H = {a: 0}.freeze
+            def test = H[:a]
+            test
+        ");
+        assert_snapshot!(hir_string("test"), @r"
+        fn test@<compiled>:3:
+        bb0():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          Jump bb2(v1)
+        bb1(v4:BasicObject):
+          EntryPoint JIT(0)
+          Jump bb2(v4)
+        bb2(v6:BasicObject):
+          PatchPoint SingleRactorMode
+          PatchPoint StableConstantNames(0x1000, H)
+          v24:HashExact[VALUE(0x1008)] = Const Value(VALUE(0x1008))
+          v12:StaticSymbol[:a] = Const Value(VALUE(0x1010))
+          PatchPoint MethodRedefined(Hash@0x1018, []@0x1020, cme:0x1028)
+          PatchPoint NoSingletonClass(Hash@0x1018)
+          v28:BasicObject = HashAref v24, v12
+          CheckInterrupts
+          Return v28
+        ");
+    }
+
+    #[test]
     fn test_optimize_thread_current() {
         eval("
             def test = Thread.current
@@ -12957,6 +13132,141 @@ mod opt_tests {
           v27:BasicObject = CCallWithFrame =~@0x1040, v26, v13
           CheckInterrupts
           Return v27
+        ");
+    }
+
+    #[test]
+    fn test_optimize_string_getbyte_fixnum() {
+        eval(r#"
+            def test(s, i) = s.getbyte(i)
+            test("foo", 0)
+        "#);
+        assert_snapshot!(hir_string("test"), @r"
+        fn test@<compiled>:2:
+        bb0():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          v2:BasicObject = GetLocal l0, SP@5
+          v3:BasicObject = GetLocal l0, SP@4
+          Jump bb2(v1, v2, v3)
+        bb1(v6:BasicObject, v7:BasicObject, v8:BasicObject):
+          EntryPoint JIT(0)
+          Jump bb2(v6, v7, v8)
+        bb2(v10:BasicObject, v11:BasicObject, v12:BasicObject):
+          PatchPoint MethodRedefined(String@0x1000, getbyte@0x1008, cme:0x1010)
+          PatchPoint NoSingletonClass(String@0x1000)
+          v26:StringExact = GuardType v11, StringExact
+          v27:Fixnum = GuardType v12, Fixnum
+          v28:NilClass|Fixnum = StringGetbyteFixnum v26, v27
+          CheckInterrupts
+          Return v28
+        ");
+    }
+
+    #[test]
+    fn test_elide_string_getbyte_fixnum() {
+        eval(r#"
+            def test(s, i)
+              s.getbyte(i)
+              5
+            end
+            test("foo", 0)
+        "#);
+        assert_snapshot!(hir_string("test"), @r"
+        fn test@<compiled>:3:
+        bb0():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          v2:BasicObject = GetLocal l0, SP@5
+          v3:BasicObject = GetLocal l0, SP@4
+          Jump bb2(v1, v2, v3)
+        bb1(v6:BasicObject, v7:BasicObject, v8:BasicObject):
+          EntryPoint JIT(0)
+          Jump bb2(v6, v7, v8)
+        bb2(v10:BasicObject, v11:BasicObject, v12:BasicObject):
+          PatchPoint MethodRedefined(String@0x1000, getbyte@0x1008, cme:0x1010)
+          PatchPoint NoSingletonClass(String@0x1000)
+          v29:StringExact = GuardType v11, StringExact
+          v30:Fixnum = GuardType v12, Fixnum
+          v20:Fixnum[5] = Const Value(5)
+          CheckInterrupts
+          Return v20
+        ");
+    }
+
+    #[test]
+    fn test_inline_integer_succ_with_fixnum() {
+        eval("
+            def test(x) = x.succ
+            test(4)
+        ");
+        assert_contains_opcode("test", YARVINSN_opt_succ);
+        assert_snapshot!(hir_string("test"), @r"
+        fn test@<compiled>:2:
+        bb0():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          v2:BasicObject = GetLocal l0, SP@4
+          Jump bb2(v1, v2)
+        bb1(v5:BasicObject, v6:BasicObject):
+          EntryPoint JIT(0)
+          Jump bb2(v5, v6)
+        bb2(v8:BasicObject, v9:BasicObject):
+          PatchPoint MethodRedefined(Integer@0x1000, succ@0x1008, cme:0x1010)
+          v24:Fixnum = GuardType v9, Fixnum
+          v25:Fixnum[1] = Const Value(1)
+          v26:Fixnum = FixnumAdd v24, v25
+          CheckInterrupts
+          Return v26
+        ");
+    }
+
+    #[test]
+    fn test_dont_inline_integer_succ_with_bignum() {
+        eval("
+            def test(x) = x.succ
+            test(4 << 70)
+        ");
+        assert_contains_opcode("test", YARVINSN_opt_succ);
+        assert_snapshot!(hir_string("test"), @r"
+        fn test@<compiled>:2:
+        bb0():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          v2:BasicObject = GetLocal l0, SP@4
+          Jump bb2(v1, v2)
+        bb1(v5:BasicObject, v6:BasicObject):
+          EntryPoint JIT(0)
+          Jump bb2(v5, v6)
+        bb2(v8:BasicObject, v9:BasicObject):
+          PatchPoint MethodRedefined(Integer@0x1000, succ@0x1008, cme:0x1010)
+          v24:Integer = GuardType v9, Integer
+          v25:BasicObject = CCallWithFrame succ@0x1038, v24
+          CheckInterrupts
+          Return v25
+        ");
+    }
+
+    #[test]
+    fn test_dont_inline_integer_succ_with_args() {
+        eval("
+            def test = 4.succ 1
+        ");
+        assert_snapshot!(hir_string("test"), @r"
+        fn test@<compiled>:2:
+        bb0():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          Jump bb2(v1)
+        bb1(v4:BasicObject):
+          EntryPoint JIT(0)
+          Jump bb2(v4)
+        bb2(v6:BasicObject):
+          v10:Fixnum[4] = Const Value(4)
+          v11:Fixnum[1] = Const Value(1)
+          v13:BasicObject = SendWithoutBlock v10, :succ, v11
+          CheckInterrupts
+          Return v13
         ");
     }
 }

@@ -702,9 +702,10 @@ pub const YARVINSN_zjit_opt_aset: ruby_vminsn_type = 237;
 pub const YARVINSN_zjit_opt_length: ruby_vminsn_type = 238;
 pub const YARVINSN_zjit_opt_size: ruby_vminsn_type = 239;
 pub const YARVINSN_zjit_opt_empty_p: ruby_vminsn_type = 240;
-pub const YARVINSN_zjit_opt_not: ruby_vminsn_type = 241;
-pub const YARVINSN_zjit_opt_regexpmatch2: ruby_vminsn_type = 242;
-pub const VM_INSTRUCTION_SIZE: ruby_vminsn_type = 243;
+pub const YARVINSN_zjit_opt_succ: ruby_vminsn_type = 241;
+pub const YARVINSN_zjit_opt_not: ruby_vminsn_type = 242;
+pub const YARVINSN_zjit_opt_regexpmatch2: ruby_vminsn_type = 243;
+pub const VM_INSTRUCTION_SIZE: ruby_vminsn_type = 244;
 pub type ruby_vminsn_type = u32;
 pub type rb_iseq_callback = ::std::option::Option<
     unsafe extern "C" fn(arg1: *const rb_iseq_t, arg2: *mut ::std::os::raw::c_void),
@@ -745,6 +746,8 @@ unsafe extern "C" {
     pub fn rb_gc_mark(obj: VALUE);
     pub fn rb_gc_mark_movable(obj: VALUE);
     pub fn rb_gc_location(obj: VALUE) -> VALUE;
+    pub fn rb_gc_enable() -> VALUE;
+    pub fn rb_gc_disable() -> VALUE;
     pub fn rb_gc_writebarrier(old: VALUE, young: VALUE);
     pub fn rb_class_get_superclass(klass: VALUE) -> VALUE;
     pub static mut rb_cObject: VALUE;
@@ -839,7 +842,6 @@ unsafe extern "C" {
     pub fn rb_ivar_set(obj: VALUE, name: ID, val: VALUE) -> VALUE;
     pub fn rb_ivar_defined(obj: VALUE, name: ID) -> VALUE;
     pub fn rb_attr_get(obj: VALUE, name: ID) -> VALUE;
-    pub fn rb_obj_info_dump(obj: VALUE);
     pub fn rb_class_allocate_instance(klass: VALUE) -> VALUE;
     pub fn rb_obj_equal(obj1: VALUE, obj2: VALUE) -> VALUE;
     pub fn rb_reg_new_ary(ary: VALUE, options: ::std::os::raw::c_int) -> VALUE;
@@ -872,6 +874,11 @@ unsafe extern "C" {
         cfp: *const rb_control_frame_t,
     ) -> *const rb_callable_method_entry_t;
     pub fn rb_obj_info(obj: VALUE) -> *const ::std::os::raw::c_char;
+    pub fn rb_raw_obj_info(
+        buff: *mut ::std::os::raw::c_char,
+        buff_size: usize,
+        obj: VALUE,
+    ) -> *const ::std::os::raw::c_char;
     pub fn rb_ec_stack_check(ec: *mut rb_execution_context_struct) -> ::std::os::raw::c_int;
     pub fn rb_gc_writebarrier_remember(obj: VALUE);
     pub fn rb_shape_id_offset() -> i32;

@@ -190,6 +190,7 @@ pub fn init() -> Annotations {
     annotate!(rb_mKernel, "itself", inline_kernel_itself);
     annotate!(rb_cString, "bytesize", types::Fixnum, no_gc, leaf);
     annotate!(rb_cString, "to_s", types::StringExact);
+    annotate!(rb_cString, "getbyte", inline_string_getbyte);
     annotate!(rb_cModule, "name", types::StringExact.union(types::NilClass), no_gc, leaf, elidable);
     annotate!(rb_cModule, "===", types::BoolExact, no_gc, leaf);
     annotate!(rb_cArray, "length", types::Fixnum, no_gc, leaf, elidable);
@@ -198,12 +199,14 @@ pub fn init() -> Annotations {
     annotate!(rb_cArray, "reverse", types::ArrayExact, leaf, elidable);
     annotate!(rb_cArray, "join", types::StringExact);
     annotate!(rb_cArray, "[]", inline_array_aref);
+    annotate!(rb_cHash, "[]", inline_hash_aref);
     annotate!(rb_cHash, "empty?", types::BoolExact, no_gc, leaf, elidable);
     annotate!(rb_cNilClass, "nil?", types::TrueClass, no_gc, leaf, elidable);
     annotate!(rb_mKernel, "nil?", types::FalseClass, no_gc, leaf, elidable);
     annotate!(rb_cBasicObject, "==", types::BoolExact, no_gc, leaf, elidable);
     annotate!(rb_cBasicObject, "!", types::BoolExact, no_gc, leaf, elidable);
-    annotate!(rb_cBasicObject, "initialize", types::NilClass, no_gc, leaf, elidable);
+    annotate!(rb_cBasicObject, "initialize", inline_basic_object_initialize);
+    annotate!(rb_cInteger, "succ", inline_integer_succ);
     annotate!(rb_cString, "to_s", inline_string_to_s);
     let thread_singleton = unsafe { rb_singleton_class(rb_cThread) };
     annotate!(thread_singleton, "current", types::BasicObject, no_gc, leaf);
@@ -247,4 +250,41 @@ fn inline_array_aref(fun: &mut hir::Function, block: hir::BlockId, recv: hir::In
         }
     }
     None
+}
+
+fn inline_hash_aref(fun: &mut hir::Function, block: hir::BlockId, recv: hir::InsnId, args: &[hir::InsnId], state: hir::InsnId) -> Option<hir::InsnId> {
+    if let &[key] = args  {
+        let result = fun.push_insn(block, hir::Insn::HashAref { hash: recv, key, state });
+        return Some(result);
+    }
+    None
+}
+
+fn inline_string_getbyte(fun: &mut hir::Function, block: hir::BlockId, recv: hir::InsnId, args: &[hir::InsnId], state: hir::InsnId) -> Option<hir::InsnId> {
+    let &[index] = args else { return None; };
+    if fun.likely_a(index, types::Fixnum, state) {
+        // String#getbyte with a Fixnum is leaf and nogc; otherwise it may run arbitrary Ruby code
+        // when converting the index to a C integer.
+        let index = fun.coerce_to(block, index, types::Fixnum, state);
+        let result = fun.push_insn(block, hir::Insn::StringGetbyteFixnum { string: recv, index });
+        return Some(result);
+    }
+    None
+}
+
+fn inline_integer_succ(fun: &mut hir::Function, block: hir::BlockId, recv: hir::InsnId, args: &[hir::InsnId], state: hir::InsnId) -> Option<hir::InsnId> {
+    if !args.is_empty() { return None; }
+    if fun.likely_a(recv, types::Fixnum, state) {
+        let left = fun.coerce_to(block, recv, types::Fixnum, state);
+        let right = fun.push_insn(block, hir::Insn::Const { val: hir::Const::Value(VALUE::fixnum_from_usize(1)) });
+        let result = fun.push_insn(block, hir::Insn::FixnumAdd { left, right, state });
+        return Some(result);
+    }
+    None
+}
+
+fn inline_basic_object_initialize(fun: &mut hir::Function, block: hir::BlockId, _recv: hir::InsnId, args: &[hir::InsnId], _state: hir::InsnId) -> Option<hir::InsnId> {
+    if !args.is_empty() { return None; }
+    let result = fun.push_insn(block, hir::Insn::Const { val: hir::Const::Value(Qnil) });
+    Some(result)
 }

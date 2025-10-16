@@ -73,6 +73,7 @@ fn main() {
         .allowlist_function("rb_utf8_str_new")
         .allowlist_function("rb_str_buf_append")
         .allowlist_function("rb_str_dup")
+        .allowlist_function("rb_str_getbyte")
         .allowlist_type("ruby_preserved_encindex")
         .allowlist_function("rb_class2name")
 
@@ -82,7 +83,7 @@ fn main() {
         .allowlist_type("ruby_rstring_flags")
 
         // This function prints info about a value and is useful for debugging
-        .allowlist_function("rb_obj_info_dump")
+        .allowlist_function("rb_raw_obj_info")
 
         .allowlist_function("ruby_init")
         .allowlist_function("ruby_init_stack")
@@ -130,6 +131,8 @@ fn main() {
         .allowlist_function("rb_singleton_class")
         .allowlist_function("rb_define_class")
         .allowlist_function("rb_class_get_superclass")
+        .allowlist_function("rb_gc_disable")
+        .allowlist_function("rb_gc_enable")
         .allowlist_function("rb_gc_mark")
         .allowlist_function("rb_gc_mark_movable")
         .allowlist_function("rb_gc_location")
