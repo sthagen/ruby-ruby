@@ -264,9 +264,9 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, function: &Function) -> Resul
         asm.write_label(label);
 
         // Compile all parameters
-        for &insn_id in block.params() {
+        for (idx, &insn_id) in block.params().enumerate() {
             match function.find(insn_id) {
-                Insn::Param { idx } => {
+                Insn::Param => {
                     jit.opnds[insn_id.0] = Some(gen_param(&mut asm, idx));
                 },
                 insn => unreachable!("Non-param insn found in block.params: {insn:?}"),
@@ -356,6 +356,7 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
         Insn::NewRangeFixnum { low, high, flag, state } => gen_new_range_fixnum(asm, opnd!(low), opnd!(high), *flag, &function.frame_state(*state)),
         Insn::ArrayDup { val, state } => gen_array_dup(asm, opnd!(val), &function.frame_state(*state)),
         Insn::ArrayArefFixnum { array, index, .. } => gen_aref_fixnum(asm, opnd!(array), opnd!(index)),
+        Insn::ArrayLength { array } => gen_array_length(asm, opnd!(array)),
         Insn::ObjectAlloc { val, state } => gen_object_alloc(jit, asm, opnd!(val), &function.frame_state(*state)),
         &Insn::ObjectAllocClass { class, state } => gen_object_alloc_class(asm, class, &function.frame_state(state)),
         Insn::StringCopy { val, chilled, state } => gen_string_copy(asm, opnd!(val), *chilled, &function.frame_state(*state)),
@@ -366,7 +367,7 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
         &Insn::StringGetbyteFixnum { string, index } => gen_string_getbyte_fixnum(asm, opnd!(string), opnd!(index)),
         Insn::StringIntern { val, state } => gen_intern(asm, opnd!(val), &function.frame_state(*state)),
         Insn::ToRegexp { opt, values, state } => gen_toregexp(jit, asm, *opt, opnds!(values), &function.frame_state(*state)),
-        Insn::Param { idx } => unreachable!("block.insns should not have Insn::Param({idx})"),
+        Insn::Param => unreachable!("block.insns should not have Insn::Param"),
         Insn::Snapshot { .. } => return Ok(()), // we don't need to do anything for this instruction at the moment
         Insn::Jump(branch) => no_output!(gen_jump(jit, asm, branch)),
         Insn::IfTrue { val, target } => no_output!(gen_if_true(jit, asm, opnd!(val), target)),
@@ -711,7 +712,6 @@ fn gen_ccall_with_frame(jit: &mut JITState, asm: &mut Assembler, cfunc: *const u
 /// Lowering for [`Insn::CCall`]. This is a low-level raw call that doesn't know
 /// anything about the callee, so handling for e.g. GC safety is dealt with elsewhere.
 fn gen_ccall(asm: &mut Assembler, cfunc: *const u8, args: Vec<Opnd>) -> lir::Opnd {
-    gen_incr_counter(asm, Counter::inline_cfunc_optimized_send_count);
     asm.ccall(cfunc, args)
 }
 
@@ -1259,6 +1259,10 @@ fn gen_aref_fixnum(
     asm_ccall!(asm, rb_ary_entry, array, unboxed_idx)
 }
 
+fn gen_array_length(asm: &mut Assembler, array: Opnd) -> lir::Opnd {
+    asm_ccall!(asm, rb_jit_array_len, array)
+}
+
 /// Compile a new hash instruction
 fn gen_new_hash(
     jit: &mut JITState,
@@ -1590,8 +1594,13 @@ fn gen_guard_type_not(jit: &mut JITState, asm: &mut Assembler, val: lir::Opnd, g
 }
 
 /// Compile an identity check with a side exit
-fn gen_guard_bit_equals(jit: &mut JITState, asm: &mut Assembler, val: lir::Opnd, expected: VALUE, state: &FrameState) -> lir::Opnd {
-    asm.cmp(val, Opnd::Value(expected));
+fn gen_guard_bit_equals(jit: &mut JITState, asm: &mut Assembler, val: lir::Opnd, expected: crate::hir::Const, state: &FrameState) -> lir::Opnd {
+    let expected_opnd: Opnd = match expected {
+        crate::hir::Const::Value(v) => { Opnd::Value(v) }
+        crate::hir::Const::CInt64(v) => { v.into() }
+        _ => panic!("gen_guard_bit_equals: unexpected hir::Const {:?}", expected),
+    };
+    asm.cmp(val, expected_opnd);
     asm.jnz(side_exit(jit, state, GuardBitEquals(expected)));
     val
 }

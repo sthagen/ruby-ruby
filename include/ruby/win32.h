@@ -126,27 +126,29 @@ typedef unsigned int uintptr_t;
 #define O_SHARE_DELETE 0x20000000 /* for rb_w32_open(), rb_w32_wopen() */
 
 typedef int clockid_t;
-#if defined(__MINGW32__)
-/* I don't know why but these return some strange values. */
-#undef CLOCK_PROCESS_CPUTIME_ID
-#undef CLOCK_THREAD_CPUTIME_ID
-#undef CLOCK_REALTIME_COARSE
-#endif
 
-/* defined in win32/win32.c for old versions */
-#if !defined(__MINGW32__) || !defined(HAVE_CLOCK_GETTIME)
-#  define HAVE_CLOCK_GETTIME 1
-#  define NEED_CLOCK_GETTIME 1
-#endif
-#if !defined(__MINGW32__) || !defined(HAVE_CLOCK_GETRES)
-#  define HAVE_CLOCK_GETRES 1
-#  define NEED_CLOCK_GETRES 1
-#endif
+/*
+ * Since we use our versions in win32/win32.c, not to depend on yet
+ * another DLL, prefix our versions not to conflict with inline
+ * versions provided in time.h.
+ */
+#define clock_gettime rb_w32_clock_gettime
+#define clock_getres rb_w32_clock_getres
+
 #ifndef CLOCK_REALTIME
 #  define CLOCK_REALTIME  0
 #endif
 #ifndef CLOCK_MONOTONIC
 #  define CLOCK_MONOTONIC 1
+#endif
+#ifndef CLOCK_PROCESS_CPUTIME_ID
+#  define CLOCK_PROCESS_CPUTIME_ID 2
+#endif
+#ifndef CLOCK_THREAD_CPUTIME_ID
+#  define CLOCK_THREAD_CPUTIME_ID 3
+#endif
+#ifndef CLOCK_REALTIME_COARSE
+#  define CLOCK_REALTIME_COARSE 4
 #endif
 
 #undef utime

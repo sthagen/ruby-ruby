@@ -272,6 +272,8 @@ AS_CASE(["${build_os}"],
 ])
 AS_CASE(["${target_os}"],
 [cygwin*|msys*|mingw*|darwin*], [
+    ac_ct_OBJCOPY=":"
+    ac_cv_prog_OBJCOPY=":"
     ac_cv_prog_ac_ct_OBJCOPY=":"
 ])
 
@@ -1236,6 +1238,11 @@ main()
 		ac_cv_header_sys_time_h=no
 		ac_cv_header_sys_times_h=no
 		ac_cv_header_sys_socket_h=no
+		ac_cv_func_chown=yes
+		ac_cv_func_getegid=yes
+		ac_cv_func_geteuid=yes
+		ac_cv_func_getgid=yes
+		ac_cv_func_getuid=yes
 		ac_cv_func_execv=yes
 		ac_cv_func_lstat=yes
 		ac_cv_func_times=yes
@@ -1248,6 +1255,8 @@ main()
 		ac_cv_func_readlink=yes
 		ac_cv_func_shutdown=yes
 		ac_cv_func_symlink=yes
+		ac_cv_func_clock_getres=yes
+		ac_cv_func_clock_gettime=yes
 		ac_cv_lib_crypt_crypt=no
 		ac_cv_func_getpgrp_void=no
 		ac_cv_func_memcmp_working=yes
@@ -1264,8 +1273,8 @@ main()
 		AS_IF([test "$target_cpu" = x64], [
 		    ac_cv_func___builtin_setjmp=yes
 		    ac_cv_func_round=no
+		    ac_cv_func_tgamma=no
 		])
-		ac_cv_func_tgamma=no
 		AC_CHECK_TYPE([NET_LUID], [], [],
 			      [@%:@include <winsock2.h>
 			       @%:@include <windows.h>
@@ -4294,6 +4303,24 @@ AS_IF([test "${ARCH_FLAG}"], [
     CFLAGS=`echo "$CFLAGS" | sed "s| *$archflagpat"'||'`
     CXXFLAGS=`echo "$CXXFLAGS" | sed "s| *$archflagpat"'||'`
     LDFLAGS=`echo "$LDFLAGS" | sed "s| *$archflagpat"'||'`
+])
+AS_CASE([" $rb_cv_warnflags "], [*" -Wshorten-64-to-32 "*|*" -Werror=shorten-64-to-32 "*], [
+    voidp_ll=
+    AS_CASE([$ac_cv_sizeof_voidp],
+    [SIZEOF_LONG_LONG], [voidp_ll=true],
+    [@<:@0-9@:>@*], [
+        AS_IF([test $ac_cv_sizeof_voidp -gt $ac_cv_sizeof_long], [voidp_ll=true])
+    ])
+    AS_IF([test "$voidp_ll"], [
+        # Disable the shorten-64-to-32 warning for now, because it currently
+        # generates a lot of warnings on platforms where `sizeof(void*)` is
+        # larger than `sizeof(long)`.
+        #
+        # TODO: Replace `long` with `ptrdiff_t` or something in the all sources.
+        rb_cv_warnflags=`echo "$rb_cv_warnflags" |
+           sed -e 's/ -W\(shorten-64-to-32 \)/ -Wno-\1/' \
+               -e 's/ -Werror=\(shorten-64-to-32 \)/ -Wno-\1/'`
+    ])
 ])
 rb_cv_warnflags=`echo "$rb_cv_warnflags" | sed 's/^ *//;s/ *$//'`
 warnflags="$rb_cv_warnflags"

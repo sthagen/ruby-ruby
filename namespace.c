@@ -208,7 +208,7 @@ free_loading_table_entry(st_data_t key, st_data_t value, st_data_t arg)
 }
 
 static void
-namespace_entry_free(void *ptr)
+namespace_root_free(void *ptr)
 {
     rb_namespace_t *ns = (rb_namespace_t *)ptr;
     if (ns->loading_table) {
@@ -216,6 +216,17 @@ namespace_entry_free(void *ptr)
         st_free_table(ns->loading_table);
         ns->loading_table = 0;
     }
+
+    if (ns->loaded_features_index) {
+        st_free_table(ns->loaded_features_index);
+    }
+}
+
+static void
+namespace_entry_free(void *ptr)
+{
+    namespace_root_free(ptr);
+    xfree(ptr);
 }
 
 static size_t
@@ -232,6 +243,17 @@ const rb_data_type_t rb_namespace_data_type = {
     {
         rb_namespace_entry_mark,
         namespace_entry_free,
+        namespace_entry_memsize,
+        rb_namespace_gc_update_references,
+    },
+    0, 0, RUBY_TYPED_FREE_IMMEDIATELY // TODO: enable RUBY_TYPED_WB_PROTECTED when inserting write barriers
+};
+
+const rb_data_type_t rb_root_namespace_data_type = {
+    "Namespace::Root",
+    {
+        rb_namespace_entry_mark,
+        namespace_root_free,
         namespace_entry_memsize,
         rb_namespace_gc_update_references,
     },
@@ -488,6 +510,10 @@ copy_ext_file_error(char *message, size_t size, int copy_retvalue, char *src_pat
         snprintf(message, size, "failed to read the extension path: %s", src_path);
       case 4:
         snprintf(message, size, "failed to write the extension path: %s", dst_path);
+      case 5:
+        snprintf(message, size, "failed to stat the extension path to copy permissions: %s", src_path);
+      case 6:
+        snprintf(message, size, "failed to set permissions to the copied extension path: %s", dst_path);
       default:
         rb_bug("unknown return value of copy_ext_file: %d", copy_retvalue);
     }
@@ -563,6 +589,19 @@ copy_ext_file(char *src_path, char *dst_path)
     }
     fclose(src);
     fclose(dst);
+#if defined(__CYGWIN__)
+    // On Cygwin, CopyFile-like operations may strip executable bits.
+    // Explicitly match destination file permissions to source.
+    if (retvalue == 0) {
+        struct stat st;
+        if (stat(src_path, &st) != 0) {
+            retvalue = 5;
+        }
+        else if (chmod(dst_path, st.st_mode & 0777) != 0) {
+            retvalue = 6;
+        }
+    }
+#endif
     return retvalue;
 #endif
 }
@@ -708,7 +747,7 @@ initialize_root_namespace(void)
         root->ns_id = namespace_generate_id();
         root->ns_object = root_namespace;
 
-        entry = TypedData_Wrap_Struct(rb_cNamespaceEntry, &rb_namespace_data_type, root);
+        entry = TypedData_Wrap_Struct(rb_cNamespaceEntry, &rb_root_namespace_data_type, root);
         rb_ivar_set(root_namespace, id_namespace_entry, entry);
     }
     else {

@@ -305,6 +305,8 @@ rb_class_duplicate_classext(rb_classext_t *orig, VALUE klass, const rb_namespace
     RCLASSEXT_SUPER(ext) = RCLASSEXT_SUPER(orig);
 
     RCLASSEXT_M_TBL(ext) = duplicate_classext_m_tbl(RCLASSEXT_M_TBL(orig), klass, dup_iclass);
+    RCLASSEXT_ICLASS_IS_ORIGIN(ext) = true;
+    RCLASSEXT_ICLASS_ORIGIN_SHARED_MTBL(ext) = false;
 
     if (orig->fields_obj) {
         RB_OBJ_WRITE(klass, &ext->fields_obj, rb_imemo_fields_clone(orig->fields_obj));
@@ -496,6 +498,13 @@ class_get_subclasses_for_ns(struct st_table *tbl, VALUE ns_id)
     return NULL;
 }
 
+static int
+remove_class_from_subclasses_replace_first_entry(st_data_t *key, st_data_t *value, st_data_t arg, int existing)
+{
+    *value = arg;
+    return ST_CONTINUE;
+}
+
 static void
 remove_class_from_subclasses(struct st_table *tbl, VALUE ns_id, VALUE klass)
 {
@@ -516,7 +525,7 @@ remove_class_from_subclasses(struct st_table *tbl, VALUE ns_id, VALUE klass)
 
             if (first_entry) {
                 if (next) {
-                    st_insert(tbl, ns_id, (st_data_t)next);
+                    st_update(tbl, ns_id, remove_class_from_subclasses_replace_first_entry, (st_data_t)next);
                 }
                 else {
                     // no subclass entries in this ns
@@ -1184,7 +1193,7 @@ rb_singleton_class_clone_and_attach(VALUE obj, VALUE attach)
         if (RCLASS_CONST_TBL(klass)) {
             struct clone_const_arg arg;
             struct rb_id_table *table;
-            arg.tbl = table = rb_id_table_create(0);
+            arg.tbl = table = rb_id_table_create(rb_id_table_size(RCLASS_CONST_TBL(klass)));
             arg.klass = clone;
             rb_id_table_foreach(RCLASS_CONST_TBL(klass), clone_const_i, &arg);
             RCLASS_SET_CONST_TBL(clone, table, false);
