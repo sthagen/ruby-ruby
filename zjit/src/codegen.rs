@@ -398,6 +398,7 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
         Insn::FixnumGe { left, right } => gen_fixnum_ge(asm, opnd!(left), opnd!(right)),
         Insn::FixnumAnd { left, right } => gen_fixnum_and(asm, opnd!(left), opnd!(right)),
         Insn::FixnumOr { left, right } => gen_fixnum_or(asm, opnd!(left), opnd!(right)),
+        &Insn::FixnumMod { left, right, state } => gen_fixnum_mod(jit, asm, opnd!(left), opnd!(right), &function.frame_state(state)),
         Insn::IsNil { val } => gen_isnil(asm, opnd!(val)),
         &Insn::IsMethodCfunc { val, cd, cfunc, state: _ } => gen_is_method_cfunc(jit, asm, opnd!(val), cd, cfunc),
         &Insn::IsBitEqual { left, right } => gen_is_bit_equal(asm, opnd!(left), opnd!(right)),
@@ -411,7 +412,8 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
         // Give up CCallWithFrame for 7+ args since asm.ccall() doesn't support it.
         Insn::CCallWithFrame { cd, state, args, .. } if args.len() > C_ARG_OPNDS.len() =>
             gen_send_without_block(jit, asm, *cd, &function.frame_state(*state), SendFallbackReason::CCallWithFrameTooManyArgs),
-        Insn::CCallWithFrame { cfunc, args, cme, state, .. } => gen_ccall_with_frame(jit, asm, *cfunc, opnds!(args), *cme, &function.frame_state(*state)),
+        Insn::CCallWithFrame { cfunc, args, cme, state, blockiseq, .. } =>
+            gen_ccall_with_frame(jit, asm, *cfunc, opnds!(args), *cme, *blockiseq, &function.frame_state(*state)),
         Insn::CCallVariadic { cfunc, recv, args, name: _, cme, state, return_type: _, elidable: _ } => {
             gen_ccall_variadic(jit, asm, *cfunc, opnd!(recv), opnds!(args), *cme, &function.frame_state(*state))
         }
@@ -446,7 +448,6 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
         &Insn::LoadIvarExtended { self_val, id, index } => gen_load_ivar_extended(asm, opnd!(self_val), id, index),
         &Insn::ArrayMax { state, .. }
         | &Insn::FixnumDiv { state, .. }
-        | &Insn::FixnumMod { state, .. }
         | &Insn::Throw { state, .. }
         => return Err(state),
     };
@@ -673,20 +674,36 @@ fn gen_patch_point(jit: &mut JITState, asm: &mut Assembler, invariant: &Invarian
 }
 
 /// Generate code for a C function call that pushes a frame
-fn gen_ccall_with_frame(jit: &mut JITState, asm: &mut Assembler, cfunc: *const u8, args: Vec<Opnd>, cme: *const rb_callable_method_entry_t, state: &FrameState) -> lir::Opnd {
+fn gen_ccall_with_frame(
+    jit: &mut JITState,
+    asm: &mut Assembler,
+    cfunc: *const u8,
+    args: Vec<Opnd>,
+    cme: *const rb_callable_method_entry_t,
+    blockiseq: Option<IseqPtr>,
+    state: &FrameState,
+) -> lir::Opnd {
     gen_incr_counter(asm, Counter::non_variadic_cfunc_optimized_send_count);
 
-    gen_prepare_non_leaf_call(jit, asm, state);
+    let caller_stack_size = state.stack_size() - args.len();
+
+    // Can't use gen_prepare_non_leaf_call() because we need to adjust the SP
+    // to account for the receiver and arguments (and block arguments if any)
+    gen_prepare_call_with_gc(asm, state, false);
+    gen_save_sp(asm, caller_stack_size);
+    gen_spill_stack(jit, asm, state);
+    gen_spill_locals(jit, asm, state);
 
     gen_push_frame(asm, args.len(), state, ControlFrame {
         recv: args[0],
         iseq: None,
         cme,
         frame_type: VM_FRAME_MAGIC_CFUNC | VM_FRAME_FLAG_CFRAME | VM_ENV_FLAG_LOCAL,
+        block_iseq: blockiseq,
     });
 
     asm_comment!(asm, "switch to new SP register");
-    let sp_offset = (state.stack().len() - args.len() + VM_ENV_DATA_SIZE.as_usize()) * SIZEOF_VALUE;
+    let sp_offset = (caller_stack_size + VM_ENV_DATA_SIZE.as_usize()) * SIZEOF_VALUE;
     let new_sp = asm.add(SP, sp_offset.into());
     asm.mov(SP, new_sp);
 
@@ -738,6 +755,7 @@ fn gen_ccall_variadic(
         iseq: None,
         cme,
         frame_type: VM_FRAME_MAGIC_CFUNC | VM_FRAME_FLAG_CFRAME | VM_ENV_FLAG_LOCAL,
+        block_iseq: None,
     });
 
     asm_comment!(asm, "switch to new SP register");
@@ -1130,6 +1148,7 @@ fn gen_send_without_block_direct(
         iseq: Some(iseq),
         cme,
         frame_type: VM_FRAME_MAGIC_METHOD | VM_ENV_FLAG_LOCAL,
+        block_iseq: None,
     });
 
     asm_comment!(asm, "switch to new SP register");
@@ -1441,6 +1460,13 @@ fn gen_fixnum_or(asm: &mut Assembler, left: lir::Opnd, right: lir::Opnd) -> lir:
     asm.or(left, right)
 }
 
+fn gen_fixnum_mod(jit: &mut JITState, asm: &mut Assembler, left: lir::Opnd, right: lir::Opnd, state: &FrameState) -> lir::Opnd {
+    // Check for left % 0, which raises ZeroDivisionError
+    asm.cmp(right, Opnd::from(VALUE::fixnum_from_usize(0)));
+    asm.je(side_exit(jit, state, FixnumModByZero));
+    asm_ccall!(asm, rb_fix_mod_fix, left, right)
+}
+
 // Compile val == nil
 fn gen_isnil(asm: &mut Assembler, val: lir::Opnd) -> lir::Opnd {
     asm.cmp(val, Qnil.into());
@@ -1719,6 +1745,7 @@ struct ControlFrame {
     iseq: Option<IseqPtr>,
     cme: *const rb_callable_method_entry_t,
     frame_type: u32,
+    block_iseq: Option<IseqPtr>,
 }
 
 /// Compile an interpreter frame
@@ -1735,9 +1762,20 @@ fn gen_push_frame(asm: &mut Assembler, argc: usize, state: &FrameState, frame: C
     };
     let ep_offset = state.stack().len() as i32 + local_size - argc as i32 + VM_ENV_DATA_SIZE as i32 - 1;
     asm.store(Opnd::mem(64, SP, (ep_offset - 2) * SIZEOF_VALUE_I32), VALUE::from(frame.cme).into());
+
+    let block_handler_opnd = if let Some(block_iseq) = frame.block_iseq {
+        // Change cfp->block_code in the current frame. See vm_caller_setup_arg_block().
+        // VM_CFP_TO_CAPTURED_BLOCK does &cfp->self, rb_captured_block->code.iseq aliases
+        // with cfp->block_code.
+        asm.store(Opnd::mem(64, CFP, RUBY_OFFSET_CFP_BLOCK_CODE), VALUE::from(block_iseq).into());
+        let cfp_self_addr = asm.lea(Opnd::mem(64, CFP, RUBY_OFFSET_CFP_SELF));
+        asm.or(cfp_self_addr, Opnd::Imm(1))
+    } else {
+        VM_BLOCK_HANDLER_NONE.into()
+    };
+
     // ep[-1]: block_handler or prev EP
-    // block_handler is not supported for now
-    asm.store(Opnd::mem(64, SP, (ep_offset - 1) * SIZEOF_VALUE_I32), VM_BLOCK_HANDLER_NONE.into());
+    asm.store(Opnd::mem(64, SP, (ep_offset - 1) * SIZEOF_VALUE_I32), block_handler_opnd);
     // ep[0]: ENV_FLAGS
     asm.store(Opnd::mem(64, SP, ep_offset * SIZEOF_VALUE_I32), frame.frame_type.into());
 
