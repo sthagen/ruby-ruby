@@ -365,6 +365,7 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
         Insn::StringConcat { strings, state, .. } if strings.is_empty() => return Err(*state),
         Insn::StringConcat { strings, state } => gen_string_concat(jit, asm, opnds!(strings), &function.frame_state(*state)),
         &Insn::StringGetbyteFixnum { string, index } => gen_string_getbyte_fixnum(asm, opnd!(string), opnd!(index)),
+        Insn::StringAppend { recv, other, state } => gen_string_append(jit, asm, opnd!(recv), opnd!(other), &function.frame_state(*state)),
         Insn::StringIntern { val, state } => gen_intern(asm, opnd!(val), &function.frame_state(*state)),
         Insn::ToRegexp { opt, values, state } => gen_toregexp(jit, asm, *opt, opnds!(values), &function.frame_state(*state)),
         Insn::Param => unreachable!("block.insns should not have Insn::Param"),
@@ -398,6 +399,7 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
         Insn::FixnumGe { left, right } => gen_fixnum_ge(asm, opnd!(left), opnd!(right)),
         Insn::FixnumAnd { left, right } => gen_fixnum_and(asm, opnd!(left), opnd!(right)),
         Insn::FixnumOr { left, right } => gen_fixnum_or(asm, opnd!(left), opnd!(right)),
+        Insn::FixnumXor { left, right } => gen_fixnum_xor(asm, opnd!(left), opnd!(right)),
         &Insn::FixnumMod { left, right, state } => gen_fixnum_mod(jit, asm, opnd!(left), opnd!(right), &function.frame_state(state)),
         Insn::IsNil { val } => gen_isnil(asm, opnd!(val)),
         &Insn::IsMethodCfunc { val, cd, cfunc, state: _ } => gen_is_method_cfunc(jit, asm, opnd!(val), cd, cfunc),
@@ -423,7 +425,7 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
         &Insn::GetLocal { ep_offset, level, use_sp, .. } => gen_getlocal(asm, ep_offset, level, use_sp),
         &Insn::SetLocal { val, ep_offset, level } => no_output!(gen_setlocal(asm, opnd!(val), function.type_of(val), ep_offset, level)),
         Insn::GetConstantPath { ic, state } => gen_get_constant_path(jit, asm, *ic, &function.frame_state(*state)),
-        Insn::SetIvar { self_val, id, val, state: _ } => no_output!(gen_setivar(asm, opnd!(self_val), *id, opnd!(val))),
+        Insn::SetIvar { self_val, id, val, state } => no_output!(gen_setivar(jit, asm, opnd!(self_val), *id, opnd!(val), &function.frame_state(*state))),
         Insn::SideExit { state, reason } => no_output!(gen_side_exit(jit, asm, reason, &function.frame_state(*state))),
         Insn::PutSpecialObject { value_type } => gen_putspecialobject(asm, *value_type),
         Insn::AnyToString { val, str, state } => gen_anytostring(asm, opnd!(val), opnd!(str), &function.frame_state(*state)),
@@ -694,12 +696,23 @@ fn gen_ccall_with_frame(
     gen_spill_stack(jit, asm, state);
     gen_spill_locals(jit, asm, state);
 
+    let block_handler_specval = if let Some(block_iseq) = blockiseq {
+        // Change cfp->block_code in the current frame. See vm_caller_setup_arg_block().
+        // VM_CFP_TO_CAPTURED_BLOCK then turns &cfp->self into a block handler.
+        // rb_captured_block->code.iseq aliases with cfp->block_code.
+        asm.store(Opnd::mem(64, CFP, RUBY_OFFSET_CFP_BLOCK_CODE), VALUE::from(block_iseq).into());
+        let cfp_self_addr = asm.lea(Opnd::mem(64, CFP, RUBY_OFFSET_CFP_SELF));
+        asm.or(cfp_self_addr, Opnd::Imm(1))
+    } else {
+        VM_BLOCK_HANDLER_NONE.into()
+    };
+
     gen_push_frame(asm, args.len(), state, ControlFrame {
         recv: args[0],
         iseq: None,
         cme,
         frame_type: VM_FRAME_MAGIC_CFUNC | VM_FRAME_FLAG_CFRAME | VM_ENV_FLAG_LOCAL,
-        block_iseq: blockiseq,
+        specval: block_handler_specval,
     });
 
     asm_comment!(asm, "switch to new SP register");
@@ -755,7 +768,7 @@ fn gen_ccall_variadic(
         iseq: None,
         cme,
         frame_type: VM_FRAME_MAGIC_CFUNC | VM_FRAME_FLAG_CFRAME | VM_ENV_FLAG_LOCAL,
-        block_iseq: None,
+        specval: VM_BLOCK_HANDLER_NONE.into(),
     });
 
     asm_comment!(asm, "switch to new SP register");
@@ -791,8 +804,10 @@ fn gen_getivar(asm: &mut Assembler, recv: Opnd, id: ID) -> Opnd {
 }
 
 /// Emit an uncached instance variable store
-fn gen_setivar(asm: &mut Assembler, recv: Opnd, id: ID, val: Opnd) {
+fn gen_setivar(jit: &mut JITState, asm: &mut Assembler, recv: Opnd, id: ID, val: Opnd, state: &FrameState) {
     gen_incr_counter(asm, Counter::dynamic_setivar_count);
+    // Setting an ivar can raise FrozenError, so we need proper frame state for exception handling.
+    gen_prepare_non_leaf_call(jit, asm, state);
     asm_ccall!(asm, rb_ivar_set, recv, id.0.into(), val);
 }
 
@@ -1141,14 +1156,28 @@ fn gen_send_without_block_direct(
     gen_spill_locals(jit, asm, state);
     gen_spill_stack(jit, asm, state);
 
+    let (frame_type, specval) = if VM_METHOD_TYPE_BMETHOD == unsafe { get_cme_def_type(cme) } {
+        // Extract EP from the Proc instance
+        let procv = unsafe { rb_get_def_bmethod_proc((*cme).def) };
+        let proc = unsafe { rb_jit_get_proc_ptr(procv) };
+        let proc_block = unsafe { &(*proc).block };
+        let capture = unsafe { proc_block.as_.captured.as_ref() };
+        let bmethod_frame_type = VM_FRAME_MAGIC_BLOCK | VM_FRAME_FLAG_BMETHOD | VM_FRAME_FLAG_LAMBDA;
+        // Tag the captured EP like VM_GUARDED_PREV_EP() in vm_call_iseq_bmethod()
+        let bmethod_specval = (capture.ep.addr() | 1).into();
+        (bmethod_frame_type, bmethod_specval)
+    } else {
+        (VM_FRAME_MAGIC_METHOD | VM_ENV_FLAG_LOCAL, VM_BLOCK_HANDLER_NONE.into())
+    };
+
     // Set up the new frame
     // TODO: Lazily materialize caller frames on side exits or when needed
     gen_push_frame(asm, args.len(), state, ControlFrame {
         recv,
         iseq: Some(iseq),
         cme,
-        frame_type: VM_FRAME_MAGIC_METHOD | VM_ENV_FLAG_LOCAL,
-        block_iseq: None,
+        frame_type,
+        specval,
     });
 
     asm_comment!(asm, "switch to new SP register");
@@ -1460,6 +1489,13 @@ fn gen_fixnum_or(asm: &mut Assembler, left: lir::Opnd, right: lir::Opnd) -> lir:
     asm.or(left, right)
 }
 
+/// Compile Fixnum ^ Fixnum
+fn gen_fixnum_xor(asm: &mut Assembler, left: lir::Opnd, right: lir::Opnd) -> lir::Opnd {
+    // XOR and then re-tag the resulting fixnum
+    let out_val = asm.xor(left, right);
+    asm.add(out_val, Opnd::UImm(1))
+}
+
 fn gen_fixnum_mod(jit: &mut JITState, asm: &mut Assembler, left: lir::Opnd, right: lir::Opnd, state: &FrameState) -> lir::Opnd {
     // Check for left % 0, which raises ZeroDivisionError
     asm.cmp(right, Opnd::from(VALUE::fixnum_from_usize(0)));
@@ -1575,7 +1611,7 @@ fn gen_guard_type(jit: &mut JITState, asm: &mut Assembler, val: lir::Opnd, guard
         let tag   = asm.and(flags, Opnd::UImm(RUBY_T_MASK as u64));
         asm.cmp(tag, Opnd::UImm(RUBY_T_STRING as u64));
         asm.jne(side);
-    } else if guard_type.bit_equal(types::HeapObject) {
+    } else if guard_type.bit_equal(types::HeapBasicObject) {
         let side_exit = side_exit(jit, state, GuardType(guard_type));
         asm.cmp(val, Opnd::Value(Qfalse));
         asm.je(side_exit.clone());
@@ -1745,7 +1781,9 @@ struct ControlFrame {
     iseq: Option<IseqPtr>,
     cme: *const rb_callable_method_entry_t,
     frame_type: u32,
-    block_iseq: Option<IseqPtr>,
+    /// The [`VM_ENV_DATA_INDEX_SPECVAL`] slot of the frame.
+    /// For the type of frames we push, block handler or the parent EP.
+    specval: lir::Opnd,
 }
 
 /// Compile an interpreter frame
@@ -1761,21 +1799,10 @@ fn gen_push_frame(asm: &mut Assembler, argc: usize, state: &FrameState, frame: C
         0
     };
     let ep_offset = state.stack().len() as i32 + local_size - argc as i32 + VM_ENV_DATA_SIZE as i32 - 1;
+    // ep[-2]: CME
     asm.store(Opnd::mem(64, SP, (ep_offset - 2) * SIZEOF_VALUE_I32), VALUE::from(frame.cme).into());
-
-    let block_handler_opnd = if let Some(block_iseq) = frame.block_iseq {
-        // Change cfp->block_code in the current frame. See vm_caller_setup_arg_block().
-        // VM_CFP_TO_CAPTURED_BLOCK does &cfp->self, rb_captured_block->code.iseq aliases
-        // with cfp->block_code.
-        asm.store(Opnd::mem(64, CFP, RUBY_OFFSET_CFP_BLOCK_CODE), VALUE::from(block_iseq).into());
-        let cfp_self_addr = asm.lea(Opnd::mem(64, CFP, RUBY_OFFSET_CFP_SELF));
-        asm.or(cfp_self_addr, Opnd::Imm(1))
-    } else {
-        VM_BLOCK_HANDLER_NONE.into()
-    };
-
-    // ep[-1]: block_handler or prev EP
-    asm.store(Opnd::mem(64, SP, (ep_offset - 1) * SIZEOF_VALUE_I32), block_handler_opnd);
+    // ep[-1]: specval
+    asm.store(Opnd::mem(64, SP, (ep_offset - 1) * SIZEOF_VALUE_I32), frame.specval);
     // ep[0]: ENV_FLAGS
     asm.store(Opnd::mem(64, SP, ep_offset * SIZEOF_VALUE_I32), frame.frame_type.into());
 
@@ -1998,9 +2025,10 @@ fn function_stub_hit_body(cb: &mut CodeBlock, iseq_call: &IseqCallRef) -> Result
     })?;
 
     // We currently don't support JIT-to-JIT calls for ISEQs with optional arguments.
-    // So we only need to use jit_entry_ptrs[0] for now. TODO: Support optional arguments.
-    assert_eq!(1, jit_entry_ptrs.len());
-    let jit_entry_ptr = jit_entry_ptrs[0];
+    // So we only need to use jit_entry_ptrs[0] for now. TODO(Shopify/ruby#817): Support optional arguments.
+    let Some(&jit_entry_ptr) = jit_entry_ptrs.get(0) else {
+        return Err(CompileError::JitToJitOptional)
+    };
 
     // Update the stub to call the code pointer
     let code_addr = jit_entry_ptr.raw_ptr(cb);
@@ -2160,6 +2188,11 @@ fn gen_string_concat(jit: &mut JITState, asm: &mut Assembler, strings: Vec<Opnd>
 fn gen_string_getbyte_fixnum(asm: &mut Assembler, string: Opnd, index: Opnd) -> Opnd {
     // TODO(max): Open-code rb_str_getbyte to avoid a call
     asm_ccall!(asm, rb_str_getbyte, string, index)
+}
+
+fn gen_string_append(jit: &mut JITState, asm: &mut Assembler, string: Opnd, val: Opnd, state: &FrameState) -> Opnd {
+    gen_prepare_non_leaf_call(jit, asm, state);
+    asm_ccall!(asm, rb_str_buf_append, string, val)
 }
 
 /// Generate a JIT entry that just increments exit_compilation_failure and exits

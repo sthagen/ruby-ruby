@@ -273,7 +273,7 @@ pub type IseqPtr = *const rb_iseq_t;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct ShapeId(pub u32);
 
-pub const INVALID_SHAPE_ID: ShapeId = ShapeId(RB_INVALID_SHAPE_ID);
+pub const INVALID_SHAPE_ID: ShapeId = ShapeId(rb_invalid_shape_id);
 
 impl ShapeId {
     pub fn is_valid(self) -> bool {
@@ -448,6 +448,11 @@ impl VALUE {
     /// Return true if the value is a heap object
     pub fn heap_object_p(self) -> bool {
         !self.special_const_p()
+    }
+
+    /// Shareability between ractors. `RB_OBJ_SHAREABLE_P()`.
+    pub fn shareable_p(self) -> bool {
+        (self.builtin_flags() & RUBY_FL_SHAREABLE as usize) != 0
     }
 
     /// Return true if the value is a Ruby Fixnum (immediate-size integer)
@@ -1337,6 +1342,7 @@ pub(crate) mod ids {
         name: NULL               content: b""
         name: respond_to_missing content: b"respond_to_missing?"
         name: eq                 content: b"=="
+        name: string_eq          content: b"String#=="
         name: include_p          content: b"include?"
         name: to_ary
         name: to_s
@@ -1354,6 +1360,7 @@ pub(crate) mod ids {
         name: ge                 content: b">="
         name: and                content: b"&"
         name: or                 content: b"|"
+        name: xor                content: b"^"
         name: freeze
         name: minusat            content: b"-@"
         name: aref               content: b"[]"

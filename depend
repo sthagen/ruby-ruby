@@ -7393,6 +7393,7 @@ jit.$(OBJEXT): $(top_srcdir)/internal/sanitizers.h
 jit.$(OBJEXT): $(top_srcdir)/internal/serial.h
 jit.$(OBJEXT): $(top_srcdir)/internal/set_table.h
 jit.$(OBJEXT): $(top_srcdir)/internal/static_assert.h
+jit.$(OBJEXT): $(top_srcdir)/internal/string.h
 jit.$(OBJEXT): $(top_srcdir)/internal/variable.h
 jit.$(OBJEXT): $(top_srcdir)/internal/vm.h
 jit.$(OBJEXT): $(top_srcdir)/internal/warnings.h
@@ -9302,6 +9303,7 @@ namespace.$(OBJEXT): {$(VPATH)}backward/2/stdalign.h
 namespace.$(OBJEXT): {$(VPATH)}backward/2/stdarg.h
 namespace.$(OBJEXT): {$(VPATH)}config.h
 namespace.$(OBJEXT): {$(VPATH)}constant.h
+namespace.$(OBJEXT): {$(VPATH)}darray.h
 namespace.$(OBJEXT): {$(VPATH)}debug_counter.h
 namespace.$(OBJEXT): {$(VPATH)}defines.h
 namespace.$(OBJEXT): {$(VPATH)}encoding.h

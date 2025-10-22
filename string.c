@@ -6667,13 +6667,14 @@ rb_str_getbyte(VALUE str, VALUE index)
  *  call-seq:
  *    setbyte(index, integer) -> integer
  *
- *  Sets the byte at zero-based +index+ to +integer+; returns +integer+:
+ *  Sets the byte at zero-based offset +index+ to the value of the given +integer+;
+ *  returns +integer+:
  *
- *    s = 'abcde'      # => "abcde"
- *    s.setbyte(0, 98) # => 98
- *    s                # => "bbcde"
+ *    s = 'xyzzy'
+ *    s.setbyte(2, 129) # => 129
+ *    s                 # => "xy\x81zy"
  *
- *  Related: String#getbyte.
+ *  Related: see {Modifying}[rdoc-ref:String@Modifying].
  */
 VALUE
 rb_str_setbyte(VALUE str, VALUE index, VALUE value)
@@ -10443,7 +10444,7 @@ rb_str_rstrip_bang(VALUE str)
  *  call-seq:
  *    rstrip -> new_string
  *
- *  Returns a copy of the receiver with trailing whitespace removed;
+ *  Returns a copy of +self+ with trailing whitespace removed;
  *  see {Whitespace in Strings}[rdoc-ref:String@Whitespace+in+Strings]:
  *
  *    whitespace = "\x00\t\n\v\f\r "
@@ -10451,7 +10452,7 @@ rb_str_rstrip_bang(VALUE str)
  *    s        # => "\u0000\t\n\v\f\r abc\u0000\t\n\v\f\r "
  *    s.rstrip # => "\u0000\t\n\v\f\r abc"
  *
- *  Related: String#lstrip, String#strip.
+ *  Related: see {Converting to New String}[rdoc-ref:String@Converting+to+New+String].
  */
 
 static VALUE
@@ -10596,40 +10597,10 @@ scan_once(VALUE str, VALUE pat, long *start, int set_backref_str)
 
 /*
  *  call-seq:
- *    scan(string_or_regexp) -> array
- *    scan(string_or_regexp) {|matches| ... } -> self
+ *    scan(pattern) -> array_of_results
+ *    scan(pattern) {|result| ... } -> self
  *
- *  Matches a pattern against +self+; the pattern is:
- *
- *  - +string_or_regexp+ itself, if it is a Regexp.
- *  - <tt>Regexp.quote(string_or_regexp)</tt>, if +string_or_regexp+ is a string.
- *
- *  Iterates through +self+, generating a collection of matching results:
- *
- *  - If the pattern contains no groups, each result is the
- *    matched string, <code>$&</code>.
- *  - If the pattern contains groups, each result is an array
- *    containing one entry per group.
- *
- *  With no block given, returns an array of the results:
- *
- *    s = 'cruel world'
- *    s.scan(/\w+/)      # => ["cruel", "world"]
- *    s.scan(/.../)      # => ["cru", "el ", "wor"]
- *    s.scan(/(...)/)    # => [["cru"], ["el "], ["wor"]]
- *    s.scan(/(..)(..)/) # => [["cr", "ue"], ["l ", "wo"]]
- *
- *  With a block given, calls the block with each result; returns +self+:
- *
- *    s.scan(/\w+/) {|w| print "<<#{w}>> " }
- *    print "\n"
- *    s.scan(/(.)(.)/) {|x,y| print y, x }
- *    print "\n"
- *
- *  Output:
- *
- *     <<cruel>> <<world>>
- *     rceu lowlr
+ *  :include: doc/string/scan.rdoc
  *
  */
 
@@ -11941,8 +11912,8 @@ enc_str_scrub(rb_encoding *enc, VALUE str, VALUE repl, int cr)
 
 /*
  *  call-seq:
- *    scrub(replacement_string = default_replacement) -> new_string
- *    scrub{|bytes| ... } -> new_string
+ *    scrub(replacement_string = default_replacement_string) -> new_string
+ *    scrub{|sequence| ... } -> new_string
  *
  *  :include: doc/string/scrub.rdoc
  *
@@ -11957,11 +11928,15 @@ str_scrub(int argc, VALUE *argv, VALUE str)
 
 /*
  *  call-seq:
- *    scrub! -> self
- *    scrub!(replacement_string = default_replacement) -> self
- *    scrub!{|bytes| ... } -> self
+ *    scrub!(replacement_string = default_replacement_string) -> self
+ *    scrub!{|sequence| ... } -> self
  *
- *  Like String#scrub, except that any replacements are made in +self+.
+ *  Like String#scrub, except that:
+ *
+ *  - Any replacements are made in +self+.
+ *  - Returns +self+.
+ *
+ *  Related: see {Modifying}[rdoc-ref:String@Modifying].
  *
  */
 static VALUE

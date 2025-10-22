@@ -192,6 +192,8 @@ pub fn init() -> Annotations {
     annotate!(rb_cString, "to_s", types::StringExact);
     annotate!(rb_cString, "getbyte", inline_string_getbyte);
     annotate!(rb_cString, "empty?", types::BoolExact, no_gc, leaf, elidable);
+    annotate!(rb_cString, "<<", inline_string_append);
+    annotate!(rb_cString, "==", inline_string_eq);
     annotate!(rb_cModule, "name", types::StringExact.union(types::NilClass), no_gc, leaf, elidable);
     annotate!(rb_cModule, "===", types::BoolExact, no_gc, leaf);
     annotate!(rb_cArray, "length", types::Fixnum, no_gc, leaf, elidable);
@@ -210,6 +212,7 @@ pub fn init() -> Annotations {
     annotate!(rb_cBasicObject, "!", types::BoolExact, no_gc, leaf, elidable);
     annotate!(rb_cBasicObject, "initialize", inline_basic_object_initialize);
     annotate!(rb_cInteger, "succ", inline_integer_succ);
+    annotate!(rb_cInteger, "^", inline_integer_xor);
     annotate!(rb_cString, "to_s", inline_string_to_s);
     let thread_singleton = unsafe { rb_singleton_class(rb_cThread) };
     annotate!(thread_singleton, "current", types::BasicObject, no_gc, leaf);
@@ -275,12 +278,57 @@ fn inline_string_getbyte(fun: &mut hir::Function, block: hir::BlockId, recv: hir
     None
 }
 
+fn inline_string_append(fun: &mut hir::Function, block: hir::BlockId, recv: hir::InsnId, args: &[hir::InsnId], state: hir::InsnId) -> Option<hir::InsnId> {
+    let &[other] = args else { return None; };
+    // Inline only StringExact << String, which matches original type check from
+    // `vm_opt_ltlt`, which checks `RB_TYPE_P(obj, T_STRING)`.
+    if fun.likely_a(recv, types::StringExact, state) && fun.likely_a(other, types::String, state) {
+        let recv = fun.coerce_to(block, recv, types::StringExact, state);
+        let other = fun.coerce_to(block, other, types::String, state);
+        let _ = fun.push_insn(block, hir::Insn::StringAppend { recv, other, state });
+        Some(recv)
+    } else {
+        None
+    }
+}
+
+fn inline_string_eq(fun: &mut hir::Function, block: hir::BlockId, recv: hir::InsnId, args: &[hir::InsnId], state: hir::InsnId) -> Option<hir::InsnId> {
+    let &[other] = args else { return None; };
+    if fun.likely_a(recv, types::String, state) && fun.likely_a(other, types::String, state) {
+        let recv = fun.coerce_to(block, recv, types::String, state);
+        let other = fun.coerce_to(block, other, types::String, state);
+        let return_type = types::BoolExact;
+        let elidable = true;
+        // TODO(max): Make StringEqual its own opcode so that we can later constant-fold StringEqual(a, a) => true
+        let result = fun.push_insn(block, hir::Insn::CCall {
+            cfunc: rb_yarv_str_eql_internal as *const u8,
+            args: vec![recv, other],
+            name: ID!(string_eq),
+            return_type,
+            elidable,
+        });
+        return Some(result);
+    }
+    None
+}
+
 fn inline_integer_succ(fun: &mut hir::Function, block: hir::BlockId, recv: hir::InsnId, args: &[hir::InsnId], state: hir::InsnId) -> Option<hir::InsnId> {
     if !args.is_empty() { return None; }
     if fun.likely_a(recv, types::Fixnum, state) {
         let left = fun.coerce_to(block, recv, types::Fixnum, state);
         let right = fun.push_insn(block, hir::Insn::Const { val: hir::Const::Value(VALUE::fixnum_from_usize(1)) });
         let result = fun.push_insn(block, hir::Insn::FixnumAdd { left, right, state });
+        return Some(result);
+    }
+    None
+}
+
+fn inline_integer_xor(fun: &mut hir::Function, block: hir::BlockId, recv: hir::InsnId, args: &[hir::InsnId], state: hir::InsnId) -> Option<hir::InsnId> {
+    let &[right] = args else { return None; };
+    if fun.likely_a(recv, types::Fixnum, state) && fun.likely_a(right, types::Fixnum, state) {
+        let left = fun.coerce_to(block, recv, types::Fixnum, state);
+        let right = fun.coerce_to(block, right, types::Fixnum, state);
+        let result = fun.push_insn(block, hir::Insn::FixnumXor { left, right });
         return Some(result);
     }
     None

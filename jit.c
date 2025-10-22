@@ -15,12 +15,21 @@
 #include "internal/gc.h"
 #include "vm_sync.h"
 #include "internal/fixnum.h"
+#include "internal/string.h"
 
-// Field offsets for the RObject struct
-enum robject_offsets {
+enum jit_bindgen_constants {
+    // Field offsets for the RObject struct
     ROBJECT_OFFSET_AS_HEAP_FIELDS = offsetof(struct RObject, as.heap.fields),
     ROBJECT_OFFSET_AS_ARY = offsetof(struct RObject, as.ary),
+
+    // Field offsets for the RString struct
+    RUBY_OFFSET_RSTRING_LEN = offsetof(struct RString, len)
 };
+
+// Manually bound in rust since this is out-of-range of `int`,
+// so this can't be in a `enum`, and we avoid `static const`
+// to avoid allocating storage for the constant.
+const shape_id_t rb_invalid_shape_id = INVALID_SHAPE_ID;
 
 unsigned int
 rb_iseq_encoded_size(const rb_iseq_t *iseq)
@@ -155,6 +164,21 @@ ID
 rb_get_def_original_id(const rb_method_definition_t *def)
 {
     return def->original_id;
+}
+
+VALUE
+rb_get_def_bmethod_proc(rb_method_definition_t *def)
+{
+    RUBY_ASSERT(def->type == VM_METHOD_TYPE_BMETHOD);
+    return def->body.bmethod.proc;
+}
+
+rb_proc_t *
+rb_jit_get_proc_ptr(VALUE procv)
+{
+    rb_proc_t *proc;
+    GetProcPtr(procv, proc);
+    return proc;
 }
 
 int
@@ -726,4 +750,12 @@ VALUE
 rb_jit_fix_mod_fix(VALUE recv, VALUE obj)
 {
     return rb_fix_mod_fix(recv, obj);
+}
+
+// YJIT/ZJIT need this function to never allocate and never raise
+VALUE
+rb_yarv_str_eql_internal(VALUE str1, VALUE str2)
+{
+    // We wrap this since it's static inline
+    return rb_str_eql_internal(str1, str2);
 }
