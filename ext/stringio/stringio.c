@@ -225,17 +225,32 @@ strio_s_allocate(VALUE klass)
  * call-seq:
  *   StringIO.new(string = '', mode = 'r+') -> new_stringio
  *
- * Note that +mode+ defaults to <tt>'r'</tt> if +string+ is frozen.
- *
  * Returns a new \StringIO instance formed from +string+ and +mode+;
- * see {Access Modes}[rdoc-ref:File@Access+Modes]:
+ * the instance should be closed when no longer needed:
  *
- *   strio = StringIO.new # => #<StringIO>
+ *   strio = StringIO.new
+ *   strio.string        # => ""
+ *   strio.closed_read?  # => false
+ *   strio.closed_write? # => false
  *   strio.close
  *
- * The instance should be closed when no longer needed.
+ * If +string+ is frozen, the default +mode+ is <tt>'r'</tt>:
  *
- * Related: StringIO.open (accepts block; closes automatically).
+ *   strio = StringIO.new('foo'.freeze)
+ *   strio.string        # => "foo"
+ *   strio.closed_read?  # => false
+ *   strio.closed_write? # => true
+ *   strio.close
+ *
+ * Argument +mode+ must be a valid
+ * {Access Mode}[rdoc-ref:File@Access+Modes],
+ * which may be a string or an integer constant:
+ *
+ *   StringIO.new('foo', 'w+')
+ *   StringIO.new('foo', File::RDONLY)
+ *
+ * Related: StringIO.open
+ * (passes the \StringIO object to the block; closes the object automatically on block exit).
  */
 static VALUE
 strio_initialize(int argc, VALUE *argv, VALUE self)
@@ -370,23 +385,20 @@ strio_finalize(VALUE self)
 
 /*
  * call-seq:
- *   StringIO.open(string = '', mode = 'r+') {|strio| ... }
+ *   StringIO.open(string = '', mode = 'r+') -> new_stringio
+ *   StringIO.open(string = '', mode = 'r+') {|strio| ... } -> object
  *
- * Note that +mode+ defaults to <tt>'r'</tt> if +string+ is frozen.
+ * Creates new \StringIO instance by calling <tt>StringIO.new(string, mode)</tt>.
  *
- * Creates a new \StringIO instance formed from +string+ and +mode+;
- * see {Access Modes}[rdoc-ref:File@Access+Modes].
- *
- * With no block, returns the new instance:
+ * With no block given, returns the new instance:
  *
  *   strio = StringIO.open # => #<StringIO>
  *
- * With a block, calls the block with the new instance
+ * With a block given, calls the block with the new instance
  * and returns the block's value;
- * closes the instance on block exit.
+ * closes the instance on block exit:
  *
- *   StringIO.open {|strio| p strio }
- *   # => #<StringIO>
+ *   StringIO.open('foo') {|strio| strio.string.upcase } # => "FOO"
  *
  * Related: StringIO.new.
  */

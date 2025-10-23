@@ -1664,6 +1664,28 @@ class TestZJIT < Test::Unit::TestCase
     }
   end
 
+  def test_getclassvariable
+    assert_compiles '42', %q{
+      class Foo
+        def self.test = @@x
+      end
+
+      Foo.class_variable_set(:@@x, 42)
+      Foo.test()
+    }
+  end
+
+  def test_setclassvariable
+    assert_compiles '42', %q{
+      class Foo
+        def self.test = @@x = 42
+      end
+
+      Foo.test()
+      Foo.class_variable_get(:@@x)
+    }
+  end
+
   def test_attr_reader
     assert_compiles '[4, 4]', %q{
       class C
@@ -1956,6 +1978,27 @@ class TestZJIT < Test::Unit::TestCase
     assert_compiles '[nil, nil, "yield"]', %q{
       def test
         yield_self { yield_self { defined?(yield) } }
+      end
+
+      [test, test, test{}]
+    }, call_threshold: 2
+  end
+
+  def test_block_given_p
+    assert_compiles "false", "block_given?"
+    assert_compiles '[false, false, true]', %q{
+      def test = block_given?
+      [test, test, test{}]
+    }, call_threshold: 2, insns: [:opt_send_without_block]
+  end
+
+  def test_block_given_p_from_block
+    # This will do some EP hopping to find the local EP,
+    # so it's slightly different than doing it outside of a block.
+
+    assert_compiles '[false, false, true]', %q{
+      def test
+        yield_self { yield_self { block_given? } }
       end
 
       [test, test, test{}]

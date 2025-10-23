@@ -207,28 +207,34 @@ static void
 ractor_mark(void *ptr)
 {
     rb_ractor_t *r = (rb_ractor_t *)ptr;
+    bool checking_shareable = rb_gc_checking_shareable();
 
     // mark received messages
     ractor_sync_mark(r);
 
     rb_gc_mark(r->loc);
     rb_gc_mark(r->name);
-    rb_gc_mark(r->r_stdin);
-    rb_gc_mark(r->r_stdout);
-    rb_gc_mark(r->r_stderr);
-    rb_gc_mark(r->verbose);
-    rb_gc_mark(r->debug);
-    rb_hook_list_mark(&r->pub.hooks);
 
-    if (r->threads.cnt > 0) {
-        rb_thread_t *th = 0;
-        ccan_list_for_each(&r->threads.set, th, lt_node) {
-            VM_ASSERT(th != NULL);
-            rb_gc_mark(th->self);
+    if (!checking_shareable) {
+        // may unshareable objects
+        rb_gc_mark(r->r_stdin);
+        rb_gc_mark(r->r_stdout);
+        rb_gc_mark(r->r_stderr);
+        rb_gc_mark(r->verbose);
+        rb_gc_mark(r->debug);
+
+        rb_hook_list_mark(&r->pub.hooks);
+
+        if (r->threads.cnt > 0) {
+            rb_thread_t *th = 0;
+            ccan_list_for_each(&r->threads.set, th, lt_node) {
+                VM_ASSERT(th != NULL);
+                rb_gc_mark(th->self);
+            }
         }
-    }
 
-    ractor_local_storage_mark(r);
+        ractor_local_storage_mark(r);
+    }
 }
 
 static void
@@ -493,8 +499,9 @@ ractor_init(rb_ractor_t *r, VALUE name, VALUE loc)
         }
         name = rb_str_new_frozen(name);
     }
-    r->name = name;
+    if (!SPECIAL_CONST_P(loc)) RB_OBJ_SET_SHAREABLE(loc);
     r->loc = loc;
+    r->name = name;
 }
 
 void
@@ -1113,6 +1120,44 @@ rb_ractor_hooks(rb_ractor_t *cr)
     return &cr->pub.hooks;
 }
 
+static void
+rb_obj_set_shareable_no_assert(VALUE obj)
+{
+    FL_SET_RAW(obj, FL_SHAREABLE);
+
+    if (rb_obj_exivar_p(obj)) {
+        VALUE fields = rb_obj_fields_no_ractor_check(obj);
+        if (imemo_type_p(fields, imemo_fields)) {
+            // no recursive mark
+            FL_SET_RAW(fields, FL_SHAREABLE);
+        }
+    }
+}
+
+#ifndef STRICT_VERIFY_SHAREABLE
+#define STRICT_VERIFY_SHAREABLE 0
+#endif
+
+bool
+rb_ractor_verify_shareable(VALUE obj)
+{
+#if STRICT_VERIFY_SHAREABLE
+    rb_gc_verify_shareable(obj);
+#endif
+    return true;
+}
+
+VALUE
+rb_obj_set_shareable(VALUE obj)
+{
+    RUBY_ASSERT(!RB_SPECIAL_CONST_P(obj));
+
+    rb_obj_set_shareable_no_assert(obj);
+    RUBY_ASSERT(rb_ractor_verify_shareable(obj));
+
+    return obj;
+}
+
 /// traverse function
 
 // 2: stop search
@@ -1239,6 +1284,8 @@ obj_traverse_i(VALUE obj, struct obj_traverse_data *data)
 
       case T_ARRAY:
         {
+            rb_ary_cancel_sharing(obj);
+
             for (int i = 0; i < RARRAY_LENINT(obj); i++) {
                 VALUE e = rb_ary_entry(obj, i);
                 if (obj_traverse_i(e, data)) return 1;
@@ -1422,7 +1469,11 @@ make_shareable_check_shareable(VALUE obj)
 static enum obj_traverse_iterator_result
 mark_shareable(VALUE obj)
 {
-    FL_SET_RAW(obj, RUBY_FL_SHAREABLE);
+    if (RB_TYPE_P(obj, T_STRING)) {
+        rb_str_make_independent(obj);
+    }
+
+    rb_obj_set_shareable_no_assert(obj);
     return traverse_cont;
 }
 

@@ -156,10 +156,11 @@ fn gen_iseq_call(cb: &mut CodeBlock, caller_iseq: IseqPtr, iseq_call: &IseqCallR
 fn register_with_perf(iseq_name: String, start_ptr: usize, code_size: usize) {
     use std::io::Write;
     let perf_map = format!("/tmp/perf-{}.map", std::process::id());
-    let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(&perf_map) else {
+    let Ok(file) = std::fs::OpenOptions::new().create(true).append(true).open(&perf_map) else {
         debug!("Failed to open perf map file: {perf_map}");
         return;
     };
+    let mut file = std::io::BufWriter::new(file);
     let Ok(_) = writeln!(file, "{:#x} {:#x} zjit::{}", start_ptr, code_size, iseq_name) else {
         debug!("Failed to write {iseq_name} to perf map file: {perf_map}");
         return;
@@ -385,7 +386,7 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
         // Ensure we have enough room fit ec, self, and arguments
         // TODO remove this check when we have stack args (we can use Time.new to test it)
         Insn::InvokeBuiltin { bf, state, .. } if bf.argc + 2 > (C_ARG_OPNDS.len() as i32) => return Err(*state),
-        Insn::InvokeBuiltin { bf, args, state, .. } => gen_invokebuiltin(jit, asm, &function.frame_state(*state), bf, opnds!(args)),
+        Insn::InvokeBuiltin { bf, leaf, args, state, .. } => gen_invokebuiltin(jit, asm, &function.frame_state(*state), bf, *leaf, opnds!(args)),
         &Insn::EntryPoint { jit_entry_idx } => no_output!(gen_entry_point(jit, asm, jit_entry_idx)),
         Insn::Return { val } => no_output!(gen_return(asm, opnd!(val))),
         Insn::FixnumAdd { left, right, state } => gen_fixnum_add(jit, asm, opnd!(left), opnd!(right), &function.frame_state(*state)),
@@ -425,6 +426,8 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
         &Insn::GetLocal { ep_offset, level, use_sp, .. } => gen_getlocal(asm, ep_offset, level, use_sp),
         &Insn::SetLocal { val, ep_offset, level } => no_output!(gen_setlocal(asm, opnd!(val), function.type_of(val), ep_offset, level)),
         Insn::GetConstantPath { ic, state } => gen_get_constant_path(jit, asm, *ic, &function.frame_state(*state)),
+        Insn::GetClassVar { id, ic, state } => gen_getclassvar(jit, asm, *id, *ic, &function.frame_state(*state)),
+        Insn::SetClassVar { id, val, ic, state } => no_output!(gen_setclassvar(jit, asm, *id, opnd!(val), *ic, &function.frame_state(*state))),
         Insn::SetIvar { self_val, id, val, state } => no_output!(gen_setivar(jit, asm, opnd!(self_val), *id, opnd!(val), &function.frame_state(*state))),
         Insn::SideExit { state, reason } => no_output!(gen_side_exit(jit, asm, reason, &function.frame_state(*state))),
         Insn::PutSpecialObject { value_type } => gen_putspecialobject(asm, *value_type),
@@ -448,6 +451,7 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
         Insn::LoadSelf => gen_load_self(),
         &Insn::LoadIvarEmbedded { self_val, id, index } => gen_load_ivar_embedded(asm, opnd!(self_val), id, index),
         &Insn::LoadIvarExtended { self_val, id, index } => gen_load_ivar_extended(asm, opnd!(self_val), id, index),
+        &Insn::IsBlockGiven => gen_is_block_given(jit, asm),
         &Insn::ArrayMax { state, .. }
         | &Insn::FixnumDiv { state, .. }
         | &Insn::Throw { state, .. }
@@ -502,12 +506,9 @@ fn gen_get_ep(asm: &mut Assembler, level: u32) -> Opnd {
 
 fn gen_objtostring(jit: &mut JITState, asm: &mut Assembler, val: Opnd, cd: *const rb_call_data, state: &FrameState) -> Opnd {
     gen_prepare_non_leaf_call(jit, asm, state);
-
-    let iseq_opnd = Opnd::Value(jit.iseq.into());
-
     // TODO: Specialize for immediate types
     // Call rb_vm_objtostring(iseq, recv, cd)
-    let ret = asm_ccall!(asm, rb_vm_objtostring, iseq_opnd, val, (cd as usize).into());
+    let ret = asm_ccall!(asm, rb_vm_objtostring, VALUE(jit.iseq as usize).into(), val, (cd as usize).into());
 
     // TODO: Call `to_s` on the receiver if rb_vm_objtostring returns Qundef
     // Need to replicate what CALL_SIMPLE_METHOD does
@@ -524,6 +525,8 @@ fn gen_defined(jit: &JITState, asm: &mut Assembler, op_type: usize, obj: VALUE, 
             // `yield` goes to the block handler stowed in the "local" iseq which is
             // the current iseq or a parent. Only the "method" iseq type can be passed a
             // block handler. (e.g. `yield` in the top level script is a syntax error.)
+            //
+            // Similar to gen_is_block_given
             let local_iseq = unsafe { rb_get_iseq_body_local_iseq(jit.iseq) };
             if unsafe { rb_get_iseq_body_type(local_iseq) } == ISEQ_TYPE_METHOD {
                 let lep = gen_get_lep(jit, asm);
@@ -546,6 +549,19 @@ fn gen_defined(jit: &JITState, asm: &mut Assembler, op_type: usize, obj: VALUE, 
             asm.cmp(def_result.with_num_bits(8), 0.into());
             asm.csel_ne(pushval.into(), Qnil.into())
         }
+    }
+}
+
+/// Similar to gen_defined for DEFINED_YIELD
+fn gen_is_block_given(jit: &JITState, asm: &mut Assembler) -> Opnd {
+    let local_iseq = unsafe { rb_get_iseq_body_local_iseq(jit.iseq) };
+    if unsafe { rb_get_iseq_body_type(local_iseq) } == ISEQ_TYPE_METHOD {
+        let lep = gen_get_lep(jit, asm);
+        let block_handler = asm.load(Opnd::mem(64, lep, SIZEOF_VALUE_I32 * VM_ENV_DATA_INDEX_SPECVAL));
+        asm.cmp(block_handler, VM_BLOCK_HANDLER_NONE.into());
+        asm.csel_e(Qfalse.into(), Qtrue.into())
+    } else {
+        Qfalse.into()
     }
 }
 
@@ -623,13 +639,17 @@ fn gen_get_constant_path(jit: &JITState, asm: &mut Assembler, ic: *const iseq_in
     asm_ccall!(asm, rb_vm_opt_getconstant_path, EC, CFP, Opnd::const_ptr(ic))
 }
 
-fn gen_invokebuiltin(jit: &JITState, asm: &mut Assembler, state: &FrameState, bf: &rb_builtin_function, args: Vec<Opnd>) -> lir::Opnd {
+fn gen_invokebuiltin(jit: &JITState, asm: &mut Assembler, state: &FrameState, bf: &rb_builtin_function, leaf: bool, args: Vec<Opnd>) -> lir::Opnd {
     assert!(bf.argc + 2 <= C_ARG_OPNDS.len() as i32,
             "gen_invokebuiltin should not be called for builtin function {} with too many arguments: {}",
             unsafe { std::ffi::CStr::from_ptr(bf.name).to_str().unwrap() },
             bf.argc);
-    // Anything can happen inside builtin functions
-    gen_prepare_non_leaf_call(jit, asm, state);
+    if leaf {
+        gen_prepare_leaf_call_with_gc(asm, state);
+    } else {
+        // Anything can happen inside builtin functions
+        gen_prepare_non_leaf_call(jit, asm, state);
+    }
 
     let mut cargs = vec![EC];
     cargs.extend(args);
@@ -809,6 +829,16 @@ fn gen_setivar(jit: &mut JITState, asm: &mut Assembler, recv: Opnd, id: ID, val:
     // Setting an ivar can raise FrozenError, so we need proper frame state for exception handling.
     gen_prepare_non_leaf_call(jit, asm, state);
     asm_ccall!(asm, rb_ivar_set, recv, id.0.into(), val);
+}
+
+fn gen_getclassvar(jit: &mut JITState, asm: &mut Assembler, id: ID, ic: *const iseq_inline_cvar_cache_entry, state: &FrameState) -> Opnd {
+    gen_prepare_non_leaf_call(jit, asm, state);
+    asm_ccall!(asm, rb_vm_getclassvariable, VALUE(jit.iseq as usize).into(), CFP, id.0.into(), Opnd::const_ptr(ic))
+}
+
+fn gen_setclassvar(jit: &mut JITState, asm: &mut Assembler, id: ID, val: Opnd, ic: *const iseq_inline_cvar_cache_entry, state: &FrameState) {
+    gen_prepare_non_leaf_call(jit, asm, state);
+    asm_ccall!(asm, rb_vm_setclassvariable, VALUE(jit.iseq as usize).into(), CFP, id.0.into(), val, Opnd::const_ptr(ic));
 }
 
 /// Look up global variables

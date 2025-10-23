@@ -610,8 +610,12 @@ pub enum Insn {
     IsMethodCfunc { val: InsnId, cd: *const rb_call_data, cfunc: *const u8, state: InsnId },
     /// Return C `true` if left == right
     IsBitEqual { left: InsnId, right: InsnId },
+    // TODO(max): In iseq body types that are not ISEQ_TYPE_METHOD, rewrite to Constant false.
     Defined { op_type: usize, obj: VALUE, pushval: VALUE, v: InsnId, state: InsnId },
     GetConstantPath { ic: *const iseq_inline_constant_cache, state: InsnId },
+    /// Kernel#block_given? but without pushing a frame. Similar to [`Insn::Defined`] with
+    /// `DEFINED_YIELD`
+    IsBlockGiven,
 
     /// Get a global variable named `id`
     GetGlobal { id: ID, state: InsnId },
@@ -643,6 +647,11 @@ pub enum Insn {
     SetLocal { level: u32, ep_offset: u32, val: InsnId },
     GetSpecialSymbol { symbol_type: SpecialBackrefSymbol, state: InsnId },
     GetSpecialNumber { nth: u64, state: InsnId },
+
+    /// Get a class variable `id`
+    GetClassVar { id: ID, ic: *const iseq_inline_cvar_cache_entry, state: InsnId },
+    /// Set a class variable `id` to `val`
+    SetClassVar { id: ID, val: InsnId, ic: *const iseq_inline_cvar_cache_entry, state: InsnId },
 
     /// Own a FrameState so that instructions can look up their dominating FrameState when
     /// generating deopt side-exits and frame reconstruction metadata. Does not directly generate
@@ -741,6 +750,7 @@ pub enum Insn {
         bf: rb_builtin_function,
         args: Vec<InsnId>,
         state: InsnId,
+        leaf: bool,
         return_type: Option<Type>,  // None for unannotated builtins
     },
 
@@ -806,7 +816,7 @@ impl Insn {
         match self {
             Insn::Jump(_)
             | Insn::IfTrue { .. } | Insn::IfFalse { .. } | Insn::EntryPoint { .. } | Insn::Return { .. }
-            | Insn::PatchPoint { .. } | Insn::SetIvar { .. } | Insn::ArrayExtend { .. }
+            | Insn::PatchPoint { .. } | Insn::SetIvar { .. } | Insn::SetClassVar { .. } | Insn::ArrayExtend { .. }
             | Insn::ArrayPush { .. } | Insn::SideExit { .. } | Insn::SetGlobal { .. }
             | Insn::SetLocal { .. } | Insn::Throw { .. } | Insn::IncrCounter(_) | Insn::IncrCounterPtr { .. }
             | Insn::CheckInterrupts { .. } | Insn::GuardBlockParamProxy { .. } => false,
@@ -870,6 +880,7 @@ impl Insn {
             Insn::NewRange { .. } => true,
             Insn::NewRangeFixnum { .. } => false,
             Insn::StringGetbyteFixnum { .. } => false,
+            Insn::IsBlockGiven => false,
             _ => true,
         }
     }
@@ -1034,8 +1045,10 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
                 }
                 Ok(())
             }
-            Insn::InvokeBuiltin { bf, args, .. } => {
-                write!(f, "InvokeBuiltin {}", unsafe { CStr::from_ptr(bf.name) }.to_str().unwrap())?;
+            Insn::InvokeBuiltin { bf, args, leaf, .. } => {
+                write!(f, "InvokeBuiltin{} {}",
+                           if *leaf { " leaf" } else { "" },
+                           unsafe { CStr::from_ptr(bf.name) }.to_str().unwrap())?;
                 for arg in args {
                     write!(f, ", {arg}")?;
                 }
@@ -1065,6 +1078,7 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
             Insn::GuardBlockParamProxy { level, .. } => write!(f, "GuardBlockParamProxy l{level}"),
             Insn::PatchPoint { invariant, .. } => { write!(f, "PatchPoint {}", invariant.print(self.ptr_map)) },
             Insn::GetConstantPath { ic, .. } => { write!(f, "GetConstantPath {:p}", self.ptr_map.map_ptr(ic)) },
+            Insn::IsBlockGiven => { write!(f, "IsBlockGiven") },
             Insn::CCall { cfunc, args, name, return_type: _, elidable: _ } => {
                 write!(f, "CCall {}@{:p}", name.contents_lossy(), self.ptr_map.map_ptr(cfunc))?;
                 for arg in args {
@@ -1121,6 +1135,8 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
             Insn::SetLocal { val, level, ep_offset } => write!(f, "SetLocal l{level}, EP@{ep_offset}, {val}"),
             Insn::GetSpecialSymbol { symbol_type, .. } => write!(f, "GetSpecialSymbol {symbol_type:?}"),
             Insn::GetSpecialNumber { nth, .. } => write!(f, "GetSpecialNumber {nth}"),
+            Insn::GetClassVar { id, .. } => write!(f, "GetClassVar :{}", id.contents_lossy()),
+            Insn::SetClassVar { id, val, .. } => write!(f, "SetClassVar :{}, {val}", id.contents_lossy()),
             Insn::ToArray { val, .. } => write!(f, "ToArray {val}"),
             Insn::ToNewArray { val, .. } => write!(f, "ToNewArray {val}"),
             Insn::ArrayExtend { left, right, .. } => write!(f, "ArrayExtend {left}, {right}"),
@@ -1562,6 +1578,7 @@ impl Function {
             result@(Const {..}
                     | Param {..}
                     | GetConstantPath {..}
+                    | IsBlockGiven
                     | PatchPoint {..}
                     | PutSpecialObject {..}
                     | GetGlobal {..}
@@ -1671,7 +1688,7 @@ impl Function {
                 state,
                 reason,
             },
-            &InvokeBuiltin { bf, ref args, state, return_type } => InvokeBuiltin { bf, args: find_vec!(args), state, return_type },
+            &InvokeBuiltin { bf, ref args, state, leaf, return_type } => InvokeBuiltin { bf, args: find_vec!(args), state, leaf, return_type },
             &ArrayDup { val, state } => ArrayDup { val: find!(val), state },
             &HashDup { val, state } => HashDup { val: find!(val), state },
             &HashAref { hash, key, state } => HashAref { hash: find!(hash), key: find!(key), state },
@@ -1706,6 +1723,8 @@ impl Function {
             &LoadIvarEmbedded { self_val, id, index } => LoadIvarEmbedded { self_val: find!(self_val), id, index },
             &LoadIvarExtended { self_val, id, index } => LoadIvarExtended { self_val: find!(self_val), id, index },
             &SetIvar { self_val, id, val, state } => SetIvar { self_val: find!(self_val), id, val: find!(val), state },
+            &GetClassVar { id, ic, state } => GetClassVar { id, ic, state },
+            &SetClassVar { id, val, ic, state } => SetClassVar { id, val: find!(val), ic, state },
             &SetLocal { val, ep_offset, level } => SetLocal { val: find!(val), ep_offset, level },
             &GetSpecialSymbol { symbol_type, state } => GetSpecialSymbol { symbol_type, state },
             &GetSpecialNumber { nth, state } => GetSpecialNumber { nth, state },
@@ -1755,7 +1774,7 @@ impl Function {
             Insn::Param { .. } => unimplemented!("params should not be present in block.insns"),
             Insn::SetGlobal { .. } | Insn::Jump(_) | Insn::EntryPoint { .. }
             | Insn::IfTrue { .. } | Insn::IfFalse { .. } | Insn::Return { .. } | Insn::Throw { .. }
-            | Insn::PatchPoint { .. } | Insn::SetIvar { .. } | Insn::ArrayExtend { .. }
+            | Insn::PatchPoint { .. } | Insn::SetIvar { .. } | Insn::SetClassVar { .. } | Insn::ArrayExtend { .. }
             | Insn::ArrayPush { .. } | Insn::SideExit { .. } | Insn::SetLocal { .. } | Insn::IncrCounter(_)
             | Insn::CheckInterrupts { .. } | Insn::GuardBlockParamProxy { .. } | Insn::IncrCounterPtr { .. } =>
                 panic!("Cannot infer type of instruction with no output: {}", self.insns[insn.0]),
@@ -1828,6 +1847,7 @@ impl Function {
             Insn::Defined { pushval, .. } => Type::from_value(*pushval).union(types::NilClass),
             Insn::DefinedIvar { pushval, .. } => Type::from_value(*pushval).union(types::NilClass),
             Insn::GetConstantPath { .. } => types::BasicObject,
+            Insn::IsBlockGiven { .. } => types::BoolExact,
             Insn::ArrayMax { .. } => types::BasicObject,
             Insn::GetGlobal { .. } => types::BasicObject,
             Insn::GetIvar { .. } => types::BasicObject,
@@ -1837,6 +1857,7 @@ impl Function {
             Insn::LoadIvarExtended { .. } => types::BasicObject,
             Insn::GetSpecialSymbol { .. } => types::BasicObject,
             Insn::GetSpecialNumber { .. } => types::BasicObject,
+            Insn::GetClassVar { .. } => types::BasicObject,
             Insn::ToNewArray { .. } => types::ArrayExact,
             Insn::ToArray { .. } => types::ArrayExact,
             Insn::ObjToString { .. } => types::BasicObject,
@@ -3009,6 +3030,7 @@ impl Function {
             | &Insn::LoadSelf
             | &Insn::GetLocal { .. }
             | &Insn::PutSpecialObject { .. }
+            | &Insn::IsBlockGiven
             | &Insn::IncrCounter(_)
             | &Insn::IncrCounterPtr { .. } =>
                 {}
@@ -3141,6 +3163,13 @@ impl Function {
             }
             &Insn::SetIvar { self_val, val, state, .. } => {
                 worklist.push_back(self_val);
+                worklist.push_back(val);
+                worklist.push_back(state);
+            }
+            &Insn::GetClassVar { state, .. } => {
+                worklist.push_back(state);
+            }
+            &Insn::SetClassVar { val, state, .. } => {
                 worklist.push_back(val);
                 worklist.push_back(state);
             }
@@ -4627,6 +4656,20 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     let val = state.stack_pop()?;
                     fun.push_insn(block, Insn::SetIvar { self_val: self_param, id, val, state: exit_id });
                 }
+                YARVINSN_getclassvariable => {
+                    let id = ID(get_arg(pc, 0).as_u64());
+                    let ic = get_arg(pc, 1).as_ptr();
+                    let exit_id = fun.push_insn(block, Insn::Snapshot { state: exit_state });
+                    let result = fun.push_insn(block, Insn::GetClassVar { id, ic, state: exit_id });
+                    state.stack_push(result);
+                }
+                YARVINSN_setclassvariable => {
+                    let id = ID(get_arg(pc, 0).as_u64());
+                    let ic = get_arg(pc, 1).as_ptr();
+                    let exit_id = fun.push_insn(block, Insn::Snapshot { state: exit_state });
+                    let val = state.stack_pop()?;
+                    fun.push_insn(block, Insn::SetClassVar { id, val, ic, state: exit_id });
+                }
                 YARVINSN_opt_reverse => {
                     // Reverse the order of the top N stack items.
                     let n = get_arg(pc, 0).as_usize();
@@ -4662,10 +4705,14 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                         .get_builtin_properties(&bf)
                         .map(|props| props.return_type);
 
+                    let builtin_attrs = unsafe { rb_jit_iseq_builtin_attrs(iseq) };
+                    let leaf = builtin_attrs & BUILTIN_ATTR_LEAF != 0;
+
                     let insn_id = fun.push_insn(block, Insn::InvokeBuiltin {
                         bf,
                         args,
                         state: exit_id,
+                        leaf,
                         return_type,
                     });
                     state.stack_push(insn_id);
@@ -4688,10 +4735,14 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                         .get_builtin_properties(&bf)
                         .map(|props| props.return_type);
 
+                    let builtin_attrs = unsafe { rb_jit_iseq_builtin_attrs(iseq) };
+                    let leaf = builtin_attrs & BUILTIN_ATTR_LEAF != 0;
+
                     let insn_id = fun.push_insn(block, Insn::InvokeBuiltin {
                         bf,
                         args,
                         state: exit_id,
+                        leaf,
                         return_type,
                     });
                     state.stack_push(insn_id);
@@ -7410,6 +7461,59 @@ mod tests {
     }
 
     #[test]
+    fn test_getclassvariable() {
+        eval("
+            class Foo
+              def self.test = @@foo
+            end
+        ");
+        let iseq = crate::cruby::with_rubyvm(|| get_method_iseq("Foo", "test"));
+        assert!(iseq_contains_opcode(iseq, YARVINSN_getclassvariable), "iseq Foo.test does not contain getclassvariable");
+        let function = iseq_to_hir(iseq).unwrap();
+        assert_snapshot!(hir_string_function(&function), @r"
+        fn test@<compiled>:3:
+        bb0():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          Jump bb2(v1)
+        bb1(v4:BasicObject):
+          EntryPoint JIT(0)
+          Jump bb2(v4)
+        bb2(v6:BasicObject):
+          v11:BasicObject = GetClassVar :@@foo
+          CheckInterrupts
+          Return v11
+        ");
+    }
+
+    #[test]
+    fn test_setclassvariable() {
+        eval("
+            class Foo
+              def self.test = @@foo = 42
+            end
+        ");
+        let iseq = crate::cruby::with_rubyvm(|| get_method_iseq("Foo", "test"));
+        assert!(iseq_contains_opcode(iseq, YARVINSN_setclassvariable), "iseq Foo.test does not contain setclassvariable");
+        let function = iseq_to_hir(iseq).unwrap();
+        assert_snapshot!(hir_string_function(&function), @r"
+        fn test@<compiled>:3:
+        bb0():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          Jump bb2(v1)
+        bb1(v4:BasicObject):
+          EntryPoint JIT(0)
+          Jump bb2(v4)
+        bb2(v6:BasicObject):
+          v10:Fixnum[42] = Const Value(42)
+          SetClassVar :@@foo, v10
+          CheckInterrupts
+          Return v10
+        ");
+    }
+
+    #[test]
     fn test_setglobal() {
         eval("
             def test = $foo = 1
@@ -7919,7 +8023,7 @@ mod tests {
           EntryPoint JIT(0)
           Jump bb2(v4)
         bb2(v6:BasicObject):
-          v11:Class = InvokeBuiltin _bi20, v6
+          v11:Class = InvokeBuiltin leaf _bi20, v6
           Jump bb3(v6, v11)
         bb3(v13:BasicObject, v14:Class):
           CheckInterrupts
@@ -8014,6 +8118,50 @@ mod tests {
           v24:BasicObject = InvokeBuiltin gc_start_internal, v14, v15, v16, v17, v22
           CheckInterrupts
           Return v24
+        ");
+    }
+
+    #[test]
+    fn test_invoke_leaf_builtin_symbol_name() {
+        let iseq = crate::cruby::with_rubyvm(|| get_instance_method_iseq("Symbol", "name"));
+        let function = iseq_to_hir(iseq).unwrap();
+        assert_snapshot!(hir_string_function(&function), @r"
+        fn name@<internal:symbol>:
+        bb0():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          Jump bb2(v1)
+        bb1(v4:BasicObject):
+          EntryPoint JIT(0)
+          Jump bb2(v4)
+        bb2(v6:BasicObject):
+          v11:BasicObject = InvokeBuiltin leaf _bi28, v6
+          Jump bb3(v6, v11)
+        bb3(v13:BasicObject, v14:BasicObject):
+          CheckInterrupts
+          Return v14
+        ");
+    }
+
+    #[test]
+    fn test_invoke_leaf_builtin_symbol_to_s() {
+        let iseq = crate::cruby::with_rubyvm(|| get_instance_method_iseq("Symbol", "to_s"));
+        let function = iseq_to_hir(iseq).unwrap();
+        assert_snapshot!(hir_string_function(&function), @r"
+        fn to_s@<internal:symbol>:
+        bb0():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          Jump bb2(v1)
+        bb1(v4:BasicObject):
+          EntryPoint JIT(0)
+          Jump bb2(v4)
+        bb2(v6:BasicObject):
+          v11:BasicObject = InvokeBuiltin leaf _bi12, v6
+          Jump bb3(v6, v11)
+        bb3(v13:BasicObject, v14:BasicObject):
+          CheckInterrupts
+          Return v14
         ");
     }
 
@@ -8492,13 +8640,23 @@ mod opt_tests {
     use super::tests::assert_contains_opcode;
 
     #[track_caller]
-    fn hir_string(method: &str) -> String {
-        let iseq = crate::cruby::with_rubyvm(|| get_method_iseq("self", method));
+    fn hir_string_function(function: &Function) -> String {
+        format!("{}", FunctionPrinter::without_snapshot(function))
+    }
+
+    #[track_caller]
+    fn hir_string_proc(proc: &str) -> String {
+        let iseq = crate::cruby::with_rubyvm(|| get_proc_iseq(proc));
         unsafe { crate::cruby::rb_zjit_profile_disable(iseq) };
         let mut function = iseq_to_hir(iseq).unwrap();
         function.optimize();
         function.validate().unwrap();
-        format!("{}", FunctionPrinter::without_snapshot(&function))
+        hir_string_function(&function)
+    }
+
+    #[track_caller]
+    fn hir_string(method: &str) -> String {
+        hir_string_proc(&format!("{}.method(:{})", "self", method))
     }
 
     #[test]
@@ -10668,6 +10826,87 @@ mod opt_tests {
           v13:BasicObject = SendWithoutBlock v10, :itself, v11
           CheckInterrupts
           Return v13
+        ");
+    }
+
+    #[test]
+    fn test_inline_kernel_block_given_p() {
+        eval("
+            def test = block_given?
+            test
+        ");
+        assert_snapshot!(hir_string("test"), @r"
+        fn test@<compiled>:2:
+        bb0():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          Jump bb2(v1)
+        bb1(v4:BasicObject):
+          EntryPoint JIT(0)
+          Jump bb2(v4)
+        bb2(v6:BasicObject):
+          PatchPoint MethodRedefined(Object@0x1000, block_given?@0x1008, cme:0x1010)
+          PatchPoint NoSingletonClass(Object@0x1000)
+          v20:HeapObject[class_exact*:Object@VALUE(0x1000)] = GuardType v6, HeapObject[class_exact*:Object@VALUE(0x1000)]
+          v21:BoolExact = IsBlockGiven
+          IncrCounter inline_cfunc_optimized_send_count
+          CheckInterrupts
+          Return v21
+        ");
+    }
+
+    #[test]
+    fn test_inline_kernel_block_given_p_in_block() {
+        eval("
+            TEST = proc { block_given? }
+            TEST.call
+        ");
+        assert_snapshot!(hir_string_proc("TEST"), @r"
+        fn block in <compiled>@<compiled>:2:
+        bb0():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          Jump bb2(v1)
+        bb1(v4:BasicObject):
+          EntryPoint JIT(0)
+          Jump bb2(v4)
+        bb2(v6:BasicObject):
+          PatchPoint MethodRedefined(Object@0x1000, block_given?@0x1008, cme:0x1010)
+          PatchPoint NoSingletonClass(Object@0x1000)
+          v20:HeapObject[class_exact*:Object@VALUE(0x1000)] = GuardType v6, HeapObject[class_exact*:Object@VALUE(0x1000)]
+          v21:BoolExact = IsBlockGiven
+          IncrCounter inline_cfunc_optimized_send_count
+          CheckInterrupts
+          Return v21
+        ");
+    }
+
+    #[test]
+    fn test_elide_kernel_block_given_p() {
+        eval("
+            def test
+              block_given?
+              5
+            end
+            test
+        ");
+        assert_snapshot!(hir_string("test"), @r"
+        fn test@<compiled>:3:
+        bb0():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          Jump bb2(v1)
+        bb1(v4:BasicObject):
+          EntryPoint JIT(0)
+          Jump bb2(v4)
+        bb2(v6:BasicObject):
+          PatchPoint MethodRedefined(Object@0x1000, block_given?@0x1008, cme:0x1010)
+          PatchPoint NoSingletonClass(Object@0x1000)
+          v23:HeapObject[class_exact*:Object@VALUE(0x1000)] = GuardType v6, HeapObject[class_exact*:Object@VALUE(0x1000)]
+          IncrCounter inline_cfunc_optimized_send_count
+          v14:Fixnum[5] = Const Value(5)
+          CheckInterrupts
+          Return v14
         ");
     }
 
