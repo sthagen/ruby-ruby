@@ -1873,7 +1873,7 @@ impl Function {
     /// Set self.param_types. They are copied to the param types of jit_entry_blocks.
     fn set_param_types(&mut self) {
         let iseq = self.iseq;
-        let param_size = unsafe { get_iseq_body_param_size(iseq) }.as_usize();
+        let param_size = unsafe { get_iseq_body_param_size(iseq) }.to_usize();
         let rest_param_idx = iseq_rest_param_idx(iseq);
 
         self.param_types.push(types::BasicObject); // self
@@ -3885,7 +3885,7 @@ pub enum ParseError {
 
 /// Return the number of locals in the current ISEQ (includes parameters)
 fn num_locals(iseq: *const rb_iseq_t) -> usize {
-    (unsafe { get_iseq_body_local_table_size(iseq) }).as_usize()
+    (unsafe { get_iseq_body_local_table_size(iseq) }).to_usize()
 }
 
 /// If we can't handle the type of send (yet), bail out.
@@ -4896,7 +4896,7 @@ fn compile_entry_block(fun: &mut Function, jit_entry_insns: &[u32]) {
 /// Compile initial locals for an entry_block for the interpreter
 fn compile_entry_state(fun: &mut Function, entry_block: BlockId) -> (InsnId, FrameState) {
     let iseq = fun.iseq;
-    let param_size = unsafe { get_iseq_body_param_size(iseq) }.as_usize();
+    let param_size = unsafe { get_iseq_body_param_size(iseq) }.to_usize();
     let rest_param_idx = iseq_rest_param_idx(iseq);
 
     let self_param = fun.push_insn(entry_block, Insn::LoadSelf);
@@ -4929,7 +4929,7 @@ fn compile_jit_entry_block(fun: &mut Function, jit_entry_idx: usize, target_bloc
 /// Compile params and initial locals for a jit_entry_block
 fn compile_jit_entry_state(fun: &mut Function, jit_entry_block: BlockId) -> (InsnId, FrameState) {
     let iseq = fun.iseq;
-    let param_size = unsafe { get_iseq_body_param_size(iseq) }.as_usize();
+    let param_size = unsafe { get_iseq_body_param_size(iseq) }.to_usize();
 
     let self_param = fun.push_insn(jit_entry_block, Insn::Param);
     let mut entry_state = FrameState::new(iseq);
@@ -14008,7 +14008,69 @@ mod opt_tests {
           PatchPoint MethodRedefined(Array@0x1000, <<@0x1008, cme:0x1010)
           PatchPoint NoSingletonClass(Array@0x1000)
           v26:ArrayExact = GuardType v9, ArrayExact
-          v27:BasicObject = CCallWithFrame <<@0x1038, v26, v13
+          ArrayPush v26, v13
+          IncrCounter inline_cfunc_optimized_send_count
+          CheckInterrupts
+          Return v26
+        ");
+    }
+
+    #[test]
+    fn test_optimize_array_push_single_arg() {
+        eval("
+            def test(arr)
+              arr.push(1)
+            end
+            test([])
+        ");
+        assert_snapshot!(hir_string("test"), @r"
+        fn test@<compiled>:3:
+        bb0():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          v2:BasicObject = GetLocal l0, SP@4
+          Jump bb2(v1, v2)
+        bb1(v5:BasicObject, v6:BasicObject):
+          EntryPoint JIT(0)
+          Jump bb2(v5, v6)
+        bb2(v8:BasicObject, v9:BasicObject):
+          v13:Fixnum[1] = Const Value(1)
+          PatchPoint MethodRedefined(Array@0x1000, push@0x1008, cme:0x1010)
+          PatchPoint NoSingletonClass(Array@0x1000)
+          v24:ArrayExact = GuardType v9, ArrayExact
+          ArrayPush v24, v13
+          IncrCounter inline_cfunc_optimized_send_count
+          CheckInterrupts
+          Return v24
+        ");
+    }
+
+    #[test]
+    fn test_do_not_optimize_array_push_multi_arg() {
+        eval("
+            def test(arr)
+              arr.push(1,2,3)
+            end
+            test([])
+        ");
+        assert_snapshot!(hir_string("test"), @r"
+        fn test@<compiled>:3:
+        bb0():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          v2:BasicObject = GetLocal l0, SP@4
+          Jump bb2(v1, v2)
+        bb1(v5:BasicObject, v6:BasicObject):
+          EntryPoint JIT(0)
+          Jump bb2(v5, v6)
+        bb2(v8:BasicObject, v9:BasicObject):
+          v13:Fixnum[1] = Const Value(1)
+          v14:Fixnum[2] = Const Value(2)
+          v15:Fixnum[3] = Const Value(3)
+          PatchPoint MethodRedefined(Array@0x1000, push@0x1008, cme:0x1010)
+          PatchPoint NoSingletonClass(Array@0x1000)
+          v26:ArrayExact = GuardType v9, ArrayExact
+          v27:BasicObject = CCallVariadic push@0x1038, v26, v13, v14, v15
           CheckInterrupts
           Return v27
         ");
@@ -15435,6 +15497,183 @@ mod opt_tests {
           IncrCounter inline_cfunc_optimized_send_count
           CheckInterrupts
           Return v28
+        ");
+    }
+
+    #[test]
+    fn test_specialize_string_size() {
+        eval(r#"
+            def test(s)
+              s.size
+            end
+            test("asdf")
+        "#);
+        assert_snapshot!(hir_string("test"), @r"
+        fn test@<compiled>:3:
+        bb0():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          v2:BasicObject = GetLocal l0, SP@4
+          Jump bb2(v1, v2)
+        bb1(v5:BasicObject, v6:BasicObject):
+          EntryPoint JIT(0)
+          Jump bb2(v5, v6)
+        bb2(v8:BasicObject, v9:BasicObject):
+          PatchPoint MethodRedefined(String@0x1000, size@0x1008, cme:0x1010)
+          PatchPoint NoSingletonClass(String@0x1000)
+          v25:StringExact = GuardType v9, StringExact
+          IncrCounter inline_cfunc_optimized_send_count
+          v27:Fixnum = CCall size@0x1038, v25
+          CheckInterrupts
+          Return v27
+        ");
+    }
+
+    #[test]
+    fn test_elide_string_size() {
+         eval(r#"
+            def test(s)
+              s.size
+              5
+            end
+            test("asdf")
+        "#);
+       assert_snapshot!(hir_string("test"), @r"
+       fn test@<compiled>:3:
+       bb0():
+         EntryPoint interpreter
+         v1:BasicObject = LoadSelf
+         v2:BasicObject = GetLocal l0, SP@4
+         Jump bb2(v1, v2)
+       bb1(v5:BasicObject, v6:BasicObject):
+         EntryPoint JIT(0)
+         Jump bb2(v5, v6)
+       bb2(v8:BasicObject, v9:BasicObject):
+         PatchPoint MethodRedefined(String@0x1000, size@0x1008, cme:0x1010)
+         PatchPoint NoSingletonClass(String@0x1000)
+         v28:StringExact = GuardType v9, StringExact
+         IncrCounter inline_cfunc_optimized_send_count
+         v19:Fixnum[5] = Const Value(5)
+         CheckInterrupts
+         Return v19
+       ");
+    }
+
+    #[test]
+    fn test_specialize_string_bytesize() {
+        eval(r#"
+            def test(s)
+              s.bytesize
+            end
+            test("asdf")
+        "#);
+        assert_snapshot!(hir_string("test"), @r"
+        fn test@<compiled>:3:
+        bb0():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          v2:BasicObject = GetLocal l0, SP@4
+          Jump bb2(v1, v2)
+        bb1(v5:BasicObject, v6:BasicObject):
+          EntryPoint JIT(0)
+          Jump bb2(v5, v6)
+        bb2(v8:BasicObject, v9:BasicObject):
+          PatchPoint MethodRedefined(String@0x1000, bytesize@0x1008, cme:0x1010)
+          PatchPoint NoSingletonClass(String@0x1000)
+          v23:StringExact = GuardType v9, StringExact
+          IncrCounter inline_cfunc_optimized_send_count
+          v25:Fixnum = CCall bytesize@0x1038, v23
+          CheckInterrupts
+          Return v25
+        ");
+    }
+
+    #[test]
+    fn test_elide_string_bytesize() {
+        eval(r#"
+            def test(s)
+              s.bytesize
+              5
+            end
+            test("asdf")
+        "#);
+        assert_snapshot!(hir_string("test"), @r"
+        fn test@<compiled>:3:
+        bb0():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          v2:BasicObject = GetLocal l0, SP@4
+          Jump bb2(v1, v2)
+        bb1(v5:BasicObject, v6:BasicObject):
+          EntryPoint JIT(0)
+          Jump bb2(v5, v6)
+        bb2(v8:BasicObject, v9:BasicObject):
+          PatchPoint MethodRedefined(String@0x1000, bytesize@0x1008, cme:0x1010)
+          PatchPoint NoSingletonClass(String@0x1000)
+          v26:StringExact = GuardType v9, StringExact
+          IncrCounter inline_cfunc_optimized_send_count
+          v17:Fixnum[5] = Const Value(5)
+          CheckInterrupts
+          Return v17
+        ");
+    }
+
+    #[test]
+    fn test_specialize_string_length() {
+        eval(r#"
+            def test(s)
+              s.length
+            end
+            test("asdf")
+        "#);
+        assert_snapshot!(hir_string("test"), @r"
+        fn test@<compiled>:3:
+        bb0():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          v2:BasicObject = GetLocal l0, SP@4
+          Jump bb2(v1, v2)
+        bb1(v5:BasicObject, v6:BasicObject):
+          EntryPoint JIT(0)
+          Jump bb2(v5, v6)
+        bb2(v8:BasicObject, v9:BasicObject):
+          PatchPoint MethodRedefined(String@0x1000, length@0x1008, cme:0x1010)
+          PatchPoint NoSingletonClass(String@0x1000)
+          v25:StringExact = GuardType v9, StringExact
+          IncrCounter inline_cfunc_optimized_send_count
+          v27:Fixnum = CCall length@0x1038, v25
+          CheckInterrupts
+          Return v27
+        ");
+    }
+
+    #[test]
+    fn test_elide_string_length() {
+        eval(r#"
+            def test(s)
+              s.length
+              4
+            end
+            test("this should get removed")
+        "#);
+        assert_snapshot!(hir_string("test"), @r"
+        fn test@<compiled>:3:
+        bb0():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          v2:BasicObject = GetLocal l0, SP@4
+          Jump bb2(v1, v2)
+        bb1(v5:BasicObject, v6:BasicObject):
+          EntryPoint JIT(0)
+          Jump bb2(v5, v6)
+        bb2(v8:BasicObject, v9:BasicObject):
+          PatchPoint MethodRedefined(String@0x1000, length@0x1008, cme:0x1010)
+          PatchPoint NoSingletonClass(String@0x1000)
+          v28:StringExact = GuardType v9, StringExact
+          IncrCounter inline_cfunc_optimized_send_count
+          v19:Fixnum[4] = Const Value(4)
+          CheckInterrupts
+          Return v19
         ");
     }
 }

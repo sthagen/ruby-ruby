@@ -188,8 +188,8 @@ fn gen_entry(cb: &mut CodeBlock, iseq: IseqPtr, function_ptr: CodePtr) -> Result
     let (code_ptr, gc_offsets) = asm.compile(cb)?;
     assert!(gc_offsets.is_empty());
     if get_option!(perf) {
-        let start_ptr = code_ptr.raw_ptr(cb) as usize;
-        let end_ptr = cb.get_write_ptr().raw_ptr(cb) as usize;
+        let start_ptr = code_ptr.raw_addr(cb);
+        let end_ptr = cb.get_write_ptr().raw_addr(cb);
         let code_size = end_ptr - start_ptr;
         let iseq_name = iseq_get_location(iseq, 0);
         register_with_perf(format!("entry for {iseq_name}"), start_ptr, code_size);
@@ -298,8 +298,8 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, function: &Function) -> Resul
     let result = asm.compile(cb);
     if let Ok((start_ptr, _)) = result {
         if get_option!(perf) {
-            let start_usize = start_ptr.raw_ptr(cb) as usize;
-            let end_usize = cb.get_write_ptr().raw_ptr(cb) as usize;
+            let start_usize = start_ptr.raw_addr(cb);
+            let end_usize = cb.get_write_ptr().raw_addr(cb);
             let code_size = end_usize - start_usize;
             let iseq_name = iseq_get_location(iseq, 0);
             register_with_perf(iseq_name, start_usize, code_size);
@@ -508,7 +508,7 @@ fn gen_objtostring(jit: &mut JITState, asm: &mut Assembler, val: Opnd, cd: *cons
     gen_prepare_non_leaf_call(jit, asm, state);
     // TODO: Specialize for immediate types
     // Call rb_vm_objtostring(iseq, recv, cd)
-    let ret = asm_ccall!(asm, rb_vm_objtostring, VALUE(jit.iseq as usize).into(), val, (cd as usize).into());
+    let ret = asm_ccall!(asm, rb_vm_objtostring, VALUE::from(jit.iseq).into(), val, Opnd::const_ptr(cd));
 
     // TODO: Call `to_s` on the receiver if rb_vm_objtostring returns Qundef
     // Need to replicate what CALL_SIMPLE_METHOD does
@@ -706,6 +706,7 @@ fn gen_ccall_with_frame(
     state: &FrameState,
 ) -> lir::Opnd {
     gen_incr_counter(asm, Counter::non_variadic_cfunc_optimized_send_count);
+    gen_stack_overflow_check(jit, asm, state, state.stack_size());
 
     let caller_stack_size = state.stack_size() - args.len();
 
@@ -736,7 +737,7 @@ fn gen_ccall_with_frame(
     });
 
     asm_comment!(asm, "switch to new SP register");
-    let sp_offset = (caller_stack_size + VM_ENV_DATA_SIZE.as_usize()) * SIZEOF_VALUE;
+    let sp_offset = (caller_stack_size + VM_ENV_DATA_SIZE.to_usize()) * SIZEOF_VALUE;
     let new_sp = asm.add(SP, sp_offset.into());
     asm.mov(SP, new_sp);
 
@@ -792,7 +793,7 @@ fn gen_ccall_variadic(
     });
 
     asm_comment!(asm, "switch to new SP register");
-    let sp_offset = (state.stack().len() - args.len() + VM_ENV_DATA_SIZE.as_usize()) * SIZEOF_VALUE;
+    let sp_offset = (state.stack().len() - args.len() + VM_ENV_DATA_SIZE.to_usize()) * SIZEOF_VALUE;
     let new_sp = asm.add(SP, sp_offset.into());
     asm.mov(SP, new_sp);
 
@@ -833,12 +834,12 @@ fn gen_setivar(jit: &mut JITState, asm: &mut Assembler, recv: Opnd, id: ID, val:
 
 fn gen_getclassvar(jit: &mut JITState, asm: &mut Assembler, id: ID, ic: *const iseq_inline_cvar_cache_entry, state: &FrameState) -> Opnd {
     gen_prepare_non_leaf_call(jit, asm, state);
-    asm_ccall!(asm, rb_vm_getclassvariable, VALUE(jit.iseq as usize).into(), CFP, id.0.into(), Opnd::const_ptr(ic))
+    asm_ccall!(asm, rb_vm_getclassvariable, VALUE::from(jit.iseq).into(), CFP, id.0.into(), Opnd::const_ptr(ic))
 }
 
 fn gen_setclassvar(jit: &mut JITState, asm: &mut Assembler, id: ID, val: Opnd, ic: *const iseq_inline_cvar_cache_entry, state: &FrameState) {
     gen_prepare_non_leaf_call(jit, asm, state);
-    asm_ccall!(asm, rb_vm_setclassvariable, VALUE(jit.iseq as usize).into(), CFP, id.0.into(), val, Opnd::const_ptr(ic));
+    asm_ccall!(asm, rb_vm_setclassvariable, VALUE::from(jit.iseq).into(), CFP, id.0.into(), val, Opnd::const_ptr(ic));
 }
 
 /// Look up global variables
@@ -975,7 +976,7 @@ fn gen_load_ivar_embedded(asm: &mut Assembler, self_val: Opnd, id: ID, index: u1
     // See ROBJECT_FIELDS() from include/ruby/internal/core/robject.h
 
     asm_comment!(asm, "Load embedded ivar id={} index={}", id.contents_lossy(), index);
-    let offs = ROBJECT_OFFSET_AS_ARY as i32 + (SIZEOF_VALUE * index as usize) as i32;
+    let offs = ROBJECT_OFFSET_AS_ARY as i32 + (SIZEOF_VALUE * index.to_usize()) as i32;
     let self_val = asm.load(self_val);
     let ivar_opnd = Opnd::mem(64, self_val, offs);
     asm.load(ivar_opnd)
@@ -990,7 +991,7 @@ fn gen_load_ivar_extended(asm: &mut Assembler, self_val: Opnd, id: ID, index: u1
     let tbl_opnd = asm.load(Opnd::mem(64, self_val, ROBJECT_OFFSET_AS_HEAP_FIELDS as i32));
 
     // Read the ivar from the extended table
-    let ivar_opnd = Opnd::mem(64, tbl_opnd, (SIZEOF_VALUE * index as usize) as i32);
+    let ivar_opnd = Opnd::mem(64, tbl_opnd, (SIZEOF_VALUE * index.to_usize()) as i32);
     asm.load(ivar_opnd)
 }
 
@@ -1113,7 +1114,7 @@ fn gen_send(
     }
     asm.ccall(
         rb_vm_send as *const u8,
-        vec![EC, CFP, (cd as usize).into(), VALUE(blockiseq as usize).into()],
+        vec![EC, CFP, Opnd::const_ptr(cd), VALUE::from(blockiseq).into()],
     )
 }
 
@@ -1136,7 +1137,7 @@ fn gen_send_forward(
     }
     asm.ccall(
         rb_vm_sendforward as *const u8,
-        vec![EC, CFP, (cd as usize).into(), VALUE(blockiseq as usize).into()],
+        vec![EC, CFP, Opnd::const_ptr(cd), VALUE::from(blockiseq).into()],
     )
 }
 
@@ -1157,7 +1158,7 @@ fn gen_send_without_block(
     }
     asm.ccall(
         rb_vm_opt_send_without_block as *const u8,
-        vec![EC, CFP, (cd as usize).into()],
+        vec![EC, CFP, Opnd::const_ptr(cd)],
     )
 }
 
@@ -1174,8 +1175,8 @@ fn gen_send_without_block_direct(
 ) -> lir::Opnd {
     gen_incr_counter(asm, Counter::iseq_optimized_send_count);
 
-    let local_size = unsafe { get_iseq_body_local_table_size(iseq) }.as_usize();
-    let stack_growth = state.stack_size() + local_size + unsafe { get_iseq_body_stack_max(iseq) }.as_usize();
+    let local_size = unsafe { get_iseq_body_local_table_size(iseq) }.to_usize();
+    let stack_growth = state.stack_size() + local_size + unsafe { get_iseq_body_stack_max(iseq) }.to_usize();
     gen_stack_overflow_check(jit, asm, state, stack_growth);
 
     // Save cfp->pc and cfp->sp for the caller frame
@@ -1211,7 +1212,7 @@ fn gen_send_without_block_direct(
     });
 
     asm_comment!(asm, "switch to new SP register");
-    let sp_offset = (state.stack().len() + local_size - args.len() + VM_ENV_DATA_SIZE.as_usize()) * SIZEOF_VALUE;
+    let sp_offset = (state.stack().len() + local_size - args.len() + VM_ENV_DATA_SIZE.to_usize()) * SIZEOF_VALUE;
     let new_sp = asm.add(SP, sp_offset.into());
     asm.mov(SP, new_sp);
 
@@ -1263,7 +1264,7 @@ fn gen_invokeblock(
     }
     asm.ccall(
         rb_vm_invokeblock as *const u8,
-        vec![EC, CFP, (cd as usize).into()],
+        vec![EC, CFP, Opnd::const_ptr(cd)],
     )
 }
 
@@ -1285,7 +1286,7 @@ fn gen_invokesuper(
     }
     asm.ccall(
         rb_vm_invokesuper as *const u8,
-        vec![EC, CFP, (cd as usize).into(), VALUE(blockiseq as usize).into()],
+        vec![EC, CFP, Opnd::const_ptr(cd), VALUE::from(blockiseq).into()],
     )
 }
 
@@ -1544,7 +1545,7 @@ fn gen_is_method_cfunc(jit: &JITState, asm: &mut Assembler, val: lir::Opnd, cd: 
     unsafe extern "C" {
         fn rb_vm_method_cfunc_is(iseq: IseqPtr, cd: *const rb_call_data, recv: VALUE, cfunc: *const u8) -> VALUE;
     }
-    asm_ccall!(asm, rb_vm_method_cfunc_is, VALUE(jit.iseq as usize).into(), (cd as usize).into(), val, (cfunc as usize).into())
+    asm_ccall!(asm, rb_vm_method_cfunc_is, VALUE::from(jit.iseq).into(), Opnd::const_ptr(cd), val, Opnd::const_ptr(cfunc))
 }
 
 fn gen_is_bit_equal(asm: &mut Assembler, left: lir::Opnd, right: lir::Opnd) -> lir::Opnd {
@@ -1889,7 +1890,7 @@ fn param_opnd(idx: usize) -> Opnd {
 /// Inverse of ep_offset_to_local_idx(). See ep_offset_to_local_idx() for details.
 pub fn local_idx_to_ep_offset(iseq: IseqPtr, local_idx: usize) -> i32 {
     let local_size = unsafe { get_iseq_body_local_table_size(iseq) };
-    local_size_and_idx_to_ep_offset(local_size as usize, local_idx)
+    local_size_and_idx_to_ep_offset(local_size.to_usize(), local_idx)
 }
 
 /// Convert the number of locals and a local index to an offset from the EP
@@ -2005,8 +2006,8 @@ c_callable! {
                     rb_set_cfp_sp(cfp, sp);
 
                     // Fill nils to uninitialized (non-argument) locals
-                    let local_size = get_iseq_body_local_table_size(iseq) as usize;
-                    let num_params = get_iseq_body_param_size(iseq) as usize;
+                    let local_size = get_iseq_body_local_table_size(iseq).to_usize();
+                    let num_params = get_iseq_body_param_size(iseq).to_usize();
                     let base = sp.offset(-local_size_and_idx_to_bp_offset(local_size, num_params) as isize);
                     slice::from_raw_parts_mut(base, local_size - num_params).fill(Qnil);
                 }

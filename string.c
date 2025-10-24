@@ -8903,8 +8903,12 @@ rb_str_delete(int argc, VALUE *argv, VALUE str)
  *  call-seq:
  *    squeeze!(*selectors) -> self or nil
  *
- *  Like String#squeeze, but modifies +self+ in place.
- *  Returns +self+ if any changes were made, +nil+ otherwise.
+ *  Like String#squeeze, except that:
+ *
+ *  - Characters are squeezed in +self+ (not in a copy of +self+).
+ *  - Returns +self+ if any changes are made, +nil+ otherwise.
+ *
+ *  Related: See {Modifying}[rdoc-ref:String@Modifying].
  */
 
 static VALUE
@@ -10482,10 +10486,12 @@ rb_str_rstrip(VALUE str)
  *  call-seq:
  *    strip! -> self or nil
  *
- *  Like String#strip, except that any modifications are made in +self+;
- *  returns +self+ if any modification are made, +nil+ otherwise.
+ *  Like String#strip, except that:
  *
- *  Related: String#lstrip!, String#strip!.
+ *  - Any modifications are made to +self+.
+ *  - Returns +self+ if any modification are made, +nil+ otherwise.
+ *
+ *  Related: see {Modifying}[rdoc-ref:String@Modifying].
  */
 
 static VALUE
@@ -10519,15 +10525,15 @@ rb_str_strip_bang(VALUE str)
  *  call-seq:
  *    strip -> new_string
  *
- *  Returns a copy of the receiver with leading and trailing whitespace removed;
+ *  Returns a copy of +self+ with leading and trailing whitespace removed;
  *  see {Whitespace in Strings}[rdoc-ref:String@Whitespace+in+Strings]:
  *
  *    whitespace = "\x00\t\n\v\f\r "
  *    s = whitespace + 'abc' + whitespace
- *    s       # => "\u0000\t\n\v\f\r abc\u0000\t\n\v\f\r "
+ *    # => "\u0000\t\n\v\f\r abc\u0000\t\n\v\f\r "
  *    s.strip # => "abc"
  *
- *  Related: String#lstrip, String#rstrip.
+ *  Related: see {Converting to New String}[rdoc-ref:String@Converting+to+New+String].
  */
 
 static VALUE
@@ -11214,7 +11220,7 @@ rb_str_rpartition(VALUE str, VALUE sep)
 
 /*
  *  call-seq:
- *    start_with?(*string_or_regexp) -> true or false
+ *    start_with?(*patterns) -> true or false
  *
  *  :include: doc/string/start_with_p.rdoc
  *

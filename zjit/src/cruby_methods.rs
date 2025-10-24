@@ -190,6 +190,9 @@ pub fn init() -> Annotations {
     annotate!(rb_mKernel, "itself", inline_kernel_itself);
     annotate!(rb_mKernel, "block_given?", inline_kernel_block_given_p);
     annotate!(rb_cString, "bytesize", types::Fixnum, no_gc, leaf);
+    annotate!(rb_cString, "bytesize", types::Fixnum, no_gc, leaf, elidable);
+    annotate!(rb_cString, "size", types::Fixnum, no_gc, leaf, elidable);
+    annotate!(rb_cString, "length", types::Fixnum, no_gc, leaf, elidable);
     annotate!(rb_cString, "to_s", types::StringExact);
     annotate!(rb_cString, "getbyte", inline_string_getbyte);
     annotate!(rb_cString, "empty?", types::BoolExact, no_gc, leaf, elidable);
@@ -203,6 +206,8 @@ pub fn init() -> Annotations {
     annotate!(rb_cArray, "reverse", types::ArrayExact, leaf, elidable);
     annotate!(rb_cArray, "join", types::StringExact);
     annotate!(rb_cArray, "[]", inline_array_aref);
+    annotate!(rb_cArray, "<<", inline_array_push);
+    annotate!(rb_cArray, "push", inline_array_push);
     annotate!(rb_cHash, "[]", inline_hash_aref);
     annotate!(rb_cHash, "size", types::Fixnum, no_gc, leaf, elidable);
     annotate!(rb_cHash, "empty?", types::BoolExact, no_gc, leaf, elidable);
@@ -262,6 +267,15 @@ fn inline_array_aref(fun: &mut hir::Function, block: hir::BlockId, recv: hir::In
             let result = fun.push_insn(block, hir::Insn::ArrayArefFixnum { array: recv, index });
             return Some(result);
         }
+    }
+    None
+}
+
+fn inline_array_push(fun: &mut hir::Function, block: hir::BlockId, recv: hir::InsnId, args: &[hir::InsnId], state: hir::InsnId) -> Option<hir::InsnId> {
+    // Inline only the case of `<<` or `push` when called with a single argument.
+    if let &[val] = args {
+        let _ = fun.push_insn(block, hir::Insn::ArrayPush { array: recv, val, state });
+        return Some(recv);
     }
     None
 }
