@@ -283,19 +283,20 @@ class TestProcess < Test::Unit::TestCase
   end
 
   MANDATORY_ENVS = %w[RUBYLIB GEM_HOME GEM_PATH RUBY_FREE_AT_EXIT]
-  case RbConfig::CONFIG['target_os']
-  when /linux/
-    MANDATORY_ENVS << 'LD_PRELOAD'
-  when /mswin|mingw/
-    MANDATORY_ENVS.concat(%w[HOME USER TMPDIR PROCESSOR_ARCHITECTURE])
-  when /darwin/
-    MANDATORY_ENVS.concat(ENV.keys.grep(/\A__CF_/))
-  end
   if e = RbConfig::CONFIG['LIBPATHENV']
     MANDATORY_ENVS << e
   end
   if e = RbConfig::CONFIG['PRELOADENV'] and !e.empty?
     MANDATORY_ENVS << e
+  end
+  case RbConfig::CONFIG['target_os']
+  when /mswin|mingw/
+    MANDATORY_ENVS.concat(%w[HOME USER TMPDIR PROCESSOR_ARCHITECTURE])
+  when /darwin/
+    MANDATORY_ENVS.concat(%w[TMPDIR], ENV.keys.grep(/\A__CF_/))
+    # IO.popen([ENV.keys.to_h {|e| [e, nil]},
+    #           RUBY, "-e", %q[print ENV.keys.join(?\0)]],
+    #          &:read).split(?\0)
   end
   PREENVARG = ['-e', "%w[#{MANDATORY_ENVS.join(' ')}].each{|e|ENV.delete(e)}"]
   ENVARG = ['-e', 'ENV.each {|k,v| puts "#{k}=#{v}" }']
