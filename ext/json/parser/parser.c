@@ -124,7 +124,7 @@ static VALUE rstring_cache_fetch(rvalue_cache *cache, const char *str, const lon
         return Qfalse;
     }
 
-    if (RB_UNLIKELY(!isalpha((unsigned char)str[0]))) {
+    if (RB_UNLIKELY(!rb_isalpha((unsigned char)str[0]))) {
         // Simple heuristic, if the first character isn't a letter,
         // we're much less likely to see this string again.
         // We mostly want to cache strings that are likely to be repeated.
@@ -176,7 +176,7 @@ static VALUE rsymbol_cache_fetch(rvalue_cache *cache, const char *str, const lon
         return Qfalse;
     }
 
-    if (RB_UNLIKELY(!isalpha((unsigned char)str[0]))) {
+    if (RB_UNLIKELY(!rb_isalpha((unsigned char)str[0]))) {
         // Simple heuristic, if the first character isn't a letter,
         // we're much less likely to see this string again.
         // We mostly want to cache strings that are likely to be repeated.
@@ -790,11 +790,11 @@ static VALUE json_decode_large_integer(const char *start, long len)
 static inline VALUE
 json_decode_integer(const char *start, const char *end)
 {
-        long len = end - start;
-        if (RB_LIKELY(len < MAX_FAST_INTEGER_SIZE)) {
-            return fast_decode_integer(start, end);
-        }
-        return json_decode_large_integer(start, len);
+    long len = end - start;
+    if (RB_LIKELY(len < MAX_FAST_INTEGER_SIZE)) {
+        return fast_decode_integer(start, end);
+    }
+    return json_decode_large_integer(start, len);
 }
 
 static VALUE json_decode_large_float(const char *start, long len)
