@@ -156,12 +156,22 @@ pub fn init() -> Annotations {
 
     macro_rules! annotate {
         ($module:ident, $method_name:literal, $inline:ident) => {
-            let props = FnProperties { no_gc: false, leaf: false, elidable: false, return_type: types::BasicObject, inline: $inline };
+            let mut props = FnProperties::default();
+            props.inline = $inline;
+            annotate_c_method(cfuncs, unsafe { $module }, $method_name, props);
+        };
+        ($module:ident, $method_name:literal, $inline:ident, $return_type:expr $(, $properties:ident)*) => {
+            let mut props = FnProperties::default();
+            props.return_type = $return_type;
+            props.inline = $inline;
+            $(
+                props.$properties = true;
+            )*
             annotate_c_method(cfuncs, unsafe { $module }, $method_name, props);
         };
         ($module:ident, $method_name:literal, $return_type:expr $(, $properties:ident)*) => {
-            #[allow(unused_mut)]
-            let mut props = FnProperties { no_gc: false, leaf: false, elidable: false, return_type: $return_type, inline: no_inline };
+            let mut props = FnProperties::default();
+            props.return_type = $return_type;
             $(
                 props.$properties = true;
             )*
@@ -175,13 +185,8 @@ pub fn init() -> Annotations {
             annotate_builtin!($module, $method_name, $return_type, no_gc, leaf, elidable)
         };
         ($module:ident, $method_name:literal, $return_type:expr, $($properties:ident),+) => {
-            let mut props = FnProperties {
-                no_gc: false,
-                leaf: false,
-                elidable: false,
-                return_type: $return_type,
-                inline: no_inline,
-            };
+            let mut props = FnProperties::default();
+            props.return_type = $return_type;
             $(props.$properties = true;)+
             annotate_builtin_method(builtin_funcs, unsafe { $module }, $method_name, props);
         }
@@ -189,10 +194,10 @@ pub fn init() -> Annotations {
 
     annotate!(rb_mKernel, "itself", inline_kernel_itself);
     annotate!(rb_mKernel, "block_given?", inline_kernel_block_given_p);
+    annotate!(rb_mKernel, "===", inline_eqq);
     annotate!(rb_cString, "bytesize", types::Fixnum, no_gc, leaf, elidable);
     annotate!(rb_cString, "size", types::Fixnum, no_gc, leaf, elidable);
     annotate!(rb_cString, "length", types::Fixnum, no_gc, leaf, elidable);
-    annotate!(rb_cString, "to_s", types::StringExact);
     annotate!(rb_cString, "getbyte", inline_string_getbyte);
     annotate!(rb_cString, "empty?", types::BoolExact, no_gc, leaf, elidable);
     annotate!(rb_cString, "<<", inline_string_append);
@@ -207,24 +212,29 @@ pub fn init() -> Annotations {
     annotate!(rb_cArray, "[]", inline_array_aref);
     annotate!(rb_cArray, "<<", inline_array_push);
     annotate!(rb_cArray, "push", inline_array_push);
+    annotate!(rb_cArray, "pop", inline_array_pop);
     annotate!(rb_cHash, "[]", inline_hash_aref);
     annotate!(rb_cHash, "size", types::Fixnum, no_gc, leaf, elidable);
     annotate!(rb_cHash, "empty?", types::BoolExact, no_gc, leaf, elidable);
-    annotate!(rb_cNilClass, "nil?", types::TrueClass, no_gc, leaf, elidable);
-    annotate!(rb_mKernel, "nil?", types::FalseClass, no_gc, leaf, elidable);
+    annotate!(rb_cNilClass, "nil?", inline_nilclass_nil_p);
+    annotate!(rb_mKernel, "nil?", inline_kernel_nil_p);
     annotate!(rb_mKernel, "respond_to?", inline_kernel_respond_to_p);
-    annotate!(rb_cBasicObject, "==", types::BoolExact, no_gc, leaf, elidable);
+    annotate!(rb_cBasicObject, "==", inline_basic_object_eq, types::BoolExact, no_gc, leaf, elidable);
     annotate!(rb_cBasicObject, "!", types::BoolExact, no_gc, leaf, elidable);
+    annotate!(rb_cBasicObject, "!=", inline_basic_object_neq, types::BoolExact, no_gc, leaf, elidable);
     annotate!(rb_cBasicObject, "initialize", inline_basic_object_initialize);
     annotate!(rb_cInteger, "succ", inline_integer_succ);
     annotate!(rb_cInteger, "^", inline_integer_xor);
-    annotate!(rb_cString, "to_s", inline_string_to_s);
+    annotate!(rb_cString, "to_s", inline_string_to_s, types::StringExact);
     let thread_singleton = unsafe { rb_singleton_class(rb_cThread) };
     annotate!(thread_singleton, "current", types::BasicObject, no_gc, leaf);
 
     annotate_builtin!(rb_mKernel, "Float", types::Float);
     annotate_builtin!(rb_mKernel, "Integer", types::Integer);
     annotate_builtin!(rb_mKernel, "class", types::Class, leaf);
+    annotate_builtin!(rb_mKernel, "frozen?", types::BoolExact);
+    annotate_builtin!(rb_cSymbol, "name", types::StringExact);
+    annotate_builtin!(rb_cSymbol, "to_s", types::StringExact);
 
     Annotations {
         cfuncs: std::mem::take(cfuncs),
@@ -276,6 +286,13 @@ fn inline_array_push(fun: &mut hir::Function, block: hir::BlockId, recv: hir::In
         return Some(recv);
     }
     None
+}
+
+fn inline_array_pop(fun: &mut hir::Function, block: hir::BlockId, recv: hir::InsnId, args: &[hir::InsnId], state: hir::InsnId) -> Option<hir::InsnId> {
+    // Only inline the case of no arguments.
+    let &[] = args else { return None; };
+    let arr = fun.push_insn(block, hir::Insn::GuardNotFrozen { val: recv, state });
+    Some(fun.push_insn(block, hir::Insn::ArrayPop { array: arr, state }))
 }
 
 fn inline_hash_aref(fun: &mut hir::Function, block: hir::BlockId, recv: hir::InsnId, args: &[hir::InsnId], state: hir::InsnId) -> Option<hir::InsnId> {
@@ -354,10 +371,49 @@ fn inline_integer_xor(fun: &mut hir::Function, block: hir::BlockId, recv: hir::I
     None
 }
 
+fn inline_basic_object_eq(fun: &mut hir::Function, block: hir::BlockId, recv: hir::InsnId, args: &[hir::InsnId], _state: hir::InsnId) -> Option<hir::InsnId> {
+    let &[other] = args else { return None; };
+    let c_result = fun.push_insn(block, hir::Insn::IsBitEqual { left: recv, right: other });
+    let result = fun.push_insn(block, hir::Insn::BoxBool { val: c_result });
+    Some(result)
+}
+
+fn inline_basic_object_neq(fun: &mut hir::Function, block: hir::BlockId, recv: hir::InsnId, args: &[hir::InsnId], state: hir::InsnId) -> Option<hir::InsnId> {
+    let &[other] = args else { return None; };
+    let recv_class = fun.type_of(recv).runtime_exact_ruby_class()?;
+    if !fun.assume_expected_cfunc(block, recv_class, ID!(eq), rb_obj_equal as _, state) {
+        return None;
+    }
+    let c_result = fun.push_insn(block, hir::Insn::IsBitNotEqual { left: recv, right: other });
+    let result = fun.push_insn(block, hir::Insn::BoxBool { val: c_result });
+    Some(result)
+}
+
 fn inline_basic_object_initialize(fun: &mut hir::Function, block: hir::BlockId, _recv: hir::InsnId, args: &[hir::InsnId], _state: hir::InsnId) -> Option<hir::InsnId> {
     if !args.is_empty() { return None; }
     let result = fun.push_insn(block, hir::Insn::Const { val: hir::Const::Value(Qnil) });
     Some(result)
+}
+
+fn inline_nilclass_nil_p(fun: &mut hir::Function, block: hir::BlockId, _recv: hir::InsnId, args: &[hir::InsnId], _state: hir::InsnId) -> Option<hir::InsnId> {
+    if !args.is_empty() { return None; }
+    Some(fun.push_insn(block, hir::Insn::Const { val: hir::Const::Value(Qtrue) }))
+}
+
+fn inline_eqq(fun: &mut hir::Function, block: hir::BlockId, recv: hir::InsnId, args: &[hir::InsnId], state: hir::InsnId) -> Option<hir::InsnId> {
+    let &[other] = args else { return None; };
+    let recv_class = fun.type_of(recv).runtime_exact_ruby_class()?;
+    if !fun.assume_expected_cfunc(block, recv_class, ID!(eq), rb_obj_equal as _, state) {
+        return None;
+    }
+    let c_result = fun.push_insn(block, hir::Insn::IsBitEqual { left: recv, right: other });
+    let result = fun.push_insn(block, hir::Insn::BoxBool { val: c_result });
+    Some(result)
+}
+
+fn inline_kernel_nil_p(fun: &mut hir::Function, block: hir::BlockId, _recv: hir::InsnId, args: &[hir::InsnId], _state: hir::InsnId) -> Option<hir::InsnId> {
+    if !args.is_empty() { return None; }
+    Some(fun.push_insn(block, hir::Insn::Const { val: hir::Const::Value(Qfalse) }))
 }
 
 fn inline_kernel_respond_to_p(

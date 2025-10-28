@@ -936,10 +936,9 @@ strio_get_sync(VALUE self)
  * call-seq:
  *   each_byte {|byte| ... } -> self
  *
- * With a block given, calls the block with each remaining byte in the stream;
- * see {Byte IO}[rdoc-ref:IO@Byte+IO].
+ * :include: stringio/each_byte.rdoc
  *
- * With no block given, returns an enumerator.
+ * Related: StringIO#each_char, StringIO#each_codepoint, StringIO#each_line.
  */
 static VALUE
 strio_each_byte(VALUE self)
@@ -1162,12 +1161,11 @@ strio_readbyte(VALUE self)
 
 /*
  * call-seq:
- *   each_char {|c| ... } -> self
+ *   each_char {|char| ... } -> self
  *
- * With a block given, calls the block with each remaining character in the stream;
- * see {Character IO}[rdoc-ref:IO@Character+IO].
+ * :include: stringio/each_char.rdoc
  *
- * With no block given, returns an enumerator.
+ * Related: StringIO#each_byte, StringIO#each_codepoint, StringIO#each_line.
  */
 static VALUE
 strio_each_char(VALUE self)
@@ -1186,10 +1184,9 @@ strio_each_char(VALUE self)
  * call-seq:
  *   each_codepoint {|codepoint| ... } -> self
  *
- * With a block given, calls the block with each remaining codepoint in the stream;
- * see {Codepoint IO}[rdoc-ref:IO@Codepoint+IO].
+ * :include: stringio/each_codepoint.rdoc
  *
- * With no block given, returns an enumerator.
+ * Related: StringIO#each_byte, StringIO#each_char, StringIO#each_line.
  */
 static VALUE
 strio_each_codepoint(VALUE self)
@@ -1630,7 +1627,7 @@ strio_readline(int argc, VALUE *argv, VALUE self)
  * "Fifth line"
  * ```
  *
- * With no block given, returns a new  {Enumerator}[rdoc-ref:Enumerator].
+ * With no block given, returns a new {Enumerator}[rdoc-ref:Enumerator].
  *
  * Related: StringIO.each_byte, StringIO.each_char, StringIO.each_codepoint.
  */

@@ -69,7 +69,7 @@ impl From<Opnd> for X86Opnd {
                 "Attempted to lower an Opnd::None. This often happens when an out operand was not allocated for an instruction because the output of the instruction was not used. Please ensure you are using the output."
             ),
 
-            _ => panic!("unsupported x86 operand type")
+            _ => panic!("unsupported x86 operand type: {opnd:?}")
         }
     }
 }
@@ -102,18 +102,12 @@ const SCRATCH_OPND: Opnd = Opnd::Reg(R11_REG);
 impl Assembler {
     /// Return an Assembler with scratch registers disabled in the backend, and a scratch register.
     pub fn new_with_scratch_reg() -> (Self, Opnd) {
-        (Self::new_with_label_names(Vec::default(), 0, true), SCRATCH_OPND)
+        (Self::new_with_accept_scratch_reg(true), SCRATCH_OPND)
     }
 
     /// Return true if opnd contains a scratch reg
     pub fn has_scratch_reg(opnd: Opnd) -> bool {
-        match opnd {
-            Opnd::Reg(_) => opnd == SCRATCH_OPND,
-            Opnd::Mem(Mem { base: MemBase::Reg(reg_no), .. }) => {
-                reg_no == SCRATCH_OPND.unwrap_reg().reg_no
-            }
-            _ => false,
-        }
+        Self::has_reg(opnd, SCRATCH_OPND.unwrap_reg())
     }
 
     /// Get the list of registers from which we can allocate on this platform
@@ -137,9 +131,9 @@ impl Assembler {
     /// Split IR instructions for the x86 platform
     fn x86_split(mut self) -> Assembler
     {
+        let mut asm = Assembler::new_with_asm(&self);
         let live_ranges: Vec<LiveRange> = take(&mut self.live_ranges);
         let mut iterator = self.insns.into_iter().enumerate().peekable();
-        let mut asm = Assembler::new_with_label_names(take(&mut self.label_names), live_ranges.len(), self.accept_scratch_reg);
 
         while let Some((index, mut insn)) = iterator.next() {
             let is_load = matches!(insn, Insn::Load { .. } | Insn::LoadInto { .. });
@@ -354,9 +348,9 @@ impl Assembler {
 
                     // Load each operand into the corresponding argument register.
                     if !opnds.is_empty() {
-                        let mut args: Vec<(Reg, Opnd)> = vec![];
+                        let mut args: Vec<(Opnd, Opnd)> = vec![];
                         for (idx, opnd) in opnds.iter_mut().enumerate() {
-                            args.push((C_ARG_OPNDS[idx].unwrap_reg(), *opnd));
+                            args.push((C_ARG_OPNDS[idx], *opnd));
                         }
                         asm.parallel_mov(args);
                     }
@@ -390,7 +384,7 @@ impl Assembler {
     /// for VRegs, most splits should happen in [`Self::x86_split`]. However, some instructions
     /// need to be split with registers after `alloc_regs`, e.g. for `compile_side_exits`, so
     /// this splits them and uses scratch registers for it.
-    pub fn x86_split_with_scratch_reg(mut self) -> Assembler {
+    pub fn x86_split_with_scratch_reg(self) -> Assembler {
         /// For some instructions, we want to be able to lower a 64-bit operand
         /// without requiring more registers to be available in the register
         /// allocator. So we just use the SCRATCH_OPND register temporarily to hold
@@ -419,8 +413,9 @@ impl Assembler {
             }
         }
 
+        let mut asm = Assembler::new_with_asm(&self);
+        asm.accept_scratch_reg = true;
         let mut iterator = self.insns.into_iter().enumerate().peekable();
-        let mut asm = Assembler::new_with_label_names(take(&mut self.label_names), self.live_ranges.len(), true);
 
         while let Some((_, mut insn)) = iterator.next() {
             match &mut insn {
@@ -488,8 +483,8 @@ impl Assembler {
                 }
                 // Resolve ParallelMov that couldn't be handled without a scratch register.
                 Insn::ParallelMov { moves } => {
-                    for (reg, opnd) in Self::resolve_parallel_moves(&moves, Some(SCRATCH_OPND)).unwrap() {
-                        asm.load_into(Opnd::Reg(reg), opnd);
+                    for (dst, src) in Self::resolve_parallel_moves(&moves, Some(SCRATCH_OPND)).unwrap() {
+                        asm.mov(dst, src)
                     }
                 }
                 // Handle various operand combinations for spills on compile_side_exits.
@@ -1367,7 +1362,7 @@ mod tests {
     }
 
     #[test]
-    fn test_reorder_c_args_no_cycle() {
+    fn test_ccall_resolve_parallel_moves_no_cycle() {
         crate::options::rb_zjit_prepare_options();
         let (mut asm, mut cb) = setup_asm();
 
@@ -1385,7 +1380,7 @@ mod tests {
     }
 
     #[test]
-    fn test_reorder_c_args_single_cycle() {
+    fn test_ccall_resolve_parallel_moves_single_cycle() {
         crate::options::rb_zjit_prepare_options();
         let (mut asm, mut cb) = setup_asm();
 
@@ -1408,7 +1403,7 @@ mod tests {
     }
 
     #[test]
-    fn test_reorder_c_args_two_cycles() {
+    fn test_ccall_resolve_parallel_moves_two_cycles() {
         crate::options::rb_zjit_prepare_options();
         let (mut asm, mut cb) = setup_asm();
 
@@ -1435,7 +1430,7 @@ mod tests {
     }
 
     #[test]
-    fn test_reorder_c_args_large_cycle() {
+    fn test_ccall_resolve_parallel_moves_large_cycle() {
         crate::options::rb_zjit_prepare_options();
         let (mut asm, mut cb) = setup_asm();
 
@@ -1460,7 +1455,7 @@ mod tests {
 
     #[test]
     #[ignore]
-    fn test_reorder_c_args_with_insn_out() {
+    fn test_ccall_resolve_parallel_moves_with_insn_out() {
         let (mut asm, mut cb) = setup_asm();
 
         let rax = asm.load(Opnd::UImm(1));
@@ -1551,38 +1546,46 @@ mod tests {
     }
 
     #[test]
-    fn frame_setup_teardown() {
+    fn frame_setup_teardown_preserved_regs() {
         let (mut asm, mut cb) = setup_asm();
-        asm.frame_setup(JIT_PRESERVED_REGS, 0);
+        asm.frame_setup(JIT_PRESERVED_REGS);
         asm.frame_teardown(JIT_PRESERVED_REGS);
-
         asm.cret(C_RET_OPND);
-
-        asm.frame_setup(&[], 5);
-        asm.frame_teardown(&[]);
-
         asm.compile_with_num_regs(&mut cb, 0);
 
-        assert_disasm_snapshot!(cb.disasm(), @"
-            0x0: push rbp
-            0x1: mov rbp, rsp
-            0x4: push r13
-            0x6: push rbx
-            0x7: push r12
-            0x9: sub rsp, 8
-            0xd: mov r13, qword ptr [rbp - 8]
-            0x11: mov rbx, qword ptr [rbp - 0x10]
-            0x15: mov r12, qword ptr [rbp - 0x18]
-            0x19: mov rsp, rbp
-            0x1c: pop rbp
-            0x1d: ret
-            0x1e: push rbp
-            0x1f: mov rbp, rsp
-            0x22: sub rsp, 0x30
-            0x26: mov rsp, rbp
-            0x29: pop rbp
+        assert_disasm_snapshot!(cb.disasm(), @r"
+        0x0: push rbp
+        0x1: mov rbp, rsp
+        0x4: push r13
+        0x6: push rbx
+        0x7: push r12
+        0x9: sub rsp, 8
+        0xd: mov r13, qword ptr [rbp - 8]
+        0x11: mov rbx, qword ptr [rbp - 0x10]
+        0x15: mov r12, qword ptr [rbp - 0x18]
+        0x19: mov rsp, rbp
+        0x1c: pop rbp
+        0x1d: ret
         ");
-        assert_snapshot!(cb.hexdump(), @"554889e541555341544883ec084c8b6df8488b5df04c8b65e84889ec5dc3554889e54883ec304889ec5d");
+        assert_snapshot!(cb.hexdump(), @"554889e541555341544883ec084c8b6df8488b5df04c8b65e84889ec5dc3");
+    }
+
+    #[test]
+    fn frame_setup_teardown_stack_base_idx() {
+        let (mut asm, mut cb) = setup_asm();
+        asm.stack_base_idx = 5;
+        asm.frame_setup(&[]);
+        asm.frame_teardown(&[]);
+        asm.compile_with_num_regs(&mut cb, 0);
+
+        assert_disasm_snapshot!(cb.disasm(), @r"
+        0x0: push rbp
+        0x1: mov rbp, rsp
+        0x4: sub rsp, 0x30
+        0x8: mov rsp, rbp
+        0xb: pop rbp
+        ");
+        assert_snapshot!(cb.hexdump(), @"554889e54883ec304889ec5d");
     }
 
     #[test]

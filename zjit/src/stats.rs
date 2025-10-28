@@ -143,6 +143,7 @@ make_counters! {
         exit_guard_bit_equals_failure,
         exit_guard_int_equals_failure,
         exit_guard_shape_failure,
+        exit_guard_not_frozen_failure,
         exit_patchpoint_bop_redefined,
         exit_patchpoint_method_redefined,
         exit_patchpoint_stable_constant_names,
@@ -248,6 +249,9 @@ make_counters! {
     vm_read_from_parent_iseq_local_count,
     // TODO(max): Implement
     // vm_reify_stack_count,
+
+    // The number of times we ran a dynamic check
+    guard_type_count,
 }
 
 /// Increase a counter by a specified amount
@@ -342,6 +346,7 @@ pub fn side_exit_counter(reason: crate::hir::SideExitReason) -> Counter {
         GuardTypeNot(_)               => exit_guard_type_not_failure,
         GuardBitEquals(_)             => exit_guard_bit_equals_failure,
         GuardShape(_)                 => exit_guard_shape_failure,
+        GuardNotFrozen                => exit_guard_not_frozen_failure,
         CalleeSideExit                => exit_callee_side_exit,
         ObjToStringFallback           => exit_obj_to_string_fallback,
         Interrupt                     => exit_interrupt,
