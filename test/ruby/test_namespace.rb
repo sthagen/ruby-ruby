@@ -690,5 +690,9 @@ class TestNamespace < Test::Unit::TestCase
       assert !$LOADED_FEATURES.include?("/tmp/barbaz")
       assert !Object.const_defined?(:FooClass)
     end;
+  ensure
+    tmp = ENV["TMPDIR"] || ENV["TMP"] || Etc.systmpdir || "/tmp"
+    pat = "_ruby_ns_*."+RbConfig::CONFIG["DLEXT"]
+    File.unlink(*Dir.glob(pat, base: tmp).map {|so| "#{tmp}/#{so}"})
   end
 end

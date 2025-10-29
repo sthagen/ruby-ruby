@@ -7,9 +7,15 @@ use crate::virtualmem::CodePtr;
 use crate::cruby::*;
 use crate::backend::lir::*;
 use crate::cast::*;
+use crate::options::asm_dump;
 
 // Use the x86 register type for this platform
 pub type Reg = X86Reg;
+
+/// Convert reg_no for MemBase::Reg into Reg, assuming it's a 64-bit GP register
+pub fn mem_base_reg(reg_no: u8) -> Reg {
+    Reg { num_bits: 64, reg_type: RegType::GP, reg_no }
+}
 
 // Callee-saved registers
 pub const CFP: Opnd = Opnd::Reg(R13_REG);
@@ -83,7 +89,7 @@ impl From<&Opnd> for X86Opnd {
 
 /// List of registers that can be used for register allocation.
 /// This has the same number of registers for x86_64 and arm64.
-/// SCRATCH_OPND is excluded.
+/// SCRATCH0_OPND is excluded.
 pub const ALLOC_REGS: &[Reg] = &[
     RDI_REG,
     RSI_REG,
@@ -96,18 +102,18 @@ pub const ALLOC_REGS: &[Reg] = &[
 ];
 
 /// Special scratch register for intermediate processing. It should be used only by
-/// [`Assembler::x86_split_with_scratch_reg`] or [`Assembler::new_with_scratch_reg`].
-const SCRATCH_OPND: Opnd = Opnd::Reg(R11_REG);
+/// [`Assembler::x86_scratch_split`] or [`Assembler::new_with_scratch_reg`].
+const SCRATCH0_OPND: Opnd = Opnd::Reg(R11_REG);
 
 impl Assembler {
     /// Return an Assembler with scratch registers disabled in the backend, and a scratch register.
     pub fn new_with_scratch_reg() -> (Self, Opnd) {
-        (Self::new_with_accept_scratch_reg(true), SCRATCH_OPND)
+        (Self::new_with_accept_scratch_reg(true), SCRATCH0_OPND)
     }
 
     /// Return true if opnd contains a scratch reg
     pub fn has_scratch_reg(opnd: Opnd) -> bool {
-        Self::has_reg(opnd, SCRATCH_OPND.unwrap_reg())
+        Self::has_reg(opnd, SCRATCH0_OPND.unwrap_reg())
     }
 
     /// Get the list of registers from which we can allocate on this platform
@@ -384,18 +390,18 @@ impl Assembler {
     /// for VRegs, most splits should happen in [`Self::x86_split`]. However, some instructions
     /// need to be split with registers after `alloc_regs`, e.g. for `compile_side_exits`, so
     /// this splits them and uses scratch registers for it.
-    pub fn x86_split_with_scratch_reg(self) -> Assembler {
+    pub fn x86_scratch_split(self) -> Assembler {
         /// For some instructions, we want to be able to lower a 64-bit operand
         /// without requiring more registers to be available in the register
-        /// allocator. So we just use the SCRATCH_OPND register temporarily to hold
+        /// allocator. So we just use the SCRATCH0_OPND register temporarily to hold
         /// the value before we immediately use it.
         fn split_64bit_immediate(asm: &mut Assembler, opnd: Opnd) -> Opnd {
             match opnd {
                 Opnd::Imm(value) => {
                     // 32-bit values will be sign-extended
                     if imm_num_bits(value) > 32 {
-                        asm.mov(SCRATCH_OPND, opnd);
-                        SCRATCH_OPND
+                        asm.mov(SCRATCH0_OPND, opnd);
+                        SCRATCH0_OPND
                     } else {
                         opnd
                     }
@@ -403,8 +409,8 @@ impl Assembler {
                 Opnd::UImm(value) => {
                     // 32-bit values will be sign-extended
                     if imm_num_bits(value as i64) > 32 {
-                        asm.mov(SCRATCH_OPND, opnd);
-                        SCRATCH_OPND
+                        asm.mov(SCRATCH0_OPND, opnd);
+                        SCRATCH0_OPND
                     } else {
                         Opnd::Imm(value as i64)
                     }
@@ -460,8 +466,8 @@ impl Assembler {
                     match (opnd, out) {
                         // Split here for compile_side_exits
                         (Opnd::Mem(_), Opnd::Mem(_)) => {
-                            asm.lea_into(SCRATCH_OPND, opnd);
-                            asm.store(out, SCRATCH_OPND);
+                            asm.lea_into(SCRATCH0_OPND, opnd);
+                            asm.store(out, SCRATCH0_OPND);
                         }
                         _ => {
                             asm.push_insn(insn);
@@ -470,40 +476,40 @@ impl Assembler {
                 }
                 Insn::LeaJumpTarget { target, out } => {
                     if let Target::Label(_) = target {
-                        asm.push_insn(Insn::LeaJumpTarget { out: SCRATCH_OPND, target: target.clone() });
-                        asm.mov(*out, SCRATCH_OPND);
+                        asm.push_insn(Insn::LeaJumpTarget { out: SCRATCH0_OPND, target: target.clone() });
+                        asm.mov(*out, SCRATCH0_OPND);
                     }
                 }
                 // Convert Opnd::const_ptr into Opnd::Mem. This split is done here to give
                 // a register for compile_side_exits.
                 &mut Insn::IncrCounter { mem, value } => {
                     assert!(matches!(mem, Opnd::UImm(_)));
-                    asm.load_into(SCRATCH_OPND, mem);
-                    asm.incr_counter(Opnd::mem(64, SCRATCH_OPND, 0), value);
+                    asm.load_into(SCRATCH0_OPND, mem);
+                    asm.incr_counter(Opnd::mem(64, SCRATCH0_OPND, 0), value);
                 }
                 // Resolve ParallelMov that couldn't be handled without a scratch register.
                 Insn::ParallelMov { moves } => {
-                    for (dst, src) in Self::resolve_parallel_moves(&moves, Some(SCRATCH_OPND)).unwrap() {
+                    for (dst, src) in Self::resolve_parallel_moves(&moves, Some(SCRATCH0_OPND)).unwrap() {
                         asm.mov(dst, src)
                     }
                 }
                 // Handle various operand combinations for spills on compile_side_exits.
                 &mut Insn::Store { dest, src } => {
                     let Opnd::Mem(Mem { num_bits, .. }) = dest else {
-                        panic!("Unexpected Insn::Store destination in x86_split_with_scratch_reg: {dest:?}");
+                        panic!("Unexpected Insn::Store destination in x86_scratch_split: {dest:?}");
                     };
 
                     let src = match src {
                         Opnd::Reg(_) => src,
                         Opnd::Mem(_) => {
-                            asm.mov(SCRATCH_OPND, src);
-                            SCRATCH_OPND
+                            asm.mov(SCRATCH0_OPND, src);
+                            SCRATCH0_OPND
                         }
                         Opnd::Imm(imm) => {
                             // For 64 bit destinations, 32-bit values will be sign-extended
                             if num_bits == 64 && imm_num_bits(imm) > 32 {
-                                asm.mov(SCRATCH_OPND, src);
-                                SCRATCH_OPND
+                                asm.mov(SCRATCH0_OPND, src);
+                                SCRATCH0_OPND
                             } else if uimm_num_bits(imm as u64) <= num_bits {
                                 // If the bit string is short enough for the destination, use the unsigned representation.
                                 // Note that 64-bit and negative values are ruled out.
@@ -515,17 +521,17 @@ impl Assembler {
                         Opnd::UImm(imm) => {
                             // For 64 bit destinations, 32-bit values will be sign-extended
                             if num_bits == 64 && imm_num_bits(imm as i64) > 32 {
-                                asm.mov(SCRATCH_OPND, src);
-                                SCRATCH_OPND
+                                asm.mov(SCRATCH0_OPND, src);
+                                SCRATCH0_OPND
                             } else {
                                 src.into()
                             }
                         }
                         Opnd::Value(_) => {
-                            asm.load_into(SCRATCH_OPND, src);
-                            SCRATCH_OPND
+                            asm.load_into(SCRATCH0_OPND, src);
+                            SCRATCH0_OPND
                         }
-                        src @ (Opnd::None | Opnd::VReg { .. }) => panic!("Unexpected source operand during x86_split_with_scratch_reg: {src:?}"),
+                        src @ (Opnd::None | Opnd::VReg { .. }) => panic!("Unexpected source operand during x86_scratch_split: {src:?}"),
                     };
                     asm.store(dest, src);
                 }
@@ -587,6 +593,9 @@ impl Assembler {
         // For each instruction
         let mut insn_idx: usize = 0;
         while let Some(insn) = self.insns.get(insn_idx) {
+            // Dump Assembler with insn_idx if --zjit-dump-lir=panic is given
+            let _hook = AssemblerPanicHook::new(self, insn_idx);
+
             match insn {
                 Insn::Comment(text) => {
                     cb.add_comment(text);
@@ -949,13 +958,21 @@ impl Assembler {
     pub fn compile_with_regs(self, cb: &mut CodeBlock, regs: Vec<Reg>) -> Result<(CodePtr, Vec<CodePtr>), CompileError> {
         // The backend is allowed to use scratch registers only if it has not accepted them so far.
         let use_scratch_regs = !self.accept_scratch_reg;
+        asm_dump!(self, init);
 
         let asm = self.x86_split();
+        asm_dump!(asm, split);
+
         let mut asm = asm.alloc_regs(regs)?;
+        asm_dump!(asm, alloc_regs);
+
         // We put compile_side_exits after alloc_regs to avoid extending live ranges for VRegs spilled on side exits.
         asm.compile_side_exits();
+        asm_dump!(asm, compile_side_exits);
+
         if use_scratch_regs {
-            asm = asm.x86_split_with_scratch_reg();
+            asm = asm.x86_scratch_split();
+            asm_dump!(asm, scratch_split);
         }
 
         // Create label instances in the code block
@@ -981,10 +998,51 @@ impl Assembler {
 mod tests {
     use insta::assert_snapshot;
     use crate::assert_disasm_snapshot;
+    use crate::options::rb_zjit_prepare_options;
     use super::*;
 
+    const BOLD_BEGIN: &str = "\x1b[1m";
+    const BOLD_END: &str = "\x1b[22m";
+
     fn setup_asm() -> (Assembler, CodeBlock) {
+        rb_zjit_prepare_options(); // for get_option! on asm.compile
         (Assembler::new(), CodeBlock::new_dummy())
+    }
+
+    #[test]
+    fn test_lir_string() {
+        use crate::hir::SideExitReason;
+
+        let mut asm = Assembler::new();
+        asm.stack_base_idx = 1;
+
+        let label = asm.new_label("bb0");
+        asm.write_label(label.clone());
+        asm.push_insn(Insn::Comment("bb0(): foo@/tmp/a.rb:1".into()));
+        asm.frame_setup(JIT_PRESERVED_REGS);
+
+        let val64 = asm.add(CFP, Opnd::UImm(64));
+        asm.store(Opnd::mem(64, SP, 0x10), val64);
+        let side_exit = Target::SideExit { reason: SideExitReason::Interrupt, pc: 0 as _, stack: vec![], locals: vec![], label: None };
+        asm.push_insn(Insn::Joz(val64, side_exit));
+
+        let val32 = asm.sub(Opnd::Value(Qtrue), Opnd::Imm(1));
+        asm.store(Opnd::mem(64, EC, 0x10).with_num_bits(32), val32.with_num_bits(32));
+        asm.cret(val64);
+
+        asm.frame_teardown(JIT_PRESERVED_REGS);
+        assert_disasm_snapshot!(lir_string(&mut asm), @r"
+        bb0:
+          # bb0(): foo@/tmp/a.rb:1
+          FrameSetup 1, r13, rbx, r12
+          v0 = Add r13, 0x40
+          Store [rbx + 0x10], v0
+          Joz Exit(Interrupt), v0
+          v1 = Sub Value(0x14), Imm(1)
+          Store Mem32[r12 + 0x10], VReg32(v1)
+          CRet v0
+          FrameTeardown r13, rbx, r12
+        ");
     }
 
     #[test]
@@ -1596,7 +1654,7 @@ mod tests {
         assert!(imitation_heap_value.heap_object_p());
         asm.store(Opnd::mem(VALUE_BITS, SP, 0), imitation_heap_value.into());
 
-        asm = asm.x86_split_with_scratch_reg();
+        asm = asm.x86_scratch_split();
         let gc_offsets = asm.x86_emit(&mut cb).unwrap();
         assert_eq!(1, gc_offsets.len(), "VALUE source operand should be reported as gc offset");
 

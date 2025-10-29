@@ -4,12 +4,18 @@ use crate::asm::{CodeBlock, Label};
 use crate::asm::arm64::*;
 use crate::cruby::*;
 use crate::backend::lir::*;
+use crate::options::asm_dump;
 use crate::stats::CompileError;
 use crate::virtualmem::CodePtr;
 use crate::cast::*;
 
 // Use the arm64 register type for this platform
 pub type Reg = A64Reg;
+
+/// Convert reg_no for MemBase::Reg into Reg, assuming it's a 64-bit register
+pub fn mem_base_reg(reg_no: u8) -> Reg {
+    Reg { num_bits: 64, reg_no }
+}
 
 // Callee-saved registers
 pub const CFP: Opnd = Opnd::Reg(X19_REG);
@@ -113,8 +119,8 @@ fn emit_jmp_ptr(cb: &mut CodeBlock, dst_ptr: CodePtr, padding: bool) {
         b(cb, InstructionOffset::from_bytes((dst_addr - src_addr) as i32));
         1
     } else {
-        let num_insns = emit_load_value(cb, Assembler::EMIT0_OPND, dst_addr as u64);
-        br(cb, Assembler::EMIT0_OPND);
+        let num_insns = emit_load_value(cb, Assembler::EMIT_OPND, dst_addr as u64);
+        br(cb, Assembler::EMIT_OPND);
         num_insns + 1
     };
 
@@ -181,7 +187,7 @@ fn emit_load_value(cb: &mut CodeBlock, rd: A64Opnd, value: u64) -> usize {
 
 /// List of registers that can be used for register allocation.
 /// This has the same number of registers for x86_64 and arm64.
-/// SCRATCH_OPND, EMIT0_OPND, and EMIT1_OPND are excluded.
+/// SCRATCH_OPND, SCRATCH1_OPND, and EMIT_OPND are excluded.
 pub const ALLOC_REGS: &[Reg] = &[
     X0_REG,
     X1_REG,
@@ -193,26 +199,24 @@ pub const ALLOC_REGS: &[Reg] = &[
     X12_REG,
 ];
 
-/// Special scratch register for intermediate processing. It should be used only by
-/// [`Assembler::arm64_split_with_scratch_reg`] or [`Assembler::new_with_scratch_reg`].
-const SCRATCH_OPND: Opnd = Opnd::Reg(X15_REG);
+/// Special scratch registers for intermediate processing. They should be used only by
+/// [`Assembler::arm64_scratch_split`] or [`Assembler::new_with_scratch_reg`].
+const SCRATCH0_OPND: Opnd = Opnd::Reg(X15_REG);
+const SCRATCH1_OPND: Opnd = Opnd::Reg(X17_REG);
 
 impl Assembler {
-    /// Special registers for intermediate processing in arm64_emit. It should be used only by arm64_emit.
-    /// TODO: Remove the use of these registers by splitting instructions in arm64_split_with_scratch_reg.
-    const EMIT0_REG: Reg = X16_REG;
-    const EMIT1_REG: Reg = X17_REG;
-    const EMIT0_OPND: A64Opnd = A64Opnd::Reg(Self::EMIT0_REG);
-    const EMIT1_OPND: A64Opnd = A64Opnd::Reg(Self::EMIT1_REG);
+    /// Special register for intermediate processing in arm64_emit. It should be used only by arm64_emit.
+    const EMIT_REG: Reg = X16_REG;
+    const EMIT_OPND: A64Opnd = A64Opnd::Reg(Self::EMIT_REG);
 
     /// Return an Assembler with scratch registers disabled in the backend, and a scratch register.
     pub fn new_with_scratch_reg() -> (Self, Opnd) {
-        (Self::new_with_accept_scratch_reg(true), SCRATCH_OPND)
+        (Self::new_with_accept_scratch_reg(true), SCRATCH0_OPND)
     }
 
     /// Return true if opnd contains a scratch reg
     pub fn has_scratch_reg(opnd: Opnd) -> bool {
-        Self::has_reg(opnd, SCRATCH_OPND.unwrap_reg())
+        Self::has_reg(opnd, SCRATCH0_OPND.unwrap_reg())
     }
 
     /// Get the list of registers from which we will allocate on this platform
@@ -685,13 +689,23 @@ impl Assembler {
     /// VRegs, most splits should happen in [`Self::arm64_split`]. However, some instructions
     /// need to be split with registers after `alloc_regs`, e.g. for `compile_side_exits`, so this
     /// splits them and uses scratch registers for it.
-    fn arm64_split_with_scratch_reg(self) -> Assembler {
+    fn arm64_scratch_split(self) -> Assembler {
         let mut asm = Assembler::new_with_asm(&self);
         asm.accept_scratch_reg = true;
-        let iterator = self.insns.into_iter().enumerate().peekable();
+        let mut iterator = self.insns.into_iter().enumerate().peekable();
 
-        for (_, mut insn) in iterator {
+        while let Some((_, mut insn)) = iterator.next() {
             match &mut insn {
+                &mut Insn::Mul { out, .. } => {
+                    asm.push_insn(insn);
+
+                    // If the next instruction is JoMul
+                    if matches!(iterator.peek(), Some((_, Insn::JoMul(_)))) {
+                        // Produce a register that is all zeros or all ones
+                        // Based on the sign bit of the 64-bit mul result
+                        asm.push_insn(Insn::RShift { out: SCRATCH0_OPND, opnd: out, shift: Opnd::UImm(63) });
+                    }
+                }
                 // For compile_side_exits, support splitting simple C arguments here
                 Insn::CCall { opnds, .. } if !opnds.is_empty() => {
                     for (i, opnd) in opnds.iter().enumerate() {
@@ -704,20 +718,43 @@ impl Assembler {
                     match (opnd, out) {
                         // Split here for compile_side_exits
                         (Opnd::Mem(_), Opnd::Mem(_)) => {
-                            asm.lea_into(SCRATCH_OPND, opnd);
-                            asm.store(out, SCRATCH_OPND);
+                            asm.lea_into(SCRATCH0_OPND, opnd);
+                            asm.store(out, SCRATCH0_OPND);
                         }
                         _ => {
                             asm.push_insn(insn);
                         }
                     }
                 }
-                // Convert Opnd::const_ptr into Opnd::Mem. It's split here compile_side_exits.
                 &mut Insn::IncrCounter { mem, value } => {
+                    // Convert Opnd::const_ptr into Opnd::Mem.
+                    // It's split here to support IncrCounter in compile_side_exits.
                     assert!(matches!(mem, Opnd::UImm(_)));
-                    asm.load_into(SCRATCH_OPND, mem);
-                    asm.lea_into(SCRATCH_OPND, Opnd::mem(64, SCRATCH_OPND, 0));
-                    asm.incr_counter(SCRATCH_OPND, value);
+                    asm.load_into(SCRATCH0_OPND, mem);
+                    asm.lea_into(SCRATCH0_OPND, Opnd::mem(64, SCRATCH0_OPND, 0));
+
+                    // Create a local loop to atomically increment a counter using SCRATCH1_OPND to check if it succeeded.
+                    // Note that arm64_emit will peek at the next Cmp to set a status into SCRATCH1_OPND on IncrCounter.
+                    let label = asm.new_label("incr_counter_loop");
+                    asm.write_label(label.clone());
+                    asm.incr_counter(SCRATCH0_OPND, value);
+                    asm.cmp(SCRATCH1_OPND, 0.into());
+                    asm.jne(label);
+                }
+                &mut Insn::Store { dest, src } => {
+                    let Opnd::Mem(Mem { num_bits: dest_num_bits, disp: dest_disp, .. }) = dest else {
+                        panic!("Insn::Store destination must be Opnd::Mem: {dest:?}, {src:?}");
+                    };
+
+                    // Split dest using a scratch register if necessary.
+                    let dest = if mem_disp_fits_bits(dest_disp) {
+                        dest
+                    } else {
+                        asm.lea_into(SCRATCH0_OPND, dest);
+                        Opnd::mem(dest_num_bits, SCRATCH0_OPND, 0)
+                    };
+
+                    asm.store(dest, src);
                 }
                 &mut Insn::Mov { dest, src } => {
                     match dest {
@@ -728,7 +765,7 @@ impl Assembler {
                 }
                 // Resolve ParallelMov that couldn't be handled without a scratch register.
                 Insn::ParallelMov { moves } => {
-                    for (dst, src) in Self::resolve_parallel_moves(moves, Some(SCRATCH_OPND)).unwrap() {
+                    for (dst, src) in Self::resolve_parallel_moves(moves, Some(SCRATCH0_OPND)).unwrap() {
                         match dst {
                             Opnd::Reg(_) => asm.load_into(dst, src),
                             Opnd::Mem(_) => asm.store(dst, src),
@@ -805,8 +842,8 @@ impl Assembler {
                     // that if it doesn't match it will skip over the
                     // instructions used for branching.
                     bcond(cb, Condition::inverse(CONDITION), (load_insns + 2).into());
-                    emit_load_value(cb, Assembler::EMIT0_OPND, dst_addr as u64);
-                    br(cb, Assembler::EMIT0_OPND);
+                    emit_load_value(cb, Assembler::EMIT_OPND, dst_addr as u64);
+                    br(cb, Assembler::EMIT_OPND);
 
                     // Here we'll return the number of instructions that it
                     // took to write out the destination address + 1 for the
@@ -870,8 +907,8 @@ impl Assembler {
                     } else {
                         cbz(cb, reg, InstructionOffset::from_insns(load_insns + 2));
                     }
-                    emit_load_value(cb, Assembler::EMIT0_OPND, dst_addr);
-                    br(cb, Assembler::EMIT0_OPND);
+                    emit_load_value(cb, Assembler::EMIT_OPND, dst_addr);
+                    br(cb, Assembler::EMIT_OPND);
                 }
             } else {
                 unreachable!("We should only generate Joz/Jonz with side-exit targets");
@@ -940,6 +977,9 @@ impl Assembler {
         // For each instruction
         let mut insn_idx: usize = 0;
         while let Some(insn) = self.insns.get(insn_idx) {
+            // Dump Assembler with insn_idx if --zjit-dump-lir=panic is given
+            let _hook = AssemblerPanicHook::new(self, insn_idx);
+
             match insn {
                 Insn::Comment(text) => {
                     cb.add_comment(text);
@@ -1039,25 +1079,25 @@ impl Assembler {
                     }
                 },
                 Insn::Mul { left, right, out } => {
-                    // If the next instruction is jo (jump on overflow)
+                    // If the next instruction is JoMul with RShift created by arm64_scratch_split
                     match (self.insns.get(insn_idx + 1), self.insns.get(insn_idx + 2)) {
-                        (Some(Insn::JoMul(_)), _) |
-                        (Some(Insn::PosMarker(_)), Some(Insn::JoMul(_))) => {
+                        (Some(Insn::RShift { out: out_sign, opnd: out_opnd, shift: out_shift }), Some(Insn::JoMul(_))) => {
                             // Compute the high 64 bits
-                            smulh(cb, Self::EMIT0_OPND, left.into(), right.into());
+                            smulh(cb, Self::EMIT_OPND, left.into(), right.into());
 
                             // Compute the low 64 bits
                             // This may clobber one of the input registers,
                             // so we do it after smulh
                             mul(cb, out.into(), left.into(), right.into());
 
-                            // Produce a register that is all zeros or all ones
-                            // Based on the sign bit of the 64-bit mul result
-                            asr(cb, Self::EMIT1_OPND, out.into(), A64Opnd::UImm(63));
+                            // Insert the shift instruction created by arm64_scratch_split
+                            // to prepare the register that has the sign bit of the high 64 bits after mul.
+                            asr(cb, out_sign.into(), out_opnd.into(), out_shift.into());
+                            insn_idx += 1; // skip the next Insn::RShift
 
                             // If the high 64-bits are not all zeros or all ones,
                             // matching the sign bit, then we have an overflow
-                            cmp(cb, Self::EMIT0_OPND, Self::EMIT1_OPND);
+                            cmp(cb, Self::EMIT_OPND, out_sign.into());
                             // Insn::JoMul will emit_conditional_jump::<{Condition::NE}>
                         }
                         _ => {
@@ -1087,11 +1127,6 @@ impl Assembler {
                     lsl(cb, out.into(), opnd.into(), shift.into());
                 },
                 Insn::Store { dest, src } => {
-                    // With minor exceptions, as long as `dest` is a Mem, all forms of `src` are accepted.
-                    let &Opnd::Mem(Mem { num_bits: dest_num_bits, base: MemBase::Reg(base_reg_no), disp }) = dest else {
-                        panic!("Unexpected Insn::Store destination in arm64_emit: {dest:?}");
-                    };
-
                     // Split src into EMIT0_OPND if necessary
                     let src_reg: A64Reg = match src {
                         Opnd::Reg(reg) => *reg,
@@ -1099,16 +1134,16 @@ impl Assembler {
                         Opnd::UImm(0) | Opnd::Imm(0) => XZR_REG,
                         // Immediates
                         &Opnd::Imm(imm) => {
-                            emit_load_value(cb, Self::EMIT0_OPND, imm as u64);
-                            Self::EMIT0_REG
+                            emit_load_value(cb, Self::EMIT_OPND, imm as u64);
+                            Self::EMIT_REG
                         }
                         &Opnd::UImm(imm) => {
-                            emit_load_value(cb, Self::EMIT0_OPND, imm);
-                            Self::EMIT0_REG
+                            emit_load_value(cb, Self::EMIT_OPND, imm);
+                            Self::EMIT_REG
                         }
                         &Opnd::Value(value) => {
-                            emit_load_gc_value(cb, &mut gc_offsets, Self::EMIT0_OPND, value);
-                            Self::EMIT0_REG
+                            emit_load_gc_value(cb, &mut gc_offsets, Self::EMIT_OPND, value);
+                            Self::EMIT_REG
                         }
                         src_mem @ &Opnd::Mem(Mem { num_bits: src_num_bits, base: MemBase::Reg(src_base_reg_no), disp: src_disp }) => {
                             // For mem-to-mem store, load the source into EMIT0_OPND
@@ -1116,36 +1151,28 @@ impl Assembler {
                                 src_mem.into()
                             } else {
                                 // Split the load address into EMIT0_OPND first if necessary
-                                load_effective_address(cb, Self::EMIT0_OPND, src_base_reg_no, src_disp);
-                                A64Opnd::new_mem(dest_num_bits, Self::EMIT0_OPND, 0)
+                                load_effective_address(cb, Self::EMIT_OPND, src_base_reg_no, src_disp);
+                                A64Opnd::new_mem(dest.rm_num_bits(), Self::EMIT_OPND, 0)
                             };
                             match src_num_bits {
-                                64 | 32 => ldur(cb, Self::EMIT0_OPND, src_mem),
-                                16 => ldurh(cb, Self::EMIT0_OPND, src_mem),
-                                8 => ldurb(cb, Self::EMIT0_OPND, src_mem),
+                                64 | 32 => ldur(cb, Self::EMIT_OPND, src_mem),
+                                16 => ldurh(cb, Self::EMIT_OPND, src_mem),
+                                8 => ldurb(cb, Self::EMIT_OPND, src_mem),
                                 num_bits => panic!("unexpected num_bits: {num_bits}")
                             };
-                            Self::EMIT0_REG
+                            Self::EMIT_REG
                         }
                         src @ (Opnd::Mem(_) | Opnd::None | Opnd::VReg { .. }) => panic!("Unexpected source operand during arm64_emit: {src:?}")
                     };
                     let src = A64Opnd::Reg(src_reg);
 
-                    // Split dest into EMIT1_OPND if necessary.
-                    let dest = if mem_disp_fits_bits(disp) {
-                        dest.into()
-                    } else {
-                        load_effective_address(cb, Self::EMIT1_OPND, base_reg_no, disp);
-                        A64Opnd::new_mem(dest_num_bits, Self::EMIT1_OPND, 0)
-                    };
-
                     // This order may be surprising but it is correct. The way
                     // the Arm64 assembler works, the register that is going to
                     // be stored is first and the address is second. However in
                     // our IR we have the address first and the register second.
-                    match dest_num_bits {
-                        64 | 32 => stur(cb, src, dest),
-                        16 => sturh(cb, src, dest),
+                    match dest.rm_num_bits() {
+                        64 | 32 => stur(cb, src, dest.into()),
+                        16 => sturh(cb, src, dest.into()),
                         num_bits => panic!("unexpected dest num_bits: {} (src: {:#?}, dest: {:#?})", num_bits, src, dest),
                     }
                 },
@@ -1219,7 +1246,7 @@ impl Assembler {
                     } else {
                         // Use a scratch reg for `out += displacement`
                         let disp_reg = if out_reg_no == base_reg_no {
-                            Self::EMIT0_OPND
+                            Self::EMIT_OPND
                         } else {
                             out
                         };
@@ -1234,10 +1261,10 @@ impl Assembler {
                     if let Target::Label(label_idx) = target {
                         // Set output to the raw address of the label
                         cb.label_ref(*label_idx, 4, |cb, end_addr, dst_addr| {
-                            adr(cb, Self::EMIT0_OPND, A64Opnd::new_imm(dst_addr - (end_addr - 4)));
+                            adr(cb, Self::EMIT_OPND, A64Opnd::new_imm(dst_addr - (end_addr - 4)));
                         });
 
-                        mov(cb, out.into(), Self::EMIT0_OPND);
+                        mov(cb, out.into(), Self::EMIT_OPND);
                     } else {
                         // Set output to the jump target's raw address
                         let target_code = target.unwrap_code_ptr();
@@ -1262,15 +1289,15 @@ impl Assembler {
                     }
 
                     // Push the flags/state register
-                    mrs(cb, Self::EMIT0_OPND, SystemRegister::NZCV);
-                    emit_push(cb, Self::EMIT0_OPND);
+                    mrs(cb, Self::EMIT_OPND, SystemRegister::NZCV);
+                    emit_push(cb, Self::EMIT_OPND);
                 },
                 Insn::CPopAll => {
                     let regs = Assembler::get_caller_save_regs();
 
                     // Pop the state/flags register
-                    msr(cb, SystemRegister::NZCV, Self::EMIT0_OPND);
-                    emit_pop(cb, Self::EMIT0_OPND);
+                    msr(cb, SystemRegister::NZCV, Self::EMIT_OPND);
+                    emit_pop(cb, Self::EMIT_OPND);
 
                     for reg in regs.into_iter().rev() {
                         emit_pop(cb, A64Opnd::Reg(reg));
@@ -1286,8 +1313,8 @@ impl Assembler {
                     if b_offset_fits_bits((dst_addr - src_addr) / 4) {
                         bl(cb, InstructionOffset::from_bytes((dst_addr - src_addr) as i32));
                     } else {
-                        emit_load_value(cb, Self::EMIT0_OPND, dst_addr as u64);
-                        blr(cb, Self::EMIT0_OPND);
+                        emit_load_value(cb, Self::EMIT_OPND, dst_addr as u64);
+                        blr(cb, Self::EMIT_OPND);
                     }
                 },
                 Insn::CRet { .. } => {
@@ -1364,21 +1391,24 @@ impl Assembler {
                     last_patch_pos = Some(cb.get_write_pos());
                 },
                 Insn::IncrCounter { mem, value } => {
-                    let label = cb.new_label("incr_counter_loop".to_string());
-                    cb.write_label(label);
+                    // Get the status register allocated by arm64_scratch_split
+                    let Some(Insn::Cmp {
+                        left: status_reg @ Opnd::Reg(_),
+                        right: Opnd::UImm(_) | Opnd::Imm(_),
+                    }) = self.insns.get(insn_idx + 1) else {
+                        panic!("arm64_scratch_split should add Cmp after IncrCounter: {:?}", self.insns.get(insn_idx + 1));
+                    };
 
-                    ldaxr(cb, Self::EMIT0_OPND, mem.into());
-                    add(cb, Self::EMIT0_OPND, Self::EMIT0_OPND, value.into());
+                    // Attempt to increment a counter
+                    ldaxr(cb, Self::EMIT_OPND, mem.into());
+                    add(cb, Self::EMIT_OPND, Self::EMIT_OPND, value.into());
 
                     // The status register that gets used to track whether or
                     // not the store was successful must be 32 bytes. Since we
                     // store the EMIT registers as their 64-bit versions, we
                     // need to rewrap it here.
-                    let status = A64Opnd::Reg(Self::EMIT1_REG.with_num_bits(32));
-                    stlxr(cb, status, Self::EMIT0_OPND, mem.into());
-
-                    cmp(cb, Self::EMIT1_OPND, A64Opnd::new_uimm(0));
-                    emit_conditional_jump::<{Condition::NE}>(cb, Target::Label(label));
+                    let status = A64Opnd::Reg(status_reg.unwrap_reg().with_num_bits(32));
+                    stlxr(cb, status, Self::EMIT_OPND, mem.into());
                 },
                 Insn::Breakpoint => {
                     brk(cb, A64Opnd::None);
@@ -1430,13 +1460,21 @@ impl Assembler {
     pub fn compile_with_regs(self, cb: &mut CodeBlock, regs: Vec<Reg>) -> Result<(CodePtr, Vec<CodePtr>), CompileError> {
         // The backend is allowed to use scratch registers only if it has not accepted them so far.
         let use_scratch_reg = !self.accept_scratch_reg;
+        asm_dump!(self, init);
 
         let asm = self.arm64_split();
+        asm_dump!(asm, split);
+
         let mut asm = asm.alloc_regs(regs)?;
+        asm_dump!(asm, alloc_regs);
+
         // We put compile_side_exits after alloc_regs to avoid extending live ranges for VRegs spilled on side exits.
         asm.compile_side_exits();
+        asm_dump!(asm, compile_side_exits);
+
         if use_scratch_reg {
-            asm = asm.arm64_split_with_scratch_reg();
+            asm = asm.arm64_scratch_split();
+            asm_dump!(asm, scratch_split);
         }
 
         // Create label instances in the code block
@@ -1505,6 +1543,42 @@ mod tests {
 
     fn setup_asm() -> (Assembler, CodeBlock) {
         (Assembler::new(), CodeBlock::new_dummy())
+    }
+
+    #[test]
+    fn test_lir_string() {
+        use crate::hir::SideExitReason;
+
+        let mut asm = Assembler::new();
+        asm.stack_base_idx = 1;
+
+        let label = asm.new_label("bb0");
+        asm.write_label(label.clone());
+        asm.push_insn(Insn::Comment("bb0(): foo@/tmp/a.rb:1".into()));
+        asm.frame_setup(JIT_PRESERVED_REGS);
+
+        let val64 = asm.add(CFP, Opnd::UImm(64));
+        asm.store(Opnd::mem(64, SP, 0x10), val64);
+        let side_exit = Target::SideExit { reason: SideExitReason::Interrupt, pc: 0 as _, stack: vec![], locals: vec![], label: None };
+        asm.push_insn(Insn::Joz(val64, side_exit));
+
+        let val32 = asm.sub(Opnd::Value(Qtrue), Opnd::Imm(1));
+        asm.store(Opnd::mem(64, EC, 0x10).with_num_bits(32), val32.with_num_bits(32));
+        asm.cret(val64);
+
+        asm.frame_teardown(JIT_PRESERVED_REGS);
+        assert_disasm_snapshot!(lir_string(&mut asm), @r"
+        bb0:
+          # bb0(): foo@/tmp/a.rb:1
+          FrameSetup 1, x19, x21, x20
+          v0 = Add x19, 0x40
+          Store [x21 + 0x10], v0
+          Joz Exit(Interrupt), v0
+          v1 = Sub Value(0x14), Imm(1)
+          Store Mem32[x20 + 0x10], VReg32(v1)
+          CRet v0
+          FrameTeardown x19, x21, x20
+        ");
     }
 
     #[test]
@@ -1865,19 +1939,19 @@ mod tests {
         asm.store(large_mem, large_mem);
 
         asm.compile_with_num_regs(&mut cb, 0);
-        assert_disasm_snapshot!(cb.disasm(), @"
-            0x0: sub x16, sp, #0x305
-            0x4: ldur x16, [x16]
-            0x8: stur x16, [x0]
-            0xc: ldur x16, [x0]
-            0x10: sub x17, sp, #0x305
-            0x14: stur x16, [x17]
-            0x18: sub x16, sp, #0x305
-            0x1c: ldur x16, [x16]
-            0x20: sub x17, sp, #0x305
-            0x24: stur x16, [x17]
+        assert_disasm_snapshot!(cb.disasm(), @r"
+        0x0: sub x16, sp, #0x305
+        0x4: ldur x16, [x16]
+        0x8: stur x16, [x0]
+        0xc: sub x15, sp, #0x305
+        0x10: ldur x16, [x0]
+        0x14: stur x16, [x15]
+        0x18: sub x15, sp, #0x305
+        0x1c: sub x16, sp, #0x305
+        0x20: ldur x16, [x16]
+        0x24: stur x16, [x15]
         ");
-        assert_snapshot!(cb.hexdump(), @"f0170cd1100240f8100000f8100040f8f1170cd1300200f8f0170cd1100240f8f1170cd1300200f8");
+        assert_snapshot!(cb.hexdump(), @"f0170cd1100240f8100000f8ef170cd1100040f8f00100f8ef170cd1f0170cd1100240f8f00100f8");
     }
 
     #[test]
