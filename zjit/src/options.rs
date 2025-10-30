@@ -160,44 +160,32 @@ pub enum DumpLIR {
     split,
     /// Dump LIR after alloc_regs
     alloc_regs,
-    /// Dump LIR after compile_side_exits
-    compile_side_exits,
+    /// Dump LIR after compile_exits
+    compile_exits,
     /// Dump LIR after {arch}_scratch_split
     scratch_split,
-    /// Dump LIR at panic on {arch}_emit
-    panic,
 }
 
-/// All compiler stages for --zjit-dump-lir=all. This does NOT include DumpLIR::panic.
+/// All compiler stages for --zjit-dump-lir=all.
 const DUMP_LIR_ALL: &[DumpLIR] = &[
     DumpLIR::init,
     DumpLIR::split,
     DumpLIR::alloc_regs,
-    DumpLIR::compile_side_exits,
+    DumpLIR::compile_exits,
     DumpLIR::scratch_split,
 ];
 
 /// Macro to dump LIR if --zjit-dump-lir is specified
 macro_rules! asm_dump {
     ($asm:expr, $target:ident) => {
-        if crate::options::dump_lir_option!($target) {
-            println!("LIR {}:\n{}", stringify!($target), $asm);
+        if let Some(crate::options::Options { dump_lir: Some(dump_lirs), .. }) = unsafe { crate::options::OPTIONS.as_ref() } {
+            if dump_lirs.contains(&crate::options::DumpLIR::$target) {
+                println!("LIR {}:\n{}", stringify!($target), $asm);
+            }
         }
     };
 }
 pub(crate) use asm_dump;
-
-/// Macro to check if a particular dump_lir option is enabled
-macro_rules! dump_lir_option {
-    ($target:ident) => {
-        if let Some(crate::options::Options { dump_lir: Some(dump_lirs), .. }) = unsafe { crate::options::OPTIONS.as_ref() } {
-            dump_lirs.contains(&crate::options::DumpLIR::$target)
-        } else {
-            false
-        }
-    };
-}
-pub(crate) use dump_lir_option;
 
 /// Macro to get an option value by name
 macro_rules! get_option {
@@ -364,13 +352,12 @@ fn parse_option(str_ptr: *const std::os::raw::c_char) -> Option<()> {
                     "init" => DumpLIR::init,
                     "split" => DumpLIR::split,
                     "alloc_regs" => DumpLIR::alloc_regs,
-                    "compile_side_exits" => DumpLIR::compile_side_exits,
+                    "compile_exits" => DumpLIR::compile_exits,
                     "scratch_split" => DumpLIR::scratch_split,
-                    "panic" => DumpLIR::panic,
                     _ => {
                         let valid_options = DUMP_LIR_ALL.iter().map(|opt| format!("{opt:?}")).collect::<Vec<_>>().join(", ");
                         eprintln!("invalid --zjit-dump-lir option: '{filter}'");
-                        eprintln!("valid --zjit-dump-lir options: all, {}, panic", valid_options);
+                        eprintln!("valid --zjit-dump-lir options: all, {}", valid_options);
                         return None;
                     }
                 };

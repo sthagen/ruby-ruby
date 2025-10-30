@@ -388,7 +388,7 @@ impl Assembler {
 
     /// Split instructions using scratch registers. To maximize the use of the register pool
     /// for VRegs, most splits should happen in [`Self::x86_split`]. However, some instructions
-    /// need to be split with registers after `alloc_regs`, e.g. for `compile_side_exits`, so
+    /// need to be split with registers after `alloc_regs`, e.g. for `compile_exits`, so
     /// this splits them and uses scratch registers for it.
     pub fn x86_scratch_split(self) -> Assembler {
         /// For some instructions, we want to be able to lower a 64-bit operand
@@ -454,7 +454,7 @@ impl Assembler {
                     }
                     asm.push_insn(insn);
                 }
-                // For compile_side_exits, support splitting simple C arguments here
+                // For compile_exits, support splitting simple C arguments here
                 Insn::CCall { opnds, .. } if !opnds.is_empty() => {
                     for (i, opnd) in opnds.iter().enumerate() {
                         asm.load_into(C_ARG_OPNDS[i], *opnd);
@@ -464,7 +464,7 @@ impl Assembler {
                 }
                 &mut Insn::Lea { opnd, out } => {
                     match (opnd, out) {
-                        // Split here for compile_side_exits
+                        // Split here for compile_exits
                         (Opnd::Mem(_), Opnd::Mem(_)) => {
                             asm.lea_into(SCRATCH0_OPND, opnd);
                             asm.store(out, SCRATCH0_OPND);
@@ -481,7 +481,7 @@ impl Assembler {
                     }
                 }
                 // Convert Opnd::const_ptr into Opnd::Mem. This split is done here to give
-                // a register for compile_side_exits.
+                // a register for compile_exits.
                 &mut Insn::IncrCounter { mem, value } => {
                     assert!(matches!(mem, Opnd::UImm(_)));
                     asm.load_into(SCRATCH0_OPND, mem);
@@ -493,7 +493,7 @@ impl Assembler {
                         asm.mov(dst, src)
                     }
                 }
-                // Handle various operand combinations for spills on compile_side_exits.
+                // Handle various operand combinations for spills on compile_exits.
                 &mut Insn::Store { dest, src } => {
                     let Opnd::Mem(Mem { num_bits, .. }) = dest else {
                         panic!("Unexpected Insn::Store destination in x86_scratch_split: {dest:?}");
@@ -590,11 +590,14 @@ impl Assembler {
         // The write_pos for the last Insn::PatchPoint, if any
         let mut last_patch_pos: Option<usize> = None;
 
+        // Install a panic hook to dump Assembler with insn_idx on dev builds
+        let (_hook, mut hook_insn_idx) = AssemblerPanicHook::new(self, 0);
+
         // For each instruction
         let mut insn_idx: usize = 0;
         while let Some(insn) = self.insns.get(insn_idx) {
-            // Dump Assembler with insn_idx if --zjit-dump-lir=panic is given
-            let _hook = AssemblerPanicHook::new(self, insn_idx);
+            // Update insn_idx that is shown on panic
+            hook_insn_idx.as_mut().map(|idx| idx.lock().map(|mut idx| *idx = insn_idx).unwrap());
 
             match insn {
                 Insn::Comment(text) => {
@@ -798,7 +801,7 @@ impl Assembler {
                     match *target {
                         Target::CodePtr(code_ptr) => jmp_ptr(cb, code_ptr),
                         Target::Label(label) => jmp_label(cb, label),
-                        Target::SideExit { .. } => unreachable!("Target::SideExit should have been compiled by compile_side_exits"),
+                        Target::SideExit { .. } => unreachable!("Target::SideExit should have been compiled by compile_exits"),
                     }
                 }
 
@@ -806,7 +809,7 @@ impl Assembler {
                     match *target {
                         Target::CodePtr(code_ptr) => je_ptr(cb, code_ptr),
                         Target::Label(label) => je_label(cb, label),
-                        Target::SideExit { .. } => unreachable!("Target::SideExit should have been compiled by compile_side_exits"),
+                        Target::SideExit { .. } => unreachable!("Target::SideExit should have been compiled by compile_exits"),
                     }
                 }
 
@@ -814,7 +817,7 @@ impl Assembler {
                     match *target {
                         Target::CodePtr(code_ptr) => jne_ptr(cb, code_ptr),
                         Target::Label(label) => jne_label(cb, label),
-                        Target::SideExit { .. } => unreachable!("Target::SideExit should have been compiled by compile_side_exits"),
+                        Target::SideExit { .. } => unreachable!("Target::SideExit should have been compiled by compile_exits"),
                     }
                 }
 
@@ -822,7 +825,7 @@ impl Assembler {
                     match *target {
                         Target::CodePtr(code_ptr) => jl_ptr(cb, code_ptr),
                         Target::Label(label) => jl_label(cb, label),
-                        Target::SideExit { .. } => unreachable!("Target::SideExit should have been compiled by compile_side_exits"),
+                        Target::SideExit { .. } => unreachable!("Target::SideExit should have been compiled by compile_exits"),
                     }
                 },
 
@@ -830,7 +833,7 @@ impl Assembler {
                     match *target {
                         Target::CodePtr(code_ptr) => jg_ptr(cb, code_ptr),
                         Target::Label(label) => jg_label(cb, label),
-                        Target::SideExit { .. } => unreachable!("Target::SideExit should have been compiled by compile_side_exits"),
+                        Target::SideExit { .. } => unreachable!("Target::SideExit should have been compiled by compile_exits"),
                     }
                 },
 
@@ -838,7 +841,7 @@ impl Assembler {
                     match *target {
                         Target::CodePtr(code_ptr) => jge_ptr(cb, code_ptr),
                         Target::Label(label) => jge_label(cb, label),
-                        Target::SideExit { .. } => unreachable!("Target::SideExit should have been compiled by compile_side_exits"),
+                        Target::SideExit { .. } => unreachable!("Target::SideExit should have been compiled by compile_exits"),
                     }
                 },
 
@@ -846,7 +849,7 @@ impl Assembler {
                     match *target {
                         Target::CodePtr(code_ptr) => jbe_ptr(cb, code_ptr),
                         Target::Label(label) => jbe_label(cb, label),
-                        Target::SideExit { .. } => unreachable!("Target::SideExit should have been compiled by compile_side_exits"),
+                        Target::SideExit { .. } => unreachable!("Target::SideExit should have been compiled by compile_exits"),
                     }
                 },
 
@@ -854,7 +857,7 @@ impl Assembler {
                     match *target {
                         Target::CodePtr(code_ptr) => jb_ptr(cb, code_ptr),
                         Target::Label(label) => jb_label(cb, label),
-                        Target::SideExit { .. } => unreachable!("Target::SideExit should have been compiled by compile_side_exits"),
+                        Target::SideExit { .. } => unreachable!("Target::SideExit should have been compiled by compile_exits"),
                     }
                 },
 
@@ -862,7 +865,7 @@ impl Assembler {
                     match *target {
                         Target::CodePtr(code_ptr) => jz_ptr(cb, code_ptr),
                         Target::Label(label) => jz_label(cb, label),
-                        Target::SideExit { .. } => unreachable!("Target::SideExit should have been compiled by compile_side_exits"),
+                        Target::SideExit { .. } => unreachable!("Target::SideExit should have been compiled by compile_exits"),
                     }
                 }
 
@@ -870,7 +873,7 @@ impl Assembler {
                     match *target {
                         Target::CodePtr(code_ptr) => jnz_ptr(cb, code_ptr),
                         Target::Label(label) => jnz_label(cb, label),
-                        Target::SideExit { .. } => unreachable!("Target::SideExit should have been compiled by compile_side_exits"),
+                        Target::SideExit { .. } => unreachable!("Target::SideExit should have been compiled by compile_exits"),
                     }
                 }
 
@@ -879,7 +882,7 @@ impl Assembler {
                     match *target {
                         Target::CodePtr(code_ptr) => jo_ptr(cb, code_ptr),
                         Target::Label(label) => jo_label(cb, label),
-                        Target::SideExit { .. } => unreachable!("Target::SideExit should have been compiled by compile_side_exits"),
+                        Target::SideExit { .. } => unreachable!("Target::SideExit should have been compiled by compile_exits"),
                     }
                 }
 
@@ -966,9 +969,9 @@ impl Assembler {
         let mut asm = asm.alloc_regs(regs)?;
         asm_dump!(asm, alloc_regs);
 
-        // We put compile_side_exits after alloc_regs to avoid extending live ranges for VRegs spilled on side exits.
-        asm.compile_side_exits();
-        asm_dump!(asm, compile_side_exits);
+        // We put compile_exits after alloc_regs to avoid extending live ranges for VRegs spilled on side exits.
+        asm.compile_exits();
+        asm_dump!(asm, compile_exits);
 
         if use_scratch_regs {
             asm = asm.x86_scratch_split();
@@ -1025,9 +1028,11 @@ mod tests {
         asm.store(Opnd::mem(64, SP, 0x10), val64);
         let side_exit = Target::SideExit { reason: SideExitReason::Interrupt, pc: 0 as _, stack: vec![], locals: vec![], label: None };
         asm.push_insn(Insn::Joz(val64, side_exit));
+        asm.parallel_mov(vec![(C_ARG_OPNDS[0], C_RET_OPND.with_num_bits(32)), (C_ARG_OPNDS[1], Opnd::mem(64, SP, -8))]);
 
         let val32 = asm.sub(Opnd::Value(Qtrue), Opnd::Imm(1));
         asm.store(Opnd::mem(64, EC, 0x10).with_num_bits(32), val32.with_num_bits(32));
+        asm.je(label);
         asm.cret(val64);
 
         asm.frame_teardown(JIT_PRESERVED_REGS);
@@ -1038,8 +1043,10 @@ mod tests {
           v0 = Add r13, 0x40
           Store [rbx + 0x10], v0
           Joz Exit(Interrupt), v0
+          ParallelMov rdi <- eax, rsi <- [rbx - 8]
           v1 = Sub Value(0x14), Imm(1)
           Store Mem32[r12 + 0x10], VReg32(v1)
+          Je bb0
           CRet v0
           FrameTeardown r13, rbx, r12
         ");

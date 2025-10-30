@@ -3,11 +3,11 @@ use std::fmt;
 use std::mem::take;
 use std::panic;
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use crate::codegen::local_size_and_idx_to_ep_offset;
 use crate::cruby::{Qundef, RUBY_OFFSET_CFP_PC, RUBY_OFFSET_CFP_SP, SIZEOF_VALUE_I32, vm_stack_canary};
 use crate::hir::SideExitReason;
-use crate::options::{TraceExits, debug, dump_lir_option, get_option};
+use crate::options::{TraceExits, debug, get_option};
 use crate::cruby::VALUE;
 use crate::stats::{exit_counter_ptr, exit_counter_ptr_for_opcode, side_exit_counter, CompileError};
 use crate::virtualmem::CodePtr;
@@ -1701,7 +1701,11 @@ impl Assembler
     }
 
     /// Compile Target::SideExit and convert it into Target::CodePtr for all instructions
-    pub fn compile_side_exits(&mut self) {
+    pub fn compile_exits(&mut self) {
+        fn join_opnds(opnds: &Vec<Opnd>, delimiter: &str) -> String {
+            opnds.iter().map(|opnd| format!("{opnd}")).collect::<Vec<_>>().join(delimiter)
+        }
+
         let mut targets = HashMap::new();
         for (idx, insn) in self.insns.iter().enumerate() {
             if let Some(target @ Target::SideExit { .. }) = insn.target() {
@@ -1723,12 +1727,12 @@ impl Assembler
 
                 // Restore the PC and the stack for regular side exits. We don't do this for
                 // side exits right after JIT-to-JIT calls, which restore them before the call.
-                asm_comment!(self, "write stack slots: {stack:?}");
+                asm_comment!(self, "write stack slots: {}", join_opnds(&stack, ", "));
                 for (idx, &opnd) in stack.iter().enumerate() {
                     self.store(Opnd::mem(64, SP, idx as i32 * SIZEOF_VALUE_I32), opnd);
                 }
 
-                asm_comment!(self, "write locals: {locals:?}");
+                asm_comment!(self, "write locals: {}", join_opnds(&locals, ", "));
                 for (idx, &opnd) in locals.iter().enumerate() {
                     self.store(Opnd::mem(64, SP, (-local_size_and_idx_to_ep_offset(locals.len(), idx) - 1) * SIZEOF_VALUE_I32), opnd);
                 }
@@ -1789,6 +1793,24 @@ pub fn lir_string(asm: &Assembler) -> String {
 
 impl fmt::Display for Assembler {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        // Count the number of duplicated label names to disambiguate them if needed
+        let mut label_counts: HashMap<&String, usize> = HashMap::new();
+        for label_name in self.label_names.iter() {
+            let counter = label_counts.entry(label_name).or_insert(0);
+            *counter += 1;
+        }
+
+        /// Return a label name String. Suffix "_{label_idx}" if the label name is used multiple times.
+        fn label_name(asm: &Assembler, label_idx: usize, label_counts: &HashMap<&String, usize>) -> String {
+            let label_name = &asm.label_names[label_idx];
+            let label_count = label_counts.get(&label_name).unwrap_or(&0);
+            if *label_count > 1 {
+                format!("{label_name}_{label_idx}")
+            } else {
+                label_name.to_string()
+            }
+        }
+
         for insn in self.insns.iter() {
             match insn {
                 Insn::Comment(comment) => {
@@ -1798,7 +1820,7 @@ impl fmt::Display for Assembler {
                     let &Target::Label(Label(label_idx)) = target else {
                         panic!("unexpected target for Insn::Label: {target:?}");
                     };
-                    writeln!(f, "  {}:", self.label_names[label_idx])?;
+                    writeln!(f, "  {}:", label_name(self, label_idx, &label_counts))?;
                 }
                 _ => {
                     write!(f, "    ")?;
@@ -1808,6 +1830,7 @@ impl fmt::Display for Assembler {
                         write!(f, "{out} = ")?;
                     }
 
+                    // Print the instruction name
                     write!(f, "{}", insn.op())?;
 
                     // Show slot_count for FrameSetup
@@ -1822,7 +1845,7 @@ impl fmt::Display for Assembler {
                     if let Some(target) = insn.target() {
                         match target {
                             Target::CodePtr(code_ptr) => write!(f, " {code_ptr:?}")?,
-                            Target::Label(Label(label_idx)) => write!(f, " {}", self.label_names[*label_idx])?,
+                            Target::Label(Label(label_idx)) => write!(f, " {}", label_name(self, *label_idx, &label_counts))?,
                             Target::SideExit { reason, .. } => write!(f, " Exit({reason})")?,
                         }
                     }
@@ -1841,21 +1864,9 @@ impl fmt::Display for Assembler {
                         }
                     } else if let Insn::ParallelMov { moves } = insn {
                         // Print operands with a special syntax for ParallelMov
-                        let mut moves_iter = moves.iter();
-                        if let Some((first_dst, first_src)) = moves_iter.next() {
-                            write!(f, " {first_dst} <- {first_src}")?;
-                        }
-                        for (dst, src) in moves_iter {
-                            write!(f, ", {dst} <- {src}")?;
-                        }
-                    } else {
-                        let mut opnd_iter = insn.opnd_iter();
-                        if let Some(first_opnd) = opnd_iter.next() {
-                            write!(f, " {first_opnd}")?;
-                        }
-                        for opnd in opnd_iter {
-                            write!(f, ", {opnd}")?;
-                        }
+                        moves.iter().try_fold(" ", |prefix, (dst, src)| write!(f, "{prefix}{dst} <- {src}").and(Ok(", ")))?;
+                    } else if insn.opnd_iter().count() > 0 {
+                        insn.opnd_iter().try_fold(" ", |prefix, opnd| write!(f, "{prefix}{opnd}").and(Ok(", ")))?;
                     }
 
                     write!(f, "\n")?;
@@ -2244,7 +2255,12 @@ impl Assembler {
 /// when not dumping disassembly.
 macro_rules! asm_comment {
     ($asm:expr, $($fmt:tt)*) => {
-        if $crate::options::get_option!(dump_disasm) || $crate::options::get_option!(dump_lir).is_some() {
+        // If --zjit-dump-disasm or --zjit-dump-lir is given, enrich them with comments.
+        // Also allow --zjit-debug on dev builds to enable comments since dev builds dump LIR on panic.
+        let enable_comment = $crate::options::get_option!(dump_disasm) ||
+            $crate::options::get_option!(dump_lir).is_some() ||
+            (cfg!(debug_assertions) && $crate::options::get_option!(debug));
+        if enable_comment {
             $asm.push_insn(crate::backend::lir::Insn::Comment(format!($($fmt)*)));
         }
     };
@@ -2272,36 +2288,60 @@ pub struct AssemblerPanicHook {
 }
 
 impl AssemblerPanicHook {
-    pub fn new(asm: &Assembler, insn_idx: usize) -> Option<Arc<Self>> {
-        // Install a panic hook if --zjit-dump-lir=panic is specified.
-        if dump_lir_option!(panic) {
+    /// Maximum number of lines [`Self::dump_asm`] is allowed to dump by default.
+    /// When --zjit-dump-lir is given, this limit is ignored.
+    const MAX_DUMP_LINES: usize = 40;
+
+    /// Install a panic hook to dump Assembler with insn_idx on dev builds.
+    /// This returns shared references to the previous hook and insn_idx.
+    /// It takes insn_idx as an argument so that you can manually use it
+    /// on non-emit passes that keep mutating the Assembler to be dumped.
+    pub fn new(asm: &Assembler, insn_idx: usize) -> (Option<Arc<Self>>, Option<Arc<Mutex<usize>>>) {
+        if cfg!(debug_assertions) {
             // Wrap prev_hook with Arc to share it among the new hook and Self to be dropped.
             let prev_hook = panic::take_hook();
             let panic_hook_ref = Arc::new(Self { prev_hook });
             let weak_hook = Arc::downgrade(&panic_hook_ref);
 
+            // Wrap insn_idx with Arc to share it among the new hook and the caller mutating it.
+            let insn_idx = Arc::new(Mutex::new(insn_idx));
+            let insn_idx_ref = insn_idx.clone();
+
             // Install a new hook to dump Assembler with insn_idx
             let asm = asm.clone();
             panic::set_hook(Box::new(move |panic_info| {
                 if let Some(panic_hook) = weak_hook.upgrade() {
-                    // Dump Assembler, highlighting the insn_idx line
-                    Self::dump_asm(&asm, insn_idx);
+                    if let Ok(insn_idx) = insn_idx_ref.lock() {
+                        // Dump Assembler, highlighting the insn_idx line
+                        Self::dump_asm(&asm, *insn_idx);
+                    }
 
                     // Call the previous panic hook
                     (panic_hook.prev_hook)(panic_info);
                 }
             }));
 
-            Some(panic_hook_ref)
+            (Some(panic_hook_ref), Some(insn_idx))
         } else {
-            None
+            (None, None)
         }
     }
 
     /// Dump Assembler, highlighting the insn_idx line
     fn dump_asm(asm: &Assembler, insn_idx: usize) {
+        let lir_string = lir_string(asm);
+        let lines: Vec<&str> = lir_string.split('\n').collect();
+
+        // By default, dump only MAX_DUMP_LINES lines.
+        // Ignore it if --zjit-dump-lir is given.
+        let (min_idx, max_idx) = if get_option!(dump_lir).is_some() {
+            (0, lines.len())
+        } else {
+            (insn_idx.saturating_sub(Self::MAX_DUMP_LINES / 2), insn_idx.saturating_add(Self::MAX_DUMP_LINES / 2))
+        };
+
         println!("Failed to compile LIR at insn_idx={insn_idx}:");
-        for (idx, line) in lir_string(asm).split('\n').enumerate() {
+        for (idx, line) in lines.iter().enumerate().filter(|(idx, _)| (min_idx..=max_idx).contains(idx)) {
             if idx == insn_idx && line.starts_with("  ") {
                 println!("{BOLD_BEGIN}=>{}{BOLD_END}", &line["  ".len()..]);
             } else {

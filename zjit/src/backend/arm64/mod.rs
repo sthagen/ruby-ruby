@@ -687,7 +687,7 @@ impl Assembler {
 
     /// Split instructions using scratch registers. To maximize the use of the register pool for
     /// VRegs, most splits should happen in [`Self::arm64_split`]. However, some instructions
-    /// need to be split with registers after `alloc_regs`, e.g. for `compile_side_exits`, so this
+    /// need to be split with registers after `alloc_regs`, e.g. for `compile_exits`, so this
     /// splits them and uses scratch registers for it.
     fn arm64_scratch_split(self) -> Assembler {
         let mut asm = Assembler::new_with_asm(&self);
@@ -706,7 +706,7 @@ impl Assembler {
                         asm.push_insn(Insn::RShift { out: SCRATCH0_OPND, opnd: out, shift: Opnd::UImm(63) });
                     }
                 }
-                // For compile_side_exits, support splitting simple C arguments here
+                // For compile_exits, support splitting simple C arguments here
                 Insn::CCall { opnds, .. } if !opnds.is_empty() => {
                     for (i, opnd) in opnds.iter().enumerate() {
                         asm.load_into(C_ARG_OPNDS[i], *opnd);
@@ -716,7 +716,7 @@ impl Assembler {
                 }
                 &mut Insn::Lea { opnd, out } => {
                     match (opnd, out) {
-                        // Split here for compile_side_exits
+                        // Split here for compile_exits
                         (Opnd::Mem(_), Opnd::Mem(_)) => {
                             asm.lea_into(SCRATCH0_OPND, opnd);
                             asm.store(out, SCRATCH0_OPND);
@@ -728,7 +728,7 @@ impl Assembler {
                 }
                 &mut Insn::IncrCounter { mem, value } => {
                     // Convert Opnd::const_ptr into Opnd::Mem.
-                    // It's split here to support IncrCounter in compile_side_exits.
+                    // It's split here to support IncrCounter in compile_exits.
                     assert!(matches!(mem, Opnd::UImm(_)));
                     asm.load_into(SCRATCH0_OPND, mem);
                     asm.lea_into(SCRATCH0_OPND, Opnd::mem(64, SCRATCH0_OPND, 0));
@@ -872,7 +872,7 @@ impl Assembler {
                     });
                 },
                 Target::SideExit { .. } => {
-                    unreachable!("Target::SideExit should have been compiled by compile_side_exits")
+                    unreachable!("Target::SideExit should have been compiled by compile_exits")
                 },
             };
         }
@@ -974,11 +974,14 @@ impl Assembler {
         // The write_pos for the last Insn::PatchPoint, if any
         let mut last_patch_pos: Option<usize> = None;
 
+        // Install a panic hook to dump Assembler with insn_idx on dev builds
+        let (_hook, mut hook_insn_idx) = AssemblerPanicHook::new(self, 0);
+
         // For each instruction
         let mut insn_idx: usize = 0;
         while let Some(insn) = self.insns.get(insn_idx) {
-            // Dump Assembler with insn_idx if --zjit-dump-lir=panic is given
-            let _hook = AssemblerPanicHook::new(self, insn_idx);
+            // Update insn_idx that is shown on panic
+            hook_insn_idx.as_mut().map(|idx| idx.lock().map(|mut idx| *idx = insn_idx).unwrap());
 
             match insn {
                 Insn::Comment(text) => {
@@ -1346,7 +1349,7 @@ impl Assembler {
                             });
                         },
                         Target::SideExit { .. } => {
-                            unreachable!("Target::SideExit should have been compiled by compile_side_exits")
+                            unreachable!("Target::SideExit should have been compiled by compile_exits")
                         },
                     };
                 },
@@ -1468,9 +1471,9 @@ impl Assembler {
         let mut asm = asm.alloc_regs(regs)?;
         asm_dump!(asm, alloc_regs);
 
-        // We put compile_side_exits after alloc_regs to avoid extending live ranges for VRegs spilled on side exits.
-        asm.compile_side_exits();
-        asm_dump!(asm, compile_side_exits);
+        // We put compile_exits after alloc_regs to avoid extending live ranges for VRegs spilled on side exits.
+        asm.compile_exits();
+        asm_dump!(asm, compile_exits);
 
         if use_scratch_reg {
             asm = asm.arm64_scratch_split();
@@ -1561,9 +1564,11 @@ mod tests {
         asm.store(Opnd::mem(64, SP, 0x10), val64);
         let side_exit = Target::SideExit { reason: SideExitReason::Interrupt, pc: 0 as _, stack: vec![], locals: vec![], label: None };
         asm.push_insn(Insn::Joz(val64, side_exit));
+        asm.parallel_mov(vec![(C_ARG_OPNDS[0], C_RET_OPND.with_num_bits(32)), (C_ARG_OPNDS[1], Opnd::mem(64, SP, -8))]);
 
         let val32 = asm.sub(Opnd::Value(Qtrue), Opnd::Imm(1));
         asm.store(Opnd::mem(64, EC, 0x10).with_num_bits(32), val32.with_num_bits(32));
+        asm.je(label);
         asm.cret(val64);
 
         asm.frame_teardown(JIT_PRESERVED_REGS);
@@ -1574,8 +1579,10 @@ mod tests {
           v0 = Add x19, 0x40
           Store [x21 + 0x10], v0
           Joz Exit(Interrupt), v0
+          ParallelMov x0 <- w0, x1 <- [x21 - 8]
           v1 = Sub Value(0x14), Imm(1)
           Store Mem32[x20 + 0x10], VReg32(v1)
+          Je bb0
           CRet v0
           FrameTeardown x19, x21, x20
         ");
