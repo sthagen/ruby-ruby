@@ -1,10 +1,12 @@
+#ifdef JSON_DEBUG
+#include <assert.h>
+#endif
+
 typedef enum {
     SIMD_NONE,
     SIMD_NEON,
     SIMD_SSE2
 } SIMD_Implementation;
-
-#ifdef JSON_ENABLE_SIMD
 
 #ifdef __clang__
 # if __has_builtin(__builtin_ctzll)
@@ -20,6 +22,10 @@ typedef enum {
 
 static inline uint32_t trailing_zeros64(uint64_t input)
 {
+#ifdef JSON_DEBUG
+    assert(input > 0); // __builtin_ctz(0) is undefined behavior
+#endif
+
 #if HAVE_BUILTIN_CTZLL
     return __builtin_ctzll(input);
 #else
@@ -35,6 +41,10 @@ static inline uint32_t trailing_zeros64(uint64_t input)
 
 static inline int trailing_zeros(int input)
 {
+#ifdef JSON_DEBUG
+    assert(input > 0); // __builtin_ctz(0) is undefined behavior
+#endif
+
 #if HAVE_BUILTIN_CTZLL
     return __builtin_ctz(input);
 #else
@@ -54,6 +64,7 @@ static inline int trailing_zeros(int input)
 #define FORCE_INLINE
 #endif
 
+#ifdef JSON_ENABLE_SIMD
 
 #define SIMD_MINIMUM_THRESHOLD 6
 

@@ -503,6 +503,52 @@ mod hir_opt_tests {
     }
 
     #[test]
+    fn neq_with_side_effect_not_elided () {
+        let result = eval("
+            class CustomEq
+              attr_reader :count
+
+              def ==(o)
+                @count = @count.to_i + 1
+                self.equal?(o)
+              end
+            end
+
+            def test(object)
+              # intentionally unused, but also can't assign to underscore
+              object != object
+              nil
+            end
+
+            custom = CustomEq.new
+            test(custom)
+            test(custom)
+
+            custom.count
+        ");
+        assert_eq!(VALUE::fixnum_from_usize(2), result);
+        assert_snapshot!(hir_string("test"), @r"
+        fn test@<compiled>:13:
+        bb0():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          v2:BasicObject = GetLocal l0, SP@4
+          Jump bb2(v1, v2)
+        bb1(v5:BasicObject, v6:BasicObject):
+          EntryPoint JIT(0)
+          Jump bb2(v5, v6)
+        bb2(v8:BasicObject, v9:BasicObject):
+          PatchPoint MethodRedefined(CustomEq@0x1000, !=@0x1008, cme:0x1010)
+          PatchPoint NoSingletonClass(CustomEq@0x1000)
+          v28:HeapObject[class_exact:CustomEq] = GuardType v9, HeapObject[class_exact:CustomEq]
+          v29:BoolExact = CCallWithFrame !=@0x1038, v28, v9
+          v19:NilClass = Const Value(nil)
+          CheckInterrupts
+          Return v19
+        ");
+    }
+
+    #[test]
     fn test_replace_guard_if_known_fixnum() {
         eval("
             def test(a)
@@ -635,6 +681,93 @@ mod hir_opt_tests {
           v20:BasicObject = SendWithoutBlockDirect v19, :foo (0x1038)
           CheckInterrupts
           Return v20
+        ");
+    }
+
+    #[test]
+    fn test_optimize_send_without_block_to_aliased_iseq() {
+        eval("
+            def foo = 1
+            alias bar foo
+            alias baz bar
+            def test = baz
+            test; test
+        ");
+        assert_snapshot!(hir_string("test"), @r"
+        fn test@<compiled>:5:
+        bb0():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          Jump bb2(v1)
+        bb1(v4:BasicObject):
+          EntryPoint JIT(0)
+          Jump bb2(v4)
+        bb2(v6:BasicObject):
+          PatchPoint MethodRedefined(Object@0x1000, baz@0x1008, cme:0x1010)
+          PatchPoint NoSingletonClass(Object@0x1000)
+          v19:HeapObject[class_exact*:Object@VALUE(0x1000)] = GuardType v6, HeapObject[class_exact*:Object@VALUE(0x1000)]
+          IncrCounter inline_iseq_optimized_send_count
+          v22:Fixnum[1] = Const Value(1)
+          CheckInterrupts
+          Return v22
+        ");
+    }
+
+    #[test]
+    fn test_optimize_send_without_block_to_aliased_cfunc() {
+        eval("
+            alias bar itself
+            alias baz bar
+            def test = baz
+            test; test
+        ");
+        assert_snapshot!(hir_string("test"), @r"
+        fn test@<compiled>:4:
+        bb0():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          Jump bb2(v1)
+        bb1(v4:BasicObject):
+          EntryPoint JIT(0)
+          Jump bb2(v4)
+        bb2(v6:BasicObject):
+          PatchPoint MethodRedefined(Object@0x1000, baz@0x1008, cme:0x1010)
+          PatchPoint NoSingletonClass(Object@0x1000)
+          v20:HeapObject[class_exact*:Object@VALUE(0x1000)] = GuardType v6, HeapObject[class_exact*:Object@VALUE(0x1000)]
+          IncrCounter inline_cfunc_optimized_send_count
+          CheckInterrupts
+          Return v20
+        ");
+    }
+
+    #[test]
+    fn test_optimize_send_to_aliased_cfunc() {
+        eval("
+            class C < Array
+              alias fun_new_map map
+            end
+            def test(o) = o.fun_new_map {|e| e }
+            test C.new; test C.new
+        ");
+        assert_snapshot!(hir_string("test"), @r"
+        fn test@<compiled>:5:
+        bb0():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          v2:BasicObject = GetLocal l0, SP@4
+          Jump bb2(v1, v2)
+        bb1(v5:BasicObject, v6:BasicObject):
+          EntryPoint JIT(0)
+          Jump bb2(v5, v6)
+        bb2(v8:BasicObject, v9:BasicObject):
+          v13:BasicObject = GetLocal l0, EP@3
+          PatchPoint MethodRedefined(C@0x1000, fun_new_map@0x1008, cme:0x1010)
+          PatchPoint NoSingletonClass(C@0x1000)
+          v25:ArraySubclass[class_exact:C] = GuardType v13, ArraySubclass[class_exact:C]
+          v26:BasicObject = CCallWithFrame fun_new_map@0x1038, v25, block=0x1040
+          v16:BasicObject = GetLocal l0, EP@3
+          CheckInterrupts
+          Return v26
         ");
     }
 

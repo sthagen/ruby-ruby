@@ -1187,16 +1187,19 @@ assert_equal 'true', %q{
   [a.frozen?, a[0].frozen?] == [true, false]
 }
 
-# Ractor.make_shareable(a_proc) is not supported now.
-assert_equal 'true', %q{
-  pr = Proc.new{}
+# Ractor.make_shareable(a_proc) requires a shareable receiver
+assert_equal '[:ok, "Proc\'s self is not shareable:"]', %q{
+  pr1 = nil.instance_exec { Proc.new{} }
+  pr2 = Proc.new{}
 
-  begin
-    Ractor.make_shareable(pr)
-  rescue Ractor::Error
-    true
-  else
-    false
+  [pr1, pr2].map do |pr|
+    begin
+      Ractor.make_shareable(pr)
+    rescue Ractor::Error => e
+      e.message[/^.+?:/]
+    else
+      :ok
+    end
   end
 }
 
@@ -1294,7 +1297,7 @@ assert_equal '[:ok, :ok]', %q{
       s = 'str'
       trap(:INT){p s}
     }.join
-  rescue => Ractor::RemoteError
+  rescue Ractor::RemoteError
     a << :ok
   end
 }

@@ -240,9 +240,11 @@ rb_str_reembeddable_p(VALUE str)
 }
 
 static inline size_t
-rb_str_embed_size(long capa)
+rb_str_embed_size(long capa, long termlen)
 {
-    return offsetof(struct RString, as.embed.ary) + capa;
+    size_t size = offsetof(struct RString, as.embed.ary) + capa + termlen;
+    if (size < sizeof(struct RString)) size = sizeof(struct RString);
+    return size;
 }
 
 size_t
@@ -250,19 +252,21 @@ rb_str_size_as_embedded(VALUE str)
 {
     size_t real_size;
     if (STR_EMBED_P(str)) {
-        real_size = rb_str_embed_size(RSTRING(str)->len) + TERM_LEN(str);
+        size_t capa = RSTRING(str)->len;
+        if (FL_TEST_RAW(str, STR_PRECOMPUTED_HASH)) capa += sizeof(st_index_t);
+
+        real_size = rb_str_embed_size(capa, TERM_LEN(str));
     }
     /* if the string is not currently embedded, but it can be embedded, how
      * much space would it require */
     else if (rb_str_reembeddable_p(str)) {
-        real_size = rb_str_embed_size(RSTRING(str)->as.heap.aux.capa) + TERM_LEN(str);
+        size_t capa = RSTRING(str)->as.heap.aux.capa;
+        if (FL_TEST_RAW(str, STR_PRECOMPUTED_HASH)) capa += sizeof(st_index_t);
+
+        real_size = rb_str_embed_size(capa, TERM_LEN(str));
     }
     else {
         real_size = sizeof(struct RString);
-    }
-
-    if (FL_TEST_RAW(str, STR_PRECOMPUTED_HASH)) {
-        real_size += sizeof(st_index_t);
     }
 
     return real_size;
@@ -271,7 +275,7 @@ rb_str_size_as_embedded(VALUE str)
 static inline bool
 STR_EMBEDDABLE_P(long len, long termlen)
 {
-    return rb_gc_size_allocatable_p(rb_str_embed_size(len + termlen));
+    return rb_gc_size_allocatable_p(rb_str_embed_size(len, termlen));
 }
 
 static VALUE str_replace_shared_without_enc(VALUE str2, VALUE str);
@@ -1004,7 +1008,7 @@ must_not_null(const char *ptr)
 static inline VALUE
 str_alloc_embed(VALUE klass, size_t capa)
 {
-    size_t size = rb_str_embed_size(capa);
+    size_t size = rb_str_embed_size(capa, 0);
     RUBY_ASSERT(size > 0);
     RUBY_ASSERT(rb_gc_size_allocatable_p(size));
 
@@ -1881,7 +1885,7 @@ str_replace(VALUE str, VALUE str2)
 static inline VALUE
 ec_str_alloc_embed(struct rb_execution_context_struct *ec, VALUE klass, size_t capa)
 {
-    size_t size = rb_str_embed_size(capa);
+    size_t size = rb_str_embed_size(capa, 0);
     RUBY_ASSERT(size > 0);
     RUBY_ASSERT(rb_gc_size_allocatable_p(size));
 
@@ -7067,7 +7071,7 @@ rb_str_to_i(int argc, VALUE *argv, VALUE str)
  *    '3.14159'.to_f  # => 3.14159
  *    '1.234e-2'.to_f # => 0.01234
  *
- *  Characters past a leading valid number (in the given +base+) are ignored:
+ *  Characters past a leading valid number are ignored:
  *
  *    '3.14 (pi to two places)'.to_f # => 3.14
  *
@@ -7075,6 +7079,7 @@ rb_str_to_i(int argc, VALUE *argv, VALUE str)
  *
  *    'abcdef'.to_f # => 0.0
  *
+ * See {Converting to Non-String}[rdoc-ref:String@Converting+to+Non--5CString].
  */
 
 static VALUE
