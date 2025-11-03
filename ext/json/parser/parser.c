@@ -1,45 +1,6 @@
-#include "ruby.h"
-#include "ruby/encoding.h"
+#include "../json.h"
 #include "../vendor/ryu.h"
-
-/* shims */
-/* This is the fallback definition from Ruby 3.4 */
-
-#ifndef RBIMPL_STDBOOL_H
-#if defined(__cplusplus)
-# if defined(HAVE_STDBOOL_H) && (__cplusplus >= 201103L)
-#  include <cstdbool>
-# endif
-#elif defined(HAVE_STDBOOL_H)
-# include <stdbool.h>
-#elif !defined(HAVE__BOOL)
-typedef unsigned char _Bool;
-# define bool  _Bool
-# define true  ((_Bool)+1)
-# define false ((_Bool)+0)
-# define __bool_true_false_are_defined
-#endif
-#endif
-
-#if SIZEOF_UINT64_T == SIZEOF_LONG_LONG
-# define INT64T2NUM(x) LL2NUM(x)
-# define UINT64T2NUM(x) ULL2NUM(x)
-#elif SIZEOF_UINT64_T == SIZEOF_LONG
-# define INT64T2NUM(x) LONG2NUM(x)
-# define UINT64T2NUM(x) ULONG2NUM(x)
-#else
-# error No uint64_t conversion
-#endif
-
 #include "../simd/simd.h"
-
-#ifndef RB_UNLIKELY
-#define RB_UNLIKELY(expr) expr
-#endif
-
-#ifndef RB_LIKELY
-#define RB_LIKELY(expr) expr
-#endif
 
 static VALUE mJSON, eNestingError, Encoding_UTF_8;
 static VALUE CNaN, CInfinity, CMinusInfinity;
@@ -55,7 +16,7 @@ static int utf8_encindex;
 
 #ifndef HAVE_RB_HASH_BULK_INSERT
 // For TruffleRuby
-void
+static void
 rb_hash_bulk_insert(long count, const VALUE *pairs, VALUE hash)
 {
     long index = 0;
@@ -72,6 +33,12 @@ rb_hash_bulk_insert(long count, const VALUE *pairs, VALUE hash)
 #define rb_hash_new_capa(n) rb_hash_new()
 #endif
 
+#ifndef HAVE_RB_STR_TO_INTERNED_STR
+static VALUE rb_str_to_interned_str(VALUE str)
+{
+    return rb_funcall(rb_str_freeze(str), i_uminus, 0);
+}
+#endif
 
 /* name cache */
 
@@ -129,104 +96,54 @@ static inline int rstring_cache_cmp(const char *str, const long length, VALUE rs
 
 static VALUE rstring_cache_fetch(rvalue_cache *cache, const char *str, const long length)
 {
-    if (RB_UNLIKELY(length > JSON_RVALUE_CACHE_MAX_ENTRY_LENGTH)) {
-        // Common names aren't likely to be very long. So we just don't
-        // cache names above an arbitrary threshold.
-        return Qfalse;
-    }
-
-    if (RB_UNLIKELY(!rb_isalpha((unsigned char)str[0]))) {
-        // Simple heuristic, if the first character isn't a letter,
-        // we're much less likely to see this string again.
-        // We mostly want to cache strings that are likely to be repeated.
-        return Qfalse;
-    }
-
     int low = 0;
     int high = cache->length - 1;
-    int mid = 0;
-    int last_cmp = 0;
 
     while (low <= high) {
-        mid = (high + low) >> 1;
+        int mid = (high + low) >> 1;
         VALUE entry = cache->entries[mid];
-        last_cmp = rstring_cache_cmp(str, length, entry);
+        int cmp = rstring_cache_cmp(str, length, entry);
 
-        if (last_cmp == 0) {
+        if (cmp == 0) {
             return entry;
-        } else if (last_cmp > 0) {
+        } else if (cmp > 0) {
             low = mid + 1;
         } else {
             high = mid - 1;
         }
     }
 
-    if (RB_UNLIKELY(memchr(str, '\\', length))) {
-        // We assume the overwhelming majority of names don't need to be escaped.
-        // But if they do, we have to fallback to the slow path.
-        return Qfalse;
-    }
-
     VALUE rstring = build_interned_string(str, length);
 
     if (cache->length < JSON_RVALUE_CACHE_CAPA) {
-        if (last_cmp > 0) {
-            mid += 1;
-        }
-
-        rvalue_cache_insert_at(cache, mid, rstring);
+        rvalue_cache_insert_at(cache, low, rstring);
     }
     return rstring;
 }
 
 static VALUE rsymbol_cache_fetch(rvalue_cache *cache, const char *str, const long length)
 {
-    if (RB_UNLIKELY(length > JSON_RVALUE_CACHE_MAX_ENTRY_LENGTH)) {
-        // Common names aren't likely to be very long. So we just don't
-        // cache names above an arbitrary threshold.
-        return Qfalse;
-    }
-
-    if (RB_UNLIKELY(!rb_isalpha((unsigned char)str[0]))) {
-        // Simple heuristic, if the first character isn't a letter,
-        // we're much less likely to see this string again.
-        // We mostly want to cache strings that are likely to be repeated.
-        return Qfalse;
-    }
-
     int low = 0;
     int high = cache->length - 1;
-    int mid = 0;
-    int last_cmp = 0;
 
     while (low <= high) {
-        mid = (high + low) >> 1;
+        int mid = (high + low) >> 1;
         VALUE entry = cache->entries[mid];
-        last_cmp = rstring_cache_cmp(str, length, rb_sym2str(entry));
+        int cmp = rstring_cache_cmp(str, length, rb_sym2str(entry));
 
-        if (last_cmp == 0) {
+        if (cmp == 0) {
             return entry;
-        } else if (last_cmp > 0) {
+        } else if (cmp > 0) {
             low = mid + 1;
         } else {
             high = mid - 1;
         }
     }
 
-    if (RB_UNLIKELY(memchr(str, '\\', length))) {
-        // We assume the overwhelming majority of names don't need to be escaped.
-        // But if they do, we have to fallback to the slow path.
-        return Qfalse;
-    }
-
     VALUE rsymbol = build_symbol(str, length);
 
     if (cache->length < JSON_RVALUE_CACHE_CAPA) {
-        if (last_cmp > 0) {
-            mid += 1;
-        }
-
-        rvalue_cache_insert_at(cache, mid, rsymbol);
+        rvalue_cache_insert_at(cache, low, rsymbol);
     }
     return rsymbol;
 }
@@ -596,7 +513,7 @@ json_eat_comments(JSON_ParserState *state)
     }
 }
 
-static inline void
+static ALWAYS_INLINE() void
 json_eat_whitespace(JSON_ParserState *state)
 {
     while (true) {
@@ -663,11 +580,20 @@ static inline VALUE build_string(const char *start, const char *end, bool intern
     return result;
 }
 
+static inline bool json_string_cacheable_p(const char *string, size_t length)
+{
+    //  We mostly want to cache strings that are likely to be repeated.
+    // Simple heuristics:
+    //  - Common names aren't likely to be very long. So we just don't cache names above an arbitrary threshold.
+    //  - If the first character isn't a letter, we're much less likely to see this string again.
+    return length <= JSON_RVALUE_CACHE_MAX_ENTRY_LENGTH && rb_isalpha(string[0]);
+}
+
 static inline VALUE json_string_fastpath(JSON_ParserState *state, const char *string, const char *stringEnd, bool is_name, bool intern, bool symbolize)
 {
     size_t bufferSize = stringEnd - string;
 
-    if (is_name && state->in_array) {
+    if (is_name && state->in_array && RB_LIKELY(json_string_cacheable_p(string, bufferSize))) {
         VALUE cached_key;
         if (RB_UNLIKELY(symbolize)) {
             cached_key = rsymbol_cache_fetch(&state->name_cache, string, bufferSize);
@@ -690,19 +616,6 @@ static VALUE json_string_unescape(JSON_ParserState *state, const char *string, c
     char *buffer;
     int unescape_len;
     char buf[4];
-
-    if (is_name && state->in_array) {
-        VALUE cached_key;
-        if (RB_UNLIKELY(symbolize)) {
-            cached_key = rsymbol_cache_fetch(&state->name_cache, string, bufferSize);
-        } else {
-            cached_key = rstring_cache_fetch(&state->name_cache, string, bufferSize);
-        }
-
-        if (RB_LIKELY(cached_key)) {
-            return cached_key;
-        }
-    }
 
     VALUE result = rb_str_buf_new(bufferSize);
     rb_enc_associate_index(result, utf8_encindex);
@@ -796,7 +709,7 @@ static VALUE json_string_unescape(JSON_ParserState *state, const char *string, c
     if (symbolize) {
         result = rb_str_intern(result);
     } else if (intern) {
-        result = rb_funcall(rb_str_freeze(result), i_uminus, 0);
+        result = rb_str_to_interned_str(result);
     }
 
     return result;
@@ -985,17 +898,11 @@ static const bool string_scan_table[256] = {
      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 };
 
-#if (defined(__GNUC__ ) || defined(__clang__))
-#define FORCE_INLINE __attribute__((always_inline))
-#else
-#define FORCE_INLINE
-#endif
-
 #ifdef HAVE_SIMD
 static SIMD_Implementation simd_impl = SIMD_NONE;
 #endif /* HAVE_SIMD */
 
-static inline bool FORCE_INLINE string_scan(JSON_ParserState *state)
+static ALWAYS_INLINE() bool string_scan(JSON_ParserState *state)
 {
 #ifdef HAVE_SIMD
 #if defined(HAVE_SIMD_NEON)
@@ -1409,6 +1316,7 @@ static VALUE json_parse_any(JSON_ParserState *state, JSON_ParserConfig *config)
     }
 
     raise_parse_error("unreachable: %s", state);
+    return Qundef;
 }
 
 static void json_ensure_eof(JSON_ParserState *state)

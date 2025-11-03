@@ -128,6 +128,7 @@ make_counters! {
         // exit_: Side exits reasons
         exit_compile_error,
         exit_unknown_newarray_send,
+        exit_unknown_duparray_send,
         exit_unhandled_tailcall,
         exit_unhandled_splat,
         exit_unhandled_kwarg,
@@ -138,6 +139,7 @@ make_counters! {
         exit_fixnum_sub_overflow,
         exit_fixnum_mult_overflow,
         exit_fixnum_mod_by_zero,
+        exit_box_fixnum_overflow,
         exit_guard_type_failure,
         exit_guard_type_not_failure,
         exit_guard_bit_equals_failure,
@@ -366,6 +368,7 @@ pub fn side_exit_counter(reason: crate::hir::SideExitReason) -> Counter {
     use crate::stats::Counter::*;
     match reason {
         UnknownNewarraySend(_)        => exit_unknown_newarray_send,
+        UnknownDuparraySend(_)        => exit_unknown_duparray_send,
         UnhandledCallType(Tailcall)   => exit_unhandled_tailcall,
         UnhandledCallType(Splat)      => exit_unhandled_splat,
         UnhandledCallType(Kwarg)      => exit_unhandled_kwarg,
@@ -376,6 +379,7 @@ pub fn side_exit_counter(reason: crate::hir::SideExitReason) -> Counter {
         FixnumSubOverflow             => exit_fixnum_sub_overflow,
         FixnumMultOverflow            => exit_fixnum_mult_overflow,
         FixnumModByZero               => exit_fixnum_mod_by_zero,
+        BoxFixnumOverflow             => exit_box_fixnum_overflow,
         GuardType(_)                  => exit_guard_type_failure,
         GuardTypeNot(_)               => exit_guard_type_not_failure,
         GuardBitEquals(_)             => exit_guard_bit_equals_failure,
