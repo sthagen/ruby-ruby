@@ -699,10 +699,18 @@ strio_to_read(VALUE self)
  * call-seq:
  *   eof? -> true or false
  *
- * Returns +true+ if positioned at end-of-stream, +false+ otherwise;
- * see {Position}[rdoc-ref:IO@Position].
+ * Returns whether +self+ is positioned at end-of-stream:
  *
- * Raises IOError if the stream is not opened for reading.
+ *   strio = StringIO.new('foo')
+ *   strio.pos  # => 0
+ *   strio.eof? # => false
+ *   strio.read # => "foo"
+ *   strio.pos  # => 3
+ *   strio.eof? # => true
+ *   strio.close_read
+ *   strio.eof? # Raises IOError: not opened for reading
+ *
+ * Related: StringIO#pos.
  */
 static VALUE
 strio_eof(VALUE self)
@@ -956,10 +964,10 @@ strio_each_byte(VALUE self)
 
 /*
  * call-seq:
- *   getc -> character or nil
+ *   getc -> character, byte, or nil
  *
- * Reads and returns the next character from the stream;
- * see {Character IO}[rdoc-ref:IO@Character+IO].
+ * :include: stringio/getc.rdoc
+ *
  */
 static VALUE
 strio_getc(VALUE self)
@@ -982,10 +990,10 @@ strio_getc(VALUE self)
 
 /*
  * call-seq:
- *   getbyte -> byte or nil
+ *   getbyte -> integer or nil
  *
- * Reads and returns the next 8-bit byte from the stream;
- * see {Byte IO}[rdoc-ref:IO@Byte+IO].
+ * :include: stringio/getbyte.rdoc
+ *
  */
 static VALUE
 strio_getbyte(VALUE self)
@@ -1420,9 +1428,8 @@ strio_getline(struct getline_arg *arg, struct StringIO *ptr)
  *   gets(limit, chomp: false) -> string or nil
  *   gets(sep, limit, chomp: false) -> string or nil
  *
- * Reads and returns a line from the stream;
- * assigns the return value to <tt>$_</tt>;
- * see {Line IO}[rdoc-ref:IO@Line+IO].
+ * :include: stringio/gets.rdoc
+ *
  */
 static VALUE
 strio_gets(int argc, VALUE *argv, VALUE self)
@@ -2039,12 +2046,20 @@ strio_truncate(VALUE self, VALUE len)
 }
 
 /*
- *  call-seq:
- *     strio.external_encoding   => encoding
+ * call-seq:
+ *   external_encoding -> encoding or nil
  *
- *  Returns the Encoding object that represents the encoding of the file.
- *  If the stream is write mode and no encoding is specified, returns
- *  +nil+.
+ * Returns an Encoding object that represents the encoding of the string;
+ * see {Encoding}[rdoc-ref:Encoding]:
+ *
+ *   strio = StringIO.new('foo')
+ *   strio.external_encoding # => #<Encoding:UTF-8>
+ *
+ * Returns +nil+ if +self+ has no string and is in write mode:
+ *
+ *   strio = StringIO.new(nil, 'w+')
+ *   strio.external_encoding # => nil
+ *
  */
 
 static VALUE
