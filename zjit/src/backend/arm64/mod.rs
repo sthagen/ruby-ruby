@@ -800,6 +800,7 @@ impl Assembler {
                         asm.push_insn(Insn::RShift { out: SCRATCH0_OPND, opnd: reg_out, shift: Opnd::UImm(63) });
                     }
                 }
+                Insn::LShift { opnd, out, .. } |
                 Insn::RShift { opnd, out, .. } => {
                     *opnd = split_memory_read(asm, *opnd, SCRATCH0_OPND);
                     let mem_out = split_memory_write(out, SCRATCH0_OPND);
@@ -1297,7 +1298,8 @@ impl Assembler {
                     match dest.rm_num_bits() {
                         64 | 32 => stur(cb, src, dest.into()),
                         16 => sturh(cb, src, dest.into()),
-                        num_bits => panic!("unexpected dest num_bits: {} (src: {:#?}, dest: {:#?})", num_bits, src, dest),
+                        8 => sturb(cb, src, dest.into()),
+                        num_bits => panic!("unexpected dest num_bits: {} (src: {:?}, dest: {:?})", num_bits, src, dest),
                     }
                 },
                 Insn::Load { opnd, out } |
@@ -1428,17 +1430,25 @@ impl Assembler {
                     }
                 },
                 Insn::CCall { fptr, .. } => {
-                    // The offset to the call target in bytes
-                    let src_addr = cb.get_write_ptr().raw_ptr(cb) as i64;
-                    let dst_addr = *fptr as i64;
+                    match fptr {
+                        Opnd::UImm(fptr) => {
+                            // The offset to the call target in bytes
+                            let src_addr = cb.get_write_ptr().raw_ptr(cb) as i64;
+                            let dst_addr = *fptr as i64;
 
-                    // Use BL if the offset is short enough to encode as an immediate.
-                    // Otherwise, use BLR with a register.
-                    if b_offset_fits_bits((dst_addr - src_addr) / 4) {
-                        bl(cb, InstructionOffset::from_bytes((dst_addr - src_addr) as i32));
-                    } else {
-                        emit_load_value(cb, Self::EMIT_OPND, dst_addr as u64);
-                        blr(cb, Self::EMIT_OPND);
+                            // Use BL if the offset is short enough to encode as an immediate.
+                            // Otherwise, use BLR with a register.
+                            if b_offset_fits_bits((dst_addr - src_addr) / 4) {
+                                bl(cb, InstructionOffset::from_bytes((dst_addr - src_addr) as i32));
+                            } else {
+                                emit_load_value(cb, Self::EMIT_OPND, dst_addr as u64);
+                                blr(cb, Self::EMIT_OPND);
+                            }
+                        }
+                        Opnd::Reg(_) => {
+                            blr(cb, fptr.into());
+                        }
+                        _ => unreachable!("unsupported ccall fptr: {fptr:?}")
                     }
                 },
                 Insn::CRet { .. } => {
@@ -1666,6 +1676,7 @@ mod tests {
     static TEMP_REGS: [Reg; 5] = [X1_REG, X9_REG, X10_REG, X14_REG, X15_REG];
 
     fn setup_asm() -> (Assembler, CodeBlock) {
+        crate::options::rb_zjit_prepare_options(); // Allow `get_option!` in Assembler
         (Assembler::new(), CodeBlock::new_dummy())
     }
 
@@ -2592,8 +2603,21 @@ mod tests {
     }
 
     #[test]
+    fn test_store_spilled_byte() {
+        let (mut asm, mut cb) = setup_asm();
+
+        asm.store(Opnd::mem(8, C_RET_OPND, 0), Opnd::mem(8, C_RET_OPND, 8));
+        asm.compile_with_num_regs(&mut cb, 0); // spill every VReg
+
+        assert_disasm_snapshot!(cb.disasm(), @r"
+        0x0: ldurb w16, [x0, #8]
+        0x4: sturb w16, [x0]
+        ");
+        assert_snapshot!(cb.hexdump(), @"1080403810000038");
+    }
+
+    #[test]
     fn test_ccall_resolve_parallel_moves_no_cycle() {
-        crate::options::rb_zjit_prepare_options();
         let (mut asm, mut cb) = setup_asm();
 
         asm.ccall(0 as _, vec![
@@ -2611,7 +2635,6 @@ mod tests {
 
     #[test]
     fn test_ccall_resolve_parallel_moves_single_cycle() {
-        crate::options::rb_zjit_prepare_options();
         let (mut asm, mut cb) = setup_asm();
 
         // x0 and x1 form a cycle
@@ -2634,7 +2657,6 @@ mod tests {
 
     #[test]
     fn test_ccall_resolve_parallel_moves_two_cycles() {
-        crate::options::rb_zjit_prepare_options();
         let (mut asm, mut cb) = setup_asm();
 
         // x0 and x1 form a cycle, and x2 and rcx form another cycle
@@ -2661,7 +2683,6 @@ mod tests {
 
     #[test]
     fn test_ccall_resolve_parallel_moves_large_cycle() {
-        crate::options::rb_zjit_prepare_options();
         let (mut asm, mut cb) = setup_asm();
 
         // x0, x1, and x2 form a cycle
@@ -2681,5 +2702,25 @@ mod tests {
             0x14: blr x16
         ");
         assert_snapshot!(cb.hexdump(), @"ef0300aae00301aae10302aae2030faa100080d200023fd6");
+    }
+
+    #[test]
+    fn test_split_spilled_lshift() {
+        let (mut asm, mut cb) = setup_asm();
+
+        let opnd_vreg = asm.load(1.into());
+        let out_vreg = asm.lshift(opnd_vreg, Opnd::UImm(1));
+        asm.mov(C_RET_OPND, out_vreg);
+        asm.compile_with_num_regs(&mut cb, 0); // spill every VReg
+
+        assert_disasm_snapshot!(cb.disasm(), @r"
+        0x0: mov x16, #1
+        0x4: stur x16, [x29, #-8]
+        0x8: ldur x15, [x29, #-8]
+        0xc: lsl x15, x15, #1
+        0x10: stur x15, [x29, #-8]
+        0x14: ldur x0, [x29, #-8]
+        ");
+        assert_snapshot!(cb.hexdump(), @"300080d2b0831ff8af835ff8eff97fd3af831ff8a0835ff8");
     }
 }

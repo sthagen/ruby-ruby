@@ -24,6 +24,14 @@ extern size_t onig_region_memsize(const struct re_registers *regs);
 
 #define STRSCAN_VERSION "3.1.6.dev"
 
+
+#ifdef HAVE_RB_DEPRECATE_CONSTANT
+/* In ruby 3.0, defined but exposed in external headers */
+extern void rb_deprecate_constant(VALUE mod, const char *name);
+#else
+# define rb_deprecate_constant(mod, name) ((void)0)
+#endif
+
 /* =======================================================================
                          Data Type Definitions
    ======================================================================= */
@@ -1270,11 +1278,12 @@ strscan_must_ascii_compat(VALUE str)
     rb_must_asciicompat(str);
 }
 
+/* :nodoc: */
 static VALUE
 strscan_scan_base10_integer(VALUE self)
 {
     char *ptr;
-    long len = 0;
+    long len = 0, remaining_len;
     struct strscanner *p;
 
     GET_SCANNER(self, p);
@@ -1284,7 +1293,7 @@ strscan_scan_base10_integer(VALUE self)
 
     ptr = CURPTR(p);
 
-    long remaining_len = S_RESTLEN(p);
+    remaining_len = S_RESTLEN(p);
 
     if (remaining_len <= 0) {
         return Qnil;
@@ -1307,11 +1316,12 @@ strscan_scan_base10_integer(VALUE self)
     return strscan_parse_integer(p, 10, len);
 }
 
+/* :nodoc: */
 static VALUE
 strscan_scan_base16_integer(VALUE self)
 {
     char *ptr;
-    long len = 0;
+    long len = 0, remaining_len;
     struct strscanner *p;
 
     GET_SCANNER(self, p);
@@ -1321,7 +1331,7 @@ strscan_scan_base16_integer(VALUE self)
 
     ptr = CURPTR(p);
 
-    long remaining_len = S_RESTLEN(p);
+    remaining_len = S_RESTLEN(p);
 
     if (remaining_len <= 0) {
         return Qnil;
@@ -1477,7 +1487,6 @@ strscan_eos_p(VALUE self)
  *   rest?
  *
  * Returns true if and only if there is more data in the string.  See #eos?.
- * This method is obsolete; use #eos? instead.
  *
  *   s = StringScanner.new('test string')
  *   # These two are opposites
@@ -1605,7 +1614,7 @@ name_to_backref_number(struct re_registers *regs, VALUE regexp, const char* name
                                               (const unsigned char* )name_end,
                                               regs);
         if (num >= 1) {
-	        return num;
+	    return num;
         }
     }
     rb_enc_raise(enc, rb_eIndexError, "undefined group name reference: %.*s",
@@ -2184,6 +2193,13 @@ strscan_named_captures(VALUE self)
    ======================================================================= */
 
 /*
+ * Document-class: StringScanner::Error
+ *
+ * The error class for StringScanner.
+ * See StringScanner#unscan.
+ */
+
+/*
  * Document-class: StringScanner
  *
  * :markup: markdown
@@ -2211,6 +2227,7 @@ Init_strscan(void)
     ScanError = rb_define_class_under(StringScanner, "Error", rb_eStandardError);
     if (!rb_const_defined(rb_cObject, id_scanerr)) {
 	rb_const_set(rb_cObject, id_scanerr, ScanError);
+	rb_deprecate_constant(rb_cObject, "ScanError");
     }
     tmp = rb_str_new2(STRSCAN_VERSION);
     rb_obj_freeze(tmp);
@@ -2218,6 +2235,7 @@ Init_strscan(void)
     tmp = rb_str_new2("$Id$");
     rb_obj_freeze(tmp);
     rb_const_set(StringScanner, rb_intern("Id"), tmp);
+    rb_deprecate_constant(StringScanner, "Id");
 
     rb_define_alloc_func(StringScanner, strscan_s_allocate);
     rb_define_private_method(StringScanner, "initialize", strscan_initialize, -1);

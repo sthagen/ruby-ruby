@@ -424,7 +424,7 @@ strio_s_new(int argc, VALUE *argv, VALUE klass)
 }
 
 /*
- * Returns +false+.  Just for compatibility to IO.
+ * Returns +false+; for compatibility with IO.
  */
 static VALUE
 strio_false(VALUE self)
@@ -434,7 +434,7 @@ strio_false(VALUE self)
 }
 
 /*
- * Returns +nil+.  Just for compatibility to IO.
+ * Returns +nil+; for compatibility with IO.
  */
 static VALUE
 strio_nil(VALUE self)
@@ -444,7 +444,7 @@ strio_nil(VALUE self)
 }
 
 /*
- * Returns an object itself.  Just for compatibility to IO.
+ * Returns +self+; for compatibility with IO.
  */
 static VALUE
 strio_self(VALUE self)
@@ -454,7 +454,7 @@ strio_self(VALUE self)
 }
 
 /*
- * Returns 0.  Just for compatibility to IO.
+ * Returns 0; for compatibility with IO.
  */
 static VALUE
 strio_0(VALUE self)
@@ -514,7 +514,7 @@ strio_get_string(VALUE self)
  * call-seq:
  *   string = other_string -> other_string
  *
- * Assigns the underlying string as +other_string+, and sets position to zero;
+ * Replaces the stored string with +other_string+, and sets the position to zero;
  * returns +other_string+:
  *
  *   StringIO.open('foo') do |strio|
@@ -528,7 +528,7 @@ strio_get_string(VALUE self)
  *   "foo"
  *   "bar"
  *
- * Related: StringIO#string (returns the underlying string).
+ * Related: StringIO#string (returns the stored string).
  */
 static VALUE
 strio_set_string(VALUE self, VALUE string)
@@ -2071,10 +2071,9 @@ strio_external_encoding(VALUE self)
 
 /*
  *  call-seq:
- *     strio.internal_encoding   => encoding
+ *     internal_encoding -> nil
  *
- *  Returns the Encoding of the internal string if conversion is
- *  specified.  Otherwise returns +nil+.
+ *  Returns +nil+; for compatibility with IO.
  */
 
 static VALUE
