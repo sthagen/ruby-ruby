@@ -220,6 +220,11 @@ fn gen_iseq(cb: &mut CodeBlock, iseq: IseqPtr, function: Option<&Function>) -> R
 
 /// Compile an ISEQ into machine code
 fn gen_iseq_body(cb: &mut CodeBlock, iseq: IseqPtr, function: Option<&Function>, payload: &mut IseqPayload) -> Result<IseqCodePtrs, CompileError> {
+    // If we ran out of code region, we shouldn't attempt to generate new code.
+    if cb.has_dropped_bytes() {
+        return Err(CompileError::OutOfMemory);
+    }
+
     // Convert ISEQ into optimized High-level IR if not given
     let function = match function {
         Some(function) => function,
@@ -426,6 +431,7 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
         Insn::GetClassVar { id, ic, state } => gen_getclassvar(jit, asm, *id, *ic, &function.frame_state(*state)),
         Insn::SetClassVar { id, val, ic, state } => no_output!(gen_setclassvar(jit, asm, *id, opnd!(val), *ic, &function.frame_state(*state))),
         Insn::SetIvar { self_val, id, val, state } => no_output!(gen_setivar(jit, asm, opnd!(self_val), *id, opnd!(val), &function.frame_state(*state))),
+        Insn::SetInstanceVariable { self_val, id, ic, val, state } => no_output!(gen_set_instance_variable(jit, asm, opnd!(self_val), *id, *ic, opnd!(val), &function.frame_state(*state))),
         Insn::SideExit { state, reason } => no_output!(gen_side_exit(jit, asm, reason, &function.frame_state(*state))),
         Insn::PutSpecialObject { value_type } => gen_putspecialobject(asm, *value_type),
         Insn::AnyToString { val, str, state } => gen_anytostring(asm, opnd!(val), opnd!(str), &function.frame_state(*state)),
@@ -840,6 +846,15 @@ fn gen_setivar(jit: &mut JITState, asm: &mut Assembler, recv: Opnd, id: ID, val:
     asm_ccall!(asm, rb_ivar_set, recv, id.0.into(), val);
 }
 
+/// Emit an uncached instance variable store using the interpreter inline cache
+fn gen_set_instance_variable(jit: &mut JITState, asm: &mut Assembler, recv: Opnd, id: ID, ic: *const iseq_inline_constant_cache, val: Opnd, state: &FrameState) {
+    gen_incr_counter(asm, Counter::dynamic_setivar_count);
+    // Setting an ivar can raise FrozenError, so we need proper frame state for exception handling.
+    gen_prepare_non_leaf_call(jit, asm, state);
+    let iseq = Opnd::Value(jit.iseq.into());
+    asm_ccall!(asm, rb_vm_setinstancevariable, iseq, recv, id.0.into(), val, Opnd::const_ptr(ic));
+}
+
 fn gen_getclassvar(jit: &mut JITState, asm: &mut Assembler, id: ID, ic: *const iseq_inline_cvar_cache_entry, state: &FrameState) -> Opnd {
     gen_prepare_non_leaf_call(jit, asm, state);
     asm_ccall!(asm, rb_vm_getclassvariable, VALUE::from(jit.iseq).into(), CFP, id.0.into(), Opnd::const_ptr(ic))
@@ -964,6 +979,7 @@ fn gen_array_extend(jit: &mut JITState, asm: &mut Assembler, left: Opnd, right: 
 }
 
 fn gen_guard_shape(jit: &mut JITState, asm: &mut Assembler, val: Opnd, shape: ShapeId, state: &FrameState) -> Opnd {
+    gen_incr_counter(asm, Counter::guard_shape_count);
     let shape_id_offset = unsafe { rb_shape_id_offset() };
     let val = asm.load(val);
     let shape_opnd = Opnd::mem(SHAPE_ID_NUM_BITS as u8, val, shape_id_offset);

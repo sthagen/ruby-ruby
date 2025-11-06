@@ -286,6 +286,14 @@ make_counters! {
 
     // The number of times we ran a dynamic check
     guard_type_count,
+    guard_shape_count,
+
+    invokeblock_handler_monomorphic_iseq,
+    invokeblock_handler_monomorphic_ifunc,
+    invokeblock_handler_monomorphic_other,
+    invokeblock_handler_polymorphic,
+    invokeblock_handler_megamorphic,
+    invokeblock_handler_no_profiles,
 }
 
 /// Increase a counter by a specified amount
@@ -549,7 +557,10 @@ pub extern "C" fn rb_zjit_stats(_ec: EcPtr, _self: VALUE, target_key: VALUE) -> 
     }
 
     // Memory usage stats
-    set_stat_usize!(hash, "code_region_bytes", ZJITState::get_code_block().mapped_region_size());
+    let code_region_bytes = ZJITState::get_code_block().mapped_region_size();
+    set_stat_usize!(hash, "code_region_bytes", code_region_bytes);
+    set_stat_usize!(hash, "zjit_alloc_bytes", zjit_alloc_bytes());
+    set_stat_usize!(hash, "total_mem_bytes", code_region_bytes + zjit_alloc_bytes());
 
     // End of default stats. Every counter beyond this is provided only for --zjit-stats.
     if !get_option!(stats) {
@@ -644,7 +655,7 @@ pub fn with_time_stat<F, R>(counter: Counter, func: F) -> R where F: FnOnce() ->
 }
 
 /// The number of bytes ZJIT has allocated on the Rust heap.
-pub fn zjit_alloc_size() -> usize {
+pub fn zjit_alloc_bytes() -> usize {
     jit::GLOBAL_ALLOCATOR.alloc_size.load(Ordering::SeqCst)
 }
 

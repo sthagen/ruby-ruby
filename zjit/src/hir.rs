@@ -675,6 +675,8 @@ pub enum Insn {
     GetIvar { self_val: InsnId, id: ID, state: InsnId },
     /// Set `self_val`'s instance variable `id` to `val`
     SetIvar { self_val: InsnId, id: ID, val: InsnId, state: InsnId },
+    /// Set `self_val`'s instance variable `id` to `val` using the interpreter inline cache
+    SetInstanceVariable { self_val: InsnId, id: ID, ic: *const iseq_inline_constant_cache, val: InsnId, state: InsnId },
     /// Check whether an instance variable exists on `self_val`
     DefinedIvar { self_val: InsnId, id: ID, pushval: VALUE, state: InsnId },
 
@@ -866,7 +868,7 @@ impl Insn {
             | Insn::PatchPoint { .. } | Insn::SetIvar { .. } | Insn::SetClassVar { .. } | Insn::ArrayExtend { .. }
             | Insn::ArrayPush { .. } | Insn::SideExit { .. } | Insn::SetGlobal { .. }
             | Insn::SetLocal { .. } | Insn::Throw { .. } | Insn::IncrCounter(_) | Insn::IncrCounterPtr { .. }
-            | Insn::CheckInterrupts { .. } | Insn::GuardBlockParamProxy { .. } => false,
+            | Insn::CheckInterrupts { .. } | Insn::GuardBlockParamProxy { .. } | Insn::SetInstanceVariable { .. } => false,
             _ => true,
         }
     }
@@ -1193,6 +1195,7 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
             Insn::LoadSelf => write!(f, "LoadSelf"),
             &Insn::LoadField { recv, id, offset, return_type: _ } => write!(f, "LoadField {recv}, :{}@{:p}", id.contents_lossy(), self.ptr_map.map_offset(offset)),
             Insn::SetIvar { self_val, id, val, .. } => write!(f, "SetIvar {self_val}, :{}, {val}", id.contents_lossy()),
+            Insn::SetInstanceVariable { self_val, id, val, .. } => write!(f, "SetInstanceVariable {self_val}, :{}, {val}", id.contents_lossy()),
             Insn::GetGlobal { id, .. } => write!(f, "GetGlobal :{}", id.contents_lossy()),
             Insn::SetGlobal { id, val, .. } => write!(f, "SetGlobal :{}, {val}", id.contents_lossy()),
             &Insn::GetLocal { level, ep_offset, use_sp: true, rest_param } => write!(f, "GetLocal l{level}, SP@{}{}", ep_offset + 1, if rest_param { ", *" } else { "" }),
@@ -1817,6 +1820,7 @@ impl Function {
             &GetIvar { self_val, id, state } => GetIvar { self_val: find!(self_val), id, state },
             &LoadField { recv, id, offset, return_type } => LoadField { recv: find!(recv), id, offset, return_type },
             &SetIvar { self_val, id, val, state } => SetIvar { self_val: find!(self_val), id, val: find!(val), state },
+            &SetInstanceVariable { self_val, id, ic, val, state } => SetInstanceVariable { self_val: find!(self_val), id, ic, val: find!(val), state },
             &GetClassVar { id, ic, state } => GetClassVar { id, ic, state },
             &SetClassVar { id, val, ic, state } => SetClassVar { id, val: find!(val), ic, state },
             &SetLocal { val, ep_offset, level } => SetLocal { val: find!(val), ep_offset, level },
@@ -1870,7 +1874,8 @@ impl Function {
             | Insn::IfTrue { .. } | Insn::IfFalse { .. } | Insn::Return { .. } | Insn::Throw { .. }
             | Insn::PatchPoint { .. } | Insn::SetIvar { .. } | Insn::SetClassVar { .. } | Insn::ArrayExtend { .. }
             | Insn::ArrayPush { .. } | Insn::SideExit { .. } | Insn::SetLocal { .. } | Insn::IncrCounter(_)
-            | Insn::CheckInterrupts { .. } | Insn::GuardBlockParamProxy { .. } | Insn::IncrCounterPtr { .. } =>
+            | Insn::CheckInterrupts { .. } | Insn::GuardBlockParamProxy { .. } | Insn::IncrCounterPtr { .. }
+            | Insn::SetInstanceVariable { .. } =>
                 panic!("Cannot infer type of instruction with no output: {}", self.insns[insn.0]),
             Insn::Const { val: Const::Value(val) } => Type::from_value(*val),
             Insn::Const { val: Const::CBool(val) } => Type::from_cbool(*val),
@@ -2286,7 +2291,7 @@ impl Function {
                         };
                         let ci = unsafe { get_call_data_ci(cd) }; // info about the call site
 
-                        // If the call site info indicates that the `Function` has `VM_CALL_ARGS_SPLAT` set, then
+                        // If the call site info indicates that the `Function` has overly complex arguments, then
                         // do not optimize into a `SendWithoutBlockDirect`.
                         let flags = unsafe { rb_vm_ci_flag(ci) };
                         if unspecializable_call_type(flags) {
@@ -3379,7 +3384,8 @@ impl Function {
                 worklist.push_back(self_val);
                 worklist.push_back(state);
             }
-            &Insn::SetIvar { self_val, val, state, .. } => {
+            &Insn::SetIvar { self_val, val, state, .. }
+            | &Insn::SetInstanceVariable { self_val, val, state, .. } => {
                 worklist.push_back(self_val);
                 worklist.push_back(val);
                 worklist.push_back(state);
@@ -4265,13 +4271,13 @@ fn num_locals(iseq: *const rb_iseq_t) -> usize {
 
 /// If we can't handle the type of send (yet), bail out.
 fn unhandled_call_type(flags: u32) -> Result<(), CallType> {
-    if (flags & VM_CALL_KWARG) != 0 { return Err(CallType::Kwarg); }
     if (flags & VM_CALL_TAILCALL) != 0 { return Err(CallType::Tailcall); }
     Ok(())
 }
 
-/// If a given call uses splatting or block arguments, then we won't specialize.
+/// If a given call uses overly complex arguments, then we won't specialize.
 fn unspecializable_call_type(flags: u32) -> bool {
+    ((flags & VM_CALL_KWARG) != 0) ||
     ((flags & VM_CALL_ARGS_SPLAT) != 0) ||
     ((flags & VM_CALL_ARGS_BLOCKARG) != 0)
 }
@@ -4407,6 +4413,34 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
             // profiled cfp->self.
             if opcode == YARVINSN_getinstancevariable || opcode == YARVINSN_trace_getinstancevariable {
                 profiles.profile_self(&exit_state, self_param);
+            } else if opcode == YARVINSN_invokeblock || opcode == YARVINSN_trace_invokeblock {
+                if get_option!(stats) {
+                    let iseq_insn_idx = exit_state.insn_idx;
+                    if let Some(operand_types) = profiles.payload.profile.get_operand_types(iseq_insn_idx) {
+                        if let [self_type_distribution] = &operand_types[..] {
+                            let summary = TypeDistributionSummary::new(&self_type_distribution);
+                            if summary.is_monomorphic() {
+                                let obj = summary.bucket(0).class();
+                                let bh_type = unsafe { rb_vm_block_handler_type(obj) };
+                                if bh_type == block_handler_type_iseq {
+                                    fun.push_insn(block, Insn::IncrCounter(Counter::invokeblock_handler_monomorphic_iseq));
+                                } else if bh_type == block_handler_type_ifunc {
+                                    fun.push_insn(block, Insn::IncrCounter(Counter::invokeblock_handler_monomorphic_ifunc));
+                                } else {
+                                    fun.push_insn(block, Insn::IncrCounter(Counter::invokeblock_handler_monomorphic_other));
+                                }
+                            } else if summary.is_skewed_polymorphic() || summary.is_polymorphic() {
+                                fun.push_insn(block, Insn::IncrCounter(Counter::invokeblock_handler_polymorphic));
+                            } else if summary.is_skewed_megamorphic() || summary.is_megamorphic() {
+                                fun.push_insn(block, Insn::IncrCounter(Counter::invokeblock_handler_megamorphic));
+                            } else {
+                                fun.push_insn(block, Insn::IncrCounter(Counter::invokeblock_handler_no_profiles));
+                            }
+                        } else {
+                            fun.push_insn(block, Insn::IncrCounter(Counter::invokeblock_handler_no_profiles));
+                        }
+                    }
+                }
             } else {
                 profiles.profile_stack(&exit_state);
             }
@@ -5061,13 +5095,13 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                 }
                 YARVINSN_setinstancevariable => {
                     let id = ID(get_arg(pc, 0).as_u64());
-                    // ic is in arg 1
+                    let ic = get_arg(pc, 1).as_ptr();
                     let exit_id = fun.push_insn(block, Insn::Snapshot { state: exit_state });
                     // Assume single-Ractor mode to omit gen_prepare_non_leaf_call on gen_setivar
                     // TODO: We only really need this if self_val is a class/module
                     fun.push_insn(block, Insn::PatchPoint { invariant: Invariant::SingleRactorMode, state: exit_id });
                     let val = state.stack_pop()?;
-                    fun.push_insn(block, Insn::SetIvar { self_val: self_param, id, val, state: exit_id });
+                    fun.push_insn(block, Insn::SetInstanceVariable { self_val: self_param, id, ic, val, state: exit_id });
                 }
                 YARVINSN_getclassvariable => {
                     let id = ID(get_arg(pc, 0).as_u64());
