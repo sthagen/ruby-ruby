@@ -4,8 +4,6 @@ require_relative "version"
 require_relative "rubygems_integration"
 require_relative "current_ruby"
 
-autoload :Pathname, "pathname"
-
 module Bundler
   autoload :WINDOWS, File.expand_path("constants", __dir__)
   autoload :FREEBSD, File.expand_path("constants", __dir__)
@@ -57,7 +55,7 @@ module Bundler
 
     def pwd
       Bundler.rubygems.ext_lock.synchronize do
-        Pathname.pwd
+        Dir.pwd
       end
     end
 

@@ -159,6 +159,7 @@ make_counters! {
         exit_stackoverflow,
         exit_block_param_proxy_modified,
         exit_block_param_proxy_not_iseq_or_ifunc,
+        exit_too_many_keyword_parameters,
     }
 
     // Send fallback counters that are summed as dynamic_send_count
@@ -331,8 +332,6 @@ pub enum CompileError {
     IseqStackTooLarge,
     ExceptionHandler,
     OutOfMemory,
-    RegisterSpillOnAlloc,
-    RegisterSpillOnCCall,
     ParseError(ParseError),
     JitToJitOptional,
 }
@@ -347,8 +346,6 @@ pub fn exit_counter_for_compile_error(compile_error: &CompileError) -> Counter {
         IseqStackTooLarge     => compile_error_iseq_stack_too_large,
         ExceptionHandler      => compile_error_exception_handler,
         OutOfMemory           => compile_error_out_of_memory,
-        RegisterSpillOnAlloc  => compile_error_register_spill_on_alloc,
-        RegisterSpillOnCCall  => compile_error_register_spill_on_ccall,
         JitToJitOptional      => compile_error_jit_to_jit_optional,
         ParseError(parse_error) => match parse_error {
             StackUnderflow(_)       => compile_error_parse_stack_underflow,
@@ -399,6 +396,7 @@ pub fn side_exit_counter(reason: crate::hir::SideExitReason) -> Counter {
         StackOverflow                 => exit_stackoverflow,
         BlockParamProxyModified       => exit_block_param_proxy_modified,
         BlockParamProxyNotIseqOrIfunc => exit_block_param_proxy_not_iseq_or_ifunc,
+        TooManyKeywordParameters      => exit_too_many_keyword_parameters,
         PatchPoint(Invariant::BOPRedefined { .. })
                                       => exit_patchpoint_bop_redefined,
         PatchPoint(Invariant::MethodRedefined { .. })

@@ -13,7 +13,8 @@ use crate::invariants::{
     track_bop_assumption, track_cme_assumption, track_no_ep_escape_assumption, track_no_trace_point_assumption,
     track_single_ractor_assumption, track_stable_constant_names_assumption, track_no_singleton_class_assumption
 };
-use crate::gc::{append_gc_offsets, get_or_create_iseq_payload, get_or_create_iseq_payload_ptr, IseqCodePtrs, IseqPayload, IseqStatus};
+use crate::gc::append_gc_offsets;
+use crate::payload::{get_or_create_iseq_payload, get_or_create_iseq_payload_ptr, IseqCodePtrs, IseqPayload, IseqStatus};
 use crate::state::ZJITState;
 use crate::stats::{send_fallback_counter, exit_counter_for_compile_error, incr_counter, incr_counter_by, send_fallback_counter_for_method_type, send_without_block_fallback_counter_for_method_type, send_without_block_fallback_counter_for_optimized_method_type, send_fallback_counter_ptr_for_opcode, CompileError};
 use crate::stats::{counter_ptr, with_time_stat, Counter, Counter::{compile_time_ns, exit_compile_error}};
@@ -432,6 +433,7 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
         Insn::SetClassVar { id, val, ic, state } => no_output!(gen_setclassvar(jit, asm, *id, opnd!(val), *ic, &function.frame_state(*state))),
         Insn::SetIvar { self_val, id, val, state } => no_output!(gen_setivar(jit, asm, opnd!(self_val), *id, opnd!(val), &function.frame_state(*state))),
         Insn::SetInstanceVariable { self_val, id, ic, val, state } => no_output!(gen_set_instance_variable(jit, asm, opnd!(self_val), *id, *ic, opnd!(val), &function.frame_state(*state))),
+        Insn::FixnumBitCheck { val, index } => gen_fixnum_bit_check(asm, opnd!(val), *index),
         Insn::SideExit { state, reason } => no_output!(gen_side_exit(jit, asm, reason, &function.frame_state(*state))),
         Insn::PutSpecialObject { value_type } => gen_putspecialobject(asm, *value_type),
         Insn::AnyToString { val, str, state } => gen_anytostring(asm, opnd!(val), opnd!(str), &function.frame_state(*state)),
@@ -649,6 +651,12 @@ fn gen_get_constant_path(jit: &JITState, asm: &mut Assembler, ic: *const iseq_in
     gen_prepare_non_leaf_call(jit, asm, state);
 
     asm_ccall!(asm, rb_vm_opt_getconstant_path, EC, CFP, Opnd::const_ptr(ic))
+}
+
+fn gen_fixnum_bit_check(asm: &mut Assembler, val: Opnd, index: u8) -> Opnd {
+    let bit_test: u64 = 0x01 << (index + 1);
+    asm.test(val, bit_test.into());
+    asm.csel_z(Qtrue.into(), Qfalse.into())
 }
 
 fn gen_invokebuiltin(jit: &JITState, asm: &mut Assembler, state: &FrameState, bf: &rb_builtin_function, leaf: bool, args: Vec<Opnd>) -> lir::Opnd {
@@ -2163,7 +2171,8 @@ fn gen_function_stub(cb: &mut CodeBlock, iseq_call: IseqCallRef) -> Result<CodeP
     })
 }
 
-/// Generate a trampoline that is used when a
+/// Generate a trampoline that is used when a function stub is called.
+/// See [gen_function_stub] for how it's used.
 pub fn gen_function_stub_hit_trampoline(cb: &mut CodeBlock) -> Result<CodePtr, CompileError> {
     let (mut asm, scratch_reg) = Assembler::new_with_scratch_reg();
     asm_comment!(asm, "function_stub_hit trampoline");
