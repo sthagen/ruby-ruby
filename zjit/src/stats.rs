@@ -128,8 +128,12 @@ make_counters! {
     exit {
         // exit_: Side exits reasons
         exit_compile_error,
-        exit_unknown_newarray_send,
-        exit_unknown_duparray_send,
+        exit_unhandled_newarray_send_min,
+        exit_unhandled_newarray_send_hash,
+        exit_unhandled_newarray_send_pack,
+        exit_unhandled_newarray_send_pack_buffer,
+        exit_unhandled_newarray_send_unknown,
+        exit_unhandled_duparray_send,
         exit_unhandled_tailcall,
         exit_unhandled_splat,
         exit_unhandled_kwarg,
@@ -174,7 +178,7 @@ make_counters! {
         send_fallback_send_without_block_cfunc_not_variadic,
         send_fallback_send_without_block_cfunc_array_variadic,
         send_fallback_send_without_block_not_optimized_method_type,
-        send_fallback_send_without_block_not_optimized_optimized_method_type,
+        send_fallback_send_without_block_not_optimized_method_type_optimized,
         send_fallback_send_without_block_direct_too_many_args,
         send_fallback_send_polymorphic,
         send_fallback_send_megamorphic,
@@ -186,7 +190,7 @@ make_counters! {
         send_fallback_one_or_more_complex_arg_pass,
         send_fallback_bmethod_non_iseq_proc,
         send_fallback_obj_to_string_not_string,
-        send_fallback_not_optimized_instruction,
+        send_fallback_uncategorized,
     }
 
     // Optimized send counters that are summed as optimized_send_count
@@ -217,6 +221,13 @@ make_counters! {
     compile_error_validation_duplicate_instruction,
     compile_error_validation_type_check_failure,
     compile_error_validation_misc_validation_error,
+
+    // unhandled_hir_insn_: Unhandled HIR instructions
+    unhandled_hir_insn_array_max,
+    unhandled_hir_insn_fixnum_div,
+    unhandled_hir_insn_throw,
+    unhandled_hir_insn_invokebuiltin,
+    unhandled_hir_insn_unknown,
 
     // The number of times YARV instructions are executed on JIT code
     zjit_insn_count,
@@ -377,14 +388,32 @@ pub fn exit_counter_for_compile_error(compile_error: &CompileError) -> Counter {
     }
 }
 
+pub fn exit_counter_for_unhandled_hir_insn(insn: &crate::hir::Insn) -> Counter {
+    use crate::hir::Insn::*;
+    use crate::stats::Counter::*;
+    match insn {
+        ArrayMax { .. }      => unhandled_hir_insn_array_max,
+        FixnumDiv { .. }     => unhandled_hir_insn_fixnum_div,
+        Throw { .. }         => unhandled_hir_insn_throw,
+        InvokeBuiltin { .. } => unhandled_hir_insn_invokebuiltin,
+        _                    => unhandled_hir_insn_unknown,
+    }
+}
+
 pub fn side_exit_counter(reason: crate::hir::SideExitReason) -> Counter {
     use crate::hir::SideExitReason::*;
     use crate::hir::CallType::*;
     use crate::hir::Invariant;
     use crate::stats::Counter::*;
     match reason {
-        UnknownNewarraySend(_)        => exit_unknown_newarray_send,
-        UnknownDuparraySend(_)        => exit_unknown_duparray_send,
+        UnhandledNewarraySend(send_type) => match send_type {
+            VM_OPT_NEWARRAY_SEND_MIN  => exit_unhandled_newarray_send_min,
+            VM_OPT_NEWARRAY_SEND_HASH => exit_unhandled_newarray_send_hash,
+            VM_OPT_NEWARRAY_SEND_PACK => exit_unhandled_newarray_send_pack,
+            VM_OPT_NEWARRAY_SEND_PACK_BUFFER => exit_unhandled_newarray_send_pack_buffer,
+            _                         => exit_unhandled_newarray_send_unknown,
+        }
+        UnhandledDuparraySend(_)      => exit_unhandled_duparray_send,
         UnhandledCallType(Tailcall)   => exit_unhandled_tailcall,
         UnhandledCallType(Splat)      => exit_unhandled_splat,
         UnhandledCallType(Kwarg)      => exit_unhandled_kwarg,
@@ -442,8 +471,8 @@ pub fn send_fallback_counter(reason: crate::hir::SendFallbackReason) -> Counter 
         SendWithoutBlockCfuncNotVariadic          => send_fallback_send_without_block_cfunc_not_variadic,
         SendWithoutBlockCfuncArrayVariadic        => send_fallback_send_without_block_cfunc_array_variadic,
         SendWithoutBlockNotOptimizedMethodType(_) => send_fallback_send_without_block_not_optimized_method_type,
-        SendWithoutBlockNotOptimizedOptimizedMethodType(_)
-                                                  => send_fallback_send_without_block_not_optimized_optimized_method_type,
+        SendWithoutBlockNotOptimizedMethodTypeOptimized(_)
+                                                  => send_fallback_send_without_block_not_optimized_method_type_optimized,
         SendWithoutBlockDirectTooManyArgs         => send_fallback_send_without_block_direct_too_many_args,
         SendPolymorphic                           => send_fallback_send_polymorphic,
         SendMegamorphic                           => send_fallback_send_megamorphic,
@@ -453,7 +482,7 @@ pub fn send_fallback_counter(reason: crate::hir::SendFallbackReason) -> Counter 
         SendNotOptimizedMethodType(_)             => send_fallback_send_not_optimized_method_type,
         CCallWithFrameTooManyArgs                 => send_fallback_ccall_with_frame_too_many_args,
         ObjToStringNotString                      => send_fallback_obj_to_string_not_string,
-        NotOptimizedInstruction(_)                => send_fallback_not_optimized_instruction,
+        Uncategorized(_)                          => send_fallback_uncategorized,
     }
 }
 
@@ -621,11 +650,11 @@ pub extern "C" fn rb_zjit_stats(_ec: EcPtr, _self: VALUE, target_key: VALUE) -> 
     set_stat_usize!(hash, "optimized_send_count", optimized_send_count);
     set_stat_usize!(hash, "send_count", dynamic_send_count + optimized_send_count);
 
-    // Set send fallback counters for NotOptimizedInstruction
+    // Set send fallback counters for Uncategorized
     let send_fallback_counters = ZJITState::get_send_fallback_counters();
     for (op_idx, count) in send_fallback_counters.iter().enumerate().take(VM_INSTRUCTION_SIZE as usize) {
         let op_name = insn_name(op_idx);
-        let key_string = "not_optimized_yarv_insn_".to_owned() + &op_name;
+        let key_string = "uncategorized_fallback_yarv_insn_".to_owned() + &op_name;
         set_stat_usize!(hash, &key_string, *count);
     }
 

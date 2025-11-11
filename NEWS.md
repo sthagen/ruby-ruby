@@ -170,7 +170,7 @@ The following bundled gems are promoted from default gems.
 * rdoc 6.15.1
 * win32ole 1.9.2
 * irb 1.15.3
-* reline 0.6.2
+* reline 0.6.3
 * readline 0.0.4
 * fiddle 1.1.8
 
@@ -197,7 +197,7 @@ The following default gems are updated.
 * fileutils 1.8.0
 * io-console 0.8.1
 * io-nonblock 0.3.2
-* io-wait 0.3.3
+* io-wait 0.3.5.test1
 * json 2.16.0
 * net-http 0.7.0
 * openssl 4.0.0.pre

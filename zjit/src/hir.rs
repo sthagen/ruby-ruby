@@ -456,8 +456,8 @@ impl PtrPrintMap {
 
 #[derive(Debug, Clone, Copy)]
 pub enum SideExitReason {
-    UnknownNewarraySend(vm_opt_newarray_send_type),
-    UnknownDuparraySend(u64),
+    UnhandledNewarraySend(vm_opt_newarray_send_type),
+    UnhandledDuparraySend(u64),
     UnknownSpecialVariable(u64),
     UnhandledHIRInsn(InsnId),
     UnhandledYARVInsn(u32),
@@ -547,13 +547,13 @@ impl std::fmt::Display for SideExitReason {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
             SideExitReason::UnhandledYARVInsn(opcode) => write!(f, "UnhandledYARVInsn({})", insn_name(*opcode as usize)),
-            SideExitReason::UnknownNewarraySend(VM_OPT_NEWARRAY_SEND_MAX) => write!(f, "UnknownNewarraySend(MAX)"),
-            SideExitReason::UnknownNewarraySend(VM_OPT_NEWARRAY_SEND_MIN) => write!(f, "UnknownNewarraySend(MIN)"),
-            SideExitReason::UnknownNewarraySend(VM_OPT_NEWARRAY_SEND_HASH) => write!(f, "UnknownNewarraySend(HASH)"),
-            SideExitReason::UnknownNewarraySend(VM_OPT_NEWARRAY_SEND_PACK) => write!(f, "UnknownNewarraySend(PACK)"),
-            SideExitReason::UnknownNewarraySend(VM_OPT_NEWARRAY_SEND_PACK_BUFFER) => write!(f, "UnknownNewarraySend(PACK_BUFFER)"),
-            SideExitReason::UnknownNewarraySend(VM_OPT_NEWARRAY_SEND_INCLUDE_P) => write!(f, "UnknownNewarraySend(INCLUDE_P)"),
-            SideExitReason::UnknownDuparraySend(method_id) => write!(f, "UnknownDuparraySend({})", method_id),
+            SideExitReason::UnhandledNewarraySend(VM_OPT_NEWARRAY_SEND_MAX) => write!(f, "UnhandledNewarraySend(MAX)"),
+            SideExitReason::UnhandledNewarraySend(VM_OPT_NEWARRAY_SEND_MIN) => write!(f, "UnhandledNewarraySend(MIN)"),
+            SideExitReason::UnhandledNewarraySend(VM_OPT_NEWARRAY_SEND_HASH) => write!(f, "UnhandledNewarraySend(HASH)"),
+            SideExitReason::UnhandledNewarraySend(VM_OPT_NEWARRAY_SEND_PACK) => write!(f, "UnhandledNewarraySend(PACK)"),
+            SideExitReason::UnhandledNewarraySend(VM_OPT_NEWARRAY_SEND_PACK_BUFFER) => write!(f, "UnhandledNewarraySend(PACK_BUFFER)"),
+            SideExitReason::UnhandledNewarraySend(VM_OPT_NEWARRAY_SEND_INCLUDE_P) => write!(f, "UnhandledNewarraySend(INCLUDE_P)"),
+            SideExitReason::UnhandledDuparraySend(method_id) => write!(f, "UnhandledDuparraySend({})", method_id),
             SideExitReason::GuardType(guard_type) => write!(f, "GuardType({guard_type})"),
             SideExitReason::GuardTypeNot(guard_type) => write!(f, "GuardTypeNot({guard_type})"),
             SideExitReason::GuardBitEquals(value) => write!(f, "GuardBitEquals({})", value.print(&PtrPrintMap::identity())),
@@ -570,15 +570,15 @@ pub enum ReceiverTypeResolution {
     /// No profile information available for the receiver
     NoProfile,
     /// The receiver has a monomorphic profile (single type observed, guard needed)
-    Monomorphic { class: VALUE, profiled_type: ProfiledType },
+    Monomorphic { profiled_type: ProfiledType },
     /// The receiver is polymorphic (multiple types, none dominant)
     Polymorphic,
     /// The receiver has a skewed polymorphic profile (dominant type with some other types, guard needed)
-    SkewedPolymorphic { class: VALUE, profiled_type: ProfiledType },
+    SkewedPolymorphic { profiled_type: ProfiledType },
     /// More than N types seen with no clear winner
     Megamorphic,
     /// Megamorphic, but with a significant skew towards one type
-    SkewedMegamorphic { class: VALUE, profiled_type: ProfiledType },
+    SkewedMegamorphic { profiled_type: ProfiledType },
     /// The receiver's class is statically known at JIT compile-time (no guard needed)
     StaticallyKnown { class: VALUE },
 }
@@ -592,7 +592,7 @@ pub enum SendFallbackReason {
     SendWithoutBlockCfuncNotVariadic,
     SendWithoutBlockCfuncArrayVariadic,
     SendWithoutBlockNotOptimizedMethodType(MethodType),
-    SendWithoutBlockNotOptimizedOptimizedMethodType(OptimizedMethodType),
+    SendWithoutBlockNotOptimizedMethodTypeOptimized(OptimizedMethodType),
     SendWithoutBlockDirectTooManyArgs,
     SendPolymorphic,
     SendMegamorphic,
@@ -607,7 +607,7 @@ pub enum SendFallbackReason {
     ComplexArgPass,
     /// Initial fallback reason for every instruction, which should be mutated to
     /// a more actionable reason when an attempt to specialize the instruction fails.
-    NotOptimizedInstruction(ruby_vminsn_type),
+    Uncategorized(ruby_vminsn_type),
 }
 
 /// An instruction in the SSA IR. The output of an instruction is referred to by the index of
@@ -2136,41 +2136,41 @@ impl Function {
         }
     }
 
-    /// Return the interpreter-profiled type of the HIR instruction at the given ISEQ instruction
-    /// index, if it is known. This historical type record is not a guarantee and must be checked
-    /// with a GuardType or similar.
+    /// Return the profiled type of the HIR instruction at the given ISEQ instruction
+    /// index, if it is known to be monomorphic or skewed polymorphic. This historical type
+    /// record is not a guarantee and must be checked with a GuardType or similar.
     fn profiled_type_of_at(&self, insn: InsnId, iseq_insn_idx: usize) -> Option<ProfiledType> {
-        let profiles = self.profiles.as_ref()?;
-        let entries = profiles.types.get(&iseq_insn_idx)?;
-        let insn = self.chase_insn(insn);
-        for (entry_insn, entry_type_summary) in entries {
-            if self.union_find.borrow().find_const(*entry_insn) == insn {
-                if entry_type_summary.is_monomorphic() || entry_type_summary.is_skewed_polymorphic() {
-                    return Some(entry_type_summary.bucket(0));
-                } else {
-                    return None;
-                }
-            }
+        match self.resolve_receiver_type_from_profile(insn, iseq_insn_idx) {
+            ReceiverTypeResolution::Monomorphic { profiled_type }
+            | ReceiverTypeResolution::SkewedPolymorphic { profiled_type } => Some(profiled_type),
+            _ => None,
         }
-        None
     }
 
     /// Resolve the receiver type for method dispatch optimization.
     ///
     /// Takes the receiver's Type, receiver HIR instruction, and ISEQ instruction index.
-    /// Performs a single iteration through profile data to determine the receiver type.
+    /// First checks if the receiver's class is statically known, otherwise consults profile data.
     ///
     /// Returns:
     /// - `StaticallyKnown` if the receiver's exact class is known at compile-time
+    /// - Result of [`Self::resolve_receiver_type_from_profile`] if we need to check profile data
+    fn resolve_receiver_type(&self, recv: InsnId, recv_type: Type, insn_idx: usize) -> ReceiverTypeResolution {
+        if let Some(class) = recv_type.runtime_exact_ruby_class() {
+            return ReceiverTypeResolution::StaticallyKnown { class };
+        }
+        self.resolve_receiver_type_from_profile(recv, insn_idx)
+    }
+
+    /// Resolve the receiver type for method dispatch optimization from profile data.
+    ///
+    /// Returns:
     /// - `Monomorphic`/`SkewedPolymorphic` if we have usable profile data
     /// - `Polymorphic` if the receiver has multiple types
     /// - `Megamorphic`/`SkewedMegamorphic` if the receiver has too many types to optimize
     ///   (SkewedMegamorphic may be optimized in the future, but for now we don't)
     /// - `NoProfile` if we have no type information
-    fn resolve_receiver_type(&self, recv: InsnId, recv_type: Type, insn_idx: usize) -> ReceiverTypeResolution {
-        if let Some(class) = recv_type.runtime_exact_ruby_class() {
-            return ReceiverTypeResolution::StaticallyKnown { class };
-        }
+    fn resolve_receiver_type_from_profile(&self, recv: InsnId, insn_idx: usize) -> ReceiverTypeResolution {
         let Some(profiles) = self.profiles.as_ref() else {
             return ReceiverTypeResolution::NoProfile;
         };
@@ -2183,22 +2183,13 @@ impl Function {
             if self.union_find.borrow().find_const(*entry_insn) == recv {
                 if entry_type_summary.is_monomorphic() {
                     let profiled_type = entry_type_summary.bucket(0);
-                    return ReceiverTypeResolution::Monomorphic {
-                        class: profiled_type.class(),
-                        profiled_type,
-                    };
+                    return ReceiverTypeResolution::Monomorphic { profiled_type };
                 } else if entry_type_summary.is_skewed_polymorphic() {
                     let profiled_type = entry_type_summary.bucket(0);
-                    return ReceiverTypeResolution::SkewedPolymorphic {
-                        class: profiled_type.class(),
-                        profiled_type,
-                    };
+                    return ReceiverTypeResolution::SkewedPolymorphic { profiled_type };
                 } else if entry_type_summary.is_skewed_megamorphic() {
                     let profiled_type = entry_type_summary.bucket(0);
-                    return ReceiverTypeResolution::SkewedMegamorphic {
-                        class: profiled_type.class(),
-                        profiled_type,
-                    };
+                    return ReceiverTypeResolution::SkewedMegamorphic { profiled_type };
                 } else if entry_type_summary.is_polymorphic() {
                     return ReceiverTypeResolution::Polymorphic;
                 } else if entry_type_summary.is_megamorphic() {
@@ -2356,8 +2347,8 @@ impl Function {
                         let frame_state = self.frame_state(state);
                         let (klass, profiled_type) = match self.resolve_receiver_type(recv, self.type_of(recv), frame_state.insn_idx) {
                             ReceiverTypeResolution::StaticallyKnown { class } => (class, None),
-                            ReceiverTypeResolution::Monomorphic { class, profiled_type }
-                            | ReceiverTypeResolution::SkewedPolymorphic { class, profiled_type } => (class, Some(profiled_type)),
+                            ReceiverTypeResolution::Monomorphic { profiled_type }
+                            | ReceiverTypeResolution::SkewedPolymorphic { profiled_type } => (profiled_type.class(), Some(profiled_type)),
                             ReceiverTypeResolution::SkewedMegamorphic { .. }
                             | ReceiverTypeResolution::Megamorphic => {
                                 if get_option!(stats) {
@@ -2517,7 +2508,7 @@ impl Function {
                                 }
                                 // Get the profiled type to check if the fields is embedded or heap allocated.
                                 let Some(is_embedded) = self.profiled_type_of_at(recv, frame_state.insn_idx).map(|t| t.flags().is_struct_embedded()) else {
-                                    // No (monomorphic) profile info
+                                    // No (monomorphic/skewed polymorphic) profile info
                                     self.push_insn_id(block, insn_id); continue;
                                 };
                                 self.push_insn(block, Insn::PatchPoint { invariant: Invariant::MethodRedefined { klass, method: mid, cme }, state });
@@ -2543,7 +2534,7 @@ impl Function {
                                 };
                                 self.make_equal_to(insn_id, replacement);
                             } else {
-                                self.set_dynamic_send_reason(insn_id, SendWithoutBlockNotOptimizedOptimizedMethodType(OptimizedMethodType::from(opt_type)));
+                                self.set_dynamic_send_reason(insn_id, SendWithoutBlockNotOptimizedMethodTypeOptimized(OptimizedMethodType::from(opt_type)));
                                 self.push_insn_id(block, insn_id); continue;
                             }
                         } else {
@@ -2557,8 +2548,8 @@ impl Function {
                         let frame_state = self.frame_state(state);
                         let klass = match self.resolve_receiver_type(recv, self.type_of(recv), frame_state.insn_idx) {
                             ReceiverTypeResolution::StaticallyKnown { class } => class,
-                            ReceiverTypeResolution::Monomorphic { class, .. }
-                            | ReceiverTypeResolution::SkewedPolymorphic { class, .. } => class,
+                            ReceiverTypeResolution::Monomorphic { profiled_type }
+                            | ReceiverTypeResolution::SkewedPolymorphic { profiled_type } => profiled_type.class(),
                             ReceiverTypeResolution::SkewedMegamorphic { .. }
                             | ReceiverTypeResolution::Megamorphic => {
                                 if get_option!(stats) {
@@ -2770,7 +2761,7 @@ impl Function {
                     Insn::GetIvar { self_val, id, state } => {
                         let frame_state = self.frame_state(state);
                         let Some(recv_type) = self.profiled_type_of_at(self_val, frame_state.insn_idx) else {
-                            // No (monomorphic) profile info
+                            // No (monomorphic/skewed polymorphic) profile info
                             self.push_insn_id(block, insn_id); continue;
                         };
                         if recv_type.flags().is_immediate() {
@@ -2845,8 +2836,8 @@ impl Function {
             let iseq_insn_idx = fun.frame_state(state).insn_idx;
             let (recv_class, profiled_type) = match fun.resolve_receiver_type(recv, self_type, iseq_insn_idx) {
                 ReceiverTypeResolution::StaticallyKnown { class } => (class, None),
-                ReceiverTypeResolution::Monomorphic { class, profiled_type }
-                | ReceiverTypeResolution::SkewedPolymorphic { class, profiled_type } => (class, Some(profiled_type)),
+                ReceiverTypeResolution::Monomorphic { profiled_type }
+                | ReceiverTypeResolution::SkewedPolymorphic { profiled_type} => (profiled_type.class(), Some(profiled_type)),
                 ReceiverTypeResolution::SkewedMegamorphic { .. } | ReceiverTypeResolution::Polymorphic | ReceiverTypeResolution::Megamorphic | ReceiverTypeResolution::NoProfile => return Err(()),
             };
 
@@ -2950,8 +2941,8 @@ impl Function {
             let iseq_insn_idx = fun.frame_state(state).insn_idx;
             let (recv_class, profiled_type) = match fun.resolve_receiver_type(recv, self_type, iseq_insn_idx) {
                 ReceiverTypeResolution::StaticallyKnown { class } => (class, None),
-                ReceiverTypeResolution::Monomorphic { class, profiled_type }
-                | ReceiverTypeResolution::SkewedPolymorphic { class, profiled_type } => (class, Some(profiled_type)),
+                ReceiverTypeResolution::Monomorphic { profiled_type }
+                | ReceiverTypeResolution::SkewedPolymorphic { profiled_type } => (profiled_type.class(), Some(profiled_type)),
                 ReceiverTypeResolution::SkewedMegamorphic { .. } | ReceiverTypeResolution::Polymorphic | ReceiverTypeResolution::Megamorphic | ReceiverTypeResolution::NoProfile => return Err(()),
             };
 
@@ -4162,6 +4153,13 @@ impl FrameState {
         state.locals.clear();
         state
     }
+
+    /// Return itself without stack. Used by leaf calls with GC to reset SP to the base pointer.
+    pub fn without_stack(&self) -> Self {
+        let mut state = self.clone();
+        state.stack.clear();
+        state
+    }
 }
 
 /// Print adaptor for [`FrameState`]. See [`PtrPrintMap`].
@@ -4658,7 +4656,7 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                         },
                         _ => {
                             // Unknown opcode; side-exit into the interpreter
-                            fun.push_insn(block, Insn::SideExit { state: exit_id, reason: SideExitReason::UnknownNewarraySend(method) });
+                            fun.push_insn(block, Insn::SideExit { state: exit_id, reason: SideExitReason::UnhandledNewarraySend(method) });
                             break;  // End the block
                         },
                     };
@@ -4686,7 +4684,7 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     let bop = match method_id {
                         x if x == ID!(include_p).0 => BOP_INCLUDE_P,
                         _ => {
-                            fun.push_insn(block, Insn::SideExit { state: exit_id, reason: SideExitReason::UnknownDuparraySend(method_id) });
+                            fun.push_insn(block, Insn::SideExit { state: exit_id, reason: SideExitReason::UnhandledDuparraySend(method_id) });
                             break;
                         },
                     };
@@ -4971,7 +4969,7 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
 
                     let args = state.stack_pop_n(argc as usize)?;
                     let recv = state.stack_pop()?;
-                    let send = fun.push_insn(block, Insn::SendWithoutBlock { recv, cd, args, state: exit_id, reason: NotOptimizedInstruction(opcode) });
+                    let send = fun.push_insn(block, Insn::SendWithoutBlock { recv, cd, args, state: exit_id, reason: Uncategorized(opcode) });
                     state.stack_push(send);
                 }
                 YARVINSN_opt_hash_freeze => {
@@ -5071,7 +5069,7 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
 
                     let args = state.stack_pop_n(argc as usize)?;
                     let recv = state.stack_pop()?;
-                    let send = fun.push_insn(block, Insn::SendWithoutBlock { recv, cd, args, state: exit_id, reason: NotOptimizedInstruction(opcode) });
+                    let send = fun.push_insn(block, Insn::SendWithoutBlock { recv, cd, args, state: exit_id, reason: Uncategorized(opcode) });
                     state.stack_push(send);
                 }
                 YARVINSN_send => {
@@ -5089,7 +5087,7 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
 
                     let args = state.stack_pop_n(argc as usize + usize::from(block_arg))?;
                     let recv = state.stack_pop()?;
-                    let send = fun.push_insn(block, Insn::Send { recv, cd, blockiseq, args, state: exit_id, reason: NotOptimizedInstruction(opcode) });
+                    let send = fun.push_insn(block, Insn::Send { recv, cd, blockiseq, args, state: exit_id, reason: Uncategorized(opcode) });
                     state.stack_push(send);
 
                     if !blockiseq.is_null() {
@@ -5119,7 +5117,7 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
 
                     let args = state.stack_pop_n(argc as usize + usize::from(forwarding))?;
                     let recv = state.stack_pop()?;
-                    let send_forward = fun.push_insn(block, Insn::SendForward { recv, cd, blockiseq, args, state: exit_id, reason: NotOptimizedInstruction(opcode) });
+                    let send_forward = fun.push_insn(block, Insn::SendForward { recv, cd, blockiseq, args, state: exit_id, reason: Uncategorized(opcode) });
                     state.stack_push(send_forward);
 
                     if !blockiseq.is_null() {
@@ -5146,7 +5144,7 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     let args = state.stack_pop_n(argc as usize + usize::from(block_arg))?;
                     let recv = state.stack_pop()?;
                     let blockiseq: IseqPtr = get_arg(pc, 1).as_ptr();
-                    let result = fun.push_insn(block, Insn::InvokeSuper { recv, cd, blockiseq, args, state: exit_id, reason: NotOptimizedInstruction(opcode) });
+                    let result = fun.push_insn(block, Insn::InvokeSuper { recv, cd, blockiseq, args, state: exit_id, reason: Uncategorized(opcode) });
                     state.stack_push(result);
 
                     if !blockiseq.is_null() {
@@ -5173,7 +5171,7 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     let argc = unsafe { vm_ci_argc((*cd).ci) };
                     let block_arg = (flags & VM_CALL_ARGS_BLOCKARG) != 0;
                     let args = state.stack_pop_n(argc as usize + usize::from(block_arg))?;
-                    let result = fun.push_insn(block, Insn::InvokeBlock { cd, args, state: exit_id, reason: NotOptimizedInstruction(opcode) });
+                    let result = fun.push_insn(block, Insn::InvokeBlock { cd, args, state: exit_id, reason: Uncategorized(opcode) });
                     state.stack_push(result);
                 }
                 YARVINSN_getglobal => {

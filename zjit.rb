@@ -162,7 +162,7 @@ class << RubyVM::ZJIT
     # Show fallback counters, ordered by the typical amount of fallbacks for the prefix at the time
     print_counters_with_prefix(prefix: 'unspecialized_send_def_type_', prompt: 'not optimized method types for send', buf:, stats:, limit: 20)
     print_counters_with_prefix(prefix: 'unspecialized_send_without_block_def_type_', prompt: 'not optimized method types for send_without_block', buf:, stats:, limit: 20)
-    print_counters_with_prefix(prefix: 'not_optimized_yarv_insn_', prompt: 'not optimized instructions', buf:, stats:, limit: 20)
+    print_counters_with_prefix(prefix: 'uncategorized_fallback_yarv_insn_', prompt: 'instructions with uncategorized fallback reason', buf:, stats:, limit: 20)
     print_counters_with_prefix(prefix: 'send_fallback_', prompt: 'send fallback reasons', buf:, stats:, limit: 20)
     print_counters_with_prefix(prefix: 'invokeblock_handler_', prompt: 'invokeblock handler', buf:, stats:, limit: 10)
 
@@ -172,8 +172,9 @@ class << RubyVM::ZJIT
     print_counters_with_prefix(prefix: 'complex_arg_pass_', prompt: 'popular complex argument-parameter features not optimized', buf:, stats:, limit: 10)
 
     # Show exit counters, ordered by the typical amount of exits for the prefix at the time
-    print_counters_with_prefix(prefix: 'unhandled_yarv_insn_', prompt: 'unhandled YARV insns', buf:, stats:, limit: 20)
     print_counters_with_prefix(prefix: 'compile_error_', prompt: 'compile error reasons', buf:, stats:, limit: 20)
+    print_counters_with_prefix(prefix: 'unhandled_yarv_insn_', prompt: 'unhandled YARV insns', buf:, stats:, limit: 20)
+    print_counters_with_prefix(prefix: 'unhandled_hir_insn_', prompt: 'unhandled HIR insns', buf:, stats:, limit: 20)
     print_counters_with_prefix(prefix: 'exit_', prompt: 'side exit reasons', buf:, stats:, limit: 20)
 
     # Show no-prefix counters, having the most important stat `ratio_in_zjit` at the end
