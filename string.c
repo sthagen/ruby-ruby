@@ -1935,8 +1935,8 @@ str_duplicate_setup_embed(VALUE klass, VALUE str, VALUE dup)
     long len = RSTRING_LEN(str);
 
     RUBY_ASSERT(STR_EMBED_P(dup));
-    RUBY_ASSERT(str_embed_capa(dup) >= len + 1);
-    MEMCPY(RSTRING(dup)->as.embed.ary, RSTRING(str)->as.embed.ary, char, len + 1);
+    RUBY_ASSERT(str_embed_capa(dup) >= len + TERM_LEN(str));
+    MEMCPY(RSTRING(dup)->as.embed.ary, RSTRING(str)->as.embed.ary, char, len + TERM_LEN(str));
     STR_SET_LEN(dup, RSTRING_LEN(str));
     return str_duplicate_setup_encoding(str, dup, flags);
 }
@@ -11972,9 +11972,9 @@ rb_str_unicode_normalize(int argc, VALUE *argv, VALUE str)
  *    unicode_normalize!(form = :nfc) -> self
  *
  *  Like String#unicode_normalize, except that the normalization
- *  is performed on +self+.
+ *  is performed on +self+ (not on a copy of +self+).
  *
- *  Related String#unicode_normalized?.
+ *  Related: see {Modifying}[rdoc-ref:String@Modifying].
  *
  */
 static VALUE
@@ -11986,8 +11986,9 @@ rb_str_unicode_normalize_bang(int argc, VALUE *argv, VALUE str)
 /*  call-seq:
  *   unicode_normalized?(form = :nfc) -> true or false
  *
- *  Returns +true+ if +self+ is in the given +form+ of Unicode normalization,
- *  +false+ otherwise.
+ *  Returns whether +self+ is in the given +form+ of Unicode normalization;
+ *  see String#unicode_normalize.
+ *
  *  The +form+ must be one of +:nfc+, +:nfd+, +:nfkc+, or +:nfkd+.
  *
  *  Examples:
@@ -12001,10 +12002,9 @@ rb_str_unicode_normalize_bang(int argc, VALUE *argv, VALUE str)
  *  Raises an exception if +self+ is not in a Unicode encoding:
  *
  *    s = "\xE0".force_encoding(Encoding::ISO_8859_1)
- *    s.unicode_normalized? # Raises Encoding::CompatibilityError.
+ *    s.unicode_normalized? # Raises Encoding::CompatibilityError
  *
- *  Related: String#unicode_normalize, String#unicode_normalize!.
- *
+ *  Related: see {Querying}[rdoc-ref:String@Querying].
  */
 static VALUE
 rb_str_unicode_normalized_p(int argc, VALUE *argv, VALUE str)
