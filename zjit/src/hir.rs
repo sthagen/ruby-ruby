@@ -721,6 +721,10 @@ pub enum Insn {
     /// Load cfp->self
     LoadSelf,
     LoadField { recv: InsnId, id: ID, offset: i32, return_type: Type },
+    /// Write `val` at an offset of `recv`.
+    /// When writing a Ruby object to a Ruby object, one must use GuardNotFrozen (or equivalent) before and WriteBarrier after.
+    StoreField { recv: InsnId, id: ID, offset: i32, val: InsnId },
+    WriteBarrier { recv: InsnId, val: InsnId },
 
     /// Get a local variable from a higher scope or the heap.
     /// If `use_sp` is true, it uses the SP register to optimize the read.
@@ -875,7 +879,7 @@ pub enum Insn {
     /// is neither ISEQ nor ifunc, which makes it incompatible with rb_block_param_proxy.
     GuardBlockParamProxy { level: u32, state: InsnId },
     /// Side-exit if val is frozen.
-    GuardNotFrozen { val: InsnId, state: InsnId },
+    GuardNotFrozen { recv: InsnId, state: InsnId },
     /// Side-exit if left is not greater than or equal to right (both operands are C long).
     GuardGreaterEq { left: InsnId, right: InsnId, state: InsnId },
     /// Side-exit if left is not less than right (both operands are C long).
@@ -908,7 +912,7 @@ impl Insn {
             | Insn::PatchPoint { .. } | Insn::SetIvar { .. } | Insn::SetClassVar { .. } | Insn::ArrayExtend { .. }
             | Insn::ArrayPush { .. } | Insn::SideExit { .. } | Insn::SetGlobal { .. }
             | Insn::SetLocal { .. } | Insn::Throw { .. } | Insn::IncrCounter(_) | Insn::IncrCounterPtr { .. }
-            | Insn::CheckInterrupts { .. } | Insn::GuardBlockParamProxy { .. } | Insn::SetInstanceVariable { .. } => false,
+            | Insn::CheckInterrupts { .. } | Insn::GuardBlockParamProxy { .. } | Insn::SetInstanceVariable { .. } | Insn::StoreField { .. } | Insn::WriteBarrier { .. } => false,
             _ => true,
         }
     }
@@ -1187,7 +1191,7 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
             Insn::GuardBitEquals { val, expected, .. } => { write!(f, "GuardBitEquals {val}, {}", expected.print(self.ptr_map)) },
             &Insn::GuardShape { val, shape, .. } => { write!(f, "GuardShape {val}, {:p}", self.ptr_map.map_shape(shape)) },
             Insn::GuardBlockParamProxy { level, .. } => write!(f, "GuardBlockParamProxy l{level}"),
-            Insn::GuardNotFrozen { val, .. } => write!(f, "GuardNotFrozen {val}"),
+            Insn::GuardNotFrozen { recv, .. } => write!(f, "GuardNotFrozen {recv}"),
             Insn::GuardLess { left, right, .. } => write!(f, "GuardLess {left}, {right}"),
             Insn::GuardGreaterEq { left, right, .. } => write!(f, "GuardGreaterEq {left}, {right}"),
             Insn::PatchPoint { invariant, .. } => { write!(f, "PatchPoint {}", invariant.print(self.ptr_map)) },
@@ -1241,6 +1245,8 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
             Insn::LoadPC => write!(f, "LoadPC"),
             Insn::LoadSelf => write!(f, "LoadSelf"),
             &Insn::LoadField { recv, id, offset, return_type: _ } => write!(f, "LoadField {recv}, :{}@{:p}", id.contents_lossy(), self.ptr_map.map_offset(offset)),
+            &Insn::StoreField { recv, id, offset, val } => write!(f, "StoreField {recv}, :{}@{:p}, {val}", id.contents_lossy(), self.ptr_map.map_offset(offset)),
+            &Insn::WriteBarrier { recv, val } => write!(f, "WriteBarrier {recv}, {val}"),
             Insn::SetIvar { self_val, id, val, .. } => write!(f, "SetIvar {self_val}, :{}, {val}", id.contents_lossy()),
             Insn::SetInstanceVariable { self_val, id, val, .. } => write!(f, "SetInstanceVariable {self_val}, :{}, {val}", id.contents_lossy()),
             Insn::GetGlobal { id, .. } => write!(f, "GetGlobal :{}", id.contents_lossy()),
@@ -1780,7 +1786,7 @@ impl Function {
             &GuardBitEquals { val, expected, state } => GuardBitEquals { val: find!(val), expected, state },
             &GuardShape { val, shape, state } => GuardShape { val: find!(val), shape, state },
             &GuardBlockParamProxy { level, state } => GuardBlockParamProxy { level, state: find!(state) },
-            &GuardNotFrozen { val, state } => GuardNotFrozen { val: find!(val), state },
+            &GuardNotFrozen { recv, state } => GuardNotFrozen { recv: find!(recv), state },
             &GuardGreaterEq { left, right, state } => GuardGreaterEq { left: find!(left), right: find!(right), state },
             &GuardLess { left, right, state } => GuardLess { left: find!(left), right: find!(right), state },
             &FixnumAdd { left, right, state } => FixnumAdd { left: find!(left), right: find!(right), state },
@@ -1888,6 +1894,8 @@ impl Function {
             &SetGlobal { id, val, state } => SetGlobal { id, val: find!(val), state },
             &GetIvar { self_val, id, state } => GetIvar { self_val: find!(self_val), id, state },
             &LoadField { recv, id, offset, return_type } => LoadField { recv: find!(recv), id, offset, return_type },
+            &StoreField { recv, id, offset, val } => StoreField { recv: find!(recv), id, offset, val: find!(val) },
+            &WriteBarrier { recv, val } => WriteBarrier { recv: find!(recv), val: find!(val) },
             &SetIvar { self_val, id, val, state } => SetIvar { self_val: find!(self_val), id, val: find!(val), state },
             &SetInstanceVariable { self_val, id, ic, val, state } => SetInstanceVariable { self_val: find!(self_val), id, ic, val: find!(val), state },
             &GetClassVar { id, ic, state } => GetClassVar { id, ic, state },
@@ -1944,8 +1952,8 @@ impl Function {
             | Insn::PatchPoint { .. } | Insn::SetIvar { .. } | Insn::SetClassVar { .. } | Insn::ArrayExtend { .. }
             | Insn::ArrayPush { .. } | Insn::SideExit { .. } | Insn::SetLocal { .. } | Insn::IncrCounter(_)
             | Insn::CheckInterrupts { .. } | Insn::GuardBlockParamProxy { .. } | Insn::IncrCounterPtr { .. }
-            | Insn::SetInstanceVariable { .. } =>
-                panic!("Cannot infer type of instruction with no output: {}", self.insns[insn.0]),
+            | Insn::SetInstanceVariable { .. } | Insn::StoreField { .. } | Insn::WriteBarrier { .. } =>
+                panic!("Cannot infer type of instruction with no output: {}. See Insn::has_output().", self.insns[insn.0]),
             Insn::Const { val: Const::Value(val) } => Type::from_value(*val),
             Insn::Const { val: Const::CBool(val) } => Type::from_cbool(*val),
             Insn::Const { val: Const::CInt8(val) } => Type::from_cint(types::CInt8, *val as i64),
@@ -1996,7 +2004,7 @@ impl Function {
             Insn::GuardTypeNot { .. } => types::BasicObject,
             Insn::GuardBitEquals { val, expected, .. } => self.type_of(*val).intersection(Type::from_const(*expected)),
             Insn::GuardShape { val, .. } => self.type_of(*val),
-            Insn::GuardNotFrozen { val, .. } => self.type_of(*val),
+            Insn::GuardNotFrozen { recv, .. } => self.type_of(*recv),
             Insn::GuardLess { left, .. } => self.type_of(*left),
             Insn::GuardGreaterEq { left, .. } => self.type_of(*left),
             Insn::FixnumAdd  { .. } => types::Fixnum,
@@ -2463,53 +2471,65 @@ impl Function {
                             self.push_insn(block, Insn::SetIvar { self_val: recv, id, val, state });
                             self.make_equal_to(insn_id, val);
                         } else if def_type == VM_METHOD_TYPE_OPTIMIZED {
-                            let opt_type = unsafe { get_cme_def_body_optimized_type(cme) };
-                            if opt_type == OPTIMIZED_METHOD_TYPE_STRUCT_AREF {
-                                if unsafe { vm_ci_argc(ci) } != 0 {
-                                    self.push_insn_id(block, insn_id); continue;
-                                }
-                                let index: i32 = unsafe { get_cme_def_body_optimized_index(cme) }
-                                                .try_into()
-                                                .unwrap();
-                                // We are going to use an encoding that takes a 4-byte immediate which
-                                // limits the offset to INT32_MAX.
-                                {
-                                    let native_index = (index as i64) * (SIZEOF_VALUE as i64);
-                                    if native_index > (i32::MAX as i64) {
-                                        self.push_insn_id(block, insn_id); continue;
+                            let opt_type: OptimizedMethodType = unsafe { get_cme_def_body_optimized_type(cme) }.into();
+                            match (opt_type, args.as_slice()) {
+                                (OptimizedMethodType::StructAref, &[]) | (OptimizedMethodType::StructAset, &[_]) => {
+                                    let index: i32 = unsafe { get_cme_def_body_optimized_index(cme) }
+                                                    .try_into()
+                                                    .unwrap();
+                                    // We are going to use an encoding that takes a 4-byte immediate which
+                                    // limits the offset to INT32_MAX.
+                                    {
+                                        let native_index = (index as i64) * (SIZEOF_VALUE as i64);
+                                        if native_index > (i32::MAX as i64) {
+                                            self.push_insn_id(block, insn_id); continue;
+                                        }
                                     }
-                                }
-                                // Get the profiled type to check if the fields is embedded or heap allocated.
-                                let Some(is_embedded) = self.profiled_type_of_at(recv, frame_state.insn_idx).map(|t| t.flags().is_struct_embedded()) else {
-                                    // No (monomorphic/skewed polymorphic) profile info
+                                    // Get the profiled type to check if the fields is embedded or heap allocated.
+                                    let Some(is_embedded) = self.profiled_type_of_at(recv, frame_state.insn_idx).map(|t| t.flags().is_struct_embedded()) else {
+                                        // No (monomorphic/skewed polymorphic) profile info
+                                        self.push_insn_id(block, insn_id); continue;
+                                    };
+                                    self.push_insn(block, Insn::PatchPoint { invariant: Invariant::MethodRedefined { klass, method: mid, cme }, state });
+                                    if klass.instance_can_have_singleton_class() {
+                                        self.push_insn(block, Insn::PatchPoint { invariant: Invariant::NoSingletonClass { klass }, state });
+                                    }
+                                    if let Some(profiled_type) = profiled_type {
+                                        recv = self.push_insn(block, Insn::GuardType { val: recv, guard_type: Type::from_profiled_type(profiled_type), state });
+                                    }
+                                    // All structs from the same Struct class should have the same
+                                    // length. So if our recv is embedded all runtime
+                                    // structs of the same class should be as well, and the same is
+                                    // true of the converse.
+                                    //
+                                    // No need for a GuardShape.
+                                    if let OptimizedMethodType::StructAset = opt_type {
+                                        recv = self.push_insn(block, Insn::GuardNotFrozen { recv, state });
+                                    }
+
+                                    let (target, offset) = if is_embedded {
+                                        let offset = RUBY_OFFSET_RSTRUCT_AS_ARY + (SIZEOF_VALUE_I32 * index);
+                                        (recv, offset)
+                                    } else {
+                                        let as_heap = self.push_insn(block, Insn::LoadField { recv, id: ID!(_as_heap), offset: RUBY_OFFSET_RSTRUCT_AS_HEAP_PTR, return_type: types::CPtr });
+                                        let offset = SIZEOF_VALUE_I32 * index;
+                                        (as_heap, offset)
+                                    };
+
+                                    let replacement = if let (OptimizedMethodType::StructAset, &[val]) = (opt_type, args.as_slice()) {
+                                        self.push_insn(block, Insn::StoreField { recv: target, id: mid, offset, val });
+                                        self.push_insn(block, Insn::WriteBarrier { recv, val });
+                                        val
+                                    } else { // StructAref
+                                        self.push_insn(block, Insn::LoadField { recv: target, id: mid, offset, return_type: types::BasicObject })
+                                    };
+                                    self.make_equal_to(insn_id, replacement);
+                                },
+                                _ => {
+                                    self.set_dynamic_send_reason(insn_id, SendWithoutBlockNotOptimizedMethodTypeOptimized(OptimizedMethodType::from(opt_type)));
                                     self.push_insn_id(block, insn_id); continue;
-                                };
-                                self.push_insn(block, Insn::PatchPoint { invariant: Invariant::MethodRedefined { klass, method: mid, cme }, state });
-                                if klass.instance_can_have_singleton_class() {
-                                    self.push_insn(block, Insn::PatchPoint { invariant: Invariant::NoSingletonClass { klass }, state });
-                                }
-                                if let Some(profiled_type) = profiled_type {
-                                    recv = self.push_insn(block, Insn::GuardType { val: recv, guard_type: Type::from_profiled_type(profiled_type), state });
-                                }
-                                // All structs from the same Struct class should have the same
-                                // length. So if our recv is embedded all runtime
-                                // structs of the same class should be as well, and the same is
-                                // true of the converse.
-                                //
-                                // No need for a GuardShape.
-                                let replacement = if is_embedded {
-                                    let offset = RUBY_OFFSET_RSTRUCT_AS_ARY + (SIZEOF_VALUE_I32 * index);
-                                    self.push_insn(block, Insn::LoadField { recv, id: mid, offset, return_type: types::BasicObject })
-                                } else {
-                                    let as_heap = self.push_insn(block, Insn::LoadField { recv, id: ID!(_as_heap), offset: RUBY_OFFSET_RSTRUCT_AS_HEAP_PTR, return_type: types::CPtr });
-                                    let offset = SIZEOF_VALUE_I32 * index;
-                                    self.push_insn(block, Insn::LoadField { recv: as_heap, id: mid, offset, return_type: types::BasicObject })
-                                };
-                                self.make_equal_to(insn_id, replacement);
-                            } else {
-                                self.set_dynamic_send_reason(insn_id, SendWithoutBlockNotOptimizedMethodTypeOptimized(OptimizedMethodType::from(opt_type)));
-                                self.push_insn_id(block, insn_id); continue;
-                            }
+                                },
+                            };
                         } else {
                             self.set_dynamic_send_reason(insn_id, SendWithoutBlockNotOptimizedMethodType(MethodType::from(def_type)));
                             self.push_insn_id(block, insn_id); continue;
@@ -3385,7 +3405,7 @@ impl Function {
             | &Insn::GuardTypeNot { val, state, .. }
             | &Insn::GuardBitEquals { val, state, .. }
             | &Insn::GuardShape { val, state, .. }
-            | &Insn::GuardNotFrozen { val, state }
+            | &Insn::GuardNotFrozen { recv: val, state }
             | &Insn::ToArray { val, state }
             | &Insn::IsMethodCfunc { val, state, .. }
             | &Insn::ToNewArray { val, state }
@@ -3510,6 +3530,11 @@ impl Function {
             }
             &Insn::LoadField { recv, .. } => {
                 worklist.push_back(recv);
+            }
+            &Insn::StoreField { recv, val, .. }
+            | &Insn::WriteBarrier { recv, val } => {
+                worklist.push_back(recv);
+                worklist.push_back(val);
             }
             &Insn::GuardBlockParamProxy { state, .. } |
             &Insn::GetGlobal { state, .. } |
@@ -3828,33 +3853,134 @@ impl Function {
         let insn_id = self.union_find.borrow().find_const(insn_id);
         let insn = self.find(insn_id);
         match insn {
-            Insn::StringCopy { val, .. } => self.assert_subtype(insn_id, val, types::StringExact),
-            Insn::StringIntern { val, .. } => self.assert_subtype(insn_id, val, types::StringExact),
-            Insn::ArrayDup { val, .. } => self.assert_subtype(insn_id, val, types::ArrayExact),
-            Insn::StringAppend { recv, other, .. } => {
-                self.assert_subtype(insn_id, recv, types::StringExact)?;
-                self.assert_subtype(insn_id, other, types::String)
+            // Instructions with no InsnId operands (except state) or nothing to assert
+            Insn::Const { .. }
+            | Insn::Param
+            | Insn::PutSpecialObject { .. }
+            | Insn::LoadField { .. }
+            | Insn::GetConstantPath { .. }
+            | Insn::IsBlockGiven
+            | Insn::GetGlobal { .. }
+            | Insn::LoadPC
+            | Insn::LoadSelf
+            | Insn::Snapshot { .. }
+            | Insn::Jump { .. }
+            | Insn::EntryPoint { .. }
+            | Insn::GuardBlockParamProxy { .. }
+            | Insn::PatchPoint { .. }
+            | Insn::SideExit { .. }
+            | Insn::IncrCounter { .. }
+            | Insn::IncrCounterPtr { .. }
+            | Insn::CheckInterrupts { .. }
+            | Insn::CCall { .. }
+            | Insn::GetClassVar { .. }
+            | Insn::GetSpecialNumber { .. }
+            | Insn::GetSpecialSymbol { .. }
+            | Insn::GetLocal { .. }
+            | Insn::StoreField { .. } => {
+                Ok(())
+            }
+            // Instructions with 1 Ruby object operand
+            Insn::Test { val }
+            | Insn::IsNil { val }
+            | Insn::IsMethodCfunc { val, .. }
+            | Insn::GuardShape { val, .. }
+            | Insn::GuardNotFrozen { recv: val, .. }
+            | Insn::SetGlobal { val, .. }
+            | Insn::SetLocal { val, .. }
+            | Insn::SetClassVar { val, .. }
+            | Insn::Return { val }
+            | Insn::Throw { val, .. }
+            | Insn::ObjToString { val, .. }
+            | Insn::GuardType { val, .. }
+            | Insn::GuardTypeNot { val, .. }
+            | Insn::ToArray { val, .. }
+            | Insn::ToNewArray { val, .. }
+            | Insn::Defined { v: val, .. }
+            | Insn::ObjectAlloc { val, .. }
+            | Insn::DupArrayInclude { target: val, .. }
+            | Insn::GetIvar { self_val: val, .. }
+            | Insn::FixnumBitCheck { val, .. } // TODO (https://github.com/Shopify/ruby/issues/859) this should check Fixnum, but then test_checkkeyword_tests_fixnum_bit fails
+            | Insn::DefinedIvar { self_val: val, .. } => {
+                self.assert_subtype(insn_id, val, types::BasicObject)
+            }
+            // Instructions with 2 Ruby object operands
+            Insn::SetIvar { self_val: left, val: right, .. }
+            | Insn::SetInstanceVariable { self_val: left, val: right, .. }
+            | Insn::NewRange { low: left, high: right, .. }
+            | Insn::AnyToString { val: left, str: right, .. }
+            | Insn::WriteBarrier { recv: left, val: right } => {
+                self.assert_subtype(insn_id, left, types::BasicObject)?;
+                self.assert_subtype(insn_id, right, types::BasicObject)
+            }
+            // Instructions with recv and a Vec of Ruby objects
+            Insn::SendWithoutBlock { recv, ref args, .. }
+            | Insn::SendWithoutBlockDirect { recv, ref args, .. }
+            | Insn::Send { recv, ref args, .. }
+            | Insn::SendForward { recv, ref args, .. }
+            | Insn::InvokeSuper { recv, ref args, .. }
+            | Insn::CCallVariadic { recv, ref args, .. }
+            | Insn::ArrayInclude { target: recv, elements: ref args, .. } => {
+                self.assert_subtype(insn_id, recv, types::BasicObject)?;
+                for &arg in args {
+                    self.assert_subtype(insn_id, arg, types::BasicObject)?;
+                }
+                Ok(())
+            }
+            // Instructions with a Vec of Ruby objects
+            Insn::CCallWithFrame { ref args, .. }
+            | Insn::InvokeBuiltin { ref args, .. }
+            | Insn::InvokeBlock { ref args, .. }
+            | Insn::NewArray { elements: ref args, .. }
+            | Insn::ArrayMax { elements: ref args, .. } => {
+                for &arg in args {
+                    self.assert_subtype(insn_id, arg, types::BasicObject)?;
+                }
+                Ok(())
             }
             Insn::NewHash { ref elements, .. } => {
                 if elements.len() % 2 != 0 {
                     return Err(ValidationError::MiscValidationError(insn_id, "NewHash elements length is not even".to_string()));
                 }
+                for &element in elements {
+                    self.assert_subtype(insn_id, element, types::BasicObject)?;
+                }
                 Ok(())
             }
-            Insn::NewRangeFixnum { low, high, .. } => {
-                self.assert_subtype(insn_id, low, types::Fixnum)?;
-                self.assert_subtype(insn_id, high, types::Fixnum)
+            Insn::StringConcat { ref strings, .. }
+            | Insn::ToRegexp { values: ref strings, .. } => {
+                for &string in strings {
+                    self.assert_subtype(insn_id, string, types::String)?;
+                }
+                Ok(())
             }
+            // Instructions with String operands
+            Insn::StringCopy { val, .. } => self.assert_subtype(insn_id, val, types::StringExact),
+            Insn::StringIntern { val, .. } => self.assert_subtype(insn_id, val, types::StringExact),
+            Insn::StringAppend { recv, other, .. } => {
+                self.assert_subtype(insn_id, recv, types::StringExact)?;
+                self.assert_subtype(insn_id, other, types::String)
+            }
+            // Instructions with Array operands
+            Insn::ArrayDup { val, .. } => self.assert_subtype(insn_id, val, types::ArrayExact),
             Insn::ArrayExtend { left, right, .. } => {
                 // TODO(max): Do left and right need to be ArrayExact?
                 self.assert_subtype(insn_id, left, types::Array)?;
                 self.assert_subtype(insn_id, right, types::Array)
             }
-            Insn::ArrayPush { array, .. } => self.assert_subtype(insn_id, array, types::Array),
-            Insn::ArrayPop { array, .. } => self.assert_subtype(insn_id, array, types::Array),
-            Insn::ArrayLength { array, .. } => self.assert_subtype(insn_id, array, types::Array),
+            Insn::ArrayPush { array, .. }
+            | Insn::ArrayPop { array, .. }
+            | Insn::ArrayLength { array, .. } => {
+                self.assert_subtype(insn_id, array, types::Array)
+            }
+            Insn::ArrayArefFixnum { array, index } => {
+                self.assert_subtype(insn_id, array, types::Array)?;
+                self.assert_subtype(insn_id, index, types::Fixnum)
+            }
+            // Instructions with Hash operands
             Insn::HashAref { hash, .. } => self.assert_subtype(insn_id, hash, types::Hash),
             Insn::HashDup { val, .. } => self.assert_subtype(insn_id, val, types::HashExact),
+            // Other
             Insn::ObjectAllocClass { class, .. } => {
                 let has_leaf_allocator = unsafe { rb_zjit_class_has_default_allocator(class) } || class_has_leaf_allocator(class);
                 if !has_leaf_allocator {
@@ -3862,9 +3988,6 @@ impl Function {
                 }
                 Ok(())
             }
-            Insn::Test { val } => self.assert_subtype(insn_id, val, types::BasicObject),
-            Insn::IsNil { val } => self.assert_subtype(insn_id, val, types::BasicObject),
-            Insn::IsMethodCfunc { val, .. } => self.assert_subtype(insn_id, val, types::BasicObject),
             Insn::IsBitEqual { left, right }
             | Insn::IsBitNotEqual { left, right } => {
                 if self.is_a(left, types::CInt) && self.is_a(right, types::CInt) {
@@ -3878,41 +4001,15 @@ impl Function {
                     return Err(ValidationError::MiscValidationError(insn_id, "IsBitEqual can only compare CInt/CInt or RubyValue/RubyValue".to_string()));
                 }
             }
-            Insn::BoxBool { val } => self.assert_subtype(insn_id, val, types::CBool),
+            Insn::BoxBool { val }
+            | Insn::IfTrue { val, .. }
+            | Insn::IfFalse { val, .. } => {
+                self.assert_subtype(insn_id, val, types::CBool)
+            }
             Insn::BoxFixnum { val, .. } => self.assert_subtype(insn_id, val, types::CInt64),
-            Insn::UnboxFixnum { val } => self.assert_subtype(insn_id, val, types::Fixnum),
-            Insn::SetGlobal { val, .. } => self.assert_subtype(insn_id, val, types::BasicObject),
-            Insn::GetIvar { self_val, .. } => self.assert_subtype(insn_id, self_val, types::BasicObject),
-            Insn::SetIvar { self_val, val, .. } => {
-                self.assert_subtype(insn_id, self_val, types::BasicObject)?;
-                self.assert_subtype(insn_id, val, types::BasicObject)
+            Insn::UnboxFixnum { val } => {
+                self.assert_subtype(insn_id, val, types::Fixnum)
             }
-            Insn::DefinedIvar { self_val, .. } => self.assert_subtype(insn_id, self_val, types::BasicObject),
-            Insn::SetLocal { val, .. } => self.assert_subtype(insn_id, val, types::BasicObject),
-            Insn::SetClassVar { val, .. } => self.assert_subtype(insn_id, val, types::BasicObject),
-            Insn::IfTrue { val, .. } | Insn::IfFalse { val, .. } => self.assert_subtype(insn_id, val, types::CBool),
-            Insn::SendWithoutBlock { recv, ref args, .. }
-            | Insn::SendWithoutBlockDirect { recv, ref args, .. }
-            | Insn::Send { recv, ref args, .. }
-            | Insn::SendForward { recv, ref args, .. }
-            | Insn::InvokeSuper { recv, ref args, .. }
-            | Insn::CCallVariadic { recv, ref args, .. } => {
-                self.assert_subtype(insn_id, recv, types::BasicObject)?;
-                for &arg in args {
-                    self.assert_subtype(insn_id, arg, types::BasicObject)?;
-                }
-                Ok(())
-            }
-            Insn::CCallWithFrame { ref args, .. }
-            | Insn::InvokeBuiltin { ref args, .. }
-            | Insn::InvokeBlock { ref args, .. } => {
-                for &arg in args {
-                    self.assert_subtype(insn_id, arg, types::BasicObject)?;
-                }
-                Ok(())
-            }
-            Insn::Return { val } => self.assert_subtype(insn_id, val, types::BasicObject),
-            Insn::Throw { val, .. } => self.assert_subtype(insn_id, val, types::BasicObject),
             Insn::FixnumAdd { left, right, .. }
             | Insn::FixnumSub { left, right, .. }
             | Insn::FixnumMult { left, right, .. }
@@ -3927,17 +4024,11 @@ impl Function {
             | Insn::FixnumAnd { left, right }
             | Insn::FixnumOr { left, right }
             | Insn::FixnumXor { left, right }
+            | Insn::NewRangeFixnum { low: left, high: right, .. }
             => {
                 self.assert_subtype(insn_id, left, types::Fixnum)?;
                 self.assert_subtype(insn_id, right, types::Fixnum)
             }
-            Insn::ObjToString { val, .. } => self.assert_subtype(insn_id, val, types::BasicObject),
-            Insn::AnyToString { val, str, .. } => {
-                self.assert_subtype(insn_id, val, types::BasicObject)?;
-                self.assert_subtype(insn_id, str, types::BasicObject)
-            }
-            Insn::GuardType { val, .. } => self.assert_subtype(insn_id, val, types::BasicObject),
-            Insn::GuardTypeNot { val, .. } => self.assert_subtype(insn_id, val, types::BasicObject),
             Insn::GuardBitEquals { val, expected, .. } => {
                 match expected {
                     Const::Value(_) => self.assert_subtype(insn_id, val, types::RubyValue),
@@ -3954,9 +4045,8 @@ impl Function {
                     Const::CPtr(_) => self.assert_subtype(insn_id, val, types::CPtr),
                 }
             }
-            Insn::GuardShape { val, .. } => self.assert_subtype(insn_id, val, types::BasicObject),
-            Insn::GuardNotFrozen { val, .. } => self.assert_subtype(insn_id, val, types::BasicObject),
-            Insn::GuardLess { left, right, .. } | Insn::GuardGreaterEq { left, right, .. } => {
+            Insn::GuardLess { left, right, .. }
+            | Insn::GuardGreaterEq { left, right, .. } => {
                 self.assert_subtype(insn_id, left, types::CInt64)?;
                 self.assert_subtype(insn_id, right, types::CInt64)
             },
@@ -3969,7 +4059,6 @@ impl Function {
                 self.assert_subtype(insn_id, index, types::Fixnum)?;
                 self.assert_subtype(insn_id, value, types::Fixnum)
             }
-            _ => Ok(()),
         }
     }
 

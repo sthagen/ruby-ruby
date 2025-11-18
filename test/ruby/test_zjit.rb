@@ -59,6 +59,44 @@ class TestZJIT < Test::Unit::TestCase
     end
   end
 
+  def test_zjit_enable
+    assert_separately([], <<~'RUBY')
+      refute_predicate RubyVM::ZJIT, :enabled?
+      refute_predicate RubyVM::ZJIT, :stats_enabled?
+      refute_includes RUBY_DESCRIPTION, "+ZJIT"
+
+      RubyVM::ZJIT.enable
+
+      assert_predicate RubyVM::ZJIT, :enabled?
+      refute_predicate RubyVM::ZJIT, :stats_enabled?
+      assert_includes RUBY_DESCRIPTION, "+ZJIT"
+    RUBY
+  end
+
+  def test_zjit_disable
+    assert_separately(["--zjit", "--zjit-disable"], <<~'RUBY')
+      refute_predicate RubyVM::ZJIT, :enabled?
+      refute_includes RUBY_DESCRIPTION, "+ZJIT"
+
+      RubyVM::ZJIT.enable
+
+      assert_predicate RubyVM::ZJIT, :enabled?
+      assert_includes RUBY_DESCRIPTION, "+ZJIT"
+    RUBY
+  end
+
+  def test_zjit_enable_respects_existing_options
+    assert_separately(['--zjit-disable', '--zjit-stats=quiet'], <<~RUBY)
+      refute_predicate RubyVM::ZJIT, :enabled?
+      assert_predicate RubyVM::ZJIT, :stats_enabled?
+
+      RubyVM::ZJIT.enable
+
+      assert_predicate RubyVM::ZJIT, :enabled?
+      assert_predicate RubyVM::ZJIT, :stats_enabled?
+    RUBY
+  end
+
   def test_call_itself
     assert_compiles '42', <<~RUBY, call_threshold: 2
       def test = 42.itself
@@ -2917,6 +2955,25 @@ class TestZJIT < Test::Unit::TestCase
 
       Ractor.new { test }.value
     }
+  end
+
+  def test_struct_set
+    assert_compiles '[42, 42, :frozen_error]', %q{
+      C = Struct.new(:foo).new(1)
+
+      def test
+        C.foo = Object.new
+        42
+      end
+
+      r = [test, test]
+      C.freeze
+      r << begin
+        test
+      rescue FrozenError
+        :frozen_error
+      end
+    }, call_threshold: 2
   end
 
   def test_global_tracepoint
