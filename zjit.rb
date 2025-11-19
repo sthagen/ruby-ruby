@@ -165,8 +165,12 @@ class << RubyVM::ZJIT
     buf = +"***ZJIT: Printing ZJIT statistics on exit***\n"
     stats = self.stats
 
-    stats[:guard_type_exit_ratio] = stats[:exit_guard_type_failure].to_f / stats[:guard_type_count] * 100
-    stats[:guard_shape_exit_ratio] = stats[:exit_guard_shape_failure].to_f / stats[:guard_shape_count] * 100
+    if stats[:guard_type_count].nonzero?
+      stats[:guard_type_exit_ratio] = stats[:exit_guard_type_failure].to_f / stats[:guard_type_count] * 100
+    end
+    if stats[:guard_shape_count].nonzero?
+      stats[:guard_shape_exit_ratio] = stats[:exit_guard_shape_failure].to_f / stats[:guard_shape_count] * 100
+    end
 
     # Show counters independent from exit_* or dynamic_send_*
     print_counters_with_prefix(prefix: 'not_inlined_cfuncs_', prompt: 'not inlined C methods', buf:, stats:, limit: 20)
@@ -269,7 +273,10 @@ class << RubyVM::ZJIT
       next unless stats.key?(key)
       value = stats[key]
       if base && key != base
-        ratio = " (%4.1f%%)" % (100.0 * value / stats[base])
+        total = stats[base]
+        if total.nonzero?
+          ratio = " (%4.1f%%)" % (100.0 * value / total)
+        end
       end
 
       case key
@@ -290,7 +297,7 @@ class << RubyVM::ZJIT
 
   def print_counters_with_prefix(buf:, stats:, prefix:, prompt:, limit: nil)
     counters = stats.select { |key, value| key.start_with?(prefix) && value > 0 }
-    return if stats.empty?
+    return if counters.empty?
 
     counters.transform_keys! { |key| key.to_s.delete_prefix(prefix) }
     key_pad = counters.keys.map(&:size).max
