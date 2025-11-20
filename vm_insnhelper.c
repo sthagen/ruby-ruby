@@ -1723,6 +1723,12 @@ rb_vm_setinstancevariable(const rb_iseq_t *iseq, VALUE obj, ID id, VALUE val, IV
     vm_setinstancevariable(iseq, obj, id, val, ic);
 }
 
+VALUE
+rb_vm_getinstancevariable(const rb_iseq_t *iseq, VALUE obj, ID id, IVC ic)
+{
+    return vm_getinstancevariable(iseq, obj, id, ic);
+}
+
 static VALUE
 vm_throw_continue(const rb_execution_context_t *ec, VALUE err)
 {
@@ -6041,11 +6047,14 @@ vm_define_method(const rb_execution_context_t *ec, VALUE obj, ID id, VALUE iseqv
 }
 
 // Return the untagged block handler:
+// * If it's VM_BLOCK_HANDLER_NONE, return nil
 // * If it's an ISEQ or an IFUNC, fetch it from its rb_captured_block
 // * If it's a PROC or SYMBOL, return it as is
 static VALUE
 rb_vm_untag_block_handler(VALUE block_handler)
 {
+    if (VM_BLOCK_HANDLER_NONE == block_handler) return Qnil;
+
     switch (vm_block_handler_type(block_handler)) {
       case block_handler_type_iseq:
       case block_handler_type_ifunc: {
