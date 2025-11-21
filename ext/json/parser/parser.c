@@ -1466,6 +1466,7 @@ static void parser_config_init(JSON_ParserConfig *config, VALUE opts)
  */
 static VALUE cParserConfig_initialize(VALUE self, VALUE opts)
 {
+    rb_check_frozen(self);
     GET_PARSER_CONFIG;
 
     parser_config_init(config, opts);
@@ -1561,7 +1562,7 @@ static const rb_data_type_t JSON_ParserConfig_type = {
         JSON_ParserConfig_memsize,
     },
     0, 0,
-    RUBY_TYPED_FREE_IMMEDIATELY | RUBY_TYPED_WB_PROTECTED,
+    RUBY_TYPED_FREE_IMMEDIATELY | RUBY_TYPED_WB_PROTECTED | RUBY_TYPED_FROZEN_SHAREABLE,
 };
 
 static VALUE cJSON_parser_s_allocate(VALUE klass)
