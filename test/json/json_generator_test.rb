@@ -92,6 +92,46 @@ class JSONGeneratorTest < Test::Unit::TestCase
     assert_equal '"World"', "World".to_json(strict: true)
   end
 
+  def test_state_depth_to_json
+    depth = Object.new
+    def depth.to_json(state)
+      JSON::State.from_state(state).depth.to_s
+    end
+
+    assert_equal "0", JSON.generate(depth)
+    assert_equal "[1]", JSON.generate([depth])
+    assert_equal %({"depth":1}), JSON.generate(depth: depth)
+    assert_equal "[[2]]", JSON.generate([[depth]])
+    assert_equal %([{"depth":2}]), JSON.generate([{depth: depth}])
+
+    state = JSON::State.new
+    assert_equal "0", state.generate(depth)
+    assert_equal "[1]", state.generate([depth])
+    assert_equal %({"depth":1}), state.generate(depth: depth)
+    assert_equal "[[2]]", state.generate([[depth]])
+    assert_equal %([{"depth":2}]), state.generate([{depth: depth}])
+  end
+
+  def test_state_depth_to_json_recursive
+    recur = Object.new
+    def recur.to_json(state = nil, *)
+      state = JSON::State.from_state(state)
+      if state.depth < 3
+        state.generate([state.depth, self])
+      else
+        state.generate([state.depth])
+      end
+    end
+
+    assert_raise(NestingError) { JSON.generate(recur, max_nesting: 3) }
+    assert_equal "[0,[1,[2,[3]]]]", JSON.generate(recur, max_nesting: 4)
+
+    state = JSON::State.new(max_nesting: 3)
+    assert_raise(NestingError) { state.generate(recur) }
+    state.max_nesting = 4
+    assert_equal "[0,[1,[2,[3]]]]", JSON.generate(recur, max_nesting: 4)
+  end
+
   def test_generate_pretty
     json = pretty_generate({})
     assert_equal('{}', json)
@@ -282,6 +322,16 @@ class JSONGeneratorTest < Test::Unit::TestCase
   end
 
   def test_depth
+    pretty = { object_nl: "\n", array_nl: "\n", space: " ", indent: "  " }
+    state = JSON.state.new(**pretty)
+    assert_equal %({\n  "foo": 42\n}), JSON.generate({ foo: 42 }, pretty)
+    assert_equal %({\n  "foo": 42\n}), state.generate(foo: 42)
+    state.depth = 1
+    assert_equal %({\n    "foo": 42\n  }), JSON.generate({ foo: 42 }, pretty.merge(depth: 1))
+    assert_equal %({\n    "foo": 42\n  }), state.generate(foo: 42)
+  end
+
+  def test_depth_nesting_error
     ary = []; ary << ary
     assert_raise(JSON::NestingError) { generate(ary) }
     assert_raise(JSON::NestingError) { JSON.pretty_generate(ary) }
@@ -914,5 +964,14 @@ class JSONGeneratorTest < Test::Unit::TestCase
         state.send(setter, 1)
       end
     end
+  end
+
+  # The case when the State is frozen is tested in JSONCoderTest#test_nesting_recovery
+  def test_nesting_recovery
+    state = JSON::State.new
+    ary = []
+    ary << ary
+    assert_raise(JSON::NestingError) { state.generate_new(ary) }
+    assert_equal '{"a":1}', state.generate({ a: 1 })
   end
 end

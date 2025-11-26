@@ -60,6 +60,7 @@ struct generate_json_data {
     JSON_Generator_State *state;
     VALUE obj;
     generator_func func;
+    long depth;
 };
 
 static VALUE cState_from_state_s(VALUE self, VALUE opts);
@@ -972,6 +973,8 @@ static inline VALUE vstate_get(struct generate_json_data *data)
     if (RB_UNLIKELY(!data->vstate)) {
         vstate_spill(data);
     }
+    GET_STATE(data->vstate);
+    state->depth = data->depth;
     return data->vstate;
 }
 
@@ -1145,7 +1148,7 @@ json_object_i(VALUE key, VALUE val, VALUE _arg)
     FBuffer *buffer = data->buffer;
     JSON_Generator_State *state = data->state;
 
-    long depth = state->depth;
+    long depth = data->depth;
     int key_type = rb_type(key);
 
     if (arg->first) {
@@ -1219,9 +1222,9 @@ json_object_i(VALUE key, VALUE val, VALUE _arg)
 static inline long increase_depth(struct generate_json_data *data)
 {
     JSON_Generator_State *state = data->state;
-    long depth = ++state->depth;
+    long depth = ++data->depth;
     if (RB_UNLIKELY(depth > state->max_nesting && state->max_nesting)) {
-        rb_raise(eNestingError, "nesting of %ld is too deep. Did you try to serialize objects with circular references?", --state->depth);
+        rb_raise(eNestingError, "nesting of %ld is too deep. Did you try to serialize objects with circular references?", --data->depth);
     }
     return depth;
 }
@@ -1232,7 +1235,7 @@ static void generate_json_object(FBuffer *buffer, struct generate_json_data *dat
 
     if (RHASH_SIZE(obj) == 0) {
         fbuffer_append(buffer, "{}", 2);
-        --data->state->depth;
+        --data->depth;
         return;
     }
 
@@ -1245,7 +1248,7 @@ static void generate_json_object(FBuffer *buffer, struct generate_json_data *dat
     };
     rb_hash_foreach(obj, json_object_i, (VALUE)&arg);
 
-    depth = --data->state->depth;
+    depth = --data->depth;
     if (RB_UNLIKELY(data->state->object_nl)) {
         fbuffer_append_str(buffer, data->state->object_nl);
         if (RB_UNLIKELY(data->state->indent)) {
@@ -1261,7 +1264,7 @@ static void generate_json_array(FBuffer *buffer, struct generate_json_data *data
 
     if (RARRAY_LEN(obj) == 0) {
         fbuffer_append(buffer, "[]", 2);
-        --data->state->depth;
+        --data->depth;
         return;
     }
 
@@ -1277,7 +1280,7 @@ static void generate_json_array(FBuffer *buffer, struct generate_json_data *data
         }
         generate_json(buffer, data, RARRAY_AREF(obj, i));
     }
-    data->state->depth = --depth;
+    data->depth = --depth;
     if (RB_UNLIKELY(data->state->array_nl)) {
         fbuffer_append_str(buffer, data->state->array_nl);
         if (RB_UNLIKELY(data->state->indent)) {
@@ -1358,7 +1361,7 @@ static void generate_json_float(FBuffer *buffer, struct generate_json_data *data
                 if (casted_obj != obj) {
                     increase_depth(data);
                     generate_json(buffer, data, casted_obj);
-                    data->state->depth--;
+                    data->depth--;
                     return;
                 }
             }
@@ -1473,6 +1476,16 @@ static VALUE generate_json_try(VALUE d)
     return fbuffer_finalize(data->buffer);
 }
 
+// Preserves the deprecated behavior of State#depth being set.
+static VALUE generate_json_ensure_deprecated(VALUE d)
+{
+    struct generate_json_data *data = (struct generate_json_data *)d;
+    fbuffer_free(data->buffer);
+    data->state->depth = data->depth;
+
+    return Qundef;
+}
+
 static VALUE generate_json_ensure(VALUE d)
 {
     struct generate_json_data *data = (struct generate_json_data *)d;
@@ -1495,10 +1508,11 @@ static VALUE cState_partial_generate(VALUE self, VALUE obj, generator_func func,
         .buffer = &buffer,
         .vstate = self,
         .state = state,
+        .depth = state->depth,
         .obj = obj,
         .func = func
     };
-    return rb_ensure(generate_json_try, (VALUE)&data, generate_json_ensure, (VALUE)&data);
+    return rb_ensure(generate_json_try, (VALUE)&data, generate_json_ensure_deprecated, (VALUE)&data);
 }
 
 /* call-seq:
@@ -1525,12 +1539,6 @@ static VALUE cState_generate_new(int argc, VALUE *argv, VALUE self)
 
     GET_STATE(self);
 
-    JSON_Generator_State new_state;
-    MEMCPY(&new_state, state, JSON_Generator_State, 1);
-
-    // FIXME: depth shouldn't be part of JSON_Generator_State, as that prevents it from being used concurrently.
-    new_state.depth = 0;
-
     char stack_buffer[FBUFFER_STACK_SIZE];
     FBuffer buffer = {
         .io = RTEST(io) ? io : Qfalse,
@@ -1540,7 +1548,8 @@ static VALUE cState_generate_new(int argc, VALUE *argv, VALUE self)
     struct generate_json_data data = {
         .buffer = &buffer,
         .vstate = Qfalse,
-        .state = &new_state,
+        .state = state,
+        .depth = 0,
         .obj = obj,
         .func = generate_json
     };
@@ -2061,6 +2070,7 @@ static VALUE cState_m_generate(VALUE klass, VALUE obj, VALUE opts, VALUE io)
         .buffer = &buffer,
         .vstate = Qfalse,
         .state = &state,
+        .depth = state.depth,
         .obj = obj,
         .func = generate_json,
     };
