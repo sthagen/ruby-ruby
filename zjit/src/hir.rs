@@ -2873,6 +2873,50 @@ impl Function {
                         };
                         self.make_equal_to(insn_id, replacement);
                     }
+                    Insn::SetIvar { self_val, id, val, state, ic: _ } => {
+                        let frame_state = self.frame_state(state);
+                        let Some(recv_type) = self.profiled_type_of_at(self_val, frame_state.insn_idx) else {
+                            // No (monomorphic/skewed polymorphic) profile info
+                            self.push_insn_id(block, insn_id); continue;
+                        };
+                        if recv_type.flags().is_immediate() {
+                            // Instance variable lookups on immediate values are always nil
+                            self.push_insn_id(block, insn_id); continue;
+                        }
+                        assert!(recv_type.shape().is_valid());
+                        if !recv_type.flags().is_t_object() {
+                            // Check if the receiver is a T_OBJECT
+                            self.push_insn_id(block, insn_id); continue;
+                        }
+                        if recv_type.shape().is_too_complex() {
+                            // too-complex shapes can't use index access
+                            self.push_insn_id(block, insn_id); continue;
+                        }
+                        if recv_type.shape().is_frozen() {
+                            // Can't set ivars on frozen objects
+                            self.push_insn_id(block, insn_id); continue;
+                        }
+                        let mut ivar_index: u16 = 0;
+                        if !unsafe { rb_shape_get_iv_index(recv_type.shape().0, id, &mut ivar_index) } {
+                            // TODO(max): Shape transition
+                            self.push_insn_id(block, insn_id); continue;
+                        }
+                        let self_val = self.push_insn(block, Insn::GuardType { val: self_val, guard_type: types::HeapBasicObject, state });
+                        let self_val = self.push_insn(block, Insn::GuardShape { val: self_val, shape: recv_type.shape(), state });
+                        // Current shape contains this ivar
+                        let (ivar_storage, offset) = if recv_type.flags().is_embedded() {
+                            // See ROBJECT_FIELDS() from include/ruby/internal/core/robject.h
+                            let offset = ROBJECT_OFFSET_AS_ARY as i32 + (SIZEOF_VALUE * ivar_index.to_usize()) as i32;
+                            (self_val, offset)
+                        } else {
+                            let as_heap = self.push_insn(block, Insn::LoadField { recv: self_val, id: ID!(_as_heap), offset: ROBJECT_OFFSET_AS_HEAP_FIELDS as i32, return_type: types::CPtr });
+                            let offset = SIZEOF_VALUE_I32 * ivar_index as i32;
+                            (as_heap, offset)
+                        };
+                        let replacement = self.push_insn(block, Insn::StoreField { recv: ivar_storage, id, offset, val });
+                        self.push_insn(block, Insn::WriteBarrier { recv: self_val, val });
+                        self.make_equal_to(insn_id, replacement);
+                    }
                     _ => { self.push_insn_id(block, insn_id); }
                 }
             }
@@ -4906,6 +4950,8 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
             // profiled cfp->self.
             if opcode == YARVINSN_getinstancevariable || opcode == YARVINSN_trace_getinstancevariable {
                 profiles.profile_self(&exit_state, self_param);
+            } else if opcode == YARVINSN_setinstancevariable || opcode == YARVINSN_trace_setinstancevariable {
+                profiles.profile_self(&exit_state, self_param);
             } else if opcode == YARVINSN_definedivar || opcode == YARVINSN_trace_definedivar {
                 profiles.profile_self(&exit_state, self_param);
             } else if opcode == YARVINSN_invokeblock || opcode == YARVINSN_trace_invokeblock {
@@ -5230,19 +5276,24 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                 }
                 YARVINSN_getlocal_WC_0 => {
                     let ep_offset = get_arg(pc, 0).as_u32();
-                    if ep_escaped || has_blockiseq { // TODO: figure out how to drop has_blockiseq here
+                    if !local_inval {
+                        // The FrameState is the source of truth for locals until invalidated.
+                        // In case of JIT-to-JIT send locals might never end up in EP memory.
+                        let val = state.getlocal(ep_offset);
+                        state.stack_push(val);
+                    } else if ep_escaped || has_blockiseq { // TODO: figure out how to drop has_blockiseq here
                         // Read the local using EP
                         let val = fun.push_insn(block, Insn::GetLocal { ep_offset, level: 0, use_sp: false, rest_param: false });
                         state.setlocal(ep_offset, val); // remember the result to spill on side-exits
                         state.stack_push(val);
                     } else {
-                        if local_inval {
-                            // If there has been any non-leaf call since JIT entry or the last patch point,
-                            // add a patch point to make sure locals have not been escaped.
-                            let exit_id = fun.push_insn(block, Insn::Snapshot { state: exit_state.without_locals() }); // skip spilling locals
-                            fun.push_insn(block, Insn::PatchPoint { invariant: Invariant::NoEPEscape(iseq), state: exit_id });
-                            local_inval = false;
-                        }
+                        assert!(local_inval); // if check above
+                        // There has been some non-leaf call since JIT entry or the last patch point,
+                        // so add a patch point to make sure locals have not been escaped.
+                        let exit_id = fun.push_insn(block, Insn::Snapshot { state: exit_state.without_locals() }); // skip spilling locals
+                        fun.push_insn(block, Insn::PatchPoint { invariant: Invariant::NoEPEscape(iseq), state: exit_id });
+                        local_inval = false;
+
                         // Read the local from FrameState
                         let val = state.getlocal(ep_offset);
                         state.stack_push(val);

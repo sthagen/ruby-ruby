@@ -780,14 +780,13 @@ mod hir_opt_tests {
           EntryPoint JIT(0)
           Jump bb2(v5, v6)
         bb2(v8:BasicObject, v9:BasicObject):
-          v13:BasicObject = GetLocal l0, EP@3
           PatchPoint MethodRedefined(C@0x1000, fun_new_map@0x1008, cme:0x1010)
           PatchPoint NoSingletonClass(C@0x1000)
-          v24:ArraySubclass[class_exact:C] = GuardType v13, ArraySubclass[class_exact:C]
-          v25:BasicObject = CCallWithFrame C#fun_new_map@0x1038, v24, block=0x1040
-          v16:BasicObject = GetLocal l0, EP@3
+          v23:ArraySubclass[class_exact:C] = GuardType v9, ArraySubclass[class_exact:C]
+          v24:BasicObject = CCallWithFrame C#fun_new_map@0x1038, v23, block=0x1040
+          v15:BasicObject = GetLocal l0, EP@3
           CheckInterrupts
-          Return v25
+          Return v24
         ");
     }
 
@@ -3475,6 +3474,151 @@ mod hir_opt_tests {
           Jump bb2(v4)
         bb2(v6:BasicObject):
           v10:StringExact|NilClass = DefinedIvar v6, :@a
+          CheckInterrupts
+          Return v10
+        ");
+    }
+
+    #[test]
+    fn test_specialize_monomorphic_setivar_already_in_shape() {
+        eval("
+            @foo = 4
+            def test = @foo = 5
+            test
+        ");
+        assert_snapshot!(hir_string("test"), @r"
+        fn test@<compiled>:3:
+        bb0():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          Jump bb2(v1)
+        bb1(v4:BasicObject):
+          EntryPoint JIT(0)
+          Jump bb2(v4)
+        bb2(v6:BasicObject):
+          v10:Fixnum[5] = Const Value(5)
+          PatchPoint SingleRactorMode
+          v19:HeapBasicObject = GuardType v6, HeapBasicObject
+          v20:HeapBasicObject = GuardShape v19, 0x1000
+          StoreField v20, :@foo@0x1001, v10
+          WriteBarrier v20, v10
+          CheckInterrupts
+          Return v10
+        ");
+    }
+
+    #[test]
+    fn test_dont_specialize_monomorphic_setivar_with_shape_transition() {
+        eval("
+            def test = @foo = 5
+            test
+        ");
+        assert_snapshot!(hir_string("test"), @r"
+        fn test@<compiled>:2:
+        bb0():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          Jump bb2(v1)
+        bb1(v4:BasicObject):
+          EntryPoint JIT(0)
+          Jump bb2(v4)
+        bb2(v6:BasicObject):
+          v10:Fixnum[5] = Const Value(5)
+          PatchPoint SingleRactorMode
+          SetIvar v6, :@foo, v10
+          CheckInterrupts
+          Return v10
+        ");
+    }
+
+    #[test]
+    fn test_dont_specialize_setivar_with_t_data() {
+        eval("
+            class C < Range
+              def test = @a = 5
+            end
+            obj = C.new 0, 1
+            obj.instance_variable_set(:@a, 1)
+            obj.test
+            TEST = C.instance_method(:test)
+        ");
+        assert_snapshot!(hir_string_proc("TEST"), @r"
+        fn test@<compiled>:3:
+        bb0():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          Jump bb2(v1)
+        bb1(v4:BasicObject):
+          EntryPoint JIT(0)
+          Jump bb2(v4)
+        bb2(v6:BasicObject):
+          v10:Fixnum[5] = Const Value(5)
+          PatchPoint SingleRactorMode
+          SetIvar v6, :@a, v10
+          CheckInterrupts
+          Return v10
+        ");
+    }
+
+    #[test]
+    fn test_dont_specialize_polymorphic_setivar() {
+        set_call_threshold(3);
+        eval("
+            class C
+              def test = @a = 5
+            end
+            obj = C.new
+            obj.instance_variable_set(:@a, 1)
+            obj.test
+            obj = C.new
+            obj.instance_variable_set(:@b, 1)
+            obj.test
+            TEST = C.instance_method(:test)
+        ");
+        assert_snapshot!(hir_string_proc("TEST"), @r"
+        fn test@<compiled>:3:
+        bb0():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          Jump bb2(v1)
+        bb1(v4:BasicObject):
+          EntryPoint JIT(0)
+          Jump bb2(v4)
+        bb2(v6:BasicObject):
+          v10:Fixnum[5] = Const Value(5)
+          PatchPoint SingleRactorMode
+          SetIvar v6, :@a, v10
+          CheckInterrupts
+          Return v10
+        ");
+    }
+
+    #[test]
+    fn test_dont_specialize_complex_shape_setivar() {
+        eval(r#"
+            class C
+              def test = @a = 5
+            end
+            obj = C.new
+            (0..1000).each do |i|
+              obj.instance_variable_set(:"@v#{i}", i)
+            end
+            obj.test
+            TEST = C.instance_method(:test)
+        "#);
+        assert_snapshot!(hir_string_proc("TEST"), @r"
+        fn test@<compiled>:3:
+        bb0():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          Jump bb2(v1)
+        bb1(v4:BasicObject):
+          EntryPoint JIT(0)
+          Jump bb2(v4)
+        bb2(v6:BasicObject):
+          v10:Fixnum[5] = Const Value(5)
+          PatchPoint SingleRactorMode
+          SetIvar v6, :@a, v10
           CheckInterrupts
           Return v10
         ");
@@ -8424,5 +8568,58 @@ mod hir_opt_tests {
           CheckInterrupts
           Return v32
         ");
+    }
+
+    #[test]
+    fn no_load_from_ep_right_after_entrypoint() {
+      let formatted = eval("
+          def read_nil_local(a, _b, _c)
+            formatted ||= a
+            @formatted = formatted
+            -> { formatted } # the environment escapes
+          end
+
+          def call
+            puts [], [], [], []     # fill VM stack with junk
+            read_nil_local(true, 1, 1) # expected direct send
+          end
+
+          call # profile
+          call # compile
+          @formatted
+       ");
+       assert_eq!(Qtrue, formatted, "{}", formatted.obj_info());
+       assert_snapshot!(hir_string("read_nil_local"), @r"
+       fn read_nil_local@<compiled>:3:
+       bb0():
+         EntryPoint interpreter
+         v1:BasicObject = LoadSelf
+         v2:BasicObject = GetLocal l0, SP@7
+         v3:BasicObject = GetLocal l0, SP@6
+         v4:BasicObject = GetLocal l0, SP@5
+         v5:NilClass = Const Value(nil)
+         Jump bb2(v1, v2, v3, v4, v5)
+       bb1(v8:BasicObject, v9:BasicObject, v10:BasicObject, v11:BasicObject):
+         EntryPoint JIT(0)
+         v12:NilClass = Const Value(nil)
+         Jump bb2(v8, v9, v10, v11, v12)
+       bb2(v14:BasicObject, v15:BasicObject, v16:BasicObject, v17:BasicObject, v18:NilClass):
+         CheckInterrupts
+         v27:BasicObject = GetLocal l0, EP@6
+         SetLocal l0, EP@3, v27
+         v39:BasicObject = GetLocal l0, EP@3
+         PatchPoint SingleRactorMode
+         SetIvar v14, :@formatted, v39
+         v45:Class[VMFrozenCore] = Const Value(VALUE(0x1000))
+         PatchPoint MethodRedefined(Class@0x1008, lambda@0x1010, cme:0x1018)
+         PatchPoint NoSingletonClass(Class@0x1008)
+         v59:BasicObject = CCallWithFrame RubyVM::FrozenCore.lambda@0x1040, v45, block=0x1048
+         v48:BasicObject = GetLocal l0, EP@6
+         v49:BasicObject = GetLocal l0, EP@5
+         v50:BasicObject = GetLocal l0, EP@4
+         v51:BasicObject = GetLocal l0, EP@3
+         CheckInterrupts
+         Return v59
+       ");
     }
 }
