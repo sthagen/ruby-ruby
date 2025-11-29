@@ -5344,8 +5344,10 @@ pm_interpolated_string_node_append(pm_interpolated_string_node_t *node, pm_node_
             break;
         case PM_X_STRING_NODE:
         case PM_INTERPOLATED_X_STRING_NODE:
-            // If this is an x string, then this is a syntax error. But we want
-            // to handle it here so that we don't fail the assertion.
+        case PM_SYMBOL_NODE:
+        case PM_INTERPOLATED_SYMBOL_NODE:
+            // These will only happen in error cases. But we want to handle it
+            // here so that we don't fail the assertion.
             CLEAR_FLAGS(node);
             break;
         default:
@@ -8443,7 +8445,7 @@ parser_lex_magic_comment(pm_parser_t *parser, bool semantic_token_seen) {
                 if (*cursor == '\\' && (cursor + 1 < end)) cursor++;
             }
             value_end = cursor;
-            if (*cursor == '"') cursor++;
+            if (cursor < end && *cursor == '"') cursor++;
         } else {
             value_start = cursor;
             while (cursor < end && *cursor != '"' && *cursor != ';' && !pm_char_is_whitespace(*cursor)) cursor++;
@@ -17336,7 +17338,11 @@ parse_pattern_hash(pm_parser_t *parser, pm_constant_id_list_t *captures, pm_node
             pm_node_t *value = NULL;
 
             if (match7(parser, PM_TOKEN_COMMA, PM_TOKEN_KEYWORD_THEN, PM_TOKEN_BRACE_RIGHT, PM_TOKEN_BRACKET_RIGHT, PM_TOKEN_PARENTHESIS_RIGHT, PM_TOKEN_NEWLINE, PM_TOKEN_SEMICOLON)) {
-                value = parse_pattern_hash_implicit_value(parser, captures, (pm_symbol_node_t *) key);
+                if (PM_NODE_TYPE_P(key, PM_SYMBOL_NODE)) {
+                    value = parse_pattern_hash_implicit_value(parser, captures, (pm_symbol_node_t *) key);
+                } else {
+                    value = (pm_node_t *) pm_missing_node_create(parser, key->location.end, key->location.end);
+                }
             } else {
                 value = parse_pattern(parser, captures, PM_PARSE_PATTERN_SINGLE, PM_ERR_PATTERN_EXPRESSION_AFTER_KEY, (uint16_t) (depth + 1));
             }
@@ -22861,8 +22867,8 @@ pm_parser_init(pm_parser_t *parser, const uint8_t *source, size_t size, const pm
     // If the shebang does not include "ruby" and this is the main script being
     // parsed, then we will start searching the file for a shebang that does
     // contain "ruby" as if -x were passed on the command line.
-    const uint8_t *newline = next_newline(parser->start, parser->end - parser->start);
-    size_t length = (size_t) ((newline != NULL ? newline : parser->end) - parser->start);
+    const uint8_t *newline = next_newline(parser->current.end, parser->end - parser->current.end);
+    size_t length = (size_t) ((newline != NULL ? newline : parser->end) - parser->current.end);
 
     if (length > 2 && parser->current.end[0] == '#' && parser->current.end[1] == '!') {
         const char *engine;
