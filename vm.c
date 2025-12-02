@@ -2444,6 +2444,7 @@ vm_init_redefined_flag(void)
     OP(GT, GT), (C(Integer), C(Float));
     OP(GE, GE), (C(Integer), C(Float));
     OP(LTLT, LTLT), (C(String), C(Array));
+    OP(GTGT, GTGT), (C(Integer));
     OP(AREF, AREF), (C(Array), C(Hash), C(Integer));
     OP(ASET, ASET), (C(Array), C(Hash));
     OP(Length, LENGTH), (C(Array), C(String), C(Hash));
@@ -3888,6 +3889,13 @@ rb_ec_clear_vm_stack(rb_execution_context_t *ec)
     // gets called in this middle of `rb_ec_set_vm_stack` via signal handler.
     ec->cfp = NULL;
     rb_ec_set_vm_stack(ec, NULL, 0);
+}
+
+void
+rb_ec_close(rb_execution_context_t *ec)
+{
+    // Fiber storage is not accessible from outside the running fiber, so it is safe to clear it here.
+    ec->storage = Qnil;
 }
 
 static void

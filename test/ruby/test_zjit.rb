@@ -525,6 +525,21 @@ class TestZJIT < Test::Unit::TestCase
     }
   end
 
+  def test_send_variadic_with_block
+    assert_compiles '[[1, "a"], [2, "b"], [3, "c"]]', %q{
+      A = [1, 2, 3]
+      B = ["a", "b", "c"]
+
+      def test
+        result = []
+        A.zip(B) { |x, y| result << [x, y] }
+        result
+      end
+
+      test; test
+    }, call_threshold: 2
+  end
+
   def test_send_splat
     assert_runs '[1, 2]', %q{
       def test(a, b) = [a, b]
@@ -3002,7 +3017,35 @@ class TestZJIT < Test::Unit::TestCase
       test
 
       Ractor.new { test }.value
-    }
+    }, call_threshold: 2
+  end
+
+  def test_ivar_get_with_already_multi_ractor_mode
+    assert_compiles '42', %q{
+      class Foo
+        def self.set_bar
+          @bar = [] # needs to be a ractor unshareable object
+        end
+
+        def self.bar
+          @bar
+        rescue Ractor::IsolationError
+          42
+        end
+      end
+
+      Foo.set_bar
+      r = Ractor.new {
+        Ractor.receive
+        Foo.bar
+      }
+
+      Foo.bar
+      Foo.bar
+
+      r << :go
+      r.value
+    }, call_threshold: 2
   end
 
   def test_ivar_set_with_multi_ractor_mode

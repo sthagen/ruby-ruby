@@ -392,22 +392,23 @@ pub const BOP_NIL_P: ruby_basic_operators = 15;
 pub const BOP_SUCC: ruby_basic_operators = 16;
 pub const BOP_GT: ruby_basic_operators = 17;
 pub const BOP_GE: ruby_basic_operators = 18;
-pub const BOP_NOT: ruby_basic_operators = 19;
-pub const BOP_NEQ: ruby_basic_operators = 20;
-pub const BOP_MATCH: ruby_basic_operators = 21;
-pub const BOP_FREEZE: ruby_basic_operators = 22;
-pub const BOP_UMINUS: ruby_basic_operators = 23;
-pub const BOP_MAX: ruby_basic_operators = 24;
-pub const BOP_MIN: ruby_basic_operators = 25;
-pub const BOP_HASH: ruby_basic_operators = 26;
-pub const BOP_CALL: ruby_basic_operators = 27;
-pub const BOP_AND: ruby_basic_operators = 28;
-pub const BOP_OR: ruby_basic_operators = 29;
-pub const BOP_CMP: ruby_basic_operators = 30;
-pub const BOP_DEFAULT: ruby_basic_operators = 31;
-pub const BOP_PACK: ruby_basic_operators = 32;
-pub const BOP_INCLUDE_P: ruby_basic_operators = 33;
-pub const BOP_LAST_: ruby_basic_operators = 34;
+pub const BOP_GTGT: ruby_basic_operators = 19;
+pub const BOP_NOT: ruby_basic_operators = 20;
+pub const BOP_NEQ: ruby_basic_operators = 21;
+pub const BOP_MATCH: ruby_basic_operators = 22;
+pub const BOP_FREEZE: ruby_basic_operators = 23;
+pub const BOP_UMINUS: ruby_basic_operators = 24;
+pub const BOP_MAX: ruby_basic_operators = 25;
+pub const BOP_MIN: ruby_basic_operators = 26;
+pub const BOP_HASH: ruby_basic_operators = 27;
+pub const BOP_CALL: ruby_basic_operators = 28;
+pub const BOP_AND: ruby_basic_operators = 29;
+pub const BOP_OR: ruby_basic_operators = 30;
+pub const BOP_CMP: ruby_basic_operators = 31;
+pub const BOP_DEFAULT: ruby_basic_operators = 32;
+pub const BOP_PACK: ruby_basic_operators = 33;
+pub const BOP_INCLUDE_P: ruby_basic_operators = 34;
+pub const BOP_LAST_: ruby_basic_operators = 35;
 pub type ruby_basic_operators = u32;
 pub type rb_serial_t = ::std::os::raw::c_ulonglong;
 #[repr(C)]
@@ -2033,6 +2034,7 @@ unsafe extern "C" {
     pub fn rb_obj_shape_id(obj: VALUE) -> shape_id_t;
     pub fn rb_shape_get_iv_index(shape_id: shape_id_t, id: ID, value: *mut attr_index_t) -> bool;
     pub fn rb_shape_transition_add_ivar_no_warnings(obj: VALUE, id: ID) -> shape_id_t;
+    pub fn rb_ivar_get_at_no_ractor_check(obj: VALUE, index: attr_index_t) -> VALUE;
     pub fn rb_gvar_get(arg1: ID) -> VALUE;
     pub fn rb_gvar_set(arg1: ID, arg2: VALUE) -> VALUE;
     pub fn rb_ensure_iv_list_size(obj: VALUE, current_len: u32, newsize: u32);
@@ -2224,4 +2226,5 @@ unsafe extern "C" {
         end: *mut ::std::os::raw::c_void,
     );
     pub fn rb_yarv_str_eql_internal(str1: VALUE, str2: VALUE) -> VALUE;
+    pub fn rb_jit_str_concat_codepoint(str_: VALUE, codepoint: VALUE);
 }

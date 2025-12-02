@@ -69,7 +69,7 @@ module Bundler
 
       # lock --lockfile works differently than install --lockfile
       unless current_cmd == "lock"
-        custom_lockfile = options[:lockfile] || Bundler.settings[:lockfile]
+        custom_lockfile = options[:lockfile] || ENV["BUNDLE_LOCKFILE"] || Bundler.settings[:lockfile]
         if custom_lockfile && !custom_lockfile.empty?
           Bundler::SharedHelpers.set_env "BUNDLE_LOCKFILE", File.expand_path(custom_lockfile)
           reset_settings = true
@@ -133,10 +133,10 @@ module Bundler
 
       unless Bundler.settings[:default_cli_command]
         Bundler.ui.info <<-MSG
-          In the feature version of Bundler, running `bundle` without argument will no longer run `bundle install`.
+          In a future version of Bundler, running `bundle` without argument will no longer run `bundle install`.
           Instead, the `cli_help` command will be displayed. Please use `bundle install` explicitly for scripts like CI/CD.
-          If you wish to use feature behavior now with `bundle config set default_cli_command cli_help --global`
-          or you can continue to use the old behavior with `bundle config set default_cli_command install_or_cli_help --global`.
+          You can use the future behavior now with `bundle config set default_cli_command cli_help --global`,
+          or you can continue to use the current behavior with `bundle config set default_cli_command install_or_cli_help --global`.
           This message will be removed after a default_cli_command value is set.
         MSG
       end
@@ -282,8 +282,10 @@ module Bundler
       end
 
       require_relative "cli/install"
+      options = self.options.dup
+      options["lockfile"] ||= ENV["BUNDLE_LOCKFILE"]
       Bundler.settings.temporary(no_install: false) do
-        Install.new(options.dup).run
+        Install.new(options).run
       end
     end
 

@@ -649,9 +649,10 @@ pub enum Insn {
     StringIntern { val: InsnId, state: InsnId },
     StringConcat { strings: Vec<InsnId>, state: InsnId },
     /// Call rb_str_getbyte with known-Fixnum index
-    StringGetbyteFixnum { string: InsnId, index: InsnId },
+    StringGetbyte { string: InsnId, index: InsnId },
     StringSetbyteFixnum { string: InsnId, index: InsnId, value: InsnId },
     StringAppend { recv: InsnId, other: InsnId, state: InsnId },
+    StringAppendCodepoint { recv: InsnId, other: InsnId, state: InsnId },
 
     /// Combine count stack values into a regexp
     ToRegexp { opt: usize, values: Vec<InsnId>, state: InsnId },
@@ -778,12 +779,13 @@ pub enum Insn {
 
     /// Call a C function without pushing a frame
     /// `name` is for printing purposes only
-    CCall { cfunc: *const u8, args: Vec<InsnId>, name: ID, return_type: Type, elidable: bool },
+    CCall { cfunc: *const u8, recv: InsnId, args: Vec<InsnId>, name: ID, return_type: Type, elidable: bool },
 
     /// Call a C function that pushes a frame
     CCallWithFrame {
         cd: *const rb_call_data, // cd for falling back to SendWithoutBlock
         cfunc: *const u8,
+        recv: InsnId,
         args: Vec<InsnId>,
         cme: *const rb_callable_method_entry_t,
         name: ID,
@@ -804,6 +806,7 @@ pub enum Insn {
         state: InsnId,
         return_type: Type,
         elidable: bool,
+        blockiseq: Option<IseqPtr>,
     },
 
     /// Un-optimized fallback implementation (dynamic dispatch) for send-ish instructions
@@ -888,6 +891,7 @@ pub enum Insn {
     FixnumOr   { left: InsnId, right: InsnId },
     FixnumXor  { left: InsnId, right: InsnId },
     FixnumLShift { left: InsnId, right: InsnId, state: InsnId },
+    FixnumRShift { left: InsnId, right: InsnId },
 
     // Distinct from `SendWithoutBlock` with `mid:to_s` because does not have a patch point for String to_s being redefined
     ObjToString { val: InsnId, cd: *const rb_call_data, state: InsnId },
@@ -986,6 +990,7 @@ impl Insn {
             Insn::FixnumOr   { .. } => false,
             Insn::FixnumXor  { .. } => false,
             Insn::FixnumLShift { .. } => false,
+            Insn::FixnumRShift { .. } => false,
             Insn::GetLocal   { .. } => false,
             Insn::IsNil      { .. } => false,
             Insn::LoadPC => false,
@@ -999,7 +1004,7 @@ impl Insn {
             // but we don't have type information here in `impl Insn`. See rb_range_new().
             Insn::NewRange { .. } => true,
             Insn::NewRangeFixnum { .. } => false,
-            Insn::StringGetbyteFixnum { .. } => false,
+            Insn::StringGetbyte { .. } => false,
             Insn::IsBlockGiven => false,
             Insn::BoxFixnum { .. } => false,
             Insn::BoxBool { .. } => false,
@@ -1113,14 +1118,17 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
 
                 Ok(())
             }
-            Insn::StringGetbyteFixnum { string, index, .. } => {
-                write!(f, "StringGetbyteFixnum {string}, {index}")
+            Insn::StringGetbyte { string, index, .. } => {
+                write!(f, "StringGetbyte {string}, {index}")
             }
             Insn::StringSetbyteFixnum { string, index, value, .. } => {
                 write!(f, "StringSetbyteFixnum {string}, {index}, {value}")
             }
             Insn::StringAppend { recv, other, .. } => {
                 write!(f, "StringAppend {recv}, {other}")
+            }
+            Insn::StringAppendCodepoint { recv, other, .. } => {
+                write!(f, "StringAppendCodepoint {recv}, {other}")
             }
             Insn::ToRegexp { values, opt, .. } => {
                 write!(f, "ToRegexp")?;
@@ -1179,8 +1187,8 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
                 }
                 Ok(())
             }
-            Insn::SendForward { cd, args, blockiseq, .. } => {
-                write!(f, "SendForward {:p}, :{}", self.ptr_map.map_ptr(blockiseq), ruby_call_method_name(*cd))?;
+            Insn::SendForward { recv, cd, args, blockiseq, .. } => {
+                write!(f, "SendForward {recv}, {:p}, :{}", self.ptr_map.map_ptr(blockiseq), ruby_call_method_name(*cd))?;
                 for arg in args {
                     write!(f, ", {arg}")?;
                 }
@@ -1227,6 +1235,7 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
             Insn::FixnumOr   { left, right, .. } => { write!(f, "FixnumOr {left}, {right}") },
             Insn::FixnumXor  { left, right, .. } => { write!(f, "FixnumXor {left}, {right}") },
             Insn::FixnumLShift { left, right, .. } => { write!(f, "FixnumLShift {left}, {right}") },
+            Insn::FixnumRShift { left, right, .. } => { write!(f, "FixnumRShift {left}, {right}") },
             Insn::GuardType { val, guard_type, .. } => { write!(f, "GuardType {val}, {}", guard_type.print(self.ptr_map)) },
             Insn::GuardTypeNot { val, guard_type, .. } => { write!(f, "GuardTypeNot {val}, {}", guard_type.print(self.ptr_map)) },
             Insn::GuardBitEquals { val, expected, .. } => { write!(f, "GuardBitEquals {val}, {}", expected.print(self.ptr_map)) },
@@ -1239,15 +1248,15 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
             Insn::GetConstantPath { ic, .. } => { write!(f, "GetConstantPath {:p}", self.ptr_map.map_ptr(ic)) },
             Insn::IsBlockGiven => { write!(f, "IsBlockGiven") },
             Insn::FixnumBitCheck {val, index} => { write!(f, "FixnumBitCheck {val}, {index}") },
-            Insn::CCall { cfunc, args, name, return_type: _, elidable: _ } => {
-                write!(f, "CCall {}@{:p}", name.contents_lossy(), self.ptr_map.map_ptr(cfunc))?;
+            Insn::CCall { cfunc, recv, args, name, return_type: _, elidable: _ } => {
+                write!(f, "CCall {recv}, :{}@{:p}", name.contents_lossy(), self.ptr_map.map_ptr(cfunc))?;
                 for arg in args {
                     write!(f, ", {arg}")?;
                 }
                 Ok(())
             },
-            Insn::CCallWithFrame { cfunc, args, name, blockiseq, .. } => {
-                write!(f, "CCallWithFrame {}@{:p}", name.contents_lossy(), self.ptr_map.map_ptr(cfunc))?;
+            Insn::CCallWithFrame { cfunc, recv, args, name, blockiseq, .. } => {
+                write!(f, "CCallWithFrame {recv}, :{}@{:p}", name.contents_lossy(), self.ptr_map.map_ptr(cfunc))?;
                 for arg in args {
                     write!(f, ", {arg}")?;
                 }
@@ -1256,8 +1265,8 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
                 }
                 Ok(())
             },
-            Insn::CCallVariadic { cfunc,  recv, args, name, .. } => {
-                write!(f, "CCallVariadic {}@{:p}, {recv}", name.contents_lossy(), self.ptr_map.map_ptr(cfunc))?;
+            Insn::CCallVariadic { cfunc, recv, args, name, .. } => {
+                write!(f, "CCallVariadic {recv}, :{}@{:p}", name.contents_lossy(), self.ptr_map.map_ptr(cfunc))?;
                 for arg in args {
                     write!(f, ", {arg}")?;
                 }
@@ -1733,6 +1742,15 @@ impl Function {
         self.blocks.len()
     }
 
+    pub fn assume_single_ractor_mode(&mut self, block: BlockId, state: InsnId) -> bool {
+        if unsafe { rb_jit_multi_ractor_p() } {
+            false
+        } else {
+            self.push_insn(block, Insn::PatchPoint { invariant: Invariant::SingleRactorMode, state });
+            true
+        }
+    }
+
     /// Return a copy of the instruction where the instruction and its operands have been read from
     /// the union-find table (to find the current most-optimized version of this instruction). See
     /// [`UnionFind`] for more.
@@ -1809,9 +1827,10 @@ impl Function {
             &StringCopy { val, chilled, state } => StringCopy { val: find!(val), chilled, state },
             &StringIntern { val, state } => StringIntern { val: find!(val), state: find!(state) },
             &StringConcat { ref strings, state } => StringConcat { strings: find_vec!(strings), state: find!(state) },
-            &StringGetbyteFixnum { string, index } => StringGetbyteFixnum { string: find!(string), index: find!(index) },
+            &StringGetbyte { string, index } => StringGetbyte { string: find!(string), index: find!(index) },
             &StringSetbyteFixnum { string, index, value } => StringSetbyteFixnum { string: find!(string), index: find!(index), value: find!(value) },
             &StringAppend { recv, other, state } => StringAppend { recv: find!(recv), other: find!(other), state: find!(state) },
+            &StringAppendCodepoint { recv, other, state } => StringAppendCodepoint { recv: find!(recv), other: find!(other), state: find!(state) },
             &ToRegexp { opt, ref values, state } => ToRegexp { opt, values: find_vec!(values), state },
             &Test { val } => Test { val: find!(val) },
             &IsNil { val } => IsNil { val: find!(val) },
@@ -1847,6 +1866,7 @@ impl Function {
             &FixnumOr { left, right } => FixnumOr { left: find!(left), right: find!(right) },
             &FixnumXor { left, right } => FixnumXor { left: find!(left), right: find!(right) },
             &FixnumLShift { left, right, state } => FixnumLShift { left: find!(left), right: find!(right), state },
+            &FixnumRShift { left, right } => FixnumRShift { left: find!(left), right: find!(right) },
             &ObjToString { val, cd, state } => ObjToString {
                 val: find!(val),
                 cd,
@@ -1908,10 +1928,11 @@ impl Function {
             &HashAref { hash, key, state } => HashAref { hash: find!(hash), key: find!(key), state },
             &ObjectAlloc { val, state } => ObjectAlloc { val: find!(val), state },
             &ObjectAllocClass { class, state } => ObjectAllocClass { class, state: find!(state) },
-            &CCall { cfunc, ref args, name, return_type, elidable } => CCall { cfunc, args: find_vec!(args), name, return_type, elidable },
-            &CCallWithFrame { cd, cfunc, ref args, cme, name, state, return_type, elidable, blockiseq } => CCallWithFrame {
+            &CCall { cfunc, recv, ref args, name, return_type, elidable } => CCall { cfunc, recv: find!(recv), args: find_vec!(args), name, return_type, elidable },
+            &CCallWithFrame { cd, cfunc, recv, ref args, cme, name, state, return_type, elidable, blockiseq } => CCallWithFrame {
                 cd,
                 cfunc,
+                recv: find!(recv),
                 args: find_vec!(args),
                 cme,
                 name,
@@ -1920,8 +1941,8 @@ impl Function {
                 elidable,
                 blockiseq,
             },
-            &CCallVariadic { cfunc, recv, ref args, cme, name, state, return_type, elidable } => CCallVariadic {
-                cfunc, recv: find!(recv), args: find_vec!(args), cme, name, state, return_type, elidable
+            &CCallVariadic { cfunc, recv, ref args, cme, name, state, return_type, elidable, blockiseq } => CCallVariadic {
+                cfunc, recv: find!(recv), args: find_vec!(args), cme, name, state, return_type, elidable, blockiseq
             },
             &Defined { op_type, obj, pushval, v, state } => Defined { op_type, obj, pushval, v: find!(v), state: find!(state) },
             &DefinedIvar { self_val, pushval, id, state } => DefinedIvar { self_val: find!(self_val), pushval, id, state },
@@ -2026,9 +2047,10 @@ impl Function {
             Insn::StringCopy { .. } => types::StringExact,
             Insn::StringIntern { .. } => types::Symbol,
             Insn::StringConcat { .. } => types::StringExact,
-            Insn::StringGetbyteFixnum { .. } => types::Fixnum.union(types::NilClass),
+            Insn::StringGetbyte { .. } => types::Fixnum,
             Insn::StringSetbyteFixnum { .. } => types::Fixnum,
             Insn::StringAppend { .. } => types::StringExact,
+            Insn::StringAppendCodepoint { .. } => types::StringExact,
             Insn::ToRegexp { .. } => types::RegexpExact,
             Insn::NewArray { .. } => types::ArrayExact,
             Insn::ArrayDup { .. } => types::ArrayExact,
@@ -2067,6 +2089,7 @@ impl Function {
             Insn::FixnumOr   { .. } => types::Fixnum,
             Insn::FixnumXor  { .. } => types::Fixnum,
             Insn::FixnumLShift { .. } => types::Fixnum,
+            Insn::FixnumRShift { .. } => types::Fixnum,
             Insn::PutSpecialObject { .. } => types::BasicObject,
             Insn::SendWithoutBlock { .. } => types::BasicObject,
             Insn::SendWithoutBlockDirect { .. } => types::BasicObject,
@@ -2363,6 +2386,17 @@ impl Function {
         }
     }
 
+    fn is_metaclass(&self, object: VALUE) -> bool {
+        unsafe {
+            if RB_TYPE_P(object, RUBY_T_CLASS) && rb_zjit_singleton_class_p(object) {
+                let attached = rb_class_attached_object(object);
+                RB_TYPE_P(attached, RUBY_T_CLASS) || RB_TYPE_P(attached, RUBY_T_MODULE)
+            } else {
+                false
+            }
+        }
+    }
+
     /// Rewrite SendWithoutBlock opcodes into SendWithoutBlockDirect opcodes if we know the target
     /// ISEQ statically. This removes run-time method lookups and opens the door for inlining.
     /// Also try and inline constant caches, specialize object allocations, and more.
@@ -2469,9 +2503,9 @@ impl Function {
 
                             // Patch points:
                             // Check for "defined with an un-shareable Proc in a different Ractor"
-                            if !procv.shareable_p() {
+                            if !procv.shareable_p() && !self.assume_single_ractor_mode(block, state) {
                                 // TODO(alan): Turn this into a ractor belonging guard to work better in multi ractor mode.
-                                self.push_insn(block, Insn::PatchPoint { invariant: Invariant::SingleRactorMode, state });
+                                self.push_insn_id(block, insn_id); continue;
                             }
                             self.push_insn(block, Insn::PatchPoint { invariant: Invariant::MethodRedefined { klass, method: mid, cme }, state });
                             if klass.instance_can_have_singleton_class() {
@@ -2484,6 +2518,12 @@ impl Function {
                             let send_direct = self.push_insn(block, Insn::SendWithoutBlockDirect { recv, cd, cme, iseq, args, state });
                             self.make_equal_to(insn_id, send_direct);
                         } else if def_type == VM_METHOD_TYPE_IVAR && args.is_empty() {
+                            // Check if we're accessing ivars of a Class or Module object as they require single-ractor mode.
+                            // We omit gen_prepare_non_leaf_call on gen_getivar, so it's unsafe to raise for multi-ractor mode.
+                            if self.is_metaclass(klass) && !self.assume_single_ractor_mode(block, state) {
+                                self.push_insn_id(block, insn_id); continue;
+                            }
+
                             self.push_insn(block, Insn::PatchPoint { invariant: Invariant::MethodRedefined { klass, method: mid, cme }, state });
                             if klass.instance_can_have_singleton_class() {
                                 self.push_insn(block, Insn::PatchPoint { invariant: Invariant::NoSingletonClass { klass }, state });
@@ -2493,31 +2533,21 @@ impl Function {
                             }
                             let id = unsafe { get_cme_def_body_attr_id(cme) };
 
-                            // Check if we're accessing ivars of a Class or Module object as they require single-ractor mode.
-                            // We omit gen_prepare_non_leaf_call on gen_getivar, so it's unsafe to raise for multi-ractor mode.
-                            if unsafe { rb_zjit_singleton_class_p(klass) } {
-                                let attached = unsafe { rb_class_attached_object(klass) };
-                                if unsafe { RB_TYPE_P(attached, RUBY_T_CLASS) || RB_TYPE_P(attached, RUBY_T_MODULE) } {
-                                    self.push_insn(block, Insn::PatchPoint { invariant: Invariant::SingleRactorMode, state });
-                                }
-                            }
                             let getivar = self.push_insn(block, Insn::GetIvar { self_val: recv, id, ic: std::ptr::null(), state });
                             self.make_equal_to(insn_id, getivar);
                         } else if let (VM_METHOD_TYPE_ATTRSET, &[val]) = (def_type, args.as_slice()) {
+                            // Check if we're accessing ivars of a Class or Module object as they require single-ractor mode.
+                            // We omit gen_prepare_non_leaf_call on gen_getivar, so it's unsafe to raise for multi-ractor mode.
+                            if self.is_metaclass(klass) && !self.assume_single_ractor_mode(block, state) {
+                                self.push_insn_id(block, insn_id); continue;
+                            }
+
                             self.push_insn(block, Insn::PatchPoint { invariant: Invariant::MethodRedefined { klass, method: mid, cme }, state });
                             if let Some(profiled_type) = profiled_type {
                                 recv = self.push_insn(block, Insn::GuardType { val: recv, guard_type: Type::from_profiled_type(profiled_type), state });
                             }
                             let id = unsafe { get_cme_def_body_attr_id(cme) };
 
-                            // Check if we're accessing ivars of a Class or Module object as they require single-ractor mode.
-                            // We omit gen_prepare_non_leaf_call on gen_setivar, so it's unsafe to raise for multi-ractor mode.
-                            if unsafe { rb_zjit_singleton_class_p(klass) } {
-                                let attached = unsafe { rb_class_attached_object(klass) };
-                                if unsafe { RB_TYPE_P(attached, RUBY_T_CLASS) || RB_TYPE_P(attached, RUBY_T_MODULE) } {
-                                    self.push_insn(block, Insn::PatchPoint { invariant: Invariant::SingleRactorMode, state });
-                                }
-                            }
                             self.push_insn(block, Insn::SetIvar { self_val: recv, id, ic: std::ptr::null(), val, state });
                             self.make_equal_to(insn_id, val);
                         } else if def_type == VM_METHOD_TYPE_OPTIMIZED {
@@ -2643,12 +2673,9 @@ impl Function {
                             self.push_insn_id(block, insn_id); continue;
                         }
                         let cref_sensitive = !unsafe { (*ice).ic_cref }.is_null();
-                        let multi_ractor_mode = unsafe { rb_jit_multi_ractor_p() };
-                        if cref_sensitive || multi_ractor_mode {
+                        if cref_sensitive || !self.assume_single_ractor_mode(block, state) {
                             self.push_insn_id(block, insn_id); continue;
                         }
-                        // Assume single-ractor mode.
-                        self.push_insn(block, Insn::PatchPoint { invariant: Invariant::SingleRactorMode, state });
                         // Invalidate output code on any constant writes associated with constants
                         // referenced after the PatchPoint.
                         self.push_insn(block, Insn::PatchPoint { invariant: Invariant::StableConstantNames { idlist }, state });
@@ -2674,8 +2701,8 @@ impl Function {
                             self.insn_types[guard.0] = self.infer_type(guard);
                             self.make_equal_to(insn_id, guard);
                         } else {
-                            self.push_insn(block, Insn::GuardTypeNot { val, guard_type: types::String, state});
-                            let send_to_s = self.push_insn(block, Insn::SendWithoutBlock { recv: val, cd, args: vec![], state, reason: ObjToStringNotString });
+                            let recv = self.push_insn(block, Insn::GuardType { val, guard_type: Type::from_profiled_type(recv_type), state});
+                            let send_to_s = self.push_insn(block, Insn::SendWithoutBlock { recv, cd, args: vec![], state, reason: ObjToStringNotString });
                             self.make_equal_to(insn_id, send_to_s);
                         }
                     }
@@ -2815,11 +2842,6 @@ impl Function {
                             self.push_insn_id(block, insn_id); continue;
                         }
                         assert!(recv_type.shape().is_valid());
-                        if !recv_type.flags().is_t_object() {
-                            // Check if the receiver is a T_OBJECT
-                            self.push_insn(block, Insn::IncrCounter(Counter::getivar_fallback_not_t_object));
-                            self.push_insn_id(block, insn_id); continue;
-                        }
                         if recv_type.shape().is_too_complex() {
                             // too-complex shapes can't use index access
                             self.push_insn(block, Insn::IncrCounter(Counter::getivar_fallback_too_complex));
@@ -2833,6 +2855,17 @@ impl Function {
                             // entered the compiler.  That means we can just return nil for this
                             // shape + iv name
                             self.push_insn(block, Insn::Const { val: Const::Value(Qnil) })
+                        } else if !recv_type.flags().is_t_object() {
+                            // NOTE: it's fine to use rb_ivar_get_at_no_ractor_check because
+                            // getinstancevariable does assume_single_ractor_mode()
+                            let ivar_index_insn: InsnId = self.push_insn(block, Insn::Const { val: Const::CUInt16(ivar_index as u16) });
+                            self.push_insn(block, Insn::CCall {
+                                cfunc: rb_ivar_get_at_no_ractor_check as *const u8,
+                                recv: self_val,
+                                args: vec![ivar_index_insn],
+                                name: ID!(rb_ivar_get_at_no_ractor_check),
+                                return_type: types::BasicObject,
+                                elidable: true })
                         } else if recv_type.flags().is_embedded() {
                             // See ROBJECT_FIELDS() from include/ruby/internal/core/robject.h
                             let offset = ROBJECT_OFFSET_AS_ARY as i32 + (SIZEOF_VALUE * ivar_index.to_usize()) as i32;
@@ -2958,7 +2991,7 @@ impl Function {
             send: Insn,
             send_insn_id: InsnId,
         ) -> Result<(), ()> {
-            let Insn::Send { mut recv, cd, blockiseq, mut args, state, .. } = send else {
+            let Insn::Send { mut recv, cd, blockiseq, args, state, .. } = send else {
                 return Err(());
             };
 
@@ -2989,25 +3022,29 @@ impl Function {
                 return Err(());
             }
 
-            // Find the `argc` (arity) of the C method, which describes the parameters it expects
+            let ci_flags = unsafe { vm_ci_flag(call_info) };
+
+            // When seeing &block argument, fall back to dynamic dispatch for now
+            // TODO: Support block forwarding
+            if unspecializable_call_type(ci_flags) {
+                fun.count_complex_call_features(block, ci_flags);
+                fun.set_dynamic_send_reason(send_insn_id, ComplexArgPass);
+                return Err(());
+            }
+
+            let blockiseq = if blockiseq.is_null() { None } else { Some(blockiseq) };
+
             let cfunc = unsafe { get_cme_def_body_cfunc(cme) };
+            // Find the `argc` (arity) of the C method, which describes the parameters it expects
             let cfunc_argc = unsafe { get_mct_argc(cfunc) };
+            let cfunc_ptr = unsafe { get_mct_func(cfunc) }.cast();
+
             match cfunc_argc {
                 0.. => {
                     // (self, arg0, arg1, ..., argc) form
                     //
                     // Bail on argc mismatch
                     if argc != cfunc_argc as u32 {
-                        return Err(());
-                    }
-
-                    let ci_flags = unsafe { vm_ci_flag(call_info) };
-
-                    // When seeing &block argument, fall back to dynamic dispatch for now
-                    // TODO: Support block forwarding
-                    if unspecializable_call_type(ci_flags) {
-                        fun.count_complex_call_features(block, ci_flags);
-                        fun.set_dynamic_send_reason(send_insn_id, ComplexArgPass);
                         return Err(());
                     }
 
@@ -3023,18 +3060,15 @@ impl Function {
                         fun.insn_types[recv.0] = fun.infer_type(recv);
                     }
 
-                    let blockiseq = if blockiseq.is_null() { None } else { Some(blockiseq) };
-
                     // Emit a call
                     let cfunc = unsafe { get_mct_func(cfunc) }.cast();
-                    let mut cfunc_args = vec![recv];
-                    cfunc_args.append(&mut args);
 
                     let name = rust_str_to_id(&qualified_method_name(unsafe { (*cme).owner }, unsafe { (*cme).called_id }));
                     let ccall = fun.push_insn(block, Insn::CCallWithFrame {
                         cd,
                         cfunc,
-                        args: cfunc_args,
+                        recv,
+                        args,
                         cme,
                         name,
                         state,
@@ -3047,9 +3081,37 @@ impl Function {
                 }
                 // Variadic method
                 -1 => {
+                    // The method gets a pointer to the first argument
                     // func(int argc, VALUE *argv, VALUE recv)
-                    fun.set_dynamic_send_reason(send_insn_id, SendCfuncVariadic);
-                    Err(())
+                    fun.gen_patch_points_for_optimized_ccall(block, recv_class, method_id, cme, state);
+
+                    if recv_class.instance_can_have_singleton_class() {
+                        fun.push_insn(block, Insn::PatchPoint { invariant: Invariant::NoSingletonClass { klass: recv_class }, state });
+                    }
+                    if let Some(profiled_type) = profiled_type {
+                        // Guard receiver class
+                        recv = fun.push_insn(block, Insn::GuardType { val: recv, guard_type: Type::from_profiled_type(profiled_type), state });
+                        fun.insn_types[recv.0] = fun.infer_type(recv);
+                    }
+
+                    if get_option!(stats) {
+                        count_not_inlined_cfunc(fun, block, cme);
+                    }
+
+                    let ccall = fun.push_insn(block, Insn::CCallVariadic {
+                        cfunc: cfunc_ptr,
+                        recv,
+                        args,
+                        cme,
+                        name: method_id,
+                        state,
+                        return_type: types::BasicObject,
+                        elidable: false,
+                        blockiseq
+                    });
+
+                    fun.make_equal_to(send_insn_id, ccall);
+                    Ok(())
                 }
                 -2 => {
                     // (self, args_ruby_array)
@@ -3068,7 +3130,7 @@ impl Function {
             send: Insn,
             send_insn_id: InsnId,
         ) -> Result<(), ()> {
-            let Insn::SendWithoutBlock { mut recv, cd, mut args, state, .. } = send else {
+            let Insn::SendWithoutBlock { mut recv, cd, args, state, .. } = send else {
                 return Err(());
             };
 
@@ -3161,14 +3223,12 @@ impl Function {
                     // No inlining; emit a call
                     let cfunc = unsafe { get_mct_func(cfunc) }.cast();
                     let name = rust_str_to_id(&qualified_method_name(unsafe { (*cme).owner }, unsafe { (*cme).called_id }));
-                    let mut cfunc_args = vec![recv];
-                    cfunc_args.append(&mut args);
                     let return_type = props.return_type;
                     let elidable = props.elidable;
                     // Filter for a leaf and GC free function
                     if props.leaf && props.no_gc {
                         fun.push_insn(block, Insn::IncrCounter(Counter::inline_cfunc_optimized_send_count));
-                        let ccall = fun.push_insn(block, Insn::CCall { cfunc, args: cfunc_args, name, return_type, elidable });
+                        let ccall = fun.push_insn(block, Insn::CCall { cfunc, recv, args, name, return_type, elidable });
                         fun.make_equal_to(send_insn_id, ccall);
                     } else {
                         if get_option!(stats) {
@@ -3177,7 +3237,8 @@ impl Function {
                         let ccall = fun.push_insn(block, Insn::CCallWithFrame {
                             cd,
                             cfunc,
-                            args: cfunc_args,
+                            recv,
+                            args,
                             cme,
                             name,
                             state,
@@ -3252,6 +3313,7 @@ impl Function {
                             state,
                             return_type,
                             elidable,
+                            blockiseq: None,
                         });
 
                         fun.make_equal_to(send_insn_id, ccall);
@@ -3365,6 +3427,11 @@ impl Function {
                     Insn::GuardType { val, guard_type, .. } if self.is_a(val, guard_type) => {
                         self.make_equal_to(insn_id, val);
                         // Don't bother re-inferring the type of val; we already know it.
+                        continue;
+                    }
+                    Insn::AnyToString { str, .. } if self.is_a(str, types::String) => {
+                        self.make_equal_to(insn_id, str);
+                        // Don't bother re-inferring the type of str; we already know it.
                         continue;
                     }
                     Insn::FixnumAdd { left, right, .. } => {
@@ -3518,7 +3585,7 @@ impl Function {
                 worklist.extend(strings);
                 worklist.push_back(state);
             }
-            &Insn::StringGetbyteFixnum { string, index } => {
+            &Insn::StringGetbyte { string, index } => {
                 worklist.push_back(string);
                 worklist.push_back(index);
             }
@@ -3527,7 +3594,9 @@ impl Function {
                 worklist.push_back(index);
                 worklist.push_back(value);
             }
-            &Insn::StringAppend { recv, other, state } => {
+            &Insn::StringAppend { recv, other, state }
+            | &Insn::StringAppendCodepoint { recv, other, state }
+            => {
                 worklist.push_back(recv);
                 worklist.push_back(other);
                 worklist.push_back(state);
@@ -3594,6 +3663,7 @@ impl Function {
             | &Insn::FixnumAnd { left, right }
             | &Insn::FixnumOr { left, right }
             | &Insn::FixnumXor { left, right }
+            | &Insn::FixnumRShift { left, right }
             | &Insn::IsBitEqual { left, right }
             | &Insn::IsBitNotEqual { left, right }
             => {
@@ -3631,19 +3701,22 @@ impl Function {
             | &Insn::SendForward { recv, ref args, state, .. }
             | &Insn::SendWithoutBlock { recv, ref args, state, .. }
             | &Insn::CCallVariadic { recv, ref args, state, .. }
+            | &Insn::CCallWithFrame { recv, ref args, state, .. }
             | &Insn::SendWithoutBlockDirect { recv, ref args, state, .. }
             | &Insn::InvokeSuper { recv, ref args, state, .. } => {
                 worklist.push_back(recv);
                 worklist.extend(args);
                 worklist.push_back(state);
             }
-            &Insn::CCallWithFrame { ref args, state, .. }
-            | &Insn::InvokeBuiltin { ref args, state, .. }
+            &Insn::InvokeBuiltin { ref args, state, .. }
             | &Insn::InvokeBlock { ref args, state, .. } => {
                 worklist.extend(args);
                 worklist.push_back(state)
             }
-            Insn::CCall { args, .. } => worklist.extend(args),
+            &Insn::CCall { recv, ref args, .. } => {
+                worklist.push_back(recv);
+                worklist.extend(args);
+            }
             &Insn::GetIvar { self_val, state, .. } | &Insn::DefinedIvar { self_val, state, .. } => {
                 worklist.push_back(self_val);
                 worklist.push_back(state);
@@ -4197,7 +4270,6 @@ impl Function {
             | Insn::IncrCounter { .. }
             | Insn::IncrCounterPtr { .. }
             | Insn::CheckInterrupts { .. }
-            | Insn::CCall { .. }
             | Insn::GetClassVar { .. }
             | Insn::GetSpecialNumber { .. }
             | Insn::GetSpecialSymbol { .. }
@@ -4224,6 +4296,7 @@ impl Function {
             | Insn::ObjectAlloc { val, .. }
             | Insn::DupArrayInclude { target: val, .. }
             | Insn::GetIvar { self_val: val, .. }
+            | Insn::CCall { recv: val, .. }
             | Insn::FixnumBitCheck { val, .. } // TODO (https://github.com/Shopify/ruby/issues/859) this should check Fixnum, but then test_checkkeyword_tests_fixnum_bit fails
             | Insn::DefinedIvar { self_val: val, .. } => {
                 self.assert_subtype(insn_id, val, types::BasicObject)
@@ -4245,6 +4318,7 @@ impl Function {
             | Insn::Send { recv, ref args, .. }
             | Insn::SendForward { recv, ref args, .. }
             | Insn::InvokeSuper { recv, ref args, .. }
+            | Insn::CCallWithFrame { recv, ref args, .. }
             | Insn::CCallVariadic { recv, ref args, .. }
             | Insn::ArrayInclude { target: recv, elements: ref args, .. } => {
                 self.assert_subtype(insn_id, recv, types::BasicObject)?;
@@ -4254,8 +4328,7 @@ impl Function {
                 Ok(())
             }
             // Instructions with a Vec of Ruby objects
-            Insn::CCallWithFrame { ref args, .. }
-            | Insn::InvokeBuiltin { ref args, .. }
+            Insn::InvokeBuiltin { ref args, .. }
             | Insn::InvokeBlock { ref args, .. }
             | Insn::NewArray { elements: ref args, .. }
             | Insn::ArrayHash { elements: ref args, .. }
@@ -4287,6 +4360,10 @@ impl Function {
             Insn::StringAppend { recv, other, .. } => {
                 self.assert_subtype(insn_id, recv, types::StringExact)?;
                 self.assert_subtype(insn_id, other, types::String)
+            }
+            Insn::StringAppendCodepoint { recv, other, .. } => {
+                self.assert_subtype(insn_id, recv, types::StringExact)?;
+                self.assert_subtype(insn_id, other, types::Fixnum)
             }
             // Instructions with Array operands
             Insn::ArrayDup { val, .. } => self.assert_subtype(insn_id, val, types::ArrayExact),
@@ -4351,11 +4428,25 @@ impl Function {
             | Insn::FixnumAnd { left, right }
             | Insn::FixnumOr { left, right }
             | Insn::FixnumXor { left, right }
-            | Insn::FixnumLShift { left, right, .. }
             | Insn::NewRangeFixnum { low: left, high: right, .. }
             => {
                 self.assert_subtype(insn_id, left, types::Fixnum)?;
                 self.assert_subtype(insn_id, right, types::Fixnum)
+            }
+            Insn::FixnumLShift { left, right, .. }
+            | Insn::FixnumRShift { left, right, .. } => {
+                self.assert_subtype(insn_id, left, types::Fixnum)?;
+                self.assert_subtype(insn_id, right, types::Fixnum)?;
+                let Some(obj) = self.type_of(right).fixnum_value() else {
+                    return Err(ValidationError::MismatchedOperandType(insn_id, right, "<a compile-time constant>".into(), "<unknown>".into()));
+                };
+                if obj < 0 {
+                    return Err(ValidationError::MismatchedOperandType(insn_id, right, "<positive>".into(), format!("{obj}")));
+                }
+                if obj > 63 {
+                    return Err(ValidationError::MismatchedOperandType(insn_id, right, "<less than 64>".into(), format!("{obj}")));
+                }
+                Ok(())
             }
             Insn::GuardBitEquals { val, expected, .. } => {
                 match expected {
@@ -4378,9 +4469,9 @@ impl Function {
                 self.assert_subtype(insn_id, left, types::CInt64)?;
                 self.assert_subtype(insn_id, right, types::CInt64)
             },
-            Insn::StringGetbyteFixnum { string, index } => {
+            Insn::StringGetbyte { string, index } => {
                 self.assert_subtype(insn_id, string, types::String)?;
-                self.assert_subtype(insn_id, index, types::Fixnum)
+                self.assert_subtype(insn_id, index, types::CInt64)
             },
             Insn::StringSetbyteFixnum { string, index, value } => {
                 self.assert_subtype(insn_id, string, types::String)?;
@@ -5621,7 +5712,11 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     // ic is in arg 1
                     // Assume single-Ractor mode to omit gen_prepare_non_leaf_call on gen_getivar
                     // TODO: We only really need this if self_val is a class/module
-                    fun.push_insn(block, Insn::PatchPoint { invariant: Invariant::SingleRactorMode, state: exit_id });
+                    if !fun.assume_single_ractor_mode(block, exit_id) {
+                        // gen_getivar assumes single Ractor; side-exit into the interpreter
+                        fun.push_insn(block, Insn::SideExit { state: exit_id, reason: SideExitReason::UnhandledYARVInsn(opcode) });
+                        break;  // End the block
+                    }
                     let result = fun.push_insn(block, Insn::GetIvar { self_val: self_param, id, ic, state: exit_id });
                     state.stack_push(result);
                 }
@@ -5630,7 +5725,11 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     let ic = get_arg(pc, 1).as_ptr();
                     // Assume single-Ractor mode to omit gen_prepare_non_leaf_call on gen_setivar
                     // TODO: We only really need this if self_val is a class/module
-                    fun.push_insn(block, Insn::PatchPoint { invariant: Invariant::SingleRactorMode, state: exit_id });
+                    if !fun.assume_single_ractor_mode(block, exit_id) {
+                        // gen_setivar assumes single Ractor; side-exit into the interpreter
+                        fun.push_insn(block, Insn::SideExit { state: exit_id, reason: SideExitReason::UnhandledYARVInsn(opcode) });
+                        break;  // End the block
+                    }
                     let val = state.stack_pop()?;
                     fun.push_insn(block, Insn::SetIvar { self_val: self_param, id, ic, val, state: exit_id });
                 }
