@@ -231,6 +231,16 @@ pub fn insn_len(opcode: usize) -> u32 {
     }
 }
 
+/// We avoid using bindgen for `rb_iseq_constant_body` since its definition changes depending
+/// on build configuration while we need one bindgen file that works for all configurations.
+/// Use an opaque type for it instead.
+/// See: <https://doc.rust-lang.org/nomicon/ffi.html#representing-opaque-structs>
+#[repr(C)]
+pub struct rb_iseq_constant_body {
+    _data: [u8; 0],
+    _marker: core::marker::PhantomData<(*mut u8, core::marker::PhantomPinned)>,
+}
+
 /// An object handle similar to VALUE in the C code. Our methods assume
 /// that this is a handle. Sometimes the C code briefly uses VALUE as
 /// an unsigned integer type and don't necessarily store valid handles but
@@ -671,6 +681,14 @@ impl VALUE {
         let k: isize = item.wrapping_add(item.wrapping_add(1));
         VALUE(k as usize)
     }
+
+    /// Call the write barrier after separately writing val to self.
+    pub fn write_barrier(self, val: VALUE) {
+        // rb_gc_writebarrier() asserts it is not called with a special constant
+        if !val.special_const_p() {
+            unsafe { rb_gc_writebarrier(self, val) };
+        }
+    }
 }
 
 pub type IseqParameters = rb_iseq_constant_body_rb_iseq_parameters;
@@ -683,7 +701,8 @@ pub trait IseqAccess {
 impl IseqAccess for IseqPtr {
     /// Get a description of the ISEQ's signature. Analogous to `ISEQ_BODY(iseq)->param` in C.
     unsafe fn params<'a>(self) -> &'a IseqParameters {
-        unsafe { &(*(*self).body).param }
+        use crate::cast::IntoUsize;
+        unsafe { &*((*self).body.byte_add(ISEQ_BODY_OFFSET_PARAM.to_usize()) as *const IseqParameters) }
     }
 }
 
@@ -975,7 +994,7 @@ pub fn rb_bug_panic_hook() {
         // You may also use ZJIT_RB_BUG=1 to trigger this on dev builds.
         if release_build || env::var("ZJIT_RB_BUG").is_ok() {
             // Abort with rb_bug(). It has a length limit on the message.
-            let panic_message = &format!("{}", panic_info)[..];
+            let panic_message = &format!("{panic_info}")[..];
             let len = std::cmp::min(0x100, panic_message.len()) as c_int;
             unsafe { rb_bug(b"ZJIT: %*s\0".as_ref().as_ptr() as *const c_char, len, panic_message.as_ptr()); }
         } else {
@@ -999,8 +1018,9 @@ mod manual_defs {
     use super::*;
 
     pub const SIZEOF_VALUE: usize = 8;
+    pub const BITS_PER_BYTE: usize = 8;
     pub const SIZEOF_VALUE_I32: i32 = SIZEOF_VALUE as i32;
-    pub const VALUE_BITS: u8 = 8 * SIZEOF_VALUE as u8;
+    pub const VALUE_BITS: u8 = BITS_PER_BYTE as u8 * SIZEOF_VALUE as u8;
 
     pub const RUBY_LONG_MIN: isize = std::os::raw::c_long::MIN as isize;
     pub const RUBY_LONG_MAX: isize = std::os::raw::c_long::MAX as isize;
@@ -1052,12 +1072,6 @@ mod manual_defs {
     pub const RUBY_OFFSET_CFP_BLOCK_CODE: i32 = 40;
     pub const RUBY_OFFSET_CFP_JIT_RETURN: i32 = 48;
     pub const RUBY_SIZEOF_CONTROL_FRAME: usize = 56;
-
-    // Constants from rb_execution_context_t vm_core.h
-    pub const RUBY_OFFSET_EC_CFP: i32 = 16;
-    pub const RUBY_OFFSET_EC_INTERRUPT_FLAG: i32 = 32; // rb_atomic_t (u32)
-    pub const RUBY_OFFSET_EC_INTERRUPT_MASK: i32 = 36; // rb_atomic_t (u32)
-    pub const RUBY_OFFSET_EC_THREAD_PTR: i32 = 48;
 
     // Constants from rb_thread_t in vm_core.h
     pub const RUBY_OFFSET_THREAD_SELF: i32 = 16;
@@ -1382,6 +1396,7 @@ pub(crate) mod ids {
         name: thread_ptr
         name: self_              content: b"self"
         name: rb_ivar_get_at_no_ractor_check
+        name: _shape_id
     }
 
     /// Get an CRuby `ID` to an interned string, e.g. a particular method name.

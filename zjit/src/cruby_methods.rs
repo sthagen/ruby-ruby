@@ -186,9 +186,16 @@ pub fn init() -> Annotations {
         ($module:ident, $method_name:literal, $return_type:expr) => {
             annotate_builtin!($module, $method_name, $return_type, no_gc, leaf, elidable)
         };
-        ($module:ident, $method_name:literal, $return_type:expr, $($properties:ident),+) => {
+        ($module:ident, $method_name:literal, $return_type:expr $(, $properties:ident)*) => {
             let mut props = FnProperties::default();
             props.return_type = $return_type;
+            $(props.$properties = true;)+
+            annotate_builtin_method(builtin_funcs, unsafe { $module }, $method_name, props);
+        };
+        ($module:ident, $method_name:literal, $inline:ident, $return_type:expr $(, $properties:ident)*) => {
+            let mut props = FnProperties::default();
+            props.return_type = $return_type;
+            props.inline = $inline;
             $(props.$properties = true;)+
             annotate_builtin_method(builtin_funcs, unsafe { $module }, $method_name, props);
         }
@@ -222,6 +229,7 @@ pub fn init() -> Annotations {
     annotate!(rb_cArray, "push", inline_array_push);
     annotate!(rb_cArray, "pop", inline_array_pop);
     annotate!(rb_cHash, "[]", inline_hash_aref);
+    annotate!(rb_cHash, "[]=", inline_hash_aset);
     annotate!(rb_cHash, "size", types::Fixnum, no_gc, leaf, elidable);
     annotate!(rb_cHash, "empty?", types::BoolExact, no_gc, leaf, elidable);
     annotate!(rb_cNilClass, "nil?", inline_nilclass_nil_p);
@@ -256,7 +264,7 @@ pub fn init() -> Annotations {
     annotate_builtin!(rb_mKernel, "Integer", types::Integer);
     // TODO(max): Annotate rb_mKernel#class as returning types::Class. Right now there is a subtle
     // type system bug that causes an issue if we make it return types::Class.
-    annotate_builtin!(rb_mKernel, "class", types::HeapObject, leaf);
+    annotate_builtin!(rb_mKernel, "class", inline_kernel_class, types::HeapObject, leaf);
     annotate_builtin!(rb_mKernel, "frozen?", types::BoolExact);
     annotate_builtin!(rb_cSymbol, "name", types::StringExact);
     annotate_builtin!(rb_cSymbol, "to_s", types::StringExact);
@@ -342,13 +350,31 @@ fn inline_array_pop(fun: &mut hir::Function, block: hir::BlockId, recv: hir::Ins
 }
 
 fn inline_hash_aref(fun: &mut hir::Function, block: hir::BlockId, recv: hir::InsnId, args: &[hir::InsnId], state: hir::InsnId) -> Option<hir::InsnId> {
-    if let &[key] = args  {
+    let &[key] = args else { return None; };
+
+    // Only optimize exact Hash, not subclasses
+    if fun.likely_a(recv, types::HashExact, state) {
+        let recv = fun.coerce_to(block, recv, types::HashExact, state);
         let result = fun.push_insn(block, hir::Insn::HashAref { hash: recv, key, state });
-        return Some(result);
+        Some(result)
+    } else {
+        None
     }
-    None
 }
 
+fn inline_hash_aset(fun: &mut hir::Function, block: hir::BlockId, recv: hir::InsnId, args: &[hir::InsnId], state: hir::InsnId) -> Option<hir::InsnId> {
+    let &[key, val] = args else { return None; };
+
+    // Only optimize exact Hash, not subclasses
+    if fun.likely_a(recv, types::HashExact, state) {
+        let recv = fun.coerce_to(block, recv, types::HashExact, state);
+        let _ = fun.push_insn(block, hir::Insn::HashAset { hash: recv, key, val, state });
+        // Hash#[]= returns the value, not the hash
+        Some(val)
+    } else {
+        None
+    }
+}
 
 fn inline_string_bytesize(fun: &mut hir::Function, block: hir::BlockId, recv: hir::InsnId, args: &[hir::InsnId], state: hir::InsnId) -> Option<hir::InsnId> {
     if args.is_empty() && fun.likely_a(recv, types::String, state) {
@@ -784,4 +810,11 @@ fn inline_kernel_respond_to_p(
         });
     }
     Some(fun.push_insn(block, hir::Insn::Const { val: hir::Const::Value(result) }))
+}
+
+fn inline_kernel_class(fun: &mut hir::Function, block: hir::BlockId, _recv: hir::InsnId, args: &[hir::InsnId], _state: hir::InsnId) -> Option<hir::InsnId> {
+    let &[recv] = args else { return None; };
+    let recv_class = fun.type_of(recv).runtime_exact_ruby_class()?;
+    let real_class = unsafe { rb_class_real(recv_class) };
+    Some(fun.push_insn(block, hir::Insn::Const { val: hir::Const::Value(real_class) }))
 }

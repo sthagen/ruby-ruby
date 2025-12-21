@@ -595,40 +595,6 @@ pub type rb_jit_func_t = ::std::option::Option<
     ) -> VALUE,
 >;
 #[repr(C)]
-pub struct rb_iseq_constant_body {
-    pub type_: rb_iseq_type,
-    pub iseq_size: ::std::os::raw::c_uint,
-    pub iseq_encoded: *mut VALUE,
-    pub param: rb_iseq_constant_body_rb_iseq_parameters,
-    pub location: rb_iseq_location_t,
-    pub insns_info: rb_iseq_constant_body_iseq_insn_info,
-    pub local_table: *const ID,
-    pub lvar_states: *mut rb_iseq_constant_body_lvar_state,
-    pub catch_table: *mut iseq_catch_table,
-    pub parent_iseq: *const rb_iseq_struct,
-    pub local_iseq: *mut rb_iseq_struct,
-    pub is_entries: *mut iseq_inline_storage_entry,
-    pub call_data: *mut rb_call_data,
-    pub variable: rb_iseq_constant_body__bindgen_ty_1,
-    pub local_table_size: ::std::os::raw::c_uint,
-    pub ic_size: ::std::os::raw::c_uint,
-    pub ise_size: ::std::os::raw::c_uint,
-    pub ivc_size: ::std::os::raw::c_uint,
-    pub icvarc_size: ::std::os::raw::c_uint,
-    pub ci_size: ::std::os::raw::c_uint,
-    pub stack_max: ::std::os::raw::c_uint,
-    pub builtin_attrs: ::std::os::raw::c_uint,
-    pub prism: bool,
-    pub mark_bits: rb_iseq_constant_body__bindgen_ty_2,
-    pub outer_variables: *mut rb_id_table,
-    pub mandatory_only_iseq: *const rb_iseq_t,
-    pub jit_entry: rb_jit_func_t,
-    pub jit_entry_calls: ::std::os::raw::c_ulong,
-    pub jit_exception: rb_jit_func_t,
-    pub jit_exception_calls: ::std::os::raw::c_ulong,
-    pub zjit_payload: *mut ::std::os::raw::c_void,
-}
-#[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct rb_iseq_constant_body_rb_iseq_parameters {
     pub flags: rb_iseq_constant_body_rb_iseq_parameters__bindgen_ty_1,
@@ -1248,17 +1214,8 @@ pub struct rb_iseq_struct__bindgen_ty_1__bindgen_ty_1 {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct rb_iseq_struct__bindgen_ty_1__bindgen_ty_2 {
-    pub local_hooks: *mut rb_hook_list_struct,
+    pub local_hooks_cnt: ::std::os::raw::c_uint,
     pub global_trace_events: rb_event_flag_t,
-}
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct rb_hook_list_struct {
-    pub hooks: *mut rb_event_hook_struct,
-    pub events: rb_event_flag_t,
-    pub running: ::std::os::raw::c_uint,
-    pub need_clean: bool,
-    pub is_local: bool,
 }
 #[repr(C)]
 pub struct rb_captured_block {
@@ -1866,9 +1823,16 @@ pub const DEFINED_REF: defined_type = 15;
 pub const DEFINED_FUNC: defined_type = 16;
 pub const DEFINED_CONST_FROM: defined_type = 17;
 pub type defined_type = u32;
+pub const ISEQ_BODY_OFFSET_PARAM: zjit_struct_offsets = 16;
+pub type zjit_struct_offsets = u32;
 pub const ROBJECT_OFFSET_AS_HEAP_FIELDS: jit_bindgen_constants = 16;
 pub const ROBJECT_OFFSET_AS_ARY: jit_bindgen_constants = 16;
 pub const RUBY_OFFSET_RSTRING_LEN: jit_bindgen_constants = 16;
+pub const RUBY_OFFSET_EC_CFP: jit_bindgen_constants = 16;
+pub const RUBY_OFFSET_EC_INTERRUPT_FLAG: jit_bindgen_constants = 32;
+pub const RUBY_OFFSET_EC_INTERRUPT_MASK: jit_bindgen_constants = 36;
+pub const RUBY_OFFSET_EC_THREAD_PTR: jit_bindgen_constants = 48;
+pub const RUBY_OFFSET_EC_RACTOR_ID: jit_bindgen_constants = 64;
 pub type jit_bindgen_constants = u32;
 pub const rb_invalid_shape_id: shape_id_t = 4294967295;
 pub type rb_iseq_param_keyword_struct =
@@ -1876,11 +1840,6 @@ pub type rb_iseq_param_keyword_struct =
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct succ_index_table {
-    pub _address: u8,
-}
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct rb_event_hook_struct {
     pub _address: u8,
 }
 unsafe extern "C" {
@@ -1971,6 +1930,7 @@ unsafe extern "C" {
     pub fn rb_obj_is_kind_of(obj: VALUE, klass: VALUE) -> VALUE;
     pub fn rb_obj_alloc(klass: VALUE) -> VALUE;
     pub fn rb_obj_frozen_p(obj: VALUE) -> VALUE;
+    pub fn rb_class_real(klass: VALUE) -> VALUE;
     pub fn rb_class_inherited_p(scion: VALUE, ascendant: VALUE) -> VALUE;
     pub fn rb_backref_get() -> VALUE;
     pub fn rb_range_new(beg: VALUE, end: VALUE, excl: ::std::os::raw::c_int) -> VALUE;
@@ -2033,7 +1993,11 @@ unsafe extern "C" {
     pub fn rb_shape_id_offset() -> i32;
     pub fn rb_obj_shape_id(obj: VALUE) -> shape_id_t;
     pub fn rb_shape_get_iv_index(shape_id: shape_id_t, id: ID, value: *mut attr_index_t) -> bool;
-    pub fn rb_shape_transition_add_ivar_no_warnings(obj: VALUE, id: ID) -> shape_id_t;
+    pub fn rb_shape_transition_add_ivar_no_warnings(
+        klass: VALUE,
+        original_shape_id: shape_id_t,
+        id: ID,
+    ) -> shape_id_t;
     pub fn rb_ivar_get_at_no_ractor_check(obj: VALUE, index: attr_index_t) -> VALUE;
     pub fn rb_gvar_get(arg1: ID) -> VALUE;
     pub fn rb_gvar_set(arg1: ID, arg2: VALUE) -> VALUE;
@@ -2119,6 +2083,7 @@ unsafe extern "C" {
     pub fn rb_zjit_class_get_alloc_func(klass: VALUE) -> rb_alloc_func_t;
     pub fn rb_zjit_class_has_default_allocator(klass: VALUE) -> bool;
     pub fn rb_vm_get_untagged_block_handler(reg_cfp: *mut rb_control_frame_t) -> VALUE;
+    pub fn rb_zjit_writebarrier_check_immediate(recv: VALUE, val: VALUE);
     pub fn rb_iseq_encoded_size(iseq: *const rb_iseq_t) -> ::std::os::raw::c_uint;
     pub fn rb_iseq_pc_at_idx(iseq: *const rb_iseq_t, insn_idx: u32) -> *mut VALUE;
     pub fn rb_iseq_opcode_at_pc(iseq: *const rb_iseq_t, pc: *const VALUE) -> ::std::os::raw::c_int;
@@ -2225,6 +2190,8 @@ unsafe extern "C" {
         start: *mut ::std::os::raw::c_void,
         end: *mut ::std::os::raw::c_void,
     );
+    pub fn rb_jit_fix_div_fix(recv: VALUE, obj: VALUE) -> VALUE;
     pub fn rb_yarv_str_eql_internal(str1: VALUE, str2: VALUE) -> VALUE;
     pub fn rb_jit_str_concat_codepoint(str_: VALUE, codepoint: VALUE);
+    pub fn rb_jit_shape_capacity(shape_id: shape_id_t) -> attr_index_t;
 }

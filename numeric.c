@@ -576,7 +576,7 @@ num_imaginary(VALUE num)
  *  call-seq:
  *    -self -> numeric
  *
- *  Unary Minus---Returns the receiver, negated.
+ *  Returns +self+, negated.
  */
 
 static VALUE
@@ -1089,7 +1089,7 @@ rb_float_plus(VALUE x, VALUE y)
  *  call-seq:
  *    self - other -> numeric
  *
- *  Returns a new \Float which is the difference of +self+ and +other+:
+ * Returns the difference of +self+ and +other+:
  *
  *    f = 3.14
  *    f - 1                 # => 2.14
@@ -1175,7 +1175,7 @@ rb_flo_div_flo(VALUE x, VALUE y)
  *  call-seq:
  *    self / other -> numeric
  *
- *  Returns a new \Float which is the result of dividing +self+ by +other+:
+ * Returns the quotient of +self+ and +other+:
  *
  *    f = 3.14
  *    f / 2              # => 1.57
@@ -1390,9 +1390,9 @@ flo_divmod(VALUE x, VALUE y)
 
 /*
  *  call-seq:
- *    self ** other -> numeric
+ *    self ** exponent -> numeric
  *
- *  Raises +self+ to the power of +other+:
+ *  Returns +self+ raised to the power +exponent+:
  *
  *    f = 3.14
  *    f ** 2              # => 9.8596
@@ -1468,10 +1468,17 @@ num_eql(VALUE x, VALUE y)
  *  call-seq:
  *    self <=> other -> zero or nil
  *
- *  Returns zero if +self+ is the same as +other+, +nil+ otherwise.
+ *  Compares +self+ and +other+.
+ *
+ *  Returns:
+ *
+ *  - Zero, if +self+ is the same as +other+.
+ *  - +nil+, otherwise.
+ *
+ *  \Class \Numeric includes module Comparable,
+ *  each of whose methods uses Numeric#<=> for comparison.
  *
  *  No subclass in the Ruby Core or Standard Library uses this implementation.
- *
  */
 
 static VALUE
@@ -1561,29 +1568,31 @@ rb_dbl_cmp(double a, double b)
 
 /*
  *  call-seq:
- *     self <=> other ->  -1, 0, +1, or nil
+ *     self <=> other ->  -1, 0, 1, or nil
  *
- *  Returns a value that depends on the numeric relation
- *  between +self+ and +other+:
+ *  Compares +self+ and +other+.
  *
- *  - -1, if +self+ is less than +other+.
- *  - 0, if +self+ is equal to +other+.
- *  - 1, if +self+ is greater than +other+.
+ *  Returns:
+ *
+ *  - +-1+, if +self+ is less than +other+.
+ *  - +0+, if +self+ is equal to +other+.
+ *  - +1+, if +self+ is greater than +other+.
  *  - +nil+, if the two values are incommensurate.
  *
  *  Examples:
  *
+ *    2.0 <=> 2.1            # => -1
  *    2.0 <=> 2              # => 0
  *    2.0 <=> 2.0            # => 0
  *    2.0 <=> Rational(2, 1) # => 0
  *    2.0 <=> Complex(2, 0)  # => 0
  *    2.0 <=> 1.9            # => 1
- *    2.0 <=> 2.1            # => -1
  *    2.0 <=> 'foo'          # => nil
  *
- *  This is the basis for the tests in the Comparable module.
- *
  *  <tt>Float::NAN <=> Float::NAN</tt> returns an implementation-dependent value.
+ *
+ *  \Class \Float includes module Comparable,
+ *  each of whose methods uses Float#<=> for comparison.
  *
  */
 
@@ -1702,7 +1711,8 @@ flo_ge(VALUE x, VALUE y)
  *  call-seq:
  *    self < other -> true or false
  *
- *  Returns +true+ if +self+ is numerically less than +other+:
+ *  Returns whether the value of +self+ is less than the value of +other+;
+ *  +other+ must be numeric, but may not be Complex:
  *
  *    2.0 < 3              # => true
  *    2.0 < 3.0            # => true
@@ -1710,7 +1720,6 @@ flo_ge(VALUE x, VALUE y)
  *    2.0 < 2.0            # => false
  *
  *  <tt>Float::NAN < Float::NAN</tt> returns an implementation-dependent value.
- *
  */
 
 static VALUE
@@ -1738,7 +1747,8 @@ flo_lt(VALUE x, VALUE y)
  *  call-seq:
  *    self <= other -> true or false
  *
- *  Returns +true+ if +self+ is numerically less than or equal to +other+:
+ *  Returns whether the value of +self+ is less than or equal to the value of +other+;
+ *  +other+ must be numeric, but may not be Complex:
  *
  *    2.0 <= 3              # => true
  *    2.0 <= 3.0            # => true
@@ -2601,7 +2611,7 @@ flo_truncate(int argc, VALUE *argv, VALUE num)
  *    floor(ndigits = 0) -> float or integer
  *
  *  Returns the largest float or integer that is less than or equal to +self+,
- *  as specified by the given `ndigits`,
+ *  as specified by the given +ndigits+,
  *  which must be an
  *  {integer-convertible object}[rdoc-ref:implicit_conversion.rdoc@Integer-Convertible+Objects].
  *
@@ -2621,7 +2631,7 @@ num_floor(int argc, VALUE *argv, VALUE num)
  *    ceil(ndigits = 0) -> float or integer
  *
  *  Returns the smallest float or integer that is greater than or equal to +self+,
- *  as specified by the given `ndigits`,
+ *  as specified by the given +ndigits+,
  *  which must be an
  *  {integer-convertible object}[rdoc-ref:implicit_conversion.rdoc@Integer-Convertible+Objects].
  *
@@ -3420,6 +3430,232 @@ rb_num2ull(VALUE val)
 
 #endif  /* HAVE_LONG_LONG */
 
+// Conversion functions for unified 128-bit integer structures,
+// These work with or without native 128-bit integer support.
+
+#ifndef HAVE_UINT128_T
+// Helper function to build 128-bit value from bignum digits (fallback path).
+static inline void
+rb_uint128_from_bignum_digits_fallback(rb_uint128_t *result, BDIGIT *digits, size_t length)
+{
+    // Build the 128-bit value from bignum digits:
+    for (long i = length - 1; i >= 0; i--) {
+        // Shift both low and high parts:
+        uint64_t carry = result->parts.low >> (64 - (SIZEOF_BDIGIT * CHAR_BIT));
+        result->parts.low = (result->parts.low << (SIZEOF_BDIGIT * CHAR_BIT)) | digits[i];
+        result->parts.high = (result->parts.high << (SIZEOF_BDIGIT * CHAR_BIT)) | carry;
+    }
+}
+
+// Helper function to convert absolute value of negative bignum to two's complement.
+// Ruby stores negative bignums as absolute values, so we need to convert to two's complement.
+static inline void
+rb_uint128_twos_complement_negate(rb_uint128_t *value)
+{
+    if (value->parts.low == 0) {
+        value->parts.high = ~value->parts.high + 1;
+    }
+    else {
+        value->parts.low = ~value->parts.low + 1;
+        value->parts.high = ~value->parts.high + (value->parts.low == 0 ? 1 : 0);
+    }
+}
+#endif
+
+rb_uint128_t
+rb_numeric_to_uint128(VALUE x)
+{
+    rb_uint128_t result = {0};
+    if (RB_FIXNUM_P(x)) {
+        long value = RB_FIX2LONG(x);
+        if (value < 0) {
+            rb_raise(rb_eRangeError, "negative integer cannot be converted to unsigned 128-bit integer");
+        }
+#ifdef HAVE_UINT128_T
+        result.value = (uint128_t)value;
+#else
+        result.parts.low = (uint64_t)value;
+        result.parts.high = 0;
+#endif
+        return result;
+    }
+    else if (RB_BIGNUM_TYPE_P(x)) {
+        if (BIGNUM_NEGATIVE_P(x)) {
+            rb_raise(rb_eRangeError, "negative integer cannot be converted to unsigned 128-bit integer");
+        }
+        size_t length = BIGNUM_LEN(x);
+#ifdef HAVE_UINT128_T
+        if (length > roomof(SIZEOF_INT128_T, SIZEOF_BDIGIT)) {
+            rb_raise(rb_eRangeError, "bignum too big to convert into 'unsigned 128-bit integer'");
+        }
+        BDIGIT *digits = BIGNUM_DIGITS(x);
+        result.value = 0;
+        for (long i = length - 1; i >= 0; i--) {
+            result.value = (result.value << (SIZEOF_BDIGIT * CHAR_BIT)) | digits[i];
+        }
+#else
+        // Check if bignum fits in 128 bits (16 bytes)
+        if (length > roomof(16, SIZEOF_BDIGIT)) {
+            rb_raise(rb_eRangeError, "bignum too big to convert into 'unsigned 128-bit integer'");
+        }
+        BDIGIT *digits = BIGNUM_DIGITS(x);
+        rb_uint128_from_bignum_digits_fallback(&result, digits, length);
+#endif
+        return result;
+    }
+    else {
+        rb_raise(rb_eTypeError, "not an integer");
+    }
+}
+
+rb_int128_t
+rb_numeric_to_int128(VALUE x)
+{
+    rb_int128_t result = {0};
+    if (RB_FIXNUM_P(x)) {
+        long value = RB_FIX2LONG(x);
+#ifdef HAVE_UINT128_T
+        result.value = (int128_t)value;
+#else
+        if (value < 0) {
+            // Two's complement representation: for negative values, sign extend
+            // Convert to unsigned: for -1, we want all bits set
+            result.parts.low = (uint64_t)value; // This will be the two's complement representation
+            result.parts.high = UINT64_MAX; // Sign extend: all bits set for negative
+        }
+        else {
+            result.parts.low = (uint64_t)value;
+            result.parts.high = 0;
+        }
+#endif
+        return result;
+    }
+    else if (RB_BIGNUM_TYPE_P(x)) {
+        size_t length = BIGNUM_LEN(x);
+#ifdef HAVE_UINT128_T
+        if (length > roomof(SIZEOF_INT128_T, SIZEOF_BDIGIT)) {
+            rb_raise(rb_eRangeError, "bignum too big to convert into 'signed 128-bit integer'");
+        }
+        BDIGIT *digits = BIGNUM_DIGITS(x);
+        uint128_t unsigned_result = 0;
+        for (long i = length - 1; i >= 0; i--) {
+            unsigned_result = (unsigned_result << (SIZEOF_BDIGIT * CHAR_BIT)) | digits[i];
+        }
+        if (BIGNUM_NEGATIVE_P(x)) {
+            // Convert from two's complement
+            // Maximum negative value is 2^127
+            if (unsigned_result > ((uint128_t)1 << 127)) {
+                rb_raise(rb_eRangeError, "bignum too big to convert into 'signed 128-bit integer'");
+            }
+            result.value = -(int128_t)(unsigned_result - 1) - 1;
+        }
+        else {
+            // Maximum positive value is 2^127 - 1
+            if (unsigned_result > (((uint128_t)1 << 127) - 1)) {
+                rb_raise(rb_eRangeError, "bignum too big to convert into 'signed 128-bit integer'");
+            }
+            result.value = (int128_t)unsigned_result;
+        }
+#else
+        if (length > roomof(16, SIZEOF_BDIGIT)) {
+            rb_raise(rb_eRangeError, "bignum too big to convert into 'signed 128-bit integer'");
+        }
+        BDIGIT *digits = BIGNUM_DIGITS(x);
+        rb_uint128_t unsigned_result = {0};
+        rb_uint128_from_bignum_digits_fallback(&unsigned_result, digits, length);
+        if (BIGNUM_NEGATIVE_P(x)) {
+            // Check if value fits in signed 128-bit (max negative is 2^127)
+            uint64_t max_neg_high = (uint64_t)1 << 63;
+            if (unsigned_result.parts.high > max_neg_high || (unsigned_result.parts.high == max_neg_high && unsigned_result.parts.low > 0)) {
+                rb_raise(rb_eRangeError, "bignum too big to convert into 'signed 128-bit integer'");
+            }
+            // Convert from absolute value to two's complement (Ruby stores negative as absolute value)
+            rb_uint128_twos_complement_negate(&unsigned_result);
+            result.parts.low = unsigned_result.parts.low;
+            result.parts.high = (int64_t)unsigned_result.parts.high; // Sign extend
+        }
+        else {
+            // Check if value fits in signed 128-bit (max positive is 2^127 - 1)
+            // Max positive: high = 0x7FFFFFFFFFFFFFFF, low = 0xFFFFFFFFFFFFFFFF
+            uint64_t max_pos_high = ((uint64_t)1 << 63) - 1;
+            if (unsigned_result.parts.high > max_pos_high) {
+                rb_raise(rb_eRangeError, "bignum too big to convert into 'signed 128-bit integer'");
+            }
+            result.parts.low = unsigned_result.parts.low;
+            result.parts.high = unsigned_result.parts.high;
+        }
+#endif
+        return result;
+    }
+    else {
+        rb_raise(rb_eTypeError, "not an integer");
+    }
+}
+
+VALUE
+rb_uint128_to_numeric(rb_uint128_t n)
+{
+#ifdef HAVE_UINT128_T
+    if (n.value <= (uint128_t)RUBY_FIXNUM_MAX) {
+        return LONG2FIX((long)n.value);
+    }
+    return rb_uint128t2big(n.value);
+#else
+    // If high part is zero and low part fits in fixnum
+    if (n.parts.high == 0 && n.parts.low <= (uint64_t)RUBY_FIXNUM_MAX) {
+        return LONG2FIX((long)n.parts.low);
+    }
+    // Convert to bignum by building it from the two 64-bit parts
+    VALUE bignum = rb_ull2big(n.parts.low);
+    if (n.parts.high > 0) {
+        VALUE high_bignum = rb_ull2big(n.parts.high);
+        // Multiply high part by 2^64 and add to low part
+        VALUE shifted_value = rb_int_lshift(high_bignum, INT2FIX(64));
+        bignum = rb_int_plus(bignum, shifted_value);
+    }
+    return bignum;
+#endif
+}
+
+VALUE
+rb_int128_to_numeric(rb_int128_t n)
+{
+#ifdef HAVE_UINT128_T
+    if (FIXABLE(n.value)) {
+        return LONG2FIX((long)n.value);
+    }
+    return rb_int128t2big(n.value);
+#else
+    int64_t high = (int64_t)n.parts.high;
+    // If it's a small positive value that fits in fixnum
+    if (high == 0 && n.parts.low <= (uint64_t)RUBY_FIXNUM_MAX) {
+        return LONG2FIX((long)n.parts.low);
+    }
+    // Check if it's negative (high bit of high part is set)
+    if (high < 0) {
+        // Negative value - convert from two's complement to absolute value
+        rb_uint128_t unsigned_value = {0};
+        if (n.parts.low == 0) {
+            unsigned_value.parts.low = 0;
+            unsigned_value.parts.high = ~n.parts.high + 1;
+        }
+        else {
+            unsigned_value.parts.low = ~n.parts.low + 1;
+            unsigned_value.parts.high = ~n.parts.high + (unsigned_value.parts.low == 0 ? 1 : 0);
+        }
+        VALUE bignum = rb_uint128_to_numeric(unsigned_value);
+        return rb_int_uminus(bignum);
+    }
+    else {
+        // Positive value
+        union uint128_int128_conversion conversion = {
+            .int128 = n
+        };
+        return rb_uint128_to_numeric(conversion.uint128);
+    }
+#endif
+}
+
 /********************************************************************
  *
  * Document-class: Integer
@@ -3971,9 +4207,9 @@ fix_minus(VALUE x, VALUE y)
 
 /*
  *  call-seq:
- *    self - numeric -> numeric_result
+ *    self - other -> numeric
  *
- *  Performs subtraction:
+ * Returns the difference of +self+ and +other+:
  *
  *    4 - 2              # => 2
  *    -4 - 2             # => -6
@@ -4160,16 +4396,18 @@ fix_div(VALUE x, VALUE y)
 
 /*
  * call-seq:
- *   self / numeric -> numeric_result
+ *   self / other -> numeric
  *
- * Performs division; for integer +numeric+, truncates the result to an integer:
+ * Returns the quotient of +self+ and +other+.
+ *
+ * For integer +other+, truncates the result to an integer:
  *
  *   4 / 3              # => 1
  *   4 / -3             # => -2
  *   -4 / 3             # => -2
  *   -4 / -3            # => 1
  *
- *  For other +numeric+, returns non-integer result:
+ * For non-integer +other+, returns a non-integer result:
  *
  *   4 / 3.0            # => 1.3333333333333333
  *   4 / Rational(3, 1) # => (4/3)
@@ -4397,9 +4635,9 @@ rb_int_divmod(VALUE x, VALUE y)
 
 /*
  *  call-seq:
- *    self ** numeric -> numeric_result
+ *    self ** exponent -> numeric
  *
- *  Raises +self+ to the power of +numeric+:
+ * Returns +self+ raised to the power +exponent+:
  *
  *    2 ** 3              # => 8
  *    2 ** -3             # => (1/8)
@@ -4522,8 +4760,7 @@ fix_pow(VALUE x, VALUE y)
  *  call-seq:
  *    self ** exponent -> numeric
  *
- *  Returns the value of base +self+ raised to the power +exponent+;
- *  see {Exponentiation}[https://en.wikipedia.org/wiki/Exponentiation]:
+ *  Returns +self+ raised to the power +exponent+:
  *
  *    # Result for non-negative Integer exponent is Integer.
  *    2 ** 0   # => 1
@@ -4660,28 +4897,29 @@ fix_cmp(VALUE x, VALUE y)
 
 /*
  *  call-seq:
- *    self <=> other  ->  -1, 0, +1, or nil
+ *    self <=> other -> -1, 0, 1, or nil
+ *
+ *  Compares +self+ and +other+.
  *
  *  Returns:
  *
- *  - -1, if +self+ is less than +other+.
- *  - 0, if +self+ is equal to +other+.
- *  - 1, if +self+ is greater then +other+.
+ *  - +-1+, if +self+ is less than +other+.
+ *  - +0+, if +self+ is equal to +other+.
+ *  - +1+, if +self+ is greater then +other+.
  *  - +nil+, if +self+ and +other+ are incomparable.
  *
  *  Examples:
  *
  *    1 <=> 2              # => -1
  *    1 <=> 1              # => 0
- *    1 <=> 0              # => 1
- *    1 <=> 'foo'          # => nil
- *
  *    1 <=> 1.0            # => 0
  *    1 <=> Rational(1, 1) # => 0
  *    1 <=> Complex(1, 0)  # => 0
+ *    1 <=> 0              # => 1
+ *    1 <=> 'foo'          # => nil
  *
- *  This method is the basis for comparisons in module Comparable.
- *
+ *  \Class \Integer includes module Comparable,
+ *  each of whose methods uses Integer#<=> for comparison.
  */
 
 VALUE
@@ -4811,15 +5049,14 @@ fix_lt(VALUE x, VALUE y)
  * call-seq:
  *    self < other -> true or false
  *
- * Returns +true+ if the value of +self+ is less than that of +other+:
+ * Returns whether the value of +self+ is less than the value of +other+;
+ * +other+ must be numeric, but may not be Complex:
  *
  *    1 < 0              # => false
  *    1 < 1              # => false
  *    1 < 2              # => true
  *    1 < 0.5            # => false
  *    1 < Rational(1, 2) # => false
- *
- *  Raises an exception if the comparison cannot be made.
  *
  */
 
@@ -4855,10 +5092,10 @@ fix_le(VALUE x, VALUE y)
 
 /*
  * call-seq:
- *    self <= real -> true or false
+ *    self <= other -> true or false
  *
- *  Returns +true+ if the value of +self+ is less than or equal to
- *  that of +other+:
+ * Returns whether the value of +self+ is less than or equal to the value of +other+;
+ * +other+ must be numeric, but may not be Complex:
  *
  *    1 <= 0              # => false
  *    1 <= 1              # => true

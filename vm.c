@@ -718,9 +718,10 @@ rb_current_ec_noinline(void)
 
 #endif
 
-rb_event_flag_t ruby_vm_event_flags;
-rb_event_flag_t ruby_vm_event_enabled_global_flags;
-unsigned int    ruby_vm_event_local_num;
+rb_event_flag_t ruby_vm_event_flags = 0;
+rb_event_flag_t ruby_vm_event_enabled_global_flags = 0;
+unsigned int    ruby_vm_c_events_enabled = 0;
+unsigned int    ruby_vm_iseq_events_enabled = 0;
 
 rb_serial_t ruby_vm_constant_cache_invalidations = 0;
 rb_serial_t ruby_vm_constant_cache_misses = 0;
@@ -1121,6 +1122,14 @@ vm_make_env_each(const rb_execution_context_t * const ec, rb_control_frame_t *co
         local_size += VM_ENV_DATA_SIZE;
     }
 
+    // Invalidate JIT code that assumes cfp->ep == vm_base_ptr(cfp).
+    // This is done before creating the imemo_env because VM_STACK_ENV_WRITE
+    // below leaves the on-stack ep in a state that is unsafe to GC.
+    if (VM_FRAME_RUBYFRAME_P(cfp)) {
+        rb_yjit_invalidate_ep_is_bp(cfp->iseq);
+        rb_zjit_invalidate_no_ep_escape(cfp->iseq);
+    }
+
     /*
      * # local variables on a stack frame (N == local_size)
      * [lvar1, lvar2, ..., lvarN, SPECVAL]
@@ -1163,12 +1172,6 @@ vm_make_env_each(const rb_execution_context_t * const ec, rb_control_frame_t *co
         }
     }
 #endif
-
-    // Invalidate JIT code that assumes cfp->ep == vm_base_ptr(cfp).
-    if (env->iseq) {
-        rb_yjit_invalidate_ep_is_bp(env->iseq);
-        rb_zjit_invalidate_no_ep_escape(env->iseq);
-    }
 
     return (VALUE)env;
 }
@@ -1594,7 +1597,10 @@ rb_proc_ractor_make_shareable(VALUE self, VALUE replace_self)
         proc->is_isolated = TRUE;
     }
     else {
-        VALUE proc_self = vm_block_self(vm_proc_block(self));
+        const struct rb_block *block = vm_proc_block(self);
+        if (block->type != block_type_symbol) rb_raise(rb_eRuntimeError, "not supported yet");
+
+        VALUE proc_self = vm_block_self(block);
         if (!rb_ractor_shareable_p(proc_self)) {
             rb_raise(rb_eRactorIsolationError,
                      "Proc's self is not shareable: %" PRIsVALUE,
@@ -2576,7 +2582,11 @@ hook_before_rewind(rb_execution_context_t *ec, bool cfp_returning_with_value, in
     }
     else {
         const rb_iseq_t *iseq = ec->cfp->iseq;
-        rb_hook_list_t *local_hooks = iseq->aux.exec.local_hooks;
+        rb_hook_list_t *local_hooks = NULL;
+        unsigned int local_hooks_cnt = iseq->aux.exec.local_hooks_cnt;
+        if (RB_UNLIKELY(local_hooks_cnt > 0)) {
+            local_hooks = rb_iseq_local_hooks(iseq, rb_ec_ractor_ptr(ec), false);
+        }
 
         switch (VM_FRAME_TYPE(ec->cfp)) {
           case VM_FRAME_MAGIC_METHOD:
@@ -2614,15 +2624,18 @@ hook_before_rewind(rb_execution_context_t *ec, bool cfp_returning_with_value, in
                                               bmethod_return_value);
 
                 VM_ASSERT(me->def->type == VM_METHOD_TYPE_BMETHOD);
-                local_hooks = me->def->body.bmethod.hooks;
-
-                if (UNLIKELY(local_hooks && local_hooks->events & RUBY_EVENT_RETURN)) {
-                    rb_exec_event_hook_orig(ec, local_hooks, RUBY_EVENT_RETURN, ec->cfp->self,
-                                            rb_vm_frame_method_entry(ec->cfp)->def->original_id,
-                                            rb_vm_frame_method_entry(ec->cfp)->called_id,
-                                            rb_vm_frame_method_entry(ec->cfp)->owner,
-                                            bmethod_return_value, TRUE);
+                unsigned int local_hooks_cnt = me->def->body.bmethod.local_hooks_cnt;
+                if (UNLIKELY(local_hooks_cnt > 0)) {
+                    local_hooks = rb_method_def_local_hooks(me->def, rb_ec_ractor_ptr(ec), false);
+                    if (local_hooks && local_hooks->events & RUBY_EVENT_RETURN) {
+                        rb_exec_event_hook_orig(ec, local_hooks, RUBY_EVENT_RETURN, ec->cfp->self,
+                                                rb_vm_frame_method_entry(ec->cfp)->def->original_id,
+                                                rb_vm_frame_method_entry(ec->cfp)->called_id,
+                                                rb_vm_frame_method_entry(ec->cfp)->owner,
+                                                bmethod_return_value, TRUE);
+                    }
                 }
+
                 THROW_DATA_CONSUMED_SET(err);
             }
             else {
@@ -3314,6 +3327,8 @@ rb_vm_mark(void *ptr)
 
         rb_gc_mark_values(RUBY_NSIG, vm->trap_list.cmd);
 
+        rb_hook_list_mark(&vm->global_hooks);
+
         rb_id_table_foreach_values(vm->negative_cme_table, vm_mark_negative_cme, NULL);
         rb_mark_tbl_no_pin(vm->overloaded_cme_table);
         for (i=0; i<VM_GLOBAL_CC_CACHE_TABLE_SIZE; i++) {
@@ -3940,6 +3955,7 @@ th_init(rb_thread_t *th, VALUE self, rb_vm_t *vm)
     th->ec->local_storage_recursive_hash_for_trace = Qnil;
 
     th->ec->storage = Qnil;
+    th->ec->ractor_id = rb_ractor_id(th->ractor);
 
 #if OPT_CALL_THREADED_CODE
     th->retval = Qundef;
@@ -4575,6 +4591,7 @@ Init_BareVM(void)
     vm->overloaded_cme_table = st_init_numtable();
     vm->constant_cache = rb_id_table_create(0);
     vm->unused_block_warning_table = set_init_numtable();
+    vm->global_hooks.type = hook_list_type_global;
 
     // setup main thread
     th->nt = ZALLOC(struct rb_native_thread);

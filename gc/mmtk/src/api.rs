@@ -2,6 +2,8 @@
 // They are called by C functions and they need to pass raw pointers to Rust.
 #![allow(clippy::missing_safety_doc)]
 
+use mmtk::util::alloc::BumpPointer;
+use mmtk::util::alloc::ImmixAllocator;
 use mmtk::util::options::PlanSelector;
 use std::str::FromStr;
 use std::sync::atomic::Ordering;
@@ -138,6 +140,10 @@ pub unsafe extern "C" fn mmtk_init_binding(
     upcalls: *const RubyUpcalls,
     weak_reference_dead_value: ObjectReference,
 ) {
+    crate::MUTATOR_THREAD_PANIC_HANDLER
+        .set((unsafe { (*upcalls).clone() }).mutator_thread_panic_handler)
+        .unwrap_or_else(|_| panic!("MUTATOR_THREAD_PANIC_HANDLER is already initialized"));
+
     crate::set_panic_hook();
 
     let builder = unsafe { Box::from_raw(builder) };
@@ -168,6 +174,24 @@ pub extern "C" fn mmtk_initialize_collection(tls: VMThread) {
 #[no_mangle]
 pub extern "C" fn mmtk_bind_mutator(tls: VMMutatorThread) -> *mut RubyMutator {
     Box::into_raw(memory_manager::bind_mutator(mmtk(), tls))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn mmtk_get_bump_pointer_allocator(m: *mut RubyMutator) -> *mut BumpPointer {
+    match *crate::BINDING.get().unwrap().mmtk.get_options().plan {
+        PlanSelector::Immix => {
+            let mutator: &mut Mutator<Ruby> = unsafe { &mut *m };
+            let allocator =
+                unsafe { mutator.allocator_mut(mmtk::util::alloc::AllocatorSelector::Immix(0)) };
+
+            if let Some(immix_allocator) = allocator.downcast_mut::<ImmixAllocator<Ruby>>() {
+                &mut immix_allocator.bump_pointer as *mut BumpPointer
+            } else {
+                panic!("Failed to get bump pointer allocator");
+            }
+        }
+        _ => std::ptr::null_mut(),
+    }
 }
 
 #[no_mangle]

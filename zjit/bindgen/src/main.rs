@@ -100,6 +100,7 @@ fn main() {
         .allowlist_function("rb_shape_id_offset")
         .allowlist_function("rb_shape_get_iv_index")
         .allowlist_function("rb_shape_transition_add_ivar_no_warnings")
+        .allowlist_function("rb_jit_shape_capacity")
         .allowlist_var("rb_invalid_shape_id")
         .allowlist_type("shape_id_fl_type")
         .allowlist_var("VM_KW_SPECIFIED_BITS_MAX")
@@ -107,6 +108,7 @@ fn main() {
         .allowlist_function("rb_obj_is_kind_of")
         .allowlist_function("rb_obj_frozen_p")
         .allowlist_function("rb_class_inherited_p")
+        .allowlist_function("rb_class_real")
         .allowlist_type("ruby_encoding_consts")
         .allowlist_function("rb_hash_new")
         .allowlist_function("rb_hash_new_with_size")
@@ -142,6 +144,7 @@ fn main() {
         .allowlist_function("rb_gc_location")
         .allowlist_function("rb_gc_writebarrier")
         .allowlist_function("rb_gc_writebarrier_remember")
+        .allowlist_function("rb_zjit_writebarrier_check_immediate")
 
         // VALUE variables for Ruby class objects
         .allowlist_var("rb_cBasicObject")
@@ -277,6 +280,7 @@ fn main() {
         .allowlist_function("rb_jit_mark_unused")
         .allowlist_function("rb_jit_get_page_size")
         .allowlist_function("rb_jit_array_len")
+        .allowlist_function("rb_jit_fix_div_fix")
         .allowlist_function("rb_jit_iseq_builtin_attrs")
         .allowlist_function("rb_jit_str_concat_codepoint")
         .allowlist_function("rb_zjit_iseq_inspect")
@@ -299,6 +303,7 @@ fn main() {
         .allowlist_function("rb_zjit_defined_ivar")
         .allowlist_function("rb_zjit_insn_leaf")
         .allowlist_type("jit_bindgen_constants")
+        .allowlist_type("zjit_struct_offsets")
         .allowlist_function("rb_assert_holding_vm_lock")
         .allowlist_function("rb_jit_shape_too_complex_p")
         .allowlist_function("rb_jit_multi_ractor_p")
@@ -426,6 +431,7 @@ fn main() {
         // We define these manually, don't import them
         .blocklist_type("VALUE")
         .blocklist_type("ID")
+        .blocklist_type("rb_iseq_constant_body")
 
         // Avoid binding to stuff we don't use
         .blocklist_item("rb_thread_struct.*")

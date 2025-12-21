@@ -63,7 +63,7 @@ static VALUE autoload_mutex;
 
 static void check_before_mod_set(VALUE, ID, VALUE, const char *);
 static void setup_const_entry(rb_const_entry_t *, VALUE, VALUE, rb_const_flag_t);
-static VALUE rb_const_search(VALUE klass, ID id, int exclude, int recurse, int visibility);
+static VALUE rb_const_search(VALUE klass, ID id, int exclude, int recurse, int visibility, VALUE *found_in);
 static st_table *generic_fields_tbl_;
 
 typedef int rb_ivar_foreach_callback_func(ID key, VALUE val, st_data_t arg);
@@ -473,7 +473,7 @@ rb_path_to_class(VALUE pathname)
         if (!id) {
             goto undefined_class;
         }
-        c = rb_const_search(c, id, TRUE, FALSE, FALSE);
+        c = rb_const_search(c, id, TRUE, FALSE, FALSE, NULL);
         if (UNDEF_P(c)) goto undefined_class;
         if (!rb_namespace_p(c)) {
             rb_raise(rb_eTypeError, "%"PRIsVALUE" does not refer to class/module",
@@ -862,7 +862,7 @@ rb_define_virtual_variable(
 static void
 rb_trace_eval(VALUE cmd, VALUE val)
 {
-    rb_eval_cmd_kw(cmd, rb_ary_new3(1, val), RB_NO_KEYWORDS);
+    rb_eval_cmd_call_kw(cmd, 1, &val, RB_NO_KEYWORDS);
 }
 
 VALUE
@@ -1195,10 +1195,13 @@ IVAR_ACCESSOR_SHOULD_BE_MAIN_RACTOR(ID id)
     }
 }
 
-#define CVAR_ACCESSOR_SHOULD_BE_MAIN_RACTOR() \
-  if (UNLIKELY(!rb_ractor_main_p())) { \
-      rb_raise(rb_eRactorIsolationError, "can not access class variables from non-main Ractors"); \
-  }
+static void
+CVAR_ACCESSOR_SHOULD_BE_MAIN_RACTOR(VALUE klass, ID id)
+{
+    if (UNLIKELY(!rb_ractor_main_p())) {
+        rb_raise(rb_eRactorIsolationError, "can not access class variables from non-main Ractors (%"PRIsVALUE" from %"PRIsVALUE")", rb_id2str(id), klass);
+    }
+}
 
 static inline void
 ivar_ractor_check(VALUE obj, ID id)
@@ -1291,7 +1294,7 @@ rb_obj_fields(VALUE obj, ID field_name)
 void
 rb_free_generic_ivar(VALUE obj)
 {
-    if (rb_obj_exivar_p(obj)) {
+    if (rb_obj_gen_fields_p(obj)) {
         st_data_t key = (st_data_t)obj, value;
         switch (BUILTIN_TYPE(obj)) {
           case T_DATA:
@@ -1444,7 +1447,8 @@ rb_ivar_lookup(VALUE obj, ID id, VALUE undef)
                     UNLIKELY(!rb_ractor_main_p()) &&
                     !rb_ractor_shareable_p(val)) {
                 rb_raise(rb_eRactorIsolationError,
-                        "can not get unshareable values from instance variables of classes/modules from non-main Ractors");
+                        "can not get unshareable values from instance variables of classes/modules from non-main Ractors (%"PRIsVALUE" from %"PRIsVALUE")",
+                        rb_id2str(id), obj);
             }
             return val;
         }
@@ -2218,7 +2222,7 @@ rb_copy_generic_ivar(VALUE dest, VALUE obj)
 
     rb_check_frozen(dest);
 
-    if (!rb_obj_exivar_p(obj)) {
+    if (!rb_obj_gen_fields_p(obj)) {
         return;
     }
 
@@ -2734,7 +2738,7 @@ autoload_const_free(void *ptr)
 static const rb_data_type_t autoload_const_type = {
     "autoload_const",
     {autoload_const_mark_and_move, autoload_const_free, autoload_const_memsize, autoload_const_mark_and_move,},
-    0, 0, RUBY_TYPED_FREE_IMMEDIATELY
+    0, 0, RUBY_TYPED_FREE_IMMEDIATELY | RUBY_TYPED_WB_PROTECTED
 };
 
 static struct autoload_data *
@@ -2778,12 +2782,12 @@ autoload_copy_table_for_box_i(st_data_t key, st_data_t value, st_data_t arg)
     struct autoload_data *autoload_data = rb_check_typeddata(autoload_data_value, &autoload_data_type);
 
     VALUE new_value = TypedData_Make_Struct(0, struct autoload_const, &autoload_const_type, autoload_const);
-    autoload_const->box_value = rb_get_box_object((rb_box_t *)box);
-    autoload_const->module = src_const->module;
+    RB_OBJ_WRITE(new_value, &autoload_const->box_value, rb_get_box_object((rb_box_t *)box));
+    RB_OBJ_WRITE(new_value, &autoload_const->module, src_const->module);
     autoload_const->name = src_const->name;
-    autoload_const->value = src_const->value;
+    RB_OBJ_WRITE(new_value, &autoload_const->value, src_const->value);
     autoload_const->flag = src_const->flag;
-    autoload_const->autoload_data_value = autoload_data_value;
+    RB_OBJ_WRITE(new_value, &autoload_const->autoload_data_value, autoload_data_value);
     ccan_list_add_tail(&autoload_data->constants, &autoload_const->cnode);
 
     st_insert(tbl, (st_data_t)autoload_const->name, (st_data_t)new_value);
@@ -2907,12 +2911,12 @@ autoload_synchronized(VALUE _arguments)
     {
         struct autoload_const *autoload_const;
         VALUE autoload_const_value = TypedData_Make_Struct(0, struct autoload_const, &autoload_const_type, autoload_const);
-        autoload_const->box_value = arguments->box_value;
-        autoload_const->module = arguments->module;
+        RB_OBJ_WRITE(autoload_const_value, &autoload_const->box_value, arguments->box_value);
+        RB_OBJ_WRITE(autoload_const_value, &autoload_const->module, arguments->module);
         autoload_const->name = arguments->name;
         autoload_const->value = Qundef;
         autoload_const->flag = CONST_PUBLIC;
-        autoload_const->autoload_data_value = autoload_data_value;
+        RB_OBJ_WRITE(autoload_const_value, &autoload_const->autoload_data_value, autoload_data_value);
         ccan_list_add_tail(&autoload_data->constants, &autoload_const->cnode);
         st_insert(autoload_table, (st_data_t)arguments->name, (st_data_t)autoload_const_value);
         RB_OBJ_WRITTEN(autoload_table_value, Qundef, autoload_const_value);
@@ -3348,11 +3352,12 @@ rb_const_warn_if_deprecated(const rb_const_entry_t *ce, VALUE klass, ID id)
 static VALUE
 rb_const_get_0(VALUE klass, ID id, int exclude, int recurse, int visibility)
 {
-    VALUE c = rb_const_search(klass, id, exclude, recurse, visibility);
+    VALUE found_in;
+    VALUE c = rb_const_search(klass, id, exclude, recurse, visibility, &found_in);
     if (!UNDEF_P(c)) {
         if (UNLIKELY(!rb_ractor_main_p())) {
             if (!rb_ractor_shareable_p(c)) {
-                rb_raise(rb_eRactorIsolationError, "can not access non-shareable objects in constant %"PRIsVALUE"::%s by non-main Ractor.", rb_class_path(klass), rb_id2name(id));
+                rb_raise(rb_eRactorIsolationError, "can not access non-shareable objects in constant %"PRIsVALUE"::%"PRIsVALUE" by non-main Ractor.", rb_class_path(found_in), rb_id2str(id));
             }
         }
         return c;
@@ -3361,7 +3366,7 @@ rb_const_get_0(VALUE klass, ID id, int exclude, int recurse, int visibility)
 }
 
 static VALUE
-rb_const_search_from(VALUE klass, ID id, int exclude, int recurse, int visibility)
+rb_const_search_from(VALUE klass, ID id, int exclude, int recurse, int visibility, VALUE *found_in)
 {
     VALUE value, current;
     bool first_iteration = true;
@@ -3398,13 +3403,17 @@ rb_const_search_from(VALUE klass, ID id, int exclude, int recurse, int visibilit
                 if (am == tmp) break;
                 am = tmp;
                 ac = autoloading_const_entry(tmp, id);
-                if (ac) return ac->value;
+                if (ac) {
+                    if (found_in) { *found_in = tmp; }
+                    return ac->value;
+                }
                 rb_autoload_load(tmp, id);
                 continue;
             }
             if (exclude && tmp == rb_cObject) {
                 goto not_found;
             }
+            if (found_in) { *found_in = tmp; }
             return value;
         }
         if (!recurse) break;
@@ -3416,17 +3425,17 @@ rb_const_search_from(VALUE klass, ID id, int exclude, int recurse, int visibilit
 }
 
 static VALUE
-rb_const_search(VALUE klass, ID id, int exclude, int recurse, int visibility)
+rb_const_search(VALUE klass, ID id, int exclude, int recurse, int visibility, VALUE *found_in)
 {
     VALUE value;
 
     if (klass == rb_cObject) exclude = FALSE;
-    value = rb_const_search_from(klass, id, exclude, recurse, visibility);
+    value = rb_const_search_from(klass, id, exclude, recurse, visibility, found_in);
     if (!UNDEF_P(value)) return value;
     if (exclude) return value;
     if (BUILTIN_TYPE(klass) != T_MODULE) return value;
     /* search global const too, if klass is a module */
-    return rb_const_search_from(rb_cObject, id, FALSE, recurse, visibility);
+    return rb_const_search_from(rb_cObject, id, FALSE, recurse, visibility, found_in);
 }
 
 VALUE
@@ -3920,21 +3929,21 @@ rb_const_set(VALUE klass, ID id, VALUE val)
     const_added(klass, id);
 }
 
-static struct autoload_data *
-autoload_data_for_named_constant(VALUE module, ID name, struct autoload_const **autoload_const_pointer)
+static VALUE
+autoload_const_value_for_named_constant(VALUE module, ID name, struct autoload_const **autoload_const_pointer)
 {
-    VALUE autoload_data_value = autoload_data(module, name);
-    if (!autoload_data_value) return 0;
+    VALUE autoload_const_value = autoload_data(module, name);
+    if (!autoload_const_value) return Qfalse;
 
-    struct autoload_data *autoload_data = get_autoload_data(autoload_data_value, autoload_const_pointer);
-    if (!autoload_data) return 0;
+    struct autoload_data *autoload_data = get_autoload_data(autoload_const_value, autoload_const_pointer);
+    if (!autoload_data) return Qfalse;
 
     /* for autoloading thread, keep the defined value to autoloading storage */
     if (autoload_by_current(autoload_data)) {
-        return autoload_data;
+        return autoload_const_value;
     }
 
-    return 0;
+    return Qfalse;
 }
 
 static void
@@ -3954,13 +3963,13 @@ const_tbl_update(struct autoload_const *ac, int autoload_force)
             RUBY_ASSERT_CRITICAL_SECTION_ENTER();
             VALUE file = ac->file;
             int line = ac->line;
-            struct autoload_data *ele = autoload_data_for_named_constant(klass, id, &ac);
+            VALUE autoload_const_value = autoload_const_value_for_named_constant(klass, id, &ac);
 
-            if (!autoload_force && ele) {
+            if (!autoload_force && autoload_const_value) {
                 rb_clear_constant_cache_for_id(id);
 
-                ac->value = val; /* autoload_data is non-WB-protected */
-                ac->file = rb_source_location(&ac->line);
+                RB_OBJ_WRITE(autoload_const_value, &ac->value, val);
+                RB_OBJ_WRITE(autoload_const_value, &ac->file, rb_source_location(&ac->line));
             }
             else {
                 /* otherwise autoloaded constant, allow to override */
@@ -4054,10 +4063,7 @@ set_const_visibility(VALUE mod, int argc, const VALUE *argv,
             ce->flag &= ~mask;
             ce->flag |= flag;
             if (UNDEF_P(ce->value)) {
-                struct autoload_data *ele;
-
-                ele = autoload_data_for_named_constant(mod, id, &ac);
-                if (ele) {
+                if (autoload_const_value_for_named_constant(mod, id, &ac)) {
                     ac->flag &= ~mask;
                     ac->flag |= flag;
                 }
@@ -4205,7 +4211,7 @@ cvar_overtaken(VALUE front, VALUE target, ID id)
     }
 
 #define CVAR_LOOKUP(v,r) do {\
-    CVAR_ACCESSOR_SHOULD_BE_MAIN_RACTOR(); \
+    CVAR_ACCESSOR_SHOULD_BE_MAIN_RACTOR(klass, id); \
     if (cvar_lookup_at(klass, id, (v))) {r;}\
     CVAR_FOREACH_ANCESTORS(klass, v, r);\
 } while(0)

@@ -745,6 +745,7 @@ box.$(OBJEXT): $(top_srcdir)/internal/file.h
 box.$(OBJEXT): $(top_srcdir)/internal/gc.h
 box.$(OBJEXT): $(top_srcdir)/internal/hash.h
 box.$(OBJEXT): $(top_srcdir)/internal/imemo.h
+box.$(OBJEXT): $(top_srcdir)/internal/io.h
 box.$(OBJEXT): $(top_srcdir)/internal/load.h
 box.$(OBJEXT): $(top_srcdir)/internal/sanitizers.h
 box.$(OBJEXT): $(top_srcdir)/internal/serial.h
@@ -951,6 +952,7 @@ box.$(OBJEXT): {$(VPATH)}internal/value_type.h
 box.$(OBJEXT): {$(VPATH)}internal/variable.h
 box.$(OBJEXT): {$(VPATH)}internal/warning_push.h
 box.$(OBJEXT): {$(VPATH)}internal/xmalloc.h
+box.$(OBJEXT): {$(VPATH)}io.h
 box.$(OBJEXT): {$(VPATH)}iseq.h
 box.$(OBJEXT): {$(VPATH)}method.h
 box.$(OBJEXT): {$(VPATH)}missing.h
@@ -1403,6 +1405,7 @@ class.$(OBJEXT): {$(VPATH)}missing.h
 class.$(OBJEXT): {$(VPATH)}node.h
 class.$(OBJEXT): {$(VPATH)}onigmo.h
 class.$(OBJEXT): {$(VPATH)}oniguruma.h
+class.$(OBJEXT): {$(VPATH)}ractor.h
 class.$(OBJEXT): {$(VPATH)}ruby_assert.h
 class.$(OBJEXT): {$(VPATH)}ruby_atomic.h
 class.$(OBJEXT): {$(VPATH)}rubyparser.h
@@ -7606,6 +7609,7 @@ iseq.$(OBJEXT): {$(VPATH)}onigmo.h
 iseq.$(OBJEXT): {$(VPATH)}oniguruma.h
 iseq.$(OBJEXT): {$(VPATH)}prism_compile.h
 iseq.$(OBJEXT): {$(VPATH)}ractor.h
+iseq.$(OBJEXT): {$(VPATH)}ractor_core.h
 iseq.$(OBJEXT): {$(VPATH)}ruby_assert.h
 iseq.$(OBJEXT): {$(VPATH)}ruby_atomic.h
 iseq.$(OBJEXT): {$(VPATH)}rubyparser.h
@@ -19760,6 +19764,7 @@ vm_trace.$(OBJEXT): {$(VPATH)}onigmo.h
 vm_trace.$(OBJEXT): {$(VPATH)}oniguruma.h
 vm_trace.$(OBJEXT): {$(VPATH)}prism_compile.h
 vm_trace.$(OBJEXT): {$(VPATH)}ractor.h
+vm_trace.$(OBJEXT): {$(VPATH)}ractor_core.h
 vm_trace.$(OBJEXT): {$(VPATH)}ruby_assert.h
 vm_trace.$(OBJEXT): {$(VPATH)}ruby_atomic.h
 vm_trace.$(OBJEXT): {$(VPATH)}rubyparser.h
@@ -20241,6 +20246,7 @@ zjit.$(OBJEXT): $(top_srcdir)/internal/array.h
 zjit.$(OBJEXT): $(top_srcdir)/internal/basic_operators.h
 zjit.$(OBJEXT): $(top_srcdir)/internal/bignum.h
 zjit.$(OBJEXT): $(top_srcdir)/internal/bits.h
+zjit.$(OBJEXT): $(top_srcdir)/internal/box.h
 zjit.$(OBJEXT): $(top_srcdir)/internal/class.h
 zjit.$(OBJEXT): $(top_srcdir)/internal/compile.h
 zjit.$(OBJEXT): $(top_srcdir)/internal/compilers.h
@@ -20252,6 +20258,7 @@ zjit.$(OBJEXT): $(top_srcdir)/internal/imemo.h
 zjit.$(OBJEXT): $(top_srcdir)/internal/numeric.h
 zjit.$(OBJEXT): $(top_srcdir)/internal/sanitizers.h
 zjit.$(OBJEXT): $(top_srcdir)/internal/serial.h
+zjit.$(OBJEXT): $(top_srcdir)/internal/set_table.h
 zjit.$(OBJEXT): $(top_srcdir)/internal/static_assert.h
 zjit.$(OBJEXT): $(top_srcdir)/internal/string.h
 zjit.$(OBJEXT): $(top_srcdir)/internal/variable.h
@@ -20428,6 +20435,7 @@ zjit.$(OBJEXT): {$(VPATH)}internal/intern/re.h
 zjit.$(OBJEXT): {$(VPATH)}internal/intern/ruby.h
 zjit.$(OBJEXT): {$(VPATH)}internal/intern/select.h
 zjit.$(OBJEXT): {$(VPATH)}internal/intern/select/largesize.h
+zjit.$(OBJEXT): {$(VPATH)}internal/intern/set.h
 zjit.$(OBJEXT): {$(VPATH)}internal/intern/signal.h
 zjit.$(OBJEXT): {$(VPATH)}internal/intern/sprintf.h
 zjit.$(OBJEXT): {$(VPATH)}internal/intern/string.h
@@ -20479,6 +20487,7 @@ zjit.$(OBJEXT): {$(VPATH)}vm_debug.h
 zjit.$(OBJEXT): {$(VPATH)}vm_insnhelper.h
 zjit.$(OBJEXT): {$(VPATH)}vm_opts.h
 zjit.$(OBJEXT): {$(VPATH)}vm_sync.h
+zjit.$(OBJEXT): {$(VPATH)}yjit.h
 zjit.$(OBJEXT): {$(VPATH)}zjit.c
 zjit.$(OBJEXT): {$(VPATH)}zjit.h
 zjit.$(OBJEXT): {$(VPATH)}zjit.rbinc

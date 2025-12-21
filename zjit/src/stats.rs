@@ -183,6 +183,7 @@ make_counters! {
         exit_fixnum_mult_overflow,
         exit_fixnum_lshift_overflow,
         exit_fixnum_mod_by_zero,
+        exit_fixnum_div_by_zero,
         exit_box_fixnum_overflow,
         exit_guard_type_failure,
         exit_guard_type_not_failure,
@@ -218,18 +219,26 @@ make_counters! {
         send_fallback_send_without_block_cfunc_array_variadic,
         send_fallback_send_without_block_not_optimized_method_type,
         send_fallback_send_without_block_not_optimized_method_type_optimized,
+        send_fallback_send_without_block_not_optimized_need_permission,
         send_fallback_too_many_args_for_lir,
         send_fallback_send_without_block_bop_redefined,
         send_fallback_send_without_block_operands_not_fixnum,
+        send_fallback_send_without_block_direct_keyword_mismatch,
+        send_fallback_send_without_block_direct_optional_keywords,
+        send_fallback_send_without_block_direct_keyword_count_mismatch,
+        send_fallback_send_without_block_direct_missing_keyword,
         send_fallback_send_polymorphic,
         send_fallback_send_megamorphic,
         send_fallback_send_no_profiles,
         send_fallback_send_not_optimized_method_type,
+        send_fallback_send_not_optimized_need_permission,
         send_fallback_ccall_with_frame_too_many_args,
         send_fallback_argc_param_mismatch,
         // The call has at least one feature on the caller or callee side
         // that the optimizer does not support.
         send_fallback_one_or_more_complex_arg_pass,
+        // Caller has keyword arguments but callee doesn't expect them.
+        send_fallback_unexpected_keyword_args,
         send_fallback_bmethod_non_iseq_proc,
         send_fallback_obj_to_string_not_string,
         send_fallback_send_cfunc_variadic,
@@ -255,6 +264,8 @@ make_counters! {
         setivar_fallback_too_complex,
         setivar_fallback_frozen,
         setivar_fallback_shape_transition,
+        setivar_fallback_new_shape_too_complex,
+        setivar_fallback_new_shape_needs_extension,
     }
 
     // Ivar fallback counters that are summed as dynamic_getivar_count
@@ -276,6 +287,7 @@ make_counters! {
     }
 
     // compile_error_: Compile error reasons
+    compile_error_iseq_version_limit_reached,
     compile_error_iseq_stack_too_large,
     compile_error_exception_handler,
     compile_error_out_of_memory,
@@ -344,7 +356,7 @@ make_counters! {
     // Unsupported parameter features
     complex_arg_pass_param_rest,
     complex_arg_pass_param_post,
-    complex_arg_pass_param_kw,
+    complex_arg_pass_param_kw_opt,
     complex_arg_pass_param_kwrest,
     complex_arg_pass_param_block,
     complex_arg_pass_param_forwardable,
@@ -419,6 +431,7 @@ pub fn send_fallback_counter_ptr_for_opcode(opcode: u32) -> *mut u64 {
 /// Reason why ZJIT failed to produce any JIT code
 #[derive(Clone, Debug, PartialEq)]
 pub enum CompileError {
+    IseqVersionLimitReached,
     IseqStackTooLarge,
     ExceptionHandler,
     OutOfMemory,
@@ -432,9 +445,10 @@ pub fn exit_counter_for_compile_error(compile_error: &CompileError) -> Counter {
     use crate::stats::CompileError::*;
     use crate::stats::Counter::*;
     match compile_error {
-        IseqStackTooLarge     => compile_error_iseq_stack_too_large,
-        ExceptionHandler      => compile_error_exception_handler,
-        OutOfMemory           => compile_error_out_of_memory,
+        IseqVersionLimitReached => compile_error_iseq_version_limit_reached,
+        IseqStackTooLarge       => compile_error_iseq_stack_too_large,
+        ExceptionHandler        => compile_error_exception_handler,
+        OutOfMemory             => compile_error_out_of_memory,
         ParseError(parse_error) => match parse_error {
             StackUnderflow(_)       => compile_error_parse_stack_underflow,
             MalformedIseq(_)        => compile_error_parse_malformed_iseq,
@@ -490,6 +504,7 @@ pub fn side_exit_counter(reason: crate::hir::SideExitReason) -> Counter {
         FixnumMultOverflow            => exit_fixnum_mult_overflow,
         FixnumLShiftOverflow          => exit_fixnum_lshift_overflow,
         FixnumModByZero               => exit_fixnum_mod_by_zero,
+        FixnumDivByZero               => exit_fixnum_div_by_zero,
         BoxFixnumOverflow             => exit_box_fixnum_overflow,
         GuardType(_)                  => exit_guard_type_failure,
         GuardTypeNot(_)               => exit_guard_type_not_failure,
@@ -539,18 +554,26 @@ pub fn send_fallback_counter(reason: crate::hir::SendFallbackReason) -> Counter 
         SendWithoutBlockNotOptimizedMethodType(_) => send_fallback_send_without_block_not_optimized_method_type,
         SendWithoutBlockNotOptimizedMethodTypeOptimized(_)
                                                   => send_fallback_send_without_block_not_optimized_method_type_optimized,
+        SendWithoutBlockNotOptimizedNeedPermission
+                                                  => send_fallback_send_without_block_not_optimized_need_permission,
         TooManyArgsForLir                         => send_fallback_too_many_args_for_lir,
         SendWithoutBlockBopRedefined              => send_fallback_send_without_block_bop_redefined,
         SendWithoutBlockOperandsNotFixnum         => send_fallback_send_without_block_operands_not_fixnum,
+        SendWithoutBlockDirectKeywordMismatch     => send_fallback_send_without_block_direct_keyword_mismatch,
+        SendWithoutBlockDirectOptionalKeywords    => send_fallback_send_without_block_direct_optional_keywords,
+        SendWithoutBlockDirectKeywordCountMismatch=> send_fallback_send_without_block_direct_keyword_count_mismatch,
+        SendWithoutBlockDirectMissingKeyword       => send_fallback_send_without_block_direct_missing_keyword,
         SendPolymorphic                           => send_fallback_send_polymorphic,
         SendMegamorphic                           => send_fallback_send_megamorphic,
         SendNoProfiles                            => send_fallback_send_no_profiles,
         SendCfuncVariadic                         => send_fallback_send_cfunc_variadic,
         SendCfuncArrayVariadic                    => send_fallback_send_cfunc_array_variadic,
         ComplexArgPass                            => send_fallback_one_or_more_complex_arg_pass,
+        UnexpectedKeywordArgs                     => send_fallback_unexpected_keyword_args,
         ArgcParamMismatch                         => send_fallback_argc_param_mismatch,
         BmethodNonIseqProc                        => send_fallback_bmethod_non_iseq_proc,
         SendNotOptimizedMethodType(_)             => send_fallback_send_not_optimized_method_type,
+        SendNotOptimizedNeedPermission            => send_fallback_send_not_optimized_need_permission,
         CCallWithFrameTooManyArgs                 => send_fallback_ccall_with_frame_too_many_args,
         ObjToStringNotString                      => send_fallback_obj_to_string_not_string,
         Uncategorized(_)                          => send_fallback_uncategorized,
@@ -771,21 +794,21 @@ pub extern "C" fn rb_zjit_stats(_ec: EcPtr, _self: VALUE, target_key: VALUE) -> 
     // Set not inlined cfunc counters
     let not_inlined_cfuncs = ZJITState::get_not_inlined_cfunc_counter_pointers();
     for (signature, counter) in not_inlined_cfuncs.iter() {
-        let key_string = format!("not_inlined_cfuncs_{}", signature);
+        let key_string = format!("not_inlined_cfuncs_{signature}");
         set_stat_usize!(hash, &key_string, **counter);
     }
 
     // Set not annotated cfunc counters
     let not_annotated_cfuncs = ZJITState::get_not_annotated_cfunc_counter_pointers();
     for (signature, counter) in not_annotated_cfuncs.iter() {
-        let key_string = format!("not_annotated_cfuncs_{}", signature);
+        let key_string = format!("not_annotated_cfuncs_{signature}");
         set_stat_usize!(hash, &key_string, **counter);
     }
 
     // Set ccall counters
     let ccall = ZJITState::get_ccall_counter_pointers();
     for (signature, counter) in ccall.iter() {
-        let key_string = format!("ccall_{}", signature);
+        let key_string = format!("ccall_{signature}");
         set_stat_usize!(hash, &key_string, **counter);
     }
 

@@ -484,21 +484,21 @@ rb_malloc_grow_capa(size_t current, size_t type_size)
     return new_capacity;
 }
 
-static inline struct rbimpl_size_mul_overflow_tag
+static inline struct rbimpl_size_overflow_tag
 size_mul_add_overflow(size_t x, size_t y, size_t z) /* x * y + z */
 {
-    struct rbimpl_size_mul_overflow_tag t = rbimpl_size_mul_overflow(x, y);
-    struct rbimpl_size_mul_overflow_tag u = rbimpl_size_add_overflow(t.right, z);
-    return (struct rbimpl_size_mul_overflow_tag) { t.left || u.left, u.right };
+    struct rbimpl_size_overflow_tag t = rbimpl_size_mul_overflow(x, y);
+    struct rbimpl_size_overflow_tag u = rbimpl_size_add_overflow(t.result, z);
+    return (struct rbimpl_size_overflow_tag) { t.overflowed || u.overflowed, u.result };
 }
 
-static inline struct rbimpl_size_mul_overflow_tag
+static inline struct rbimpl_size_overflow_tag
 size_mul_add_mul_overflow(size_t x, size_t y, size_t z, size_t w) /* x * y + z * w */
 {
-    struct rbimpl_size_mul_overflow_tag t = rbimpl_size_mul_overflow(x, y);
-    struct rbimpl_size_mul_overflow_tag u = rbimpl_size_mul_overflow(z, w);
-    struct rbimpl_size_mul_overflow_tag v = rbimpl_size_add_overflow(t.right, u.right);
-    return (struct rbimpl_size_mul_overflow_tag) { t.left || u.left || v.left, v.right };
+    struct rbimpl_size_overflow_tag t = rbimpl_size_mul_overflow(x, y);
+    struct rbimpl_size_overflow_tag u = rbimpl_size_mul_overflow(z, w);
+    struct rbimpl_size_overflow_tag v = rbimpl_size_add_overflow(t.result, u.result);
+    return (struct rbimpl_size_overflow_tag) { t.overflowed || u.overflowed || v.overflowed, v.result };
 }
 
 PRINTF_ARGS(NORETURN(static void gc_raise(VALUE, const char*, ...)), 2, 3);
@@ -506,9 +506,9 @@ PRINTF_ARGS(NORETURN(static void gc_raise(VALUE, const char*, ...)), 2, 3);
 static inline size_t
 size_mul_or_raise(size_t x, size_t y, VALUE exc)
 {
-    struct rbimpl_size_mul_overflow_tag t = rbimpl_size_mul_overflow(x, y);
-    if (LIKELY(!t.left)) {
-        return t.right;
+    struct rbimpl_size_overflow_tag t = rbimpl_size_mul_overflow(x, y);
+    if (LIKELY(!t.overflowed)) {
+        return t.result;
     }
     else if (rb_during_gc()) {
         rb_memerror();          /* or...? */
@@ -532,9 +532,9 @@ rb_size_mul_or_raise(size_t x, size_t y, VALUE exc)
 static inline size_t
 size_mul_add_or_raise(size_t x, size_t y, size_t z, VALUE exc)
 {
-    struct rbimpl_size_mul_overflow_tag t = size_mul_add_overflow(x, y, z);
-    if (LIKELY(!t.left)) {
-        return t.right;
+    struct rbimpl_size_overflow_tag t = size_mul_add_overflow(x, y, z);
+    if (LIKELY(!t.overflowed)) {
+        return t.result;
     }
     else if (rb_during_gc()) {
         rb_memerror();          /* or...? */
@@ -559,9 +559,9 @@ rb_size_mul_add_or_raise(size_t x, size_t y, size_t z, VALUE exc)
 static inline size_t
 size_mul_add_mul_or_raise(size_t x, size_t y, size_t z, size_t w, VALUE exc)
 {
-    struct rbimpl_size_mul_overflow_tag t = size_mul_add_mul_overflow(x, y, z, w);
-    if (LIKELY(!t.left)) {
-        return t.right;
+    struct rbimpl_size_overflow_tag t = size_mul_add_mul_overflow(x, y, z, w);
+    if (LIKELY(!t.overflowed)) {
+        return t.result;
     }
     else if (rb_during_gc()) {
         rb_memerror();          /* or...? */
@@ -1001,7 +1001,10 @@ newobj_of(rb_ractor_t *cr, VALUE klass, VALUE flags, shape_id_t shape_id, bool w
     if (UNLIKELY(rb_gc_event_hook_required_p(RUBY_INTERNAL_EVENT_NEWOBJ))) {
         int lev = RB_GC_VM_LOCK_NO_BARRIER();
         {
-            memset((char *)obj + RVALUE_SIZE, 0, rb_gc_obj_slot_size(obj) - RVALUE_SIZE);
+            size_t slot_size = rb_gc_obj_slot_size(obj);
+            if (slot_size > RVALUE_SIZE) {
+                memset((char *)obj + RVALUE_SIZE, 0, slot_size - RVALUE_SIZE);
+            }
 
             /* We must disable GC here because the callback could call xmalloc
              * which could potentially trigger a GC, and a lot of code is unsafe
@@ -1537,34 +1540,26 @@ os_obj_of(VALUE of)
  *  Ruby process. If <i>module</i> is specified, calls the block
  *  for only those classes or modules that match (or are a subclass of)
  *  <i>module</i>. Returns the number of objects found. Immediate
- *  objects (<code>Fixnum</code>s, <code>Symbol</code>s
- *  <code>true</code>, <code>false</code>, and <code>nil</code>) are
- *  never returned. In the example below, #each_object returns both
- *  the numbers we defined and several constants defined in the Math
- *  module.
+ *  objects (such as <code>Fixnum</code>s, static <code>Symbol</code>s
+ *  <code>true</code>, <code>false</code> and <code>nil</code>) are
+ *  never returned.
  *
  *  If no block is given, an enumerator is returned instead.
  *
- *     a = 102.7
- *     b = 95       # Won't be returned
- *     c = 12345678987654321
- *     count = ObjectSpace.each_object(Numeric) {|x| p x }
+ *     Job = Class.new
+ *     jobs = [Job.new, Job.new]
+ *     count = ObjectSpace.each_object(Job) {|x| p x }
  *     puts "Total count: #{count}"
  *
  *  <em>produces:</em>
  *
- *     12345678987654321
- *     102.7
- *     2.71828182845905
- *     3.14159265358979
- *     2.22044604925031e-16
- *     1.7976931348623157e+308
- *     2.2250738585072e-308
- *     Total count: 7
+ *    #<Job:0x000000011d6cbbf0>
+ *    #<Job:0x000000011d6cbc68>
+ *     Total count: 2
  *
- *  Due to a current known Ractor implementation issue, this method will not yield
- *  Ractor-unshareable objects in multi-Ractor mode (when
- *  <code>Ractor.new</code> has been called within the process at least once).
+ *  Due to a current Ractor implementation issue, this method does not yield
+ *  Ractor-unshareable objects when the process is in multi-Ractor mode. Multi-ractor
+ *  mode is enabled when <code>Ractor.new</code> has been called for the first time.
  *  See https://bugs.ruby-lang.org/issues/19387 for more information.
  *
  *     a = 12345678987654321 # shareable
@@ -1816,7 +1811,7 @@ id2ref_tbl_mark(void *data)
         // It's very unlikely, but if enough object ids were generated, keys may be T_BIGNUM
         rb_mark_set(table);
     }
-    // We purposedly don't mark values, as they are weak references.
+    // We purposely don't mark values, as they are weak references.
     // rb_gc_obj_free_vm_weak_references takes care of cleaning them up.
 }
 
@@ -1905,7 +1900,9 @@ object_id0(VALUE obj)
     RUBY_ASSERT(rb_shape_obj_has_id(obj));
 
     if (RB_UNLIKELY(id2ref_tbl)) {
-        st_insert(id2ref_tbl, (st_data_t)id, (st_data_t)obj);
+        RB_VM_LOCKING() {
+            st_insert(id2ref_tbl, (st_data_t)id, (st_data_t)obj);
+        }
     }
     return id;
 }
@@ -2059,9 +2056,10 @@ obj_free_object_id(VALUE obj)
 void
 rb_gc_obj_free_vm_weak_references(VALUE obj)
 {
+    ASSUME(!RB_SPECIAL_CONST_P(obj));
     obj_free_object_id(obj);
 
-    if (rb_obj_exivar_p(obj)) {
+    if (rb_obj_gen_fields_p(obj)) {
         rb_free_generic_ivar(obj);
     }
 
@@ -2120,14 +2118,9 @@ rb_gc_obj_free_vm_weak_references(VALUE obj)
 static VALUE
 id2ref(VALUE objid)
 {
-#if SIZEOF_LONG == SIZEOF_VOIDP
-#define NUM2PTR(x) NUM2ULONG(x)
-#elif SIZEOF_LONG_LONG == SIZEOF_VOIDP
-#define NUM2PTR(x) NUM2ULL(x)
-#endif
     objid = rb_to_int(objid);
     if (FIXNUM_P(objid) || rb_big_size(objid) <= SIZEOF_VOIDP) {
-        VALUE ptr = NUM2PTR(objid);
+        VALUE ptr = (VALUE)NUM2PTR(objid);
         if (SPECIAL_CONST_P(ptr)) {
             if (ptr == Qtrue) return Qtrue;
             if (ptr == Qfalse) return Qfalse;
@@ -3116,7 +3109,7 @@ rb_gc_mark_children(void *objspace, VALUE obj)
 {
     struct gc_mark_classext_foreach_arg foreach_args;
 
-    if (rb_obj_exivar_p(obj)) {
+    if (rb_obj_gen_fields_p(obj)) {
         rb_mark_generic_ivar(obj);
     }
 
@@ -3304,7 +3297,7 @@ rb_gc_mark_children(void *objspace, VALUE obj)
             gc_mark_internal(ptr[i]);
         }
 
-        if (!FL_TEST_RAW(obj, RSTRUCT_GEN_FIELDS)) {
+        if (rb_shape_obj_has_fields(obj) && !FL_TEST_RAW(obj, RSTRUCT_GEN_FIELDS)) {
             gc_mark_internal(RSTRUCT_FIELDS_OBJ(obj));
         }
 
@@ -4839,11 +4832,11 @@ rb_raw_obj_info_buitin_type(char *const buff, const size_t buff_size, const VALU
                         APPEND_F("(too_complex) len:%zu", hash_len);
                     }
                     else {
-                        APPEND_F("(embed) len:%d", ROBJECT_FIELDS_CAPACITY(obj));
+                        APPEND_F("(embed) len:%d capa:%d", RSHAPE_LEN(RBASIC_SHAPE_ID(obj)), ROBJECT_FIELDS_CAPACITY(obj));
                     }
                 }
                 else {
-                    APPEND_F("len:%d ptr:%p", ROBJECT_FIELDS_CAPACITY(obj), (void *)ROBJECT_FIELDS(obj));
+                    APPEND_F("len:%d capa:%d ptr:%p", RSHAPE_LEN(RBASIC_SHAPE_ID(obj)), ROBJECT_FIELDS_CAPACITY(obj), (void *)ROBJECT_FIELDS(obj));
                 }
             }
             break;
@@ -5064,11 +5057,7 @@ gc_raise(VALUE exc, const char *fmt, ...)
         exc, fmt, &ap,
     };
 
-    if (ruby_thread_has_gvl_p()) {
-        gc_vraise(&argv);
-        UNREACHABLE;
-    }
-    else if (ruby_native_thread_p()) {
+    if (ruby_native_thread_p()) {
         rb_thread_call_with_gvl(gc_vraise, &argv);
         UNREACHABLE;
     }
@@ -5378,11 +5367,11 @@ ruby_mimcalloc(size_t num, size_t size)
 {
     void *mem;
 #if CALC_EXACT_MALLOC_SIZE
-    struct rbimpl_size_mul_overflow_tag t = rbimpl_size_mul_overflow(num, size);
-    if (UNLIKELY(t.left)) {
+    struct rbimpl_size_overflow_tag t = rbimpl_size_mul_overflow(num, size);
+    if (UNLIKELY(t.overflowed)) {
         return NULL;
     }
-    size = t.right + sizeof(struct malloc_obj_info);
+    size = t.result + sizeof(struct malloc_obj_info);
     mem = calloc1(size);
     if (!mem) {
         return NULL;

@@ -47,7 +47,7 @@ class TestRactor < Test::Unit::TestCase
     def x.to_s
       raise "this should not be called"
     end
-    assert_unshareable(x, "can not make shareable object for #<Method: String#to_s()>", exception: Ractor::Error)
+    assert_unshareable(x, "can not make shareable object for #<Method: String#to_s()> because it refers unshareable objects", exception: Ractor::Error)
   end
 
   def test_default_thread_group
@@ -199,6 +199,18 @@ class TestRactor < Test::Unit::TestCase
     assert_ractor(<<~'RUBY', args: [{ "RUBY_MAX_CPU" => "1" }])
       assert_equal :ok, Ractor.new { :ok }.value
     RUBY
+  end
+
+  def test_symbol_proc_is_shareable
+    pr = :symbol.to_proc
+    assert_make_shareable(pr)
+  end
+
+  # [Bug #21775]
+  def test_ifunc_proc_not_shareable
+    h = Hash.new { self }
+    pr = h.to_proc
+    assert_unshareable(pr, /not supported yet/, exception: RuntimeError)
   end
 
   def assert_make_shareable(obj)

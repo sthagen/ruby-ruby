@@ -1554,7 +1554,7 @@ rb_hash_dup(VALUE hash)
     const VALUE flags = RBASIC(hash)->flags;
     VALUE ret = hash_dup(hash, rb_obj_class(hash), flags & RHASH_PROC_DEFAULT);
 
-    if (rb_obj_exivar_p(hash)) {
+    if (rb_obj_gen_fields_p(hash)) {
         rb_copy_generic_ivar(ret, hash);
     }
     return ret;
@@ -2876,7 +2876,7 @@ hash_aset(st_data_t *key, st_data_t *val, struct update_arg *arg, int existing)
 VALUE
 rb_hash_key_str(VALUE key)
 {
-    if (!rb_obj_exivar_p(key) && RBASIC_CLASS(key) == rb_cString) {
+    if (!rb_obj_gen_fields_p(key) && RBASIC_CLASS(key) == rb_cString) {
         return rb_fstring(key);
     }
     else {
@@ -4888,10 +4888,9 @@ hash_le(VALUE hash1, VALUE hash2)
 
 /*
  *  call-seq:
- *    self <= other_hash -> true or false
+ *    self <= other -> true or false
  *
- *  Returns +true+ if the entries of +self+ are a subset of the entries of +other_hash+,
- *  +false+ otherwise:
+ *  Returns whether the entries of +self+ are a subset of the entries of +other+:
  *
  *    h0 = {foo: 0, bar: 1}
  *    h1 = {foo: 0, bar: 1, baz: 2}
@@ -4915,10 +4914,9 @@ rb_hash_le(VALUE hash, VALUE other)
 
 /*
  *  call-seq:
- *    self < other_hash -> true or false
+ *    self < other -> true or false
  *
- *  Returns +true+ if the entries of +self+ are a proper subset of the entries of +other_hash+,
- *  +false+ otherwise:
+ *  Returns whether the entries of +self+ are a proper subset of the entries of +other+:
  *
  *    h = {foo: 0, bar: 1}
  *    h < {foo: 0, bar: 1, baz: 2} # => true   # Proper subset.

@@ -1948,14 +1948,15 @@ rb_class_inherited_p(VALUE mod, VALUE arg)
 
 /*
  * call-seq:
- *   mod < other   ->  true, false, or nil
+ *   self < other -> true, false, or nil
  *
- * Returns true if <i>mod</i> is a subclass of <i>other</i>. Returns
- * <code>false</code> if <i>mod</i> is the same as <i>other</i>
- * or <i>mod</i> is an ancestor of <i>other</i>.
- * Returns <code>nil</code> if there's no relationship between the two.
- * (Think of the relationship in terms of the class definition:
- * "class A < B" implies "A < B".)
+ * Returns whether +self+ is a subclass of +other+,
+ * or +nil+ if there is no relationship between the two:
+ *
+ *   Float < Numeric # => true
+ *   Numeric < Float # => false
+ *   Float < Float   # => false
+ *   Float < Hash    # => nil
  *
  */
 
@@ -2011,13 +2012,15 @@ rb_mod_gt(VALUE mod, VALUE arg)
 
 /*
  *  call-seq:
- *     self <=> object -> -1, 0, +1, or nil
+ *     self <=> other -> -1, 0, 1, or nil
+ *
+ *  Compares +self+ and +other+.
  *
  *  Returns:
  *
- *  - +-1+, if +self+ includes +object+, if or +self+ is a subclass of +object+.
- *  - +0+, if +self+ and +object+ are the same.
- *  - +1+, if +object+ includes +self+, or if +object+ is a subclass of +self+.
+ *  - +-1+, if +self+ includes +other+, if or +self+ is a subclass of +other+.
+ *  - +0+, if +self+ and +other+ are the same.
+ *  - +1+, if +other+ includes +self+, or if +other+ is a subclass of +self+.
  *  - +nil+, if none of the above is true.
  *
  *  Examples:
@@ -2028,8 +2031,10 @@ rb_mod_gt(VALUE mod, VALUE arg)
  *        Enumerable <=> Array      # =>  1
  *    # Class File is a subclass of class IO.
  *              File <=> IO         # => -1
- *                IO <=> File       # =>  1
  *              File <=> File       # =>  0
+ *                IO <=> File       # =>  1
+ *    # Class File has no relationship to class String.
+ *              File <=> String     # => nil
  *
  */
 
@@ -2238,8 +2243,10 @@ class_call_alloc_func(rb_alloc_func_t allocator, VALUE klass)
 
     obj = (*allocator)(klass);
 
-    if (rb_obj_class(obj) != rb_class_real(klass)) {
-        rb_raise(rb_eTypeError, "wrong instance allocation");
+    if (UNLIKELY(RBASIC_CLASS(obj) != klass)) {
+        if (rb_obj_class(obj) != rb_class_real(klass)) {
+            rb_raise(rb_eTypeError, "wrong instance allocation");
+        }
     }
     return obj;
 }

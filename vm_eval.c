@@ -1379,6 +1379,17 @@ rb_yield(VALUE val)
     }
 }
 
+VALUE
+rb_ec_yield(rb_execution_context_t *ec, VALUE val)
+{
+    if (UNDEF_P(val)) {
+        return vm_yield(ec, 0, NULL, RB_NO_KEYWORDS);
+    }
+    else {
+        return vm_yield(ec, 1, &val, RB_NO_KEYWORDS);
+    }
+}
+
 #undef rb_yield_values
 VALUE
 rb_yield_values(int n, ...)
@@ -2148,6 +2159,17 @@ rb_eval_string_wrap(const char *str, int *pstate)
 VALUE
 rb_eval_cmd_kw(VALUE cmd, VALUE arg, int kw_splat)
 {
+    Check_Type(arg, T_ARRAY);
+    int argc = RARRAY_LENINT(arg);
+    const VALUE *argv = RARRAY_CONST_PTR(arg);
+    VALUE val = rb_eval_cmd_call_kw(cmd, argc, argv, kw_splat);
+    RB_GC_GUARD(arg);
+    return val;
+}
+
+VALUE
+rb_eval_cmd_call_kw(VALUE cmd, int argc, const VALUE *argv, int kw_splat)
+{
     enum ruby_tag_type state;
     volatile VALUE val = Qnil;		/* OK */
     rb_execution_context_t * volatile ec = GET_EC();
@@ -2155,8 +2177,7 @@ rb_eval_cmd_kw(VALUE cmd, VALUE arg, int kw_splat)
     EC_PUSH_TAG(ec);
     if ((state = EC_EXEC_TAG()) == TAG_NONE) {
         if (!RB_TYPE_P(cmd, T_STRING)) {
-            val = rb_funcallv_kw(cmd, idCall, RARRAY_LENINT(arg),
-                              RARRAY_CONST_PTR(arg), kw_splat);
+            val = rb_funcallv_kw(cmd, idCall, argc, argv, kw_splat);
         }
         else {
             val = eval_string_with_cref(rb_vm_top_self(), cmd, NULL, 0, 0);
