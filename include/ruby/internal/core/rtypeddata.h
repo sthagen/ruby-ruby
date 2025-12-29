@@ -476,7 +476,7 @@ RBIMPL_SYMBOL_EXPORT_END()
  */
 #define TypedData_Make_Struct0(result, klass, type, size, data_type, sval) \
     VALUE result = rb_data_typed_object_zalloc(klass, size, data_type);    \
-    (sval) = (type *)RTYPEDDATA_GET_DATA(result); \
+    (sval) = RBIMPL_CAST((type *)RTYPEDDATA_GET_DATA(result)); \
     RBIMPL_CAST(/*suppress unused variable warnings*/(void)(sval))
 
 /**
@@ -594,7 +594,7 @@ RBIMPL_ATTR_ARTIFICIAL()
  * @return     Data type struct that corresponds to `obj`.
  * @pre        `obj` must be an instance of ::RTypedData.
  */
-static inline const struct rb_data_type_struct *
+static inline const rb_data_type_t *
 RTYPEDDATA_TYPE(VALUE obj)
 {
 #if RUBY_DEBUG
@@ -604,7 +604,8 @@ RTYPEDDATA_TYPE(VALUE obj)
     }
 #endif
 
-    return (const struct rb_data_type_struct *)(RTYPEDDATA(obj)->type & TYPED_DATA_PTR_MASK);
+    VALUE type = RTYPEDDATA(obj)->type & TYPED_DATA_PTR_MASK;
+    return RBIMPL_CAST((const rb_data_type_t *)type);
 }
 
 RBIMPL_ATTR_ARTIFICIAL()
@@ -668,14 +669,6 @@ rb_data_typed_object_make(VALUE klass, const rb_data_type_t *type, void **datap,
 {
     TypedData_Make_Struct0(result, klass, void, size, type, *datap);
     return result;
-}
-
-RBIMPL_ATTR_DEPRECATED(("by: rb_data_typed_object_wrap"))
-/** @deprecated  This function was renamed to rb_data_typed_object_wrap(). */
-static inline VALUE
-rb_data_typed_object_alloc(VALUE klass, void *datap, const rb_data_type_t *type)
-{
-    return rb_data_typed_object_wrap(klass, datap, type);
 }
 
 #endif /* RBIMPL_RTYPEDDATA_H */
