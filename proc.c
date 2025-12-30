@@ -898,6 +898,9 @@ rb_vm_ifunc_new(rb_block_call_func_t func, const void *data, int min_argc, int m
     rb_execution_context_t *ec = GET_EC();
 
     struct vm_ifunc *ifunc = IMEMO_NEW(struct vm_ifunc, imemo_ifunc, (VALUE)rb_vm_svar_lep(ec, ec->cfp));
+
+    rb_gc_register_pinning_obj((VALUE)ifunc);
+
     ifunc->func = func;
     ifunc->data = data;
     ifunc->argc.min = min_argc;
@@ -1510,14 +1513,20 @@ proc_eq(VALUE self, VALUE other)
 static VALUE
 iseq_location(const rb_iseq_t *iseq)
 {
-    VALUE loc[2];
+    VALUE loc[5];
+    int i = 0;
 
     if (!iseq) return Qnil;
     rb_iseq_check(iseq);
-    loc[0] = rb_iseq_path(iseq);
-    loc[1] = RB_INT2NUM(ISEQ_BODY(iseq)->location.first_lineno);
+    loc[i++] = rb_iseq_path(iseq);
+    const rb_code_location_t *cl = &ISEQ_BODY(iseq)->location.code_location;
+    loc[i++] = RB_INT2NUM(cl->beg_pos.lineno);
+    loc[i++] = RB_INT2NUM(cl->beg_pos.column);
+    loc[i++] = RB_INT2NUM(cl->end_pos.lineno);
+    loc[i++] = RB_INT2NUM(cl->end_pos.column);
+    RUBY_ASSERT_ALWAYS(i == numberof(loc));
 
-    return rb_ary_new4(2, loc);
+    return rb_ary_new_from_values(i, loc);
 }
 
 VALUE
@@ -1534,9 +1543,9 @@ rb_iseq_location(const rb_iseq_t *iseq)
  * The returned Array contains:
  *   (1) the Ruby source filename
  *   (2) the line number where the definition starts
- *   (3) the column number where the definition starts
+ *   (3) the position where the definition starts, in number of bytes from the start of the line
  *   (4) the line number where the definition ends
- *   (5) the column number where the definitions ends
+ *   (5) the position where the definitions ends, in number of bytes from the start of the line
  *
  * This method will return +nil+ if the Proc was not defined in Ruby (i.e. native).
  */
@@ -3194,9 +3203,9 @@ rb_method_entry_location(const rb_method_entry_t *me)
  * The returned Array contains:
  *   (1) the Ruby source filename
  *   (2) the line number where the definition starts
- *   (3) the column number where the definition starts
+ *   (3) the position where the definition starts, in number of bytes from the start of the line
  *   (4) the line number where the definition ends
- *   (5) the column number where the definitions ends
+ *   (5) the position where the definitions ends, in number of bytes from the start of the line
  *
  * This method will return +nil+ if the method was not defined in Ruby (i.e. native).
  */

@@ -396,6 +396,7 @@ RBIMPL_ATTR_NONNULL((3))
  */
 VALUE rb_data_typed_object_wrap(VALUE klass, void *datap, const rb_data_type_t *type);
 
+RBIMPL_ATTR_NONNULL((3))
 /**
  * Identical  to rb_data_typed_object_wrap(),  except it  allocates a  new data
  * region internally instead of taking an existing one.  The allocation is done
@@ -411,6 +412,7 @@ VALUE rb_data_typed_object_wrap(VALUE klass, void *datap, const rb_data_type_t *
  */
 VALUE rb_data_typed_object_zalloc(VALUE klass, size_t size, const rb_data_type_t *type);
 
+RBIMPL_ATTR_NONNULL(())
 /**
  * Checks for the domestic relationship between the two.
  *
@@ -425,6 +427,7 @@ VALUE rb_data_typed_object_zalloc(VALUE klass, size_t size, const rb_data_type_t
  */
 int rb_typeddata_inherited_p(const rb_data_type_t *child, const rb_data_type_t *parent);
 
+RBIMPL_ATTR_NONNULL((2))
 /**
  * Checks if the given object is of given kind.
  *
@@ -435,6 +438,7 @@ int rb_typeddata_inherited_p(const rb_data_type_t *child, const rb_data_type_t *
  */
 int rb_typeddata_is_kind_of(VALUE obj, const rb_data_type_t *data_type);
 
+RBIMPL_ATTR_NONNULL((2))
 /**
  * Identical to rb_typeddata_is_kind_of(), except  it raises exceptions instead
  * of returning false.
@@ -446,6 +450,36 @@ int rb_typeddata_is_kind_of(VALUE obj, const rb_data_type_t *data_type);
  * @post       Upon successful return `obj`'s type is guaranteed `data_type`.
  */
 void *rb_check_typeddata(VALUE obj, const rb_data_type_t *data_type);
+
+RBIMPL_ATTR_NORETURN()
+RBIMPL_ATTR_NONNULL((2))
+/**
+ * @private
+ *
+ * Fails with the given object's type incompatibility to the type.
+ *
+ * This  is  an implementation  detail  of  Check_Type.   People don't  use  it
+ * directly.
+ *
+ * @param[in]  obj            The object in question.
+ * @param[in]  expected       Name of expected data type of `obj`.
+ */
+void rb_unexpected_object_type(VALUE obj, const char *expected);
+
+RBIMPL_ATTR_NORETURN()
+RBIMPL_ATTR_NONNULL(())
+/**
+ * @private
+ *
+ * Fails with the given object's type incompatibility to the type.
+ *
+ * This is  an implementation  detail of #TypedData_Make_Struct.   People don't
+ * use it directly.
+ *
+ * @param[in]  actual         Actual data type.
+ * @param[in]  expected       Expected data type.
+ */
+void rb_unexpected_typeddata(const rb_data_type_t *actual, const rb_data_type_t *expected);
 RBIMPL_SYMBOL_EXPORT_END()
 
 /**
@@ -532,7 +566,7 @@ RTYPEDDATA_GET_DATA(VALUE obj)
 #if RUBY_DEBUG
     if (RB_UNLIKELY(!RB_TYPE_P(obj, RUBY_T_DATA))) {
         Check_Type(obj, RUBY_T_DATA);
-        RBIMPL_UNREACHABLE_RETURN(false);
+        RBIMPL_UNREACHABLE_RETURN(NULL);
     }
 #endif
 
@@ -561,6 +595,27 @@ rbimpl_rtypeddata_p(VALUE obj)
     return FL_TEST_RAW(obj, RUBY_TYPED_FL_IS_TYPED_DATA);
 }
 
+RBIMPL_ATTR_PURE()
+RBIMPL_ATTR_ARTIFICIAL()
+/**
+ * @private
+ *
+ * Identical to rbimpl_rtypeddata_p(), except it is allowed to call on non-data
+ * objects.
+ *
+ * This is an  implementation detail of inline functions defined  in this file.
+ * People don't use it directly.
+ *
+ * @param[in]  obj    Object in question
+ * @retval     true   `obj` is an instance of ::RTypedData.
+ * @retval     false  `obj` is not an instance of ::RTypedData
+ */
+static inline bool
+rbimpl_obj_typeddata_p(VALUE obj)
+{
+    return RB_TYPE_P(obj, RUBY_T_DATA) && rbimpl_rtypeddata_p(obj);
+}
+
 RBIMPL_ATTR_PURE_UNLESS_DEBUG()
 RBIMPL_ATTR_ARTIFICIAL()
 /**
@@ -586,7 +641,7 @@ RTYPEDDATA_P(VALUE obj)
 
 RBIMPL_ATTR_PURE_UNLESS_DEBUG()
 RBIMPL_ATTR_ARTIFICIAL()
-/* :TODO: can this function be __attribute__((returns_nonnull)) or not? */
+RBIMPL_ATTR_RETURNS_NONNULL()
 /**
  * Queries for the type of given object.
  *
@@ -605,10 +660,35 @@ RTYPEDDATA_TYPE(VALUE obj)
 #endif
 
     VALUE type = RTYPEDDATA(obj)->type & TYPED_DATA_PTR_MASK;
-    return RBIMPL_CAST((const rb_data_type_t *)type);
+    const rb_data_type_t *ptr = RBIMPL_CAST((const rb_data_type_t *)type);
+    RBIMPL_ASSERT_OR_ASSUME(ptr);
+    return ptr;
 }
 
 RBIMPL_ATTR_ARTIFICIAL()
+RBIMPL_ATTR_NONNULL(())
+static inline bool
+rb_typeddata_inherited_p_inline(const rb_data_type_t *child, const rb_data_type_t *parent)
+{
+    do {
+        if (RB_LIKELY(child == parent)) return true;
+    } while ((child = child->parent) != NULL);
+    return false;
+}
+#define rb_typeddata_inherited_p rb_typeddata_inherited_p_inline
+
+RBIMPL_ATTR_ARTIFICIAL()
+RBIMPL_ATTR_NONNULL((2))
+static inline bool
+rb_typeddata_is_kind_of_inline(VALUE obj, const rb_data_type_t *data_type)
+{
+    if (RB_UNLIKELY(!rbimpl_obj_typeddata_p(obj))) return false;
+    return rb_typeddata_inherited_p(RTYPEDDATA_TYPE(obj), data_type);
+}
+#define rb_typeddata_is_kind_of rb_typeddata_is_kind_of_inline
+
+RBIMPL_ATTR_ARTIFICIAL()
+RBIMPL_ATTR_NONNULL((2))
 /**
  * @private
  *
@@ -618,22 +698,16 @@ RBIMPL_ATTR_ARTIFICIAL()
 static inline void *
 rbimpl_check_typeddata(VALUE obj, const rb_data_type_t *expected_type)
 {
-    if (RB_LIKELY(RB_TYPE_P(obj, T_DATA) && RTYPEDDATA_P(obj))) {
-        const rb_data_type_t *actual_type = RTYPEDDATA_TYPE(obj);
-        void *data = RTYPEDDATA_GET_DATA(obj);
-        if (RB_LIKELY(actual_type == expected_type)) {
-            return data;
-        }
-
-        while (actual_type) {
-            actual_type = actual_type->parent;
-            if (actual_type == expected_type) {
-                return data;
-            }
-        }
+    if (RB_UNLIKELY(!rbimpl_obj_typeddata_p(obj))) {
+        rb_unexpected_object_type(obj, expected_type->wrap_struct_name);
     }
 
-    return rb_check_typeddata(obj, expected_type);
+    const rb_data_type_t *actual_type = RTYPEDDATA_TYPE(obj);
+    if (RB_UNLIKELY(!rb_typeddata_inherited_p(actual_type, expected_type))){
+        rb_unexpected_typeddata(actual_type, expected_type);
+    }
+
+    return RTYPEDDATA_GET_DATA(obj);
 }
 
 
@@ -650,6 +724,7 @@ rbimpl_check_typeddata(VALUE obj, const rb_data_type_t *expected_type)
 #define TypedData_Get_Struct(obj,type,data_type,sval) \
     ((sval) = RBIMPL_CAST((type *)rbimpl_check_typeddata((obj), (data_type))))
 
+RBIMPL_ATTR_NONNULL((2))
 /**
  * While  we don't  stop  you from  using  this  function, it  seems  to be  an
  * implementation  detail of  #TypedData_Make_Struct, which  is preferred  over
