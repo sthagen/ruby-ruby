@@ -83,6 +83,12 @@ RB_THREAD_LOCAL_SPECIFIER VALUE marking_parent_object;
 # error We currently need language-supported TLS
 #endif
 
+#ifdef MMTK_DEBUG
+# define MMTK_ASSERT(expr, ...) RUBY_ASSERT_ALWAYS(expr, #expr RBIMPL_VA_OPT_ARGS(__VA_ARGS__))
+#else
+# define MMTK_ASSERT(expr, ...) ((void)0)
+#endif
+
 #include <pthread.h>
 
 static void
@@ -962,6 +968,21 @@ rb_gc_impl_writebarrier(void *objspace_ptr, VALUE a, VALUE b)
     struct MMTk_ractor_cache *cache = rb_gc_get_ractor_newobj_cache();
 
     if (SPECIAL_CONST_P(b)) return;
+
+#ifdef MMTK_DEBUG
+    if (!rb_gc_impl_pointer_to_heap_p(objspace_ptr, (void *)a)) {
+        char buff[256];
+        rb_bug("a: %s is not an object", rb_raw_obj_info(buff, 256, a));
+    }
+
+    if (!rb_gc_impl_pointer_to_heap_p(objspace_ptr, (void *)b)) {
+        char buff[256];
+        rb_bug("b: %s is not an object", rb_raw_obj_info(buff, 256, b));
+    }
+#endif
+
+    MMTK_ASSERT(BUILTIN_TYPE(a) != T_NONE);
+    MMTK_ASSERT(BUILTIN_TYPE(b) != T_NONE);
 
     mmtk_object_reference_write_post(cache->mutator, (MMTk_ObjectReference)a);
 }

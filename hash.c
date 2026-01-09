@@ -1558,9 +1558,8 @@ rb_hash_dup(VALUE hash)
     const VALUE flags = RBASIC(hash)->flags;
     VALUE ret = hash_dup(hash, rb_obj_class(hash), flags & RHASH_PROC_DEFAULT);
 
-    if (rb_obj_gen_fields_p(hash)) {
-        rb_copy_generic_ivar(ret, hash);
-    }
+    rb_copy_generic_ivar(ret, hash);
+
     return ret;
 }
 
@@ -3980,17 +3979,13 @@ hash_equal(VALUE hash1, VALUE hash2, int eql)
 
 /*
  *  call-seq:
- *    self == object -> true or false
+ *    self == other -> true or false
  *
- *  Returns whether +self+ and +object+ are equal.
+ *  Returns whether all of the following are true:
  *
- *  Returns +true+ if all of the following are true:
- *
- *  - +object+ is a +Hash+ object (or can be converted to one).
- *  - +self+ and +object+ have the same keys (regardless of order).
- *  - For each key +key+, <tt>self[key] == object[key]</tt>.
- *
- *  Otherwise, returns +false+.
+ *  - +other+ is a +Hash+ object (or can be converted to one).
+ *  - +self+ and +other+ have the same keys (regardless of order).
+ *  - For each key +key+, <tt>self[key] == other[key]</tt>.
  *
  *  Examples:
  *
