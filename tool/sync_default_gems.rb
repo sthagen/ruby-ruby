@@ -304,7 +304,6 @@ module SyncDefaultGems
     time: lib("ruby/time"),
     timeout: lib("ruby/timeout"),
     tmpdir: lib("ruby/tmpdir"),
-    tsort: lib("ruby/tsort"),
     un: lib("ruby/un"),
     uri: lib("ruby/uri", gemspec_in_subdir: true),
     weakref: lib("ruby/weakref"),
@@ -440,7 +439,7 @@ module SyncDefaultGems
   end
 
   def check_prerelease_version(gem)
-    return if ["rubygems", "mmtk", "cgi", "pathname"].include?(gem)
+    return if ["rubygems", "mmtk", "cgi", "pathname", "Onigmo"].include?(gem)
 
     require "net/https"
     require "json"
