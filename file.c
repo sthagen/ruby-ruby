@@ -169,6 +169,7 @@ typedef struct timespec stat_timestamp;
 #include "internal.h"
 #include "internal/compilers.h"
 #include "internal/dir.h"
+#include "internal/encoding.h"
 #include "internal/error.h"
 #include "internal/file.h"
 #include "internal/io.h"
@@ -3723,7 +3724,7 @@ rb_enc_path_end(const char *path, const char *end, rb_encoding *enc)
 static rb_encoding *
 fs_enc_check(VALUE path1, VALUE path2)
 {
-    rb_encoding *enc = rb_enc_check(path1, path2);
+    rb_encoding *enc = rb_enc_check_str(path1, path2);
     int encidx = rb_enc_to_index(enc);
     if (encidx == ENCINDEX_US_ASCII) {
         encidx = rb_enc_get_index(path1);
@@ -4651,7 +4652,7 @@ rb_check_realpath_emulate(VALUE basedir, VALUE path, rb_encoding *origenc, enum 
     return resolved;
 }
 
-static VALUE rb_file_join(VALUE ary);
+static VALUE rb_file_join(long argc, VALUE *args);
 
 #ifndef HAVE_REALPATH
 static VALUE
@@ -4692,7 +4693,8 @@ rb_check_realpath_internal(VALUE basedir, VALUE path, rb_encoding *origenc, enum
 
     unresolved_path = rb_str_dup_frozen(path);
     if (*RSTRING_PTR(unresolved_path) != '/' && !NIL_P(basedir)) {
-        unresolved_path = rb_file_join(rb_assoc_new(basedir, unresolved_path));
+        VALUE paths[2] = {basedir, unresolved_path};
+        unresolved_path = rb_file_join(2, paths);
     }
     if (origenc) unresolved_path = TO_OSPATH(unresolved_path);
 
@@ -5255,15 +5257,17 @@ rb_file_s_split(VALUE klass, VALUE path)
     return rb_assoc_new(rb_file_dirname(path), rb_file_s_basename(1,&path,Qundef));
 }
 
+static VALUE rb_file_join_ary(VALUE ary);
+
 static VALUE
 file_inspect_join(VALUE ary, VALUE arg, int recur)
 {
     if (recur || ary == arg) rb_raise(rb_eArgError, "recursive array");
-    return rb_file_join(arg);
+    return rb_file_join_ary(arg);
 }
 
 static VALUE
-rb_file_join(VALUE ary)
+rb_file_join_ary(VALUE ary)
 {
     long len, i;
     VALUE result, tmp;
@@ -5328,6 +5332,77 @@ rb_file_join(VALUE ary)
     return result;
 }
 
+static inline VALUE
+rb_file_join_fastpath(long argc, VALUE *args)
+{
+    long size = argc;
+
+    long i;
+    for (i = 0; i < argc; i++) {
+        VALUE tmp = args[i];
+        if (RB_LIKELY(RB_TYPE_P(tmp, T_STRING) && rb_str_enc_fastpath(tmp))) {
+            size += RSTRING_LEN(tmp);
+        }
+        else {
+            return 0;
+        }
+    }
+
+    VALUE result = rb_str_buf_new(size);
+
+    int encidx = ENCODING_GET_INLINED(args[0]);
+    ENCODING_SET_INLINED(result, encidx);
+    rb_str_buf_append(result, args[0]);
+
+    const char *name = RSTRING_PTR(result);
+    for (i = 1; i < argc; i++) {
+        VALUE tmp = args[i];
+        long len = RSTRING_LEN(result);
+
+        const char *tmp_s;
+        long tmp_len;
+        RSTRING_GETMEM(tmp, tmp_s, tmp_len);
+
+        if (isdirsep(tmp_s[0])) {
+            // right side has a leading separator, remove left side separators.
+            long trailing_seps = 0;
+            while (isdirsep(name[len - trailing_seps - 1])) {
+                trailing_seps++;
+            }
+            rb_str_set_len(result, len - trailing_seps);
+        }
+        else if (!isdirsep(name[len - 1])) {
+            // neither side have a separator, append one;
+            rb_str_cat(result, "/", 1);
+        }
+
+        if (RB_UNLIKELY(ENCODING_GET_INLINED(tmp) != encidx)) {
+            rb_encoding *new_enc = fs_enc_check(result, tmp);
+            rb_enc_associate(result, new_enc);
+            encidx = rb_enc_to_index(new_enc);
+        }
+
+        rb_str_buf_cat(result, tmp_s, tmp_len);
+    }
+
+    rb_str_null_check(result);
+    return result;
+}
+
+static inline VALUE
+rb_file_join(long argc, VALUE *args)
+{
+    if (RB_UNLIKELY(argc == 0)) {
+        return rb_str_new(0, 0);
+    }
+
+    VALUE result = rb_file_join_fastpath(argc, args);
+    if (RB_LIKELY(result)) {
+        return result;
+    }
+
+    return rb_file_join_ary(rb_ary_new_from_values(argc, args));
+}
 /*
  *  call-seq:
  *     File.join(string, ...)  ->  string
@@ -5340,9 +5415,9 @@ rb_file_join(VALUE ary)
  */
 
 static VALUE
-rb_file_s_join(VALUE klass, VALUE args)
+rb_file_s_join(int argc, VALUE *argv, VALUE klass)
 {
-    return rb_file_join(args);
+    return rb_file_join(argc, argv);
 }
 
 #if defined(HAVE_TRUNCATE)
@@ -5482,7 +5557,7 @@ rb_thread_flock(void *data)
  *  call-seq:
  *    flock(locking_constant) -> 0 or false
  *
- *  Locks or unlocks file +self+ according to the given `locking_constant`,
+ *  Locks or unlocks file `self` according to the given `locking_constant`,
  *  a bitwise OR of the values in the table below.
  *
  *  Not available on all platforms.
@@ -5492,10 +5567,10 @@ rb_thread_flock(void *data)
  *
  *  | Constant        | Lock         | Effect
  *  |-----------------|--------------|-----------------------------------------------------------------------------------------------------------------|
- *  | +File::LOCK_EX+ | Exclusive    | Only one process may hold an exclusive lock for +self+ at a time.                                               |
- *  | +File::LOCK_NB+ | Non-blocking | No blocking; may be combined with +File::LOCK_SH+ or +File::LOCK_EX+ using the bitwise OR operator <tt>\|</tt>. |
- *  | +File::LOCK_SH+ | Shared       | Multiple processes may each hold a shared lock for +self+ at the same time.                                     |
- *  | +File::LOCK_UN+ | Unlock       | Remove an existing lock held by this process.                                                                   |
+ *  | `File::LOCK_EX` | Exclusive    | Only one process may hold an exclusive lock for `self` at a time.                                               |
+ *  | `File::LOCK_NB` | Non-blocking | No blocking; may be combined with `File::LOCK_SH` or `File::LOCK_EX` using the bitwise OR operator <tt>\|</tt>. |
+ *  | `File::LOCK_SH` | Shared       | Multiple processes may each hold a shared lock for `self` at the same time.                                     |
+ *  | `File::LOCK_UN` | Unlock       | Remove an existing lock held by this process.                                                                   |
  *
  *  Example:
  *
@@ -5622,11 +5697,11 @@ test_check(int n, int argc, VALUE *argv)
  *      | <tt>'z'</tt> | Whether the entity exists and is of length zero.                          |
  *
  *  - This test operates only on the entity at `path0`,
- *    and returns an integer size or +nil+:
+ *    and returns an integer size or `nil`:
  *
  *      | Character    | Test                                                                                         |
  *      |:------------:|:---------------------------------------------------------------------------------------------|
- *      | <tt>'s'</tt> | Returns positive integer size if the entity exists and has non-zero length, +nil+ otherwise. |
+ *      | <tt>'s'</tt> | Returns positive integer size if the entity exists and has non-zero length, `nil` otherwise. |
  *
  *  - Each of these tests operates only on the entity at `path0`,
  *    and returns a Time object;
@@ -7584,7 +7659,7 @@ Init_File(void)
     /* separates directory parts in path */
     rb_define_const(rb_cFile, "SEPARATOR", separator);
     rb_define_singleton_method(rb_cFile, "split",  rb_file_s_split, 1);
-    rb_define_singleton_method(rb_cFile, "join",   rb_file_s_join, -2);
+    rb_define_singleton_method(rb_cFile, "join",   rb_file_s_join, -1);
 
 #ifdef DOSISH
     /* platform specific alternative separator */
@@ -7888,11 +7963,11 @@ Init_File(void)
      *
      * ==== File::FNM_EXTGLOB
      *
-     * Flag File::FNM_EXTGLOB enables pattern <tt>'{_a_,_b_}'</tt>,
+     * Flag File::FNM_EXTGLOB enables pattern <tt>'{a,b}'</tt>,
      * which matches pattern '_a_' and pattern '_b_';
      * behaves like
      * a {regexp union}[rdoc-ref:Regexp.union]
-     * (e.g., <tt>'(?:_a_|_b_)'</tt>):
+     * (e.g., <tt>'(?:a|b)'</tt>):
      *
      *   pattern = '{LEGAL,BSDL}'
      *   Dir.glob(pattern)      # => ["LEGAL", "BSDL"]
