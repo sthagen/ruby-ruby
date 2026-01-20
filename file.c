@@ -214,15 +214,16 @@ file_path_convert(VALUE name)
     return name;
 }
 
-static rb_encoding *
+static void
 check_path_encoding(VALUE str)
 {
-    rb_encoding *enc = rb_enc_get(str);
-    if (!rb_enc_asciicompat(enc)) {
-        rb_raise(rb_eEncCompatError, "path name must be ASCII-compatible (%s): %"PRIsVALUE,
-                 rb_enc_name(enc), rb_str_inspect(str));
+    if (RB_UNLIKELY(!rb_str_enc_fastpath(str))) {
+        rb_encoding *enc = rb_str_enc_get(str);
+        if (!rb_enc_asciicompat(enc)) {
+            rb_raise(rb_eEncCompatError, "path name must be ASCII-compatible (%s): %"PRIsVALUE,
+                     rb_enc_name(enc), rb_str_inspect(str));
+        }
     }
-    return enc;
 }
 
 VALUE
@@ -250,7 +251,7 @@ rb_get_path_check_convert(VALUE obj)
         rb_raise(rb_eArgError, "path name contains null byte");
     }
 
-    return rb_str_new4(obj);
+    return rb_str_new_frozen(obj);
 }
 
 VALUE
@@ -264,6 +265,19 @@ rb_get_path(VALUE obj)
 {
     return rb_get_path_check_convert(rb_get_path_check_to_string(obj));
 }
+
+static inline VALUE
+check_path(VALUE obj, const char **cstr)
+{
+    VALUE str = rb_get_path_check_convert(rb_get_path_check_to_string(obj));
+#if RUBY_DEBUG
+    str = rb_str_new_frozen(str);
+#endif
+    *cstr = RSTRING_PTR(str);
+    return str;
+}
+
+#define CheckPath(str, cstr) RB_GC_GUARD(str) = check_path(str, &cstr);
 
 VALUE
 rb_str_encode_ospath(VALUE path)
@@ -3557,8 +3571,8 @@ static const char file_alt_separator[] = {FILE_ALT_SEPARATOR, '\0'};
 # define isADS(x) 0
 #endif
 
-#define Next(p, e, enc) ((p) + rb_enc_mbclen((p), (e), (enc)))
-#define Inc(p, e, enc) ((p) = Next((p), (e), (enc)))
+#define Next(p, e, mb_enc, enc) ((p) + ((mb_enc) ? rb_enc_mbclen((p), (e), (enc)) : 1))
+#define Inc(p, e, mb_enc, enc) ((p) = Next((p), (e), (mb_enc), (enc)))
 
 #if defined(DOSISH_UNC)
 #define has_unc(buf) (isdirsep((buf)[0]) && isdirsep((buf)[1]))
@@ -3622,7 +3636,7 @@ not_same_drive(VALUE path, int drive)
 #endif /* DOSISH_DRIVE_LETTER */
 
 static inline char *
-skiproot(const char *path, const char *end, rb_encoding *enc)
+skiproot(const char *path, const char *end)
 {
 #ifdef DOSISH_DRIVE_LETTER
     if (path + 2 <= end && has_drive_letter(path)) path += 2;
@@ -3631,31 +3645,37 @@ skiproot(const char *path, const char *end, rb_encoding *enc)
     return (char *)path;
 }
 
-#define nextdirsep rb_enc_path_next
-char *
-rb_enc_path_next(const char *s, const char *e, rb_encoding *enc)
+static inline char *
+enc_path_next(const char *s, const char *e, bool mb_enc, rb_encoding *enc)
 {
     while (s < e && !isdirsep(*s)) {
-        Inc(s, e, enc);
+        Inc(s, e, mb_enc, enc);
     }
     return (char *)s;
 }
 
-#if defined(DOSISH_UNC) || defined(DOSISH_DRIVE_LETTER)
-#define skipprefix rb_enc_path_skip_prefix
-#else
-#define skipprefix(path, end, enc) (path)
-#endif
+#define nextdirsep rb_enc_path_next
 char *
-rb_enc_path_skip_prefix(const char *path, const char *end, rb_encoding *enc)
+rb_enc_path_next(const char *s, const char *e, rb_encoding *enc)
+{
+    return enc_path_next(s, e, true, enc);
+}
+
+#if defined(DOSISH_UNC) || defined(DOSISH_DRIVE_LETTER)
+#define skipprefix enc_path_skip_prefix
+#else
+#define skipprefix(path, end, mb_enc, enc) (path)
+#endif
+static inline char *
+enc_path_skip_prefix(const char *path, const char *end, bool mb_enc, rb_encoding *enc)
 {
 #if defined(DOSISH_UNC) || defined(DOSISH_DRIVE_LETTER)
 #ifdef DOSISH_UNC
     if (path + 2 <= end && isdirsep(path[0]) && isdirsep(path[1])) {
         path += 2;
         while (path < end && isdirsep(*path)) path++;
-        if ((path = rb_enc_path_next(path, end, enc)) < end && path[0] && path[1] && !isdirsep(path[1]))
-            path = rb_enc_path_next(path + 1, end, enc);
+        if ((path = enc_path_next(path, end, mb_enc, enc)) < end && path[0] && path[1] && !isdirsep(path[1]))
+            path = enc_path_next(path + 1, end, mb_enc, enc);
         return (char *)path;
     }
 #endif
@@ -3667,19 +3687,24 @@ rb_enc_path_skip_prefix(const char *path, const char *end, rb_encoding *enc)
     return (char *)path;
 }
 
+char *
+rb_enc_path_skip_prefix(const char *path, const char *end, rb_encoding *enc)
+{
+    return enc_path_skip_prefix(path, end, true, enc);
+}
+
 static inline char *
 skipprefixroot(const char *path, const char *end, rb_encoding *enc)
 {
 #if defined(DOSISH_UNC) || defined(DOSISH_DRIVE_LETTER)
-    char *p = skipprefix(path, end, enc);
+    char *p = skipprefix(path, end, true, enc);
     while (isdirsep(*p)) p++;
     return p;
 #else
-    return skiproot(path, end, enc);
+    return skiproot(path, end);
 #endif
 }
 
-#define strrdirsep rb_enc_path_last_separator
 char *
 rb_enc_path_last_separator(const char *path, const char *end, rb_encoding *enc)
 {
@@ -3692,10 +3717,35 @@ rb_enc_path_last_separator(const char *path, const char *end, rb_encoding *enc)
             last = (char *)tmp;
         }
         else {
-            Inc(path, end, enc);
+            Inc(path, end, true, enc);
         }
     }
     return last;
+}
+
+static inline char *
+strrdirsep(const char *path, const char *end, bool mb_enc, rb_encoding *enc)
+{
+    if (RB_UNLIKELY(mb_enc)) {
+        return rb_enc_path_last_separator(path, end, enc);
+    }
+
+    const char *cursor = end - 1;
+
+    while (isdirsep(cursor[0])) {
+        cursor--;
+    }
+
+    while (cursor >= path) {
+        if (isdirsep(cursor[0])) {
+            while (cursor > path && isdirsep(cursor[-1])) {
+                cursor--;
+            }
+            return (char *)cursor;
+        }
+        cursor--;
+    }
+    return NULL;
 }
 
 static char *
@@ -3708,7 +3758,7 @@ chompdirsep(const char *path, const char *end, rb_encoding *enc)
             if (path >= end) return (char *)last;
         }
         else {
-            Inc(path, end, enc);
+            Inc(path, end, true, enc);
         }
     }
     return (char *)path;
@@ -3753,7 +3803,7 @@ ntfs_tail(const char *path, const char *end, rb_encoding *enc)
             if (isADS(*path)) path++;
         }
         else {
-            Inc(path, end, enc);
+            Inc(path, end, true, enc);
         }
     }
     return (char *)path;
@@ -3815,7 +3865,7 @@ copy_home_path(VALUE result, const char *dir)
     rb_enc_associate_index(result, encidx);
 #if defined DOSISH || defined __CYGWIN__
     enc = rb_enc_from_index(encidx);
-    for (bend = (p = buf) + dirlen; p < bend; Inc(p, bend, enc)) {
+    for (bend = (p = buf) + dirlen; p < bend; Inc(p, bend, true, enc)) {
         if (*p == '\\') {
             *p = '/';
         }
@@ -4038,7 +4088,7 @@ rb_file_expand_path_internal(VALUE fname, VALUE dname, int abs_mode, int long_na
                 rb_enc_associate(result, enc = fs_enc_check(result, fname));
                 p = pend;
             }
-            p = chompdirsep(skiproot(buf, p, enc), p, enc);
+            p = chompdirsep(skiproot(buf, p), p, enc);
             s += 2;
         }
     }
@@ -4059,11 +4109,11 @@ rb_file_expand_path_internal(VALUE fname, VALUE dname, int abs_mode, int long_na
         if (isdirsep(*s)) {
             /* specified full path, but not drive letter nor UNC */
             /* we need to get the drive letter or UNC share name */
-            p = skipprefix(buf, p, enc);
+            p = skipprefix(buf, p, true, enc);
         }
         else
 #endif /* defined DOSISH || defined __CYGWIN__ */
-            p = chompdirsep(skiproot(buf, p, enc), p, enc);
+            p = chompdirsep(skiproot(buf, p), p, enc);
     }
     else {
         size_t len;
@@ -4087,7 +4137,7 @@ rb_file_expand_path_internal(VALUE fname, VALUE dname, int abs_mode, int long_na
     rb_str_set_len(result, p-buf+1);
     BUFCHECK(bdiff + 1 >= buflen);
     p[1] = 0;
-    root = skipprefix(buf, p+1, enc);
+    root = skipprefix(buf, p+1, true, enc);
 
     b = s;
     while (*s) {
@@ -4103,7 +4153,7 @@ rb_file_expand_path_internal(VALUE fname, VALUE dname, int abs_mode, int long_na
                         /* We must go back to the parent */
                         char *n;
                         *p = '\0';
-                        if (!(n = strrdirsep(root, p, enc))) {
+                        if (!(n = strrdirsep(root, p, true, enc))) {
                             *p = '/';
                         }
                         else {
@@ -4166,7 +4216,7 @@ rb_file_expand_path_internal(VALUE fname, VALUE dname, int abs_mode, int long_na
                 }
             }
 #endif /* __APPLE__ */
-            Inc(s, fend, enc);
+            Inc(s, fend, true, enc);
             break;
         }
     }
@@ -4194,7 +4244,7 @@ rb_file_expand_path_internal(VALUE fname, VALUE dname, int abs_mode, int long_na
         BUFCOPY(b, s-b);
         rb_str_set_len(result, p-buf);
     }
-    if (p == skiproot(buf, p + !!*p, enc) - 1) p++;
+    if (p == skiproot(buf, p + !!*p) - 1) p++;
 
 #if USE_NTFS
     *p = '\0';
@@ -4466,7 +4516,7 @@ realpath_rec(long *prefixlenp, VALUE *resolvedp, const char *unresolved, VALUE f
             if (*prefixlenp < RSTRING_LEN(*resolvedp)) {
                 const char *resolved_str = RSTRING_PTR(*resolvedp);
                 const char *resolved_names = resolved_str + *prefixlenp;
-                const char *lastsep = strrdirsep(resolved_names, resolved_str + RSTRING_LEN(*resolvedp), enc);
+                const char *lastsep = strrdirsep(resolved_names, resolved_str + RSTRING_LEN(*resolvedp), true, enc);
                 long len = lastsep ? lastsep - resolved_names : 0;
                 rb_str_resize(*resolvedp, *prefixlenp + len);
             }
@@ -4616,7 +4666,7 @@ rb_check_realpath_emulate(VALUE basedir, VALUE path, rb_encoding *origenc, enum 
         if (*prefixptr == FILE_ALT_SEPARATOR) {
             *prefixptr = '/';
         }
-        Inc(prefixptr, pend, enc);
+        Inc(prefixptr, pend, true, enc);
     }
 #endif
 
@@ -4870,7 +4920,7 @@ ruby_enc_find_basename(const char *name, long *baselen, long *alllen, rb_encodin
     long f = 0, n = -1;
 
     end = name + (alllen ? (size_t)*alllen : strlen(name));
-    name = skipprefix(name, end, enc);
+    name = skipprefix(name, end, true, enc);
 #if defined DOSISH_DRIVE_LETTER || defined DOSISH_UNC
     root = name;
 #endif
@@ -4897,7 +4947,7 @@ ruby_enc_find_basename(const char *name, long *baselen, long *alllen, rb_encodin
 #endif /* defined DOSISH_DRIVE_LETTER || defined DOSISH_UNC */
     }
     else {
-        if (!(p = strrdirsep(name, end, enc))) {
+        if (!(p = strrdirsep(name, end, true, enc))) {
             p = name;
         }
         else {
@@ -4909,7 +4959,7 @@ ruby_enc_find_basename(const char *name, long *baselen, long *alllen, rb_encodin
         n = chompdirsep(p, end, enc) - p;
 #endif
         for (q = p; q - p < n && *q == '.'; q++);
-        for (e = 0; q - p < n; Inc(q, end, enc)) {
+        for (e = 0; q - p < n; Inc(q, end, true, enc)) {
             if (*q == '.') e = q;
         }
         if (e) f = e - p;
@@ -4952,7 +5002,8 @@ rb_file_s_basename(int argc, VALUE *argv, VALUE _)
     if (rb_check_arity(argc, 1, 2) == 2) {
         fext = argv[1];
         StringValue(fext);
-        enc = check_path_encoding(fext);
+        check_path_encoding(fext);
+        enc = rb_str_enc_get(fext);
     }
     fname = argv[0];
     FilePathStringValue(fname);
@@ -5026,19 +5077,18 @@ rb_file_dirname_n(VALUE fname, int n)
 {
     const char *name, *root, *p, *end;
     VALUE dirname;
-    rb_encoding *enc;
-    VALUE sepsv = 0;
-    const char **seps;
 
     if (n < 0) rb_raise(rb_eArgError, "negative level: %d", n);
-    FilePathStringValue(fname);
-    name = StringValueCStr(fname);
+    CheckPath(fname, name);
     end = name + RSTRING_LEN(fname);
-    enc = rb_enc_get(fname);
-    root = skiproot(name, end, enc);
+
+    bool mb_enc = !rb_str_enc_fastpath(fname);
+    rb_encoding *enc = rb_str_enc_get(fname);
+
+    root = skiproot(name, end);
 #ifdef DOSISH_UNC
     if (root > name + 1 && isdirsep(*name))
-        root = skipprefix(name = root - 2, end, enc);
+        root = skipprefix(name = root - 2, end, mb_enc, enc);
 #else
     if (root > name + 1)
         name = root - 1;
@@ -5047,75 +5097,41 @@ rb_file_dirname_n(VALUE fname, int n)
         p = root;
     }
     else {
-        int i;
-        switch (n) {
-          case 0:
-            p = end;
-            break;
-          case 1:
-            if (!(p = strrdirsep(root, end, enc))) p = root;
-            break;
-          default:
-            seps = ALLOCV_N(const char *, sepsv, n);
-            for (i = 0; i < n; ++i) seps[i] = root;
-            i = 0;
-            for (p = root; p < end; ) {
-                if (isdirsep(*p)) {
-                    const char *tmp = p++;
-                    while (p < end && isdirsep(*p)) p++;
-                    if (p >= end) break;
-                    seps[i++] = tmp;
-                    if (i == n) i = 0;
-                }
-                else {
-                    Inc(p, end, enc);
-                }
+        p = end;
+        while (n) {
+            if (!(p = strrdirsep(root, p, mb_enc, enc))) {
+                p = root;
+                break;
             }
-            p = seps[i];
-            ALLOCV_END(sepsv);
-            break;
+            n--;
         }
     }
+
     if (p == name) {
-        dirname = rb_str_new(".", 1);
-        rb_enc_copy(dirname, fname);
-        return dirname;
+        return rb_enc_str_new(".", 1, enc);
     }
 #ifdef DOSISH_DRIVE_LETTER
     if (has_drive_letter(name) && isdirsep(*(name + 2))) {
-        const char *top = skiproot(name + 2, end, enc);
-        dirname = rb_str_new(name, 3);
+        const char *top = skiproot(name + 2, end);
+        dirname = rb_enc_str_new(name, 3, enc);
         rb_str_cat(dirname, top, p - top);
     }
     else
 #endif
-    dirname = rb_str_new(name, p - name);
+    dirname = rb_enc_str_new(name, p - name, enc);
 #ifdef DOSISH_DRIVE_LETTER
     if (has_drive_letter(name) && root == name + 2 && p - name == 2)
         rb_str_cat(dirname, ".", 1);
 #endif
-    rb_enc_copy(dirname, fname);
     return dirname;
 }
 
-/*
- * accept a String, and return the pointer of the extension.
- * if len is passed, set the length of extension to it.
- * returned pointer is in ``name'' or NULL.
- *                 returns   *len
- *   no dot        NULL      0
- *   dotfile       top       0
- *   end with dot  dot       1
- *   .ext          dot       len of .ext
- *   .ext:stream   dot       len of .ext without :stream (NTFS only)
- *
- */
-const char *
-ruby_enc_find_extname(const char *name, long *len, rb_encoding *enc)
+static inline const char *
+enc_find_extname(const char *name, long *len, bool mb_enc, rb_encoding *enc)
 {
     const char *p, *e, *end = name + (len ? *len : (long)strlen(name));
 
-    p = strrdirsep(name, end, enc);	/* get the last path component */
+    p = strrdirsep(name, end, mb_enc, enc);	/* get the last path component */
     if (!p)
         p = name;
     else
@@ -5148,7 +5164,7 @@ ruby_enc_find_extname(const char *name, long *len, rb_encoding *enc)
 #endif
         else if (isdirsep(*p))
             break;
-        Inc(p, end, enc);
+        Inc(p, end, mb_enc, enc);
     }
 
     if (len) {
@@ -5161,6 +5177,24 @@ ruby_enc_find_extname(const char *name, long *len, rb_encoding *enc)
             *len = p - e;
     }
     return e;
+}
+
+/*
+ * accept a String, and return the pointer of the extension.
+ * if len is passed, set the length of extension to it.
+ * returned pointer is in ``name'' or NULL.
+ *                 returns   *len
+ *   no dot        NULL      0
+ *   dotfile       top       0
+ *   end with dot  dot       1
+ *   .ext          dot       len of .ext
+ *   .ext:stream   dot       len of .ext without :stream (NTFS only)
+ *
+ */
+const char *
+ruby_enc_find_extname(const char *name, long *len, rb_encoding *enc)
+{
+    return enc_find_extname(name, len, true, enc);
 }
 
 /*
@@ -5192,18 +5226,19 @@ ruby_enc_find_extname(const char *name, long *len, rb_encoding *enc)
 static VALUE
 rb_file_s_extname(VALUE klass, VALUE fname)
 {
-    const char *name, *e;
-    long len;
-    VALUE extname;
+    const char *name;
+    CheckPath(fname, name);
+    long len = RSTRING_LEN(fname);
 
-    FilePathStringValue(fname);
-    name = StringValueCStr(fname);
-    len = RSTRING_LEN(fname);
-    e = ruby_enc_find_extname(name, &len, rb_enc_get(fname));
-    if (len < 1)
-        return rb_str_new(0, 0);
-    extname = rb_str_subseq(fname, e - name, len); /* keep the dot, too! */
-    return extname;
+    if (len < 1) {
+        return rb_enc_str_new(0, 0, rb_str_enc_get(fname));
+    }
+
+    bool mb_enc = !rb_str_enc_fastpath(fname);
+    rb_encoding *enc = rb_str_enc_get(fname);
+
+    const char *ext = enc_find_extname(name, &len, mb_enc, enc);
+    return rb_enc_str_new(ext, len, enc);
 }
 
 /*
