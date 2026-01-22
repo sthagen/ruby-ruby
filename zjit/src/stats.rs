@@ -210,6 +210,7 @@ make_counters! {
         exit_stackoverflow,
         exit_block_param_proxy_modified,
         exit_block_param_proxy_not_iseq_or_ifunc,
+        exit_block_param_wb_required,
         exit_too_many_keyword_parameters,
     }
 
@@ -228,9 +229,9 @@ make_counters! {
         send_fallback_send_without_block_bop_redefined,
         send_fallback_send_without_block_operands_not_fixnum,
         send_fallback_send_without_block_direct_keyword_mismatch,
-        send_fallback_send_without_block_direct_optional_keywords,
         send_fallback_send_without_block_direct_keyword_count_mismatch,
         send_fallback_send_without_block_direct_missing_keyword,
+        send_fallback_send_without_block_direct_too_many_keywords,
         send_fallback_send_polymorphic,
         send_fallback_send_megamorphic,
         send_fallback_send_no_profiles,
@@ -387,7 +388,6 @@ make_counters! {
     // Unsupported parameter features
     complex_arg_pass_param_rest,
     complex_arg_pass_param_post,
-    complex_arg_pass_param_kw_opt,
     complex_arg_pass_param_kwrest,
     complex_arg_pass_param_block,
     complex_arg_pass_param_forwardable,
@@ -558,6 +558,7 @@ pub fn side_exit_counter(reason: crate::hir::SideExitReason) -> Counter {
         StackOverflow                 => exit_stackoverflow,
         BlockParamProxyModified       => exit_block_param_proxy_modified,
         BlockParamProxyNotIseqOrIfunc => exit_block_param_proxy_not_iseq_or_ifunc,
+        BlockParamWbRequired          => exit_block_param_wb_required,
         TooManyKeywordParameters      => exit_too_many_keyword_parameters,
         PatchPoint(Invariant::BOPRedefined { .. })
                                       => exit_patchpoint_bop_redefined,
@@ -599,9 +600,9 @@ pub fn send_fallback_counter(reason: crate::hir::SendFallbackReason) -> Counter 
         SendWithoutBlockBopRedefined              => send_fallback_send_without_block_bop_redefined,
         SendWithoutBlockOperandsNotFixnum         => send_fallback_send_without_block_operands_not_fixnum,
         SendWithoutBlockDirectKeywordMismatch     => send_fallback_send_without_block_direct_keyword_mismatch,
-        SendWithoutBlockDirectOptionalKeywords    => send_fallback_send_without_block_direct_optional_keywords,
         SendWithoutBlockDirectKeywordCountMismatch=> send_fallback_send_without_block_direct_keyword_count_mismatch,
         SendWithoutBlockDirectMissingKeyword       => send_fallback_send_without_block_direct_missing_keyword,
+        SendWithoutBlockDirectTooManyKeywords     => send_fallback_send_without_block_direct_too_many_keywords,
         SendPolymorphic                           => send_fallback_send_polymorphic,
         SendMegamorphic                           => send_fallback_send_megamorphic,
         SendNoProfiles                            => send_fallback_send_no_profiles,

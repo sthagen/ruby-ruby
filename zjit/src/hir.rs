@@ -506,6 +506,7 @@ pub enum SideExitReason {
     Interrupt,
     BlockParamProxyModified,
     BlockParamProxyNotIseqOrIfunc,
+    BlockParamWbRequired,
     StackOverflow,
     FixnumModByZero,
     FixnumDivByZero,
@@ -625,9 +626,9 @@ pub enum SendFallbackReason {
     SendWithoutBlockBopRedefined,
     SendWithoutBlockOperandsNotFixnum,
     SendWithoutBlockDirectKeywordMismatch,
-    SendWithoutBlockDirectOptionalKeywords,
     SendWithoutBlockDirectKeywordCountMismatch,
     SendWithoutBlockDirectMissingKeyword,
+    SendWithoutBlockDirectTooManyKeywords,
     SendPolymorphic,
     SendMegamorphic,
     SendNoProfiles,
@@ -686,9 +687,9 @@ impl Display for SendFallbackReason {
             SendWithoutBlockBopRedefined => write!(f, "SendWithoutBlock: basic operation was redefined"),
             SendWithoutBlockOperandsNotFixnum => write!(f, "SendWithoutBlock: operands are not fixnums"),
             SendWithoutBlockDirectKeywordMismatch => write!(f, "SendWithoutBlockDirect: keyword mismatch"),
-            SendWithoutBlockDirectOptionalKeywords => write!(f, "SendWithoutBlockDirect: optional keywords"),
             SendWithoutBlockDirectKeywordCountMismatch => write!(f, "SendWithoutBlockDirect: keyword count mismatch"),
             SendWithoutBlockDirectMissingKeyword => write!(f, "SendWithoutBlockDirect: missing keyword"),
+            SendWithoutBlockDirectTooManyKeywords => write!(f, "SendWithoutBlockDirect: too many keywords for fixnum bitmask"),
             SendPolymorphic => write!(f, "Send: polymorphic call site"),
             SendMegamorphic => write!(f, "Send: megamorphic call site"),
             SendNoProfiles => write!(f, "Send: no profile data available"),
@@ -802,7 +803,7 @@ pub enum Insn {
     GetConstantPath { ic: *const iseq_inline_constant_cache, state: InsnId },
     /// Kernel#block_given? but without pushing a frame. Similar to [`Insn::Defined`] with
     /// `DEFINED_YIELD`
-    IsBlockGiven,
+    IsBlockGiven { lep: InsnId },
     /// Test the bit at index of val, a Fixnum.
     /// Return Qtrue if the bit is set, else Qfalse.
     FixnumBitCheck { val: InsnId, index: u8 },
@@ -839,6 +840,11 @@ pub enum Insn {
     /// If `use_sp` is true, it uses the SP register to optimize the read.
     /// `rest_param` is used by infer_types to infer the ArrayExact type.
     GetLocal { level: u32, ep_offset: u32, use_sp: bool, rest_param: bool },
+    /// Check whether VM_FRAME_FLAG_MODIFIED_BLOCK_PARAM is set in the environment flags.
+    /// Returns CBool (0/1).
+    IsBlockParamModified { level: u32 },
+    /// Get the block parameter as a Proc.
+    GetBlockParam { level: u32, ep_offset: u32, state: InsnId },
     /// Set a local variable in a higher scope or the heap
     SetLocal { level: u32, ep_offset: u32, val: InsnId },
     GetSpecialSymbol { symbol_type: SpecialBackrefSymbol, state: InsnId },
@@ -848,6 +854,10 @@ pub enum Insn {
     GetClassVar { id: ID, ic: *const iseq_inline_cvar_cache_entry, state: InsnId },
     /// Set a class variable `id` to `val`
     SetClassVar { id: ID, val: InsnId, ic: *const iseq_inline_cvar_cache_entry, state: InsnId },
+
+    /// Get the EP of the ISeq of the containing method, or "local level", skipping over block-level EPs.
+    /// Equivalent of GET_LEP() macro.
+    GetLEP,
 
     /// Own a FrameState so that instructions can look up their dominating FrameState when
     /// generating deopt side-exits and frame reconstruction metadata. Does not directly generate
@@ -947,6 +957,7 @@ pub enum Insn {
         cme: *const rb_callable_method_entry_t,
         iseq: IseqPtr,
         args: Vec<InsnId>,
+        kw_bits: u32,
         state: InsnId,
     },
 
@@ -989,6 +1000,10 @@ pub enum Insn {
     ObjToString { val: InsnId, cd: *const rb_call_data, state: InsnId },
     AnyToString { val: InsnId, str: InsnId, state: InsnId },
 
+    /// Refine the known type information of with additional type information.
+    /// Computes the intersection of the existing type and the new type.
+    RefineType { val: InsnId, new_type: Type },
+
     /// Side-exit if val doesn't have the expected type.
     GuardType { val: InsnId, guard_type: Type, state: InsnId },
     GuardTypeNot { val: InsnId, guard_type: Type, state: InsnId },
@@ -1011,9 +1026,9 @@ pub enum Insn {
     GuardLess { left: InsnId, right: InsnId, state: InsnId },
     /// Side-exit if the method entry at ep[VM_ENV_DATA_INDEX_ME_CREF] doesn't match the expected CME.
     /// Used to ensure super calls are made from the expected method context.
-    GuardSuperMethodEntry { cme: *const rb_callable_method_entry_t, state: InsnId },
+    GuardSuperMethodEntry { lep: InsnId, cme: *const rb_callable_method_entry_t, state: InsnId },
     /// Get the block handler from ep[VM_ENV_DATA_INDEX_SPECVAL] at the local EP (LEP).
-    GetBlockHandler,
+    GetBlockHandler { lep: InsnId },
 
     /// Generate no code (or padding if necessary) and insert a patch point
     /// that can be rewritten to a side exit when the Invariant is broken.
@@ -1130,6 +1145,7 @@ impl Insn {
             Insn::DefinedIvar { .. } => effects::Any,
             Insn::LoadPC { .. } => Effect::read_write(abstract_heaps::PC, abstract_heaps::Empty),
             Insn::LoadEC { .. } => effects::Empty,
+            Insn::GetLEP { .. } => effects::Empty,
             Insn::LoadSelf { .. } => Effect::read_write(abstract_heaps::Frame, abstract_heaps::Empty),
             Insn::LoadField { .. } => Effect::read_write(abstract_heaps::Other, abstract_heaps::Empty),
             Insn::StoreField { .. } => effects::Any,
@@ -1140,6 +1156,8 @@ impl Insn {
             Insn::GetSpecialNumber { .. } => effects::Any,
             Insn::GetClassVar { .. } => effects::Any,
             Insn::SetClassVar { .. } => effects::Any,
+            Insn::IsBlockParamModified { .. } => effects::Any,
+            Insn::GetBlockParam { .. } => effects::Any,
             Insn::Snapshot { .. } => effects::Empty,
             Insn::Jump(_) => effects::Any,
             Insn::IfTrue { .. } => effects::Any,
@@ -1206,6 +1224,7 @@ impl Insn {
             Insn::IncrCounterPtr { .. } => effects::Any,
             Insn::CheckInterrupts { .. } => effects::Any,
             Insn::InvokeProc { .. } => effects::Any,
+            Insn::RefineType { .. } => effects::Empty,
         }
     }
 
@@ -1501,6 +1520,7 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
             Insn::FixnumLShift { left, right, .. } => { write!(f, "FixnumLShift {left}, {right}") },
             Insn::FixnumRShift { left, right, .. } => { write!(f, "FixnumRShift {left}, {right}") },
             Insn::GuardType { val, guard_type, .. } => { write!(f, "GuardType {val}, {}", guard_type.print(self.ptr_map)) },
+            Insn::RefineType { val, new_type, .. } => { write!(f, "RefineType {val}, {}", new_type.print(self.ptr_map)) },
             Insn::GuardTypeNot { val, guard_type, .. } => { write!(f, "GuardTypeNot {val}, {}", guard_type.print(self.ptr_map)) },
             Insn::GuardBitEquals { val, expected, .. } => { write!(f, "GuardBitEquals {val}, {}", expected.print(self.ptr_map)) },
             &Insn::GuardShape { val, shape, .. } => { write!(f, "GuardShape {val}, {:p}", self.ptr_map.map_shape(shape)) },
@@ -1509,11 +1529,16 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
             Insn::GuardNotShared { recv, .. } => write!(f, "GuardNotShared {recv}"),
             Insn::GuardLess { left, right, .. } => write!(f, "GuardLess {left}, {right}"),
             Insn::GuardGreaterEq { left, right, .. } => write!(f, "GuardGreaterEq {left}, {right}"),
-            Insn::GuardSuperMethodEntry { cme, .. } => write!(f, "GuardSuperMethodEntry {:p}", self.ptr_map.map_ptr(cme)),
-            Insn::GetBlockHandler => write!(f, "GetBlockHandler"),
+            Insn::GuardSuperMethodEntry { lep, cme, .. } => write!(f, "GuardSuperMethodEntry {lep}, {:p}", self.ptr_map.map_ptr(cme)),
+            Insn::GetBlockHandler { lep } => write!(f, "GetBlockHandler {lep}"),
+            &Insn::GetBlockParam { level, ep_offset, .. } => {
+                let name = get_local_var_name_for_printer(self.iseq, level, ep_offset)
+                    .map_or(String::new(), |x| format!("{x}, "));
+                write!(f, "GetBlockParam {name}l{level}, EP@{ep_offset}")
+            },
             Insn::PatchPoint { invariant, .. } => { write!(f, "PatchPoint {}", invariant.print(self.ptr_map)) },
             Insn::GetConstantPath { ic, .. } => { write!(f, "GetConstantPath {:p}", self.ptr_map.map_ptr(ic)) },
-            Insn::IsBlockGiven => { write!(f, "IsBlockGiven") },
+            Insn::IsBlockGiven { lep } => { write!(f, "IsBlockGiven {lep}") },
             Insn::FixnumBitCheck {val, index} => { write!(f, "FixnumBitCheck {val}, {index}") },
             Insn::CCall { cfunc, recv, args, name, return_type: _, elidable: _ } => {
                 write!(f, "CCall {recv}, :{}@{:p}", name.contents_lossy(), self.ptr_map.map_ptr(cfunc))?;
@@ -1561,6 +1586,7 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
             Insn::GetIvar { self_val, id, .. } => write!(f, "GetIvar {self_val}, :{}", id.contents_lossy()),
             Insn::LoadPC => write!(f, "LoadPC"),
             Insn::LoadEC => write!(f, "LoadEC"),
+            Insn::GetLEP => write!(f, "GetLEP"),
             Insn::LoadSelf => write!(f, "LoadSelf"),
             &Insn::LoadField { recv, id, offset, return_type: _ } => write!(f, "LoadField {recv}, :{}@{:p}", id.contents_lossy(), self.ptr_map.map_offset(offset)),
             &Insn::StoreField { recv, id, offset, val } => write!(f, "StoreField {recv}, :{}@{:p}, {val}", id.contents_lossy(), self.ptr_map.map_offset(offset)),
@@ -1575,6 +1601,9 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
             &Insn::GetLocal { level, ep_offset, use_sp: false, rest_param } => {
                 let name = get_local_var_name_for_printer(self.iseq, level, ep_offset).map_or(String::new(), |x| format!("{x}, "));
                 write!(f, "GetLocal {name}l{level}, EP@{ep_offset}{}", if rest_param { ", *" } else { "" })
+            },
+            &Insn::IsBlockParamModified { level } => {
+                write!(f, "IsBlockParamModified l{level}")
             },
             &Insn::SetLocal { val, level, ep_offset } => {
                 let name = get_local_var_name_for_printer(self.iseq, level, ep_offset).map_or(String::new(), |x| format!("{x}, "));
@@ -1792,7 +1821,7 @@ pub enum ValidationError {
     MiscValidationError(InsnId, String),
 }
 
-fn can_direct_send(function: &mut Function, block: BlockId, iseq: *const rb_iseq_t, send_insn: InsnId, args: &[InsnId]) -> bool {
+fn can_direct_send(function: &mut Function, block: BlockId, iseq: *const rb_iseq_t, ci: *const rb_callinfo, send_insn: InsnId, args: &[InsnId]) -> bool {
     let mut can_send = true;
     let mut count_failure = |counter| {
         can_send = false;
@@ -1807,26 +1836,9 @@ fn can_direct_send(function: &mut Function, block: BlockId, iseq: *const rb_iseq
     if 0 != params.flags.forwardable() { count_failure(complex_arg_pass_param_forwardable) }
 
     if 0 != params.flags.has_kwrest()  { count_failure(complex_arg_pass_param_kwrest) }
-    if 0 != params.flags.has_kw() {
-        let keyword = params.keyword;
-        if !keyword.is_null() {
-            let num = unsafe { (*keyword).num };
-            let required_num = unsafe { (*keyword).required_num };
-            // Only support required keywords for now (no optional keywords)
-            if num != required_num {
-                count_failure(complex_arg_pass_param_kw_opt)
-            }
-        }
-    }
 
     if !can_send {
         function.set_dynamic_send_reason(send_insn, ComplexArgPass);
-        return false;
-    }
-
-    // asm.ccall() doesn't support 6+ args
-    if args.len() + 1 > C_ARG_OPNDS.len() { // +1 for self
-        function.set_dynamic_send_reason(send_insn, TooManyArgsForLir);
         return false;
     }
 
@@ -1835,14 +1847,30 @@ fn can_direct_send(function: &mut Function, block: BlockId, iseq: *const rb_iseq
     let opt_num = params.opt_num;
     let keyword = params.keyword;
     let kw_req_num = if keyword.is_null() { 0 } else { unsafe { (*keyword).required_num } };
-    let req_num = lead_num + kw_req_num;
+    let kw_total_num = if keyword.is_null() { 0 } else { unsafe { (*keyword).num } };
+    // Minimum args: all required positional + all required keywords
+    let min_argc = lead_num + kw_req_num;
+    // Maximum args: all positional (required + optional) + all keywords (required + optional)
+    let max_argc = lead_num + opt_num + kw_total_num;
+
     can_send = c_int::try_from(args.len())
         .as_ref()
-        .map(|argc| (req_num..=req_num + opt_num).contains(argc))
+        .map(|argc| (min_argc..=max_argc).contains(argc))
         .unwrap_or(false);
     if !can_send {
         function.set_dynamic_send_reason(send_insn, ArgcParamMismatch);
         return false
+    }
+
+    // asm.ccall() doesn't support 6+ args. Compute the final argc after keyword setup:
+    // final_argc = caller's positional args + callee's total keywords (all kw slots are filled).
+    let kwarg = unsafe { rb_vm_ci_kwarg(ci) };
+    let caller_kw_count = if kwarg.is_null() { 0 } else { (unsafe { get_cikw_keyword_len(kwarg) }) as usize };
+    let caller_positional = args.len() - caller_kw_count;
+    let final_argc = caller_positional + kw_total_num as usize;
+    if final_argc + 1 > C_ARG_OPNDS.len() { // +1 for self
+        function.set_dynamic_send_reason(send_insn, TooManyArgsForLir);
+        return false;
     }
 
     can_send
@@ -1967,6 +1995,10 @@ impl Function {
             param_types: vec![],
             profiles: None,
         }
+    }
+
+    pub fn iseq(&self) -> *const rb_iseq_t {
+        self.iseq
     }
 
     // Add an instruction to the function without adding it to any block
@@ -2119,15 +2151,16 @@ impl Function {
             result@(Const {..}
                     | Param
                     | GetConstantPath {..}
-                    | IsBlockGiven
                     | PatchPoint {..}
                     | PutSpecialObject {..}
                     | GetGlobal {..}
                     | GetLocal {..}
+                    | IsBlockParamModified {..}
                     | SideExit {..}
                     | EntryPoint {..}
                     | LoadPC
                     | LoadEC
+                    | GetLEP
                     | LoadSelf
                     | IncrCounterPtr {..}
                     | IncrCounter(_)) => result.clone(),
@@ -2164,6 +2197,7 @@ impl Function {
             Jump(target) => Jump(find_branch_edge!(target)),
             &IfTrue { val, ref target } => IfTrue { val: find!(val), target: find_branch_edge!(target) },
             &IfFalse { val, ref target } => IfFalse { val: find!(val), target: find_branch_edge!(target) },
+            &RefineType { val, new_type } => RefineType { val: find!(val), new_type },
             &GuardType { val, guard_type, state } => GuardType { val: find!(val), guard_type, state },
             &GuardTypeNot { val, guard_type, state } => GuardTypeNot { val: find!(val), guard_type, state },
             &GuardBitEquals { val, expected, reason, state } => GuardBitEquals { val: find!(val), expected, reason, state },
@@ -2173,8 +2207,10 @@ impl Function {
             &GuardNotShared { recv, state } => GuardNotShared { recv: find!(recv), state },
             &GuardGreaterEq { left, right, state } => GuardGreaterEq { left: find!(left), right: find!(right), state },
             &GuardLess { left, right, state } => GuardLess { left: find!(left), right: find!(right), state },
-            &GuardSuperMethodEntry { cme, state } => GuardSuperMethodEntry { cme, state },
-            &GetBlockHandler => GetBlockHandler,
+            &GuardSuperMethodEntry { lep, cme, state } => GuardSuperMethodEntry { lep: find!(lep), cme, state },
+            &GetBlockHandler { lep } => GetBlockHandler { lep: find!(lep) },
+            &IsBlockGiven { lep } => IsBlockGiven { lep: find!(lep) },
+            &GetBlockParam { level, ep_offset, state } => GetBlockParam { level, ep_offset, state: find!(state) },
             &FixnumAdd { left, right, state } => FixnumAdd { left: find!(left), right: find!(right), state },
             &FixnumSub { left, right, state } => FixnumSub { left: find!(left), right: find!(right), state },
             &FixnumMult { left, right, state } => FixnumMult { left: find!(left), right: find!(right), state },
@@ -2208,12 +2244,13 @@ impl Function {
                 state,
                 reason,
             },
-            &SendWithoutBlockDirect { recv, cd, cme, iseq, ref args, state } => SendWithoutBlockDirect {
+            &SendWithoutBlockDirect { recv, cd, cme, iseq, ref args, kw_bits, state } => SendWithoutBlockDirect {
                 recv: find!(recv),
                 cd,
                 cme,
                 iseq,
                 args: find_vec!(args),
+                kw_bits,
                 state,
             },
             &Send { recv, cd, blockiseq, ref args, state, reason } => Send {
@@ -2411,6 +2448,7 @@ impl Function {
             Insn::CCall { return_type, .. } => *return_type,
             &Insn::CCallVariadic { return_type, .. } => return_type,
             Insn::GuardType { val, guard_type, .. } => self.type_of(*val).intersection(*guard_type),
+            Insn::RefineType { val, new_type, .. } => self.type_of(*val).intersection(*new_type),
             Insn::GuardTypeNot { .. } => types::BasicObject,
             Insn::GuardBitEquals { val, expected, .. } => self.type_of(*val).intersection(Type::from_const(*expected)),
             Insn::GuardShape { val, .. } => self.type_of(*val),
@@ -2445,7 +2483,7 @@ impl Function {
             Insn::Defined { pushval, .. } => Type::from_value(*pushval).union(types::NilClass),
             Insn::DefinedIvar { pushval, .. } => Type::from_value(*pushval).union(types::NilClass),
             Insn::GetConstantPath { .. } => types::BasicObject,
-            Insn::IsBlockGiven => types::BoolExact,
+            Insn::IsBlockGiven { .. } => types::BoolExact,
             Insn::FixnumBitCheck { .. } => types::BoolExact,
             Insn::ArrayMax { .. } => types::BasicObject,
             Insn::ArrayInclude { .. } => types::BoolExact,
@@ -2456,6 +2494,7 @@ impl Function {
             Insn::GetIvar { .. } => types::BasicObject,
             Insn::LoadPC => types::CPtr,
             Insn::LoadEC => types::CPtr,
+            Insn::GetLEP => types::CPtr,
             Insn::LoadSelf => types::BasicObject,
             &Insn::LoadField { return_type, .. } => return_type,
             Insn::GetSpecialSymbol { .. } => types::BasicObject,
@@ -2467,7 +2506,9 @@ impl Function {
             Insn::AnyToString { .. } => types::String,
             Insn::GetLocal { rest_param: true, .. } => types::ArrayExact,
             Insn::GetLocal { .. } => types::BasicObject,
-            Insn::GetBlockHandler => types::RubyValue,
+            Insn::IsBlockParamModified { .. } => types::CBool,
+            Insn::GetBlockParam { .. } => types::BasicObject,
+            Insn::GetBlockHandler { .. } => types::RubyValue,
             // The type of Snapshot doesn't really matter; it's never materialized. It's used only
             // as a reference for FrameState, which we use to generate side-exit code.
             Insn::Snapshot { .. } => types::Any,
@@ -2581,6 +2622,7 @@ impl Function {
             | Insn::GuardTypeNot { val, .. }
             | Insn::GuardShape { val, .. }
             | Insn::GuardBitEquals { val, .. } => self.chase_insn(val),
+            | Insn::RefineType { val, .. } => self.chase_insn(val),
             _ => id,
         }
     }
@@ -2596,31 +2638,74 @@ impl Function {
         }
     }
 
-    /// Reorder keyword arguments to match the callee's expectation.
+    /// Prepare arguments for a direct send, handling keyword argument reordering and default synthesis.
+    /// Returns the (state, processed_args, kw_bits) to use for the SendWithoutBlockDirect instruction,
+    /// or Err with the fallback reason if direct send isn't possible.
+    fn prepare_direct_send_args(
+        &mut self,
+        block: BlockId,
+        args: &[InsnId],
+        ci: *const rb_callinfo,
+        iseq: IseqPtr,
+        state: InsnId,
+    ) -> Result<(InsnId, Vec<InsnId>, u32), SendFallbackReason> {
+        let kwarg = unsafe { rb_vm_ci_kwarg(ci) };
+        let (processed_args, caller_argc, kw_bits) = self.setup_keyword_arguments(block, args, kwarg, iseq)?;
+
+        // If args were reordered or synthesized, create a new snapshot with the updated stack
+        let send_state = if processed_args != args {
+            let new_state = self.frame_state(state).with_replaced_args(&processed_args, caller_argc);
+            self.push_insn(block, Insn::Snapshot { state: new_state })
+        } else {
+            state
+        };
+
+        Ok((send_state, processed_args, kw_bits))
+    }
+
+    /// Reorder keyword arguments to match the callee's expected order, and synthesize
+    /// default values for any optional keywords not provided by the caller.
     ///
-    /// Returns Ok with reordered arguments if successful, or Err with the fallback reason if not.
-    fn reorder_keyword_arguments(
-        &self,
+    /// The output always contains all of the callee's keyword arguments (required + optional),
+    /// so the returned vec may be larger than the input args.
+    ///
+    /// Returns Ok with (processed_args, caller_argc, kw_bits) if successful, or Err with the fallback reason if not.
+    /// - caller_argc: number of arguments the caller actually pushed (for stack calculations)
+    /// - kw_bits: bitmask indicating which optional keywords were NOT provided by the caller
+    ///            (used by checkkeyword to determine if non-constant defaults need evaluation)
+    fn setup_keyword_arguments(
+        &mut self,
+        block: BlockId,
         args: &[InsnId],
         kwarg: *const rb_callinfo_kwarg,
         iseq: IseqPtr,
-    ) -> Result<Vec<InsnId>, SendFallbackReason> {
+    ) -> Result<(Vec<InsnId>, usize, u32), SendFallbackReason> {
         let callee_keyword = unsafe { rb_get_iseq_body_param_keyword(iseq) };
         if callee_keyword.is_null() {
-            // Caller is passing kwargs but callee doesn't expect them.
-            return Err(SendWithoutBlockDirectKeywordMismatch);
+            if !kwarg.is_null() {
+                // Caller is passing kwargs but callee doesn't expect them.
+                return Err(SendWithoutBlockDirectKeywordMismatch);
+            }
+            // Neither caller nor callee have keywords - nothing to do
+            return Ok((args.to_vec(), args.len(), 0));
         }
 
-        let caller_kw_count = unsafe { get_cikw_keyword_len(kwarg) } as usize;
+        // kwarg may be null if caller passes no keywords but callee has optional keywords
+        let caller_kw_count = if kwarg.is_null() { 0 } else { (unsafe { get_cikw_keyword_len(kwarg) }) as usize };
         let callee_kw_count = unsafe { (*callee_keyword).num } as usize;
+
+        // When there are 31+ keywords, CRuby uses a hash instead of a fixnum bitmask
+        // for kw_bits. Fall back to VM dispatch for this rare case.
+        if callee_kw_count >= VM_KW_SPECIFIED_BITS_MAX as usize {
+            return Err(SendWithoutBlockDirectTooManyKeywords);
+        }
+
         let callee_kw_required = unsafe { (*callee_keyword).required_num } as usize;
         let callee_kw_table = unsafe { (*callee_keyword).table };
+        let default_values = unsafe { (*callee_keyword).default_values };
 
-        // For now, only handle the case where all keywords are required.
-        if callee_kw_count != callee_kw_required {
-            return Err(SendWithoutBlockDirectOptionalKeywords);
-        }
-        if caller_kw_count != callee_kw_count {
+        // Caller can't provide more keywords than callee expects (no **kwrest support yet).
+        if caller_kw_count > callee_kw_count {
             return Err(SendWithoutBlockDirectKeywordCountMismatch);
         }
 
@@ -2629,13 +2714,35 @@ impl Function {
 
         // Build a mapping from caller keywords to their positions.
         let mut caller_kw_order: Vec<ID> = Vec::with_capacity(caller_kw_count);
-        for i in 0..caller_kw_count {
-            let sym = unsafe { get_cikw_keywords_idx(kwarg, i as i32) };
-            let id = unsafe { rb_sym2id(sym) };
-            caller_kw_order.push(id);
+        if !kwarg.is_null() {
+            for i in 0..caller_kw_count {
+                let sym = unsafe { get_cikw_keywords_idx(kwarg, i as i32) };
+                let id = unsafe { rb_sym2id(sym) };
+                caller_kw_order.push(id);
+            }
+        }
+
+        // Verify all caller keywords are expected by callee (no unknown keywords).
+        // Without **kwrest, unexpected keywords should raise ArgumentError at runtime.
+        for &caller_id in &caller_kw_order {
+            let mut found = false;
+            for i in 0..callee_kw_count {
+                let expected_id = unsafe { *callee_kw_table.add(i) };
+                if caller_id == expected_id {
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
+                // Caller is passing an unknown keyword - this will raise ArgumentError.
+                // Fall back to VM dispatch to handle the error.
+                return Err(SendWithoutBlockDirectKeywordMismatch);
+            }
         }
 
         // Reorder keyword arguments to match callee expectation.
+        // Track which optional keywords were not provided via kw_bits.
+        let mut kw_bits: u32 = 0;
         let mut reordered_kw_args: Vec<InsnId> = Vec::with_capacity(callee_kw_count);
         for i in 0..callee_kw_count {
             let expected_id = unsafe { *callee_kw_table.add(i) };
@@ -2652,14 +2759,36 @@ impl Function {
 
             if !found {
                 // Required keyword not provided by caller which will raise an ArgumentError.
-                return Err(SendWithoutBlockDirectMissingKeyword);
+                if i < callee_kw_required {
+                    return Err(SendWithoutBlockDirectMissingKeyword);
+                }
+
+                // Optional keyword not provided - use default value
+                let default_idx = i - callee_kw_required;
+                let default_value = unsafe { *default_values.add(default_idx) };
+
+                if default_value == Qundef {
+                    // Non-constant default (e.g., `def foo(a: compute())`).
+                    // Set the bit so checkkeyword knows to evaluate the default at runtime.
+                    // Push Qnil as a placeholder; the callee's checkkeyword will detect this
+                    // and branch to evaluate the default expression.
+                    kw_bits |= 1 << default_idx;
+                    let nil_insn = self.push_insn(block, Insn::Const { val: Const::Value(Qnil) });
+                    reordered_kw_args.push(nil_insn);
+                } else {
+                    // Constant default value - use it directly
+                    let const_insn = self.push_insn(block, Insn::Const { val: Const::Value(default_value) });
+                    reordered_kw_args.push(const_insn);
+                }
             }
         }
 
         // Replace the keyword arguments with the reordered ones.
+        // Keep track of the original caller argc for stack calculations.
+        let caller_argc = args.len();
         let mut processed_args = args[..kw_args_start].to_vec();
         processed_args.extend(reordered_kw_args);
-        Ok(processed_args)
+        Ok((processed_args, caller_argc, kw_bits))
     }
 
     /// Resolve the receiver type for method dispatch optimization.
@@ -2894,7 +3023,7 @@ impl Function {
                             // Only specialize positional-positional calls
                             // TODO(max): Handle other kinds of parameter passing
                             let iseq = unsafe { get_def_iseq_ptr((*cme).def) };
-                            if !can_direct_send(self, block, iseq, insn_id, args.as_slice()) {
+                            if !can_direct_send(self, block, iseq, ci, insn_id, args.as_slice()) {
                                 self.push_insn_id(block, insn_id); continue;
                             }
                             // Check singleton class assumption first, before emitting other patchpoints
@@ -2907,24 +3036,12 @@ impl Function {
                                 recv = self.push_insn(block, Insn::GuardType { val: recv, guard_type: Type::from_profiled_type(profiled_type), state });
                             }
 
-                            let kwarg = unsafe { rb_vm_ci_kwarg(ci) };
-                            let (send_state, processed_args) = if !kwarg.is_null() {
-                                match self.reorder_keyword_arguments(&args, kwarg, iseq) {
-                                    Ok(reordered) => {
-                                        let new_state = self.frame_state(state).with_reordered_args(&reordered);
-                                        let snapshot = self.push_insn(block, Insn::Snapshot { state: new_state });
-                                        (snapshot, reordered)
-                                    }
-                                    Err(reason) => {
-                                        self.set_dynamic_send_reason(insn_id, reason);
-                                        self.push_insn_id(block, insn_id); continue;
-                                    }
-                                }
-                            } else {
-                                (state, args.clone())
+                            let Ok((send_state, processed_args, kw_bits)) = self.prepare_direct_send_args(block, &args, ci, iseq, state)
+                                .inspect_err(|&reason| self.set_dynamic_send_reason(insn_id, reason)) else {
+                                self.push_insn_id(block, insn_id); continue;
                             };
 
-                            let send_direct = self.push_insn(block, Insn::SendWithoutBlockDirect { recv, cd, cme, iseq, args: processed_args, state: send_state });
+                            let send_direct = self.push_insn(block, Insn::SendWithoutBlockDirect { recv, cd, cme, iseq, args: processed_args, kw_bits, state: send_state });
                             self.make_equal_to(insn_id, send_direct);
                         } else if def_type == VM_METHOD_TYPE_BMETHOD {
                             let procv = unsafe { rb_get_def_bmethod_proc((*cme).def) };
@@ -2939,7 +3056,7 @@ impl Function {
                             let capture = unsafe { proc_block.as_.captured.as_ref() };
                             let iseq = unsafe { *capture.code.iseq.as_ref() };
 
-                            if !can_direct_send(self, block, iseq, insn_id, args.as_slice()) {
+                            if !can_direct_send(self, block, iseq, ci, insn_id, args.as_slice()) {
                                 self.push_insn_id(block, insn_id); continue;
                             }
                             // Can't pass a block to a block for now
@@ -2962,24 +3079,12 @@ impl Function {
                                 recv = self.push_insn(block, Insn::GuardType { val: recv, guard_type: Type::from_profiled_type(profiled_type), state });
                             }
 
-                            let kwarg = unsafe { rb_vm_ci_kwarg(ci) };
-                            let (send_state, processed_args) = if !kwarg.is_null() {
-                                match self.reorder_keyword_arguments(&args, kwarg, iseq) {
-                                    Ok(reordered) => {
-                                        let new_state = self.frame_state(state).with_reordered_args(&reordered);
-                                        let snapshot = self.push_insn(block, Insn::Snapshot { state: new_state });
-                                        (snapshot, reordered)
-                                    }
-                                    Err(reason) => {
-                                        self.set_dynamic_send_reason(insn_id, reason);
-                                        self.push_insn_id(block, insn_id); continue;
-                                    }
-                                }
-                            } else {
-                                (state, args.clone())
+                            let Ok((send_state, processed_args, kw_bits)) = self.prepare_direct_send_args(block, &args, ci, iseq, state)
+                                .inspect_err(|&reason| self.set_dynamic_send_reason(insn_id, reason)) else {
+                                self.push_insn_id(block, insn_id); continue;
                             };
 
-                            let send_direct = self.push_insn(block, Insn::SendWithoutBlockDirect { recv, cd, cme, iseq, args: processed_args, state: send_state });
+                            let send_direct = self.push_insn(block, Insn::SendWithoutBlockDirect { recv, cd, cme, iseq, args: processed_args, kw_bits, state: send_state });
                             self.make_equal_to(insn_id, send_direct);
                         } else if def_type == VM_METHOD_TYPE_IVAR && args.is_empty() {
                             // Check if we're accessing ivars of a Class or Module object as they require single-ractor mode.
@@ -3332,7 +3437,7 @@ impl Function {
                         // Check if the super method's parameters support direct send.
                         // If not, we can't do direct dispatch.
                         let super_iseq = unsafe { get_def_iseq_ptr((*super_cme).def) };
-                        if !can_direct_send(self, block, super_iseq, insn_id, args.as_slice()) {
+                        if !can_direct_send(self, block, super_iseq, ci, insn_id, args.as_slice()) {
                             self.push_insn_id(block, insn_id);
                             self.set_dynamic_send_reason(insn_id, SuperTargetComplexArgsPass);
                             continue;
@@ -3349,10 +3454,15 @@ impl Function {
                         });
 
                         // Guard that we're calling `super` from the expected method context.
-                        self.push_insn(block, Insn::GuardSuperMethodEntry { cme: current_cme, state });
+                        let lep = self.push_insn(block, Insn::GetLEP);
+                        self.push_insn(block, Insn::GuardSuperMethodEntry {
+                            lep,
+                            cme: current_cme,
+                            state
+                        });
 
                         // Guard that no block is being passed (implicit or explicit).
-                        let block_handler = self.push_insn(block, Insn::GetBlockHandler);
+                        let block_handler = self.push_insn(block, Insn::GetBlockHandler { lep });
                         self.push_insn(block, Insn::GuardBitEquals {
                             val: block_handler,
                             expected: Const::Value(VALUE(VM_BLOCK_HANDLER_NONE as usize)),
@@ -3360,14 +3470,20 @@ impl Function {
                             state
                         });
 
+                        let Ok((send_state, processed_args, kw_bits)) = self.prepare_direct_send_args(block, &args, ci, super_iseq, state)
+                            .inspect_err(|&reason| self.set_dynamic_send_reason(insn_id, reason)) else {
+                            self.push_insn_id(block, insn_id); continue;
+                        };
+
                         // Use SendWithoutBlockDirect with the super method's CME and ISEQ.
                         let send_direct = self.push_insn(block, Insn::SendWithoutBlockDirect {
                             recv,
                             cd,
                             cme: super_cme,
                             iseq: super_iseq,
-                            args,
-                            state
+                            args: processed_args,
+                            kw_bits,
+                            state: send_state
                         });
                         self.make_equal_to(insn_id, send_direct);
                     }
@@ -4287,16 +4403,21 @@ impl Function {
             | &Insn::EntryPoint { .. }
             | &Insn::LoadPC
             | &Insn::LoadEC
+            | &Insn::GetLEP
             | &Insn::LoadSelf
             | &Insn::GetLocal { .. }
-            | &Insn::GetBlockHandler
+            | &Insn::IsBlockParamModified { .. }
             | &Insn::PutSpecialObject { .. }
-            | &Insn::IsBlockGiven
             | &Insn::IncrCounter(_)
             | &Insn::IncrCounterPtr { .. } =>
                 {}
+            &Insn::GetBlockHandler { lep }
+            | &Insn::IsBlockGiven { lep } => {
+                worklist.push_back(lep);
+            }
             &Insn::PatchPoint { state, .. }
             | &Insn::CheckInterrupts { state }
+            | &Insn::GetBlockParam { state, .. }
             | &Insn::GetConstantPath { ic: _, state } => {
                 worklist.push_back(state);
             }
@@ -4355,6 +4476,7 @@ impl Function {
                 worklist.extend(values);
                 worklist.push_back(state);
             }
+            | &Insn::RefineType { val, .. }
             | &Insn::Return { val }
             | &Insn::Test { val }
             | &Insn::SetLocal { val, .. }
@@ -4519,12 +4641,15 @@ impl Function {
                 worklist.push_back(val);
             }
             &Insn::GuardBlockParamProxy { state, .. } |
-            &Insn::GuardSuperMethodEntry { state, .. } |
             &Insn::GetGlobal { state, .. } |
             &Insn::GetSpecialSymbol { state, .. } |
             &Insn::GetSpecialNumber { state, .. } |
             &Insn::ObjectAllocClass { state, .. } |
             &Insn::SideExit { state, .. } => worklist.push_back(state),
+            &Insn::GuardSuperMethodEntry { lep, state, .. } => {
+                worklist.push_back(lep);
+                worklist.push_back(state);
+            }
             &Insn::UnboxFixnum { val } => worklist.push_back(val),
             &Insn::FixnumAref { recv, index } => {
                 worklist.push_back(recv);
@@ -4630,6 +4755,10 @@ impl Function {
         let mut entry_blocks = self.jit_entry_blocks.clone();
         entry_blocks.insert(0, self.entry_block);
         entry_blocks
+    }
+
+    pub fn is_entry_block(&self, block_id: BlockId) -> bool {
+        self.entry_block == block_id || self.jit_entry_blocks.contains(&block_id)
     }
 
     /// Return a traversal of the `Function`'s `BlockId`s in reverse post-order.
@@ -5025,17 +5154,18 @@ impl Function {
             | Insn::PutSpecialObject { .. }
             | Insn::LoadField { .. }
             | Insn::GetConstantPath { .. }
-            | Insn::IsBlockGiven
+            | Insn::IsBlockGiven { .. }
             | Insn::GetGlobal { .. }
             | Insn::LoadPC
             | Insn::LoadEC
+            | Insn::GetLEP
             | Insn::LoadSelf
             | Insn::Snapshot { .. }
             | Insn::Jump { .. }
             | Insn::EntryPoint { .. }
             | Insn::GuardBlockParamProxy { .. }
             | Insn::GuardSuperMethodEntry { .. }
-            | Insn::GetBlockHandler
+            | Insn::GetBlockHandler { .. }
             | Insn::PatchPoint { .. }
             | Insn::SideExit { .. }
             | Insn::IncrCounter { .. }
@@ -5045,6 +5175,8 @@ impl Function {
             | Insn::GetSpecialNumber { .. }
             | Insn::GetSpecialSymbol { .. }
             | Insn::GetLocal { .. }
+            | Insn::GetBlockParam { .. }
+            | Insn::IsBlockParamModified { .. }
             | Insn::StoreField { .. } => {
                 Ok(())
             }
@@ -5272,6 +5404,7 @@ impl Function {
                 self.assert_subtype(insn_id, val, types::BasicObject)?;
                 self.assert_subtype(insn_id, class, types::Class)
             }
+            Insn::RefineType { .. } => Ok(()),
         }
     }
 
@@ -5455,13 +5588,27 @@ impl FrameState {
         state
     }
 
-    /// Return itself with send args reordered. Used when kwargs are reordered for callee.
-    fn with_reordered_args(&self, reordered_args: &[InsnId]) -> Self {
+    /// Return itself with send args replaced. Used when kwargs are reordered/synthesized for callee.
+    /// `original_argc` is the number of args originally on the stack (before processing).
+    fn with_replaced_args(&self, new_args: &[InsnId], original_argc: usize) -> Self {
         let mut state = self.clone();
-        let args_start = state.stack.len() - reordered_args.len();
+        let args_start = state.stack.len() - original_argc;
         state.stack.truncate(args_start);
-        state.stack.extend_from_slice(reordered_args);
+        state.stack.extend_from_slice(new_args);
         state
+    }
+
+    fn replace(&mut self, old: InsnId, new: InsnId) {
+        for slot in &mut self.stack {
+            if *slot == old {
+                *slot = new;
+            }
+        }
+        for slot in &mut self.locals {
+            if *slot == old {
+                *slot = new;
+            }
+        }
     }
 }
 
@@ -6121,7 +6268,17 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     let ep_offset = get_arg(pc, 0).as_u32();
                     let index = get_arg(pc, 1).as_u64();
                     let index: u8 = index.try_into().map_err(|_| ParseError::MalformedIseq(insn_idx))?;
-                    let val = fun.push_insn(block, Insn::GetLocal { ep_offset, level: 0, use_sp: false, rest_param: false });
+                    // Use FrameState to get kw_bits when possible, just like getlocal_WC_0.
+                    let val = if !local_inval {
+                        state.getlocal(ep_offset)
+                    } else if ep_escaped || has_blockiseq {
+                        fun.push_insn(block, Insn::GetLocal { ep_offset, level: 0, use_sp: false, rest_param: false })
+                    } else {
+                        let exit_id = fun.push_insn(block, Insn::Snapshot { state: exit_state.without_locals() });
+                        fun.push_insn(block, Insn::PatchPoint { invariant: Invariant::NoEPEscape(iseq), state: exit_id });
+                        local_inval = false;
+                        state.getlocal(ep_offset)
+                    };
                     state.stack_push(fun.push_insn(block, Insn::FixnumBitCheck { val, index }));
                 }
                 YARVINSN_opt_getconstant_path => {
@@ -6136,10 +6293,17 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     let test_id = fun.push_insn(block, Insn::Test { val });
                     let target_idx = insn_idx_at_offset(insn_idx, offset);
                     let target = insn_idx_to_block[&target_idx];
+                    let nil_false_type = types::Falsy;
+                    let nil_false = fun.push_insn(block, Insn::RefineType { val, new_type: nil_false_type });
+                    let mut iffalse_state = state.clone();
+                    iffalse_state.replace(val, nil_false);
                     let _branch_id = fun.push_insn(block, Insn::IfFalse {
                         val: test_id,
-                        target: BranchEdge { target, args: state.as_args(self_param) }
+                        target: BranchEdge { target, args: iffalse_state.as_args(self_param) }
                     });
+                    let not_nil_false_type = types::Truthy;
+                    let not_nil_false = fun.push_insn(block, Insn::RefineType { val, new_type: not_nil_false_type });
+                    state.replace(val, not_nil_false);
                     queue.push_back((state.clone(), target, target_idx, local_inval));
                 }
                 YARVINSN_branchif => {
@@ -6149,10 +6313,17 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     let test_id = fun.push_insn(block, Insn::Test { val });
                     let target_idx = insn_idx_at_offset(insn_idx, offset);
                     let target = insn_idx_to_block[&target_idx];
+                    let not_nil_false_type = types::Truthy;
+                    let not_nil_false = fun.push_insn(block, Insn::RefineType { val, new_type: not_nil_false_type });
+                    let mut iftrue_state = state.clone();
+                    iftrue_state.replace(val, not_nil_false);
                     let _branch_id = fun.push_insn(block, Insn::IfTrue {
                         val: test_id,
-                        target: BranchEdge { target, args: state.as_args(self_param) }
+                        target: BranchEdge { target, args: iftrue_state.as_args(self_param) }
                     });
+                    let nil_false_type = types::Falsy;
+                    let nil_false = fun.push_insn(block, Insn::RefineType { val, new_type: nil_false_type });
+                    state.replace(val, nil_false);
                     queue.push_back((state.clone(), target, target_idx, local_inval));
                 }
                 YARVINSN_branchnil => {
@@ -6162,10 +6333,16 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     let test_id = fun.push_insn(block, Insn::IsNil { val });
                     let target_idx = insn_idx_at_offset(insn_idx, offset);
                     let target = insn_idx_to_block[&target_idx];
+                    let nil = fun.push_insn(block, Insn::Const { val: Const::Value(Qnil) });
+                    let mut iftrue_state = state.clone();
+                    iftrue_state.replace(val, nil);
                     let _branch_id = fun.push_insn(block, Insn::IfTrue {
                         val: test_id,
-                        target: BranchEdge { target, args: state.as_args(self_param) }
+                        target: BranchEdge { target, args: iftrue_state.as_args(self_param) }
                     });
+                    let new_type = types::NotNil;
+                    let not_nil = fun.push_insn(block, Insn::RefineType { val, new_type });
+                    state.replace(val, not_nil);
                     queue.push_back((state.clone(), target, target_idx, local_inval));
                 }
                 YARVINSN_opt_case_dispatch => {
@@ -6274,6 +6451,112 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     fun.push_insn(block, Insn::GuardBlockParamProxy { level, state: exit_id });
                     // TODO(Shopify/ruby#753): GC root, so we should be able to avoid unnecessary GC tracing
                     state.stack_push(fun.push_insn(block, Insn::Const { val: Const::Value(unsafe { rb_block_param_proxy }) }));
+                }
+                YARVINSN_getblockparam => {
+                    fn new_branch_block(
+                        fun: &mut Function,
+                        insn_idx: u32,
+                        exit_state: &FrameState,
+                        locals_count: usize,
+                        stack_count: usize,
+                    ) -> (BlockId, InsnId, FrameState, InsnId) {
+                        let block = fun.new_block(insn_idx);
+                        let self_param = fun.push_insn(block, Insn::Param);
+                        let mut state = exit_state.clone();
+                        state.locals.clear();
+                        state.stack.clear();
+                        state.locals.extend((0..locals_count).map(|_| fun.push_insn(block, Insn::Param)));
+                        state.stack.extend((0..stack_count).map(|_| fun.push_insn(block, Insn::Param)));
+                        let snapshot = fun.push_insn(block, Insn::Snapshot { state: state.clone() });
+                        (block, self_param, state, snapshot)
+                    }
+
+                    fn finish_getblockparam_branch(
+                        fun: &mut Function,
+                        block: BlockId,
+                        self_param: InsnId,
+                        state: &mut FrameState,
+                        join_block: BlockId,
+                        ep_offset: u32,
+                        level: u32,
+                        val: InsnId,
+                    ) {
+                        if level == 0 {
+                            state.setlocal(ep_offset, val);
+                        }
+                        state.stack_push(val);
+                        fun.push_insn(block, Insn::Jump(BranchEdge {
+                            target: join_block,
+                            args: state.as_args(self_param),
+                        }));
+                    }
+
+                    let ep_offset = get_arg(pc, 0).as_u32();
+                    let level = get_arg(pc, 1).as_u32();
+                    let branch_insn_idx = exit_state.insn_idx as u32;
+
+                    // If the block param is already a Proc (modified), read it from EP.
+                    // Otherwise, convert it to a Proc and store it to EP.
+                    let is_modified = fun.push_insn(block, Insn::IsBlockParamModified { level });
+
+                    let locals_count = state.locals.len();
+                    let stack_count = state.stack.len();
+                    let entry_args = state.as_args(self_param);
+
+                    // Set up branch and join blocks.
+                    let (modified_block, modified_self_param, mut modified_state, ..) =
+                    new_branch_block(&mut fun, branch_insn_idx, &exit_state, locals_count, stack_count);
+                    let (unmodified_block, unmodified_self_param, mut unmodified_state, unmodified_exit_id) =
+                    new_branch_block(&mut fun, branch_insn_idx, &exit_state, locals_count, stack_count);
+                    let join_block = insn_idx_to_block.get(&insn_idx).copied().unwrap_or_else(|| fun.new_block(insn_idx));
+
+                    fun.push_insn(block, Insn::IfTrue {
+                        val: is_modified,
+                        target: BranchEdge { target: modified_block, args: entry_args.clone() },
+                    });
+                    fun.push_insn(block, Insn::Jump(BranchEdge {
+                        target: unmodified_block,
+                        args: entry_args,
+                    }));
+
+                    // Push modified block: read Proc from EP.
+                    let modified_val = fun.push_insn(modified_block, Insn::GetLocal {
+                        ep_offset,
+                        level,
+                        use_sp: false,
+                        rest_param: false,
+                    });
+                    finish_getblockparam_branch(
+                        &mut fun,
+                        modified_block,
+                        modified_self_param,
+                        &mut modified_state,
+                        join_block,
+                        ep_offset,
+                        level,
+                        modified_val,
+                    );
+
+                    // Push unmodified block: convert block handler to Proc.
+                    let unmodified_val = fun.push_insn(unmodified_block, Insn::GetBlockParam {
+                        ep_offset,
+                        level,
+                        state: unmodified_exit_id,
+                    });
+                    finish_getblockparam_branch(
+                        &mut fun,
+                        unmodified_block,
+                        unmodified_self_param,
+                        &mut unmodified_state,
+                        join_block,
+                        ep_offset,
+                        level,
+                        unmodified_val,
+                    );
+
+                    // Continue compilation from the join block at the next instruction.
+                    queue.push_back((unmodified_state, join_block, insn_idx, local_inval));
+                    break;
                 }
                 YARVINSN_pop => { state.stack_pop()?; }
                 YARVINSN_dup => { state.stack_push(state.stack_top()?); }
@@ -6845,10 +7128,12 @@ fn compile_jit_entry_state(fun: &mut Function, jit_entry_block: BlockId, jit_ent
             // Omitted optionals are locals, so they start as nils before their code run
             entry_state.locals.push(fun.push_insn(jit_entry_block, Insn::Const { val: Const::Value(Qnil) }));
         } else if Some(local_idx) == kw_bits_idx {
-            // We currently only support required keywords so the unspecified bits will always be zero.
-            // TODO: Make this a parameter when we start writing anything other than zero.
-            let unspecified_bits = VALUE::fixnum_from_usize(0);
-            entry_state.locals.push(fun.push_insn(jit_entry_block, Insn::Const { val: Const::Value(unspecified_bits) }));
+            // Read the kw_bits value written by the caller to the callee frame.
+            // This tells us which optional keywords were NOT provided and need their defaults evaluated.
+            // Note: The caller writes kw_bits to memory via gen_send_iseq_direct but does NOT pass it
+            // as a C argument, so we must read it from memory using GetLocal rather than Param.
+            let ep_offset = local_idx_to_ep_offset(iseq, local_idx) as u32;
+            entry_state.locals.push(fun.push_insn(jit_entry_block, Insn::GetLocal { level: 0, ep_offset, use_sp: false, rest_param: false }));
         } else if local_idx < param_size {
             entry_state.locals.push(fun.push_insn(jit_entry_block, Insn::Param));
         } else {
@@ -7582,21 +7867,23 @@ mod graphviz_tests {
         <TR><TD ALIGN="left" PORT="v12">PatchPoint NoTracePoint&nbsp;</TD></TR>
         <TR><TD ALIGN="left" PORT="v14">CheckInterrupts&nbsp;</TD></TR>
         <TR><TD ALIGN="left" PORT="v15">v15:CBool = Test v9&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v16">IfFalse v15, bb3(v8, v9)&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v18">PatchPoint NoTracePoint&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v19">v19:Fixnum[3] = Const Value(3)&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v21">PatchPoint NoTracePoint&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v22">CheckInterrupts&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v23">Return v19&nbsp;</TD></TR>
+        <TR><TD ALIGN="left" PORT="v16">v16:Falsy = RefineType v9, Falsy&nbsp;</TD></TR>
+        <TR><TD ALIGN="left" PORT="v17">IfFalse v15, bb3(v8, v16)&nbsp;</TD></TR>
+        <TR><TD ALIGN="left" PORT="v18">v18:Truthy = RefineType v9, Truthy&nbsp;</TD></TR>
+        <TR><TD ALIGN="left" PORT="v20">PatchPoint NoTracePoint&nbsp;</TD></TR>
+        <TR><TD ALIGN="left" PORT="v21">v21:Fixnum[3] = Const Value(3)&nbsp;</TD></TR>
+        <TR><TD ALIGN="left" PORT="v23">PatchPoint NoTracePoint&nbsp;</TD></TR>
+        <TR><TD ALIGN="left" PORT="v24">CheckInterrupts&nbsp;</TD></TR>
+        <TR><TD ALIGN="left" PORT="v25">Return v21&nbsp;</TD></TR>
         </TABLE>>];
-          bb2:v16 -> bb3:params:n;
+          bb2:v17 -> bb3:params:n;
           bb3 [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0">
-        <TR><TD ALIGN="LEFT" PORT="params" BGCOLOR="gray">bb3(v24:BasicObject, v25:BasicObject)&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v28">PatchPoint NoTracePoint&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v29">v29:Fixnum[4] = Const Value(4)&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v31">PatchPoint NoTracePoint&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v32">CheckInterrupts&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v33">Return v29&nbsp;</TD></TR>
+        <TR><TD ALIGN="LEFT" PORT="params" BGCOLOR="gray">bb3(v26:BasicObject, v27:Falsy)&nbsp;</TD></TR>
+        <TR><TD ALIGN="left" PORT="v30">PatchPoint NoTracePoint&nbsp;</TD></TR>
+        <TR><TD ALIGN="left" PORT="v31">v31:Fixnum[4] = Const Value(4)&nbsp;</TD></TR>
+        <TR><TD ALIGN="left" PORT="v33">PatchPoint NoTracePoint&nbsp;</TD></TR>
+        <TR><TD ALIGN="left" PORT="v34">CheckInterrupts&nbsp;</TD></TR>
+        <TR><TD ALIGN="left" PORT="v35">Return v31&nbsp;</TD></TR>
         </TABLE>>];
         }
         "#);
