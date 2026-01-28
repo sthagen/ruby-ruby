@@ -4492,21 +4492,21 @@ flatten_i(VALUE key, VALUE val, VALUE ary)
  *  Examples; note that entry <tt>foo: {bar: 1, baz: 2}</tt> is never flattened.
  *
  *   h = {foo: {bar: 1, baz: 2}, bat: [:bam, [:bap, [:bah]]]}
- *   h.flatten(1) # => [:foo, {:bar=>1, :baz=>2}, :bat, [:bam, [:bap, [:bah]]]]
- *   h.flatten(2) # => [:foo, {:bar=>1, :baz=>2}, :bat, :bam, [:bap, [:bah]]]
- *   h.flatten(3) # => [:foo, {:bar=>1, :baz=>2}, :bat, :bam, :bap, [:bah]]
- *   h.flatten(4) # => [:foo, {:bar=>1, :baz=>2}, :bat, :bam, :bap, :bah]
- *   h.flatten(5) # => [:foo, {:bar=>1, :baz=>2}, :bat, :bam, :bap, :bah]
+ *   h.flatten(1) # => [:foo, {bar: 1, baz: 2}, :bat, [:bam, [:bap, [:bah]]]]
+ *   h.flatten(2) # => [:foo, {bar: 1, baz: 2}, :bat, :bam, [:bap, [:bah]]]
+ *   h.flatten(3) # => [:foo, {bar: 1, baz: 2}, :bat, :bam, :bap, [:bah]]
+ *   h.flatten(4) # => [:foo, {bar: 1, baz: 2}, :bat, :bam, :bap, :bah]
+ *   h.flatten(5) # => [:foo, {bar: 1, baz: 2}, :bat, :bam, :bap, :bah]
  *
  *  With negative integer +depth+,
  *  flattens all levels:
  *
- *    h.flatten(-1) # => [:foo, {:bar=>1, :baz=>2}, :bat, :bam, :bap, :bah]
+ *    h.flatten(-1) # => [:foo, {bar: 1, baz: 2}, :bat, :bam, :bap, :bah]
  *
  *  With +depth+ zero,
  *  returns the equivalent of #to_a:
  *
- *    h.flatten(0) # => [[:foo, {:bar=>1, :baz=>2}], [:bat, [:bam, [:bap, [:bah]]]]]
+ *    h.flatten(0) # => [[:foo, {bar: 1, baz: 2}], [:bat, [:bam, [:bap, [:bah]]]]]
  *
  *  Related: see {Methods for Converting}[rdoc-ref:Hash@Methods+for+Converting].
  */
@@ -7216,8 +7216,8 @@ static const rb_data_type_t env_data_type = {
  *
  *  First, what's elsewhere. Class +Hash+:
  *
- *  - Inherits from {class Object}[rdoc-ref:Object@What-27s+Here].
- *  - Includes {module Enumerable}[rdoc-ref:Enumerable@What-27s+Here],
+ *  - Inherits from {class Object}[rdoc-ref:Object@Whats+Here].
+ *  - Includes {module Enumerable}[rdoc-ref:Enumerable@Whats+Here],
  *    which provides dozens of additional methods.
  *
  *  Here, class +Hash+ provides methods that are useful for:
@@ -7528,8 +7528,8 @@ Init_Hash(void)
      *
      * First, what's elsewhere. Class +ENV+:
      *
-     * - Inherits from {class Object}[rdoc-ref:Object@What-27s+Here].
-     * - Extends {module Enumerable}[rdoc-ref:Enumerable@What-27s+Here],
+     * - Inherits from {class Object}[rdoc-ref:Object@Whats+Here].
+     * - Extends {module Enumerable}[rdoc-ref:Enumerable@Whats+Here],
      *
      * Here, class +ENV+ provides methods that are useful for:
      *
