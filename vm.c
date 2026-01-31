@@ -3525,12 +3525,13 @@ vm_memsize(const void *ptr)
     // struct rb_objspace *objspace;
 }
 
-static const rb_data_type_t vm_data_type = {
+const rb_data_type_t ruby_vm_data_type = {
     "VM",
     {0, 0, vm_memsize,},
     0, 0, RUBY_TYPED_FREE_IMMEDIATELY
 };
 
+#define vm_data_type ruby_vm_data_type
 
 static VALUE
 vm_default_params(void)
@@ -3821,7 +3822,12 @@ thread_free(void *ptr)
     else {
         // ruby_xfree(th->nt);
         // TODO: MN system collect nt, but without MN system it should be freed here.
-        ruby_xfree(th);
+        if (th->main_thread) {
+            ruby_mimfree(th);
+        }
+        else {
+            ruby_xfree(th);
+        }
     }
 
     RUBY_FREE_LEAVE("thread");
@@ -4594,6 +4600,7 @@ Init_BareVM(void)
     vm->global_hooks.type = hook_list_type_global;
 
     // setup main thread
+    th->main_thread = 1;
     th->nt = ZALLOC(struct rb_native_thread);
     th->vm = vm;
     th->ractor = vm->ractor.main_ractor = rb_ractor_main_alloc();
