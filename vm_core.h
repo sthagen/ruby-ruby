@@ -787,9 +787,6 @@ typedef struct rb_vm_struct {
     /* hook (for internal events: NEWOBJ, FREEOBJ, GC events, etc.) */
     rb_hook_list_t global_hooks;
 
-    /* postponed_job (async-signal-safe, and thread-safe) */
-    struct rb_postponed_job_queue *postponed_job_queue;
-
     int src_encoding_index;
 
     /* workqueue (thread-safe, NOT async-signal-safe) */
@@ -2002,7 +1999,7 @@ VALUE *rb_vm_svar_lep(const rb_execution_context_t *ec, const rb_control_frame_t
 int rb_vm_get_sourceline(const rb_control_frame_t *);
 void rb_vm_stack_to_heap(rb_execution_context_t *ec);
 void ruby_thread_init_stack(rb_thread_t *th, void *local_in_parent_frame);
-void rb_thread_malloc_stack_set(rb_thread_t *th, void *stack);
+void rb_thread_malloc_stack_set(rb_thread_t *th, void *stack, size_t stack_size);
 rb_thread_t * ruby_thread_from_native(void);
 int ruby_thread_set_native(rb_thread_t *th);
 int rb_vm_control_frame_id_and_class(const rb_control_frame_t *cfp, ID *idp, ID *called_idp, VALUE *klassp);
@@ -2387,9 +2384,7 @@ rb_exec_event_hook_script_compiled(rb_execution_context_t *ec, const rb_iseq_t *
 
 void rb_vm_trap_exit(rb_vm_t *vm);
 void rb_vm_postponed_job_atfork(void); /* vm_trace.c */
-void rb_vm_postponed_job_free(void); /* vm_trace.c */
 size_t rb_vm_memsize_postponed_job_queue(void); /* vm_trace.c */
-void rb_vm_postponed_job_queue_init(rb_vm_t *vm); /* vm_trace.c */
 
 RUBY_SYMBOL_EXPORT_BEGIN
 
