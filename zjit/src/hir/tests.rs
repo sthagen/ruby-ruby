@@ -1124,6 +1124,52 @@ pub mod hir_build_tests {
     }
 
     #[test]
+    fn defined_yield_in_method_local_iseq_returns_defined() {
+        eval("
+            def test = defined?(yield)
+        ");
+        assert_contains_opcode("test", YARVINSN_defined);
+        assert_snapshot!(hir_string("test"), @r"
+        fn test@<compiled>:2:
+        bb0():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          Jump bb2(v1)
+        bb1(v4:BasicObject):
+          EntryPoint JIT(0)
+          Jump bb2(v4)
+        bb2(v6:BasicObject):
+          v10:NilClass = Const Value(nil)
+          v12:StringExact|NilClass = Defined yield, v10
+          CheckInterrupts
+          Return v12
+        ");
+    }
+
+    #[test]
+    fn defined_yield_in_non_method_local_iseq_returns_nil() {
+        eval("
+            define_method(:test) { defined?(yield) }
+        ");
+        assert_contains_opcode("test", YARVINSN_defined);
+        assert_snapshot!(hir_string("test"), @r"
+        fn block in <compiled>@<compiled>:2:
+        bb0():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          Jump bb2(v1)
+        bb1(v4:BasicObject):
+          EntryPoint JIT(0)
+          Jump bb2(v4)
+        bb2(v6:BasicObject):
+          v10:NilClass = Const Value(nil)
+          v12:NilClass = Const Value(nil)
+          CheckInterrupts
+          Return v12
+        ");
+    }
+
+    #[test]
     fn test_return_const() {
         eval("
             def test(cond)
@@ -2058,7 +2104,7 @@ pub mod hir_build_tests {
           PatchPoint NoEPEscape(test)
           v33:CPtr = GetEP 0
           v34:CInt64 = LoadField v33, :_env_data_index_flags@0x1000
-          v35:CInt64 = GuardNoBitsSet v34, CUInt64(512)
+          v35:CInt64 = GuardNoBitsSet v34, VM_FRAME_FLAG_MODIFIED_BLOCK_PARAM=CUInt64(512)
           v36:CInt64 = LoadField v33, :_env_data_index_specval@0x1001
           v37:CInt64 = GuardAnyBitSet v36, CUInt64(1)
           v38:HeapObject[BlockParamProxy] = Const Value(VALUE(0x1008))
@@ -2580,6 +2626,32 @@ pub mod hir_build_tests {
           v21:BasicObject = SendWithoutBlock v18, :size # SendFallbackReason: Uncategorized(opt_size)
           CheckInterrupts
           Return v21
+        ");
+    }
+
+    #[test]
+    fn test_getconstant() {
+        eval("
+            def test(klass)
+              klass::ARGV
+            end
+        ");
+        assert_contains_opcode("test", YARVINSN_getconstant);
+        assert_snapshot!(hir_string("test"), @r"
+        fn test@<compiled>:3:
+        bb0():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          v2:BasicObject = GetLocal :klass, l0, SP@4
+          Jump bb2(v1, v2)
+        bb1(v5:BasicObject, v6:BasicObject):
+          EntryPoint JIT(0)
+          Jump bb2(v5, v6)
+        bb2(v8:BasicObject, v9:BasicObject):
+          v14:FalseClass = Const Value(false)
+          v16:BasicObject = GetConstant v9, :ARGV, v14
+          CheckInterrupts
+          Return v16
         ");
     }
 
@@ -3435,7 +3507,7 @@ pub mod hir_build_tests {
           PatchPoint NoEPEscape(open)
           v31:CPtr = GetEP 0
           v32:CInt64 = LoadField v31, :_env_data_index_flags@0x1000
-          v33:CInt64 = GuardNoBitsSet v32, CUInt64(512)
+          v33:CInt64 = GuardNoBitsSet v32, VM_FRAME_FLAG_MODIFIED_BLOCK_PARAM=CUInt64(512)
           v34:CInt64 = LoadField v31, :_env_data_index_specval@0x1001
           v35:CInt64 = GuardAnyBitSet v34, CUInt64(1)
           v36:HeapObject[BlockParamProxy] = Const Value(VALUE(0x1008))
@@ -3834,11 +3906,12 @@ pub mod hir_build_tests {
         bb2(v12:BasicObject, v13:BasicObject, v14:NilClass, v15:NilClass):
           v21:ArrayExact = GuardType v13, ArrayExact
           v22:CInt64 = ArrayLength v21
-          v23:CInt64[2] = GuardBitEquals v22, CInt64(2)
-          v24:CInt64[1] = Const CInt64(1)
-          v25:BasicObject = ArrayAref v21, v24
-          v26:CInt64[0] = Const CInt64(0)
-          v27:BasicObject = ArrayAref v21, v26
+          v23:CInt64[2] = Const CInt64(2)
+          v24:CInt64 = GuardGreaterEq v22, v23
+          v25:CInt64[1] = Const CInt64(1)
+          v26:BasicObject = ArrayAref v21, v25
+          v27:CInt64[0] = Const CInt64(0)
+          v28:BasicObject = ArrayAref v21, v27
           PatchPoint NoEPEscape(test)
           CheckInterrupts
           Return v13
@@ -3994,6 +4067,54 @@ pub mod hir_build_tests {
           Jump bb2(v38, v39, v40, v41, v42, v43, v44, v45, v46, v47, v48, v49, v50, v51, v52, v53, v54, v55, v56, v57, v58, v59, v60, v61, v62, v63, v64, v65, v66, v67, v68, v69, v70, v71, v72)
         bb2(v74:BasicObject, v75:BasicObject, v76:BasicObject, v77:BasicObject, v78:BasicObject, v79:BasicObject, v80:BasicObject, v81:BasicObject, v82:BasicObject, v83:BasicObject, v84:BasicObject, v85:BasicObject, v86:BasicObject, v87:BasicObject, v88:BasicObject, v89:BasicObject, v90:BasicObject, v91:BasicObject, v92:BasicObject, v93:BasicObject, v94:BasicObject, v95:BasicObject, v96:BasicObject, v97:BasicObject, v98:BasicObject, v99:BasicObject, v100:BasicObject, v101:BasicObject, v102:BasicObject, v103:BasicObject, v104:BasicObject, v105:BasicObject, v106:BasicObject, v107:BasicObject, v108:BasicObject):
           SideExit TooManyKeywordParameters
+        ");
+    }
+
+    #[test]
+    fn test_array_each() {
+        assert_snapshot!(hir_string_proc("Array.instance_method(:each)"), @r"
+        fn each@<internal:array>:
+        bb0():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          v2:NilClass = Const Value(nil)
+          Jump bb2(v1, v2)
+        bb1(v5:BasicObject):
+          EntryPoint JIT(0)
+          v6:NilClass = Const Value(nil)
+          Jump bb2(v5, v6)
+        bb2(v8:BasicObject, v9:NilClass):
+          v13:NilClass = Const Value(nil)
+          v15:TrueClass|NilClass = Defined yield, v13
+          v17:CBool = Test v15
+          v18:NilClass = RefineType v15, Falsy
+          IfFalse v17, bb3(v8, v9)
+          v20:TrueClass = RefineType v15, Truthy
+          Jump bb5(v8, v9)
+        bb3(v23:BasicObject, v24:NilClass):
+          v28:BasicObject = InvokeBuiltin <inline_expr>, v23
+          Jump bb4(v23, v24, v28)
+        bb4(v40:BasicObject, v41:NilClass, v42:BasicObject):
+          CheckInterrupts
+          Return v42
+        bb5(v30:BasicObject, v31:NilClass):
+          v35:Fixnum[0] = Const Value(0)
+          Jump bb7(v30, v35)
+        bb7(v48:BasicObject, v49:Fixnum):
+          v52:BoolExact = InvokeBuiltin rb_jit_ary_at_end, v48, v49
+          v54:CBool = Test v52
+          v55:FalseClass = RefineType v52, Falsy
+          IfFalse v54, bb6(v48, v49)
+          v57:TrueClass = RefineType v52, Truthy
+          v59:NilClass = Const Value(nil)
+          CheckInterrupts
+          Return v48
+        bb6(v67:BasicObject, v68:Fixnum):
+          v72:BasicObject = InvokeBuiltin rb_jit_ary_at, v67, v68
+          v74:BasicObject = InvokeBlock, v72 # SendFallbackReason: Uncategorized(invokeblock)
+          v78:Fixnum = InvokeBuiltin rb_jit_fixnum_inc, v67, v68
+          PatchPoint NoEPEscape(each)
+          Jump bb7(v67, v78)
         ");
     }
  }

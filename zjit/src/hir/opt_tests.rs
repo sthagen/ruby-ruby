@@ -823,11 +823,11 @@ mod hir_opt_tests {
         bb2(v8:BasicObject, v9:BasicObject):
           PatchPoint NoSingletonClass(C@0x1000)
           PatchPoint MethodRedefined(C@0x1000, fun_new_map@0x1008, cme:0x1010)
-          v23:ArraySubclass[class_exact:C] = GuardType v9, ArraySubclass[class_exact:C]
-          v24:BasicObject = CCallWithFrame v23, :C#fun_new_map@0x1038, block=0x1040
+          v22:ArraySubclass[class_exact:C] = GuardType v9, ArraySubclass[class_exact:C]
+          v23:BasicObject = SendDirect v22, 0x1038, :fun_new_map (0x1048)
           v15:BasicObject = GetLocal :o, l0, EP@3
           CheckInterrupts
-          Return v24
+          Return v23
         ");
     }
 
@@ -2357,6 +2357,33 @@ mod hir_opt_tests {
     }
 
     #[test]
+    fn test_do_not_eliminate_getconstant() {
+        eval("
+            def test(klass)
+              klass::ARGV
+              5
+            end
+        ");
+        assert_snapshot!(hir_string("test"), @r"
+        fn test@<compiled>:3:
+        bb0():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          v2:BasicObject = GetLocal :klass, l0, SP@4
+          Jump bb2(v1, v2)
+        bb1(v5:BasicObject, v6:BasicObject):
+          EntryPoint JIT(0)
+          Jump bb2(v5, v6)
+        bb2(v8:BasicObject, v9:BasicObject):
+          v14:FalseClass = Const Value(false)
+          v16:BasicObject = GetConstant v9, :ARGV, v14
+          v20:Fixnum[5] = Const Value(5)
+          CheckInterrupts
+          Return v20
+        ");
+    }
+
+    #[test]
     fn kernel_itself_const() {
         eval("
             def test(x) = x.itself
@@ -2926,15 +2953,14 @@ mod hir_opt_tests {
           Jump bb2(v5, v6)
         bb2(v8:BasicObject, v9:NilClass):
           v13:Fixnum[1] = Const Value(1)
-          SetLocal :a, l0, EP@3, v13
           PatchPoint NoSingletonClass(Object@0x1000)
           PatchPoint MethodRedefined(Object@0x1000, foo@0x1008, cme:0x1010)
           v31:HeapObject[class_exact*:Object@VALUE(0x1000)] = GuardType v8, HeapObject[class_exact*:Object@VALUE(0x1000)]
           IncrCounter inline_iseq_optimized_send_count
-          v20:BasicObject = GetLocal :a, l0, EP@3
-          v24:BasicObject = GetLocal :a, l0, EP@3
+          v19:BasicObject = GetLocal :a, l0, EP@3
+          PatchPoint NoEPEscape(test)
           CheckInterrupts
-          Return v24
+          Return v19
         ");
     }
 
@@ -3415,15 +3441,14 @@ mod hir_opt_tests {
           Jump bb2(v6, v7, v8)
         bb2(v10:BasicObject, v11:BasicObject, v12:NilClass):
           v16:ArrayExact = NewArray
-          SetLocal :a, l0, EP@3, v16
-          v22:TrueClass = Const Value(true)
+          v21:TrueClass = Const Value(true)
           IncrCounter complex_arg_pass_caller_kwarg
-          v24:BasicObject = Send v11, 0x1000, :each_line, v22 # SendFallbackReason: Complex argument passing
-          v25:BasicObject = GetLocal :s, l0, EP@4
-          v26:BasicObject = GetLocal :a, l0, EP@3
-          v30:BasicObject = GetLocal :a, l0, EP@3
+          v23:BasicObject = Send v11, 0x1000, :each_line, v21 # SendFallbackReason: Complex argument passing
+          v24:BasicObject = GetLocal :s, l0, EP@4
+          v25:BasicObject = GetLocal :a, l0, EP@3
+          PatchPoint NoEPEscape(test)
           CheckInterrupts
-          Return v30
+          Return v25
         ");
     }
 
@@ -3888,7 +3913,7 @@ mod hir_opt_tests {
         bb2(v8:BasicObject, v9:BasicObject):
           v14:CPtr = GetEP 0
           v15:CInt64 = LoadField v14, :_env_data_index_flags@0x1000
-          v16:CInt64 = GuardNoBitsSet v15, CUInt64(512)
+          v16:CInt64 = GuardNoBitsSet v15, VM_FRAME_FLAG_MODIFIED_BLOCK_PARAM=CUInt64(512)
           v17:CInt64 = LoadField v14, :_env_data_index_specval@0x1001
           v18:CInt64 = GuardAnyBitSet v17, CUInt64(1)
           v19:HeapObject[BlockParamProxy] = Const Value(VALUE(0x1008))
@@ -6490,9 +6515,9 @@ mod hir_opt_tests {
           v11:ArrayExact = ArrayDup v10
           PatchPoint NoSingletonClass(Array@0x1008)
           PatchPoint MethodRedefined(Array@0x1008, map@0x1010, cme:0x1018)
-          v21:BasicObject = CCallWithFrame v11, :Array#map@0x1040, block=0x1048
+          v20:BasicObject = SendDirect v11, 0x1040, :map (0x1050)
           CheckInterrupts
-          Return v21
+          Return v20
         ");
     }
 
@@ -6523,7 +6548,6 @@ mod hir_opt_tests {
           Jump bb2(v5, v6)
         bb2(v8:BasicObject, v9:NilClass):
           v13:ArrayExact = NewArray
-          SetLocal :result, l0, EP@3, v13
           PatchPoint SingleRactorMode
           PatchPoint StableConstantNames(0x1000, A)
           v36:ArrayExact[VALUE(0x1008)] = Const Value(VALUE(0x1008))
@@ -6533,10 +6557,10 @@ mod hir_opt_tests {
           PatchPoint NoSingletonClass(Array@0x1020)
           PatchPoint MethodRedefined(Array@0x1020, zip@0x1028, cme:0x1030)
           v43:BasicObject = CCallVariadic v36, :zip@0x1058, v39
-          v25:BasicObject = GetLocal :result, l0, EP@3
-          v29:BasicObject = GetLocal :result, l0, EP@3
+          v24:BasicObject = GetLocal :result, l0, EP@3
+          PatchPoint NoEPEscape(test)
           CheckInterrupts
-          Return v29
+          Return v24
         ");
     }
 
@@ -6560,7 +6584,7 @@ mod hir_opt_tests {
           v13:ArrayExact = NewArray
           v15:CPtr = GetEP 0
           v16:CInt64 = LoadField v15, :_env_data_index_flags@0x1000
-          v17:CInt64 = GuardNoBitsSet v16, CUInt64(512)
+          v17:CInt64 = GuardNoBitsSet v16, VM_FRAME_FLAG_MODIFIED_BLOCK_PARAM=CUInt64(512)
           v18:CInt64 = LoadField v15, :_env_data_index_specval@0x1001
           v19:CInt64 = GuardAnyBitSet v18, CUInt64(1)
           v20:HeapObject[BlockParamProxy] = Const Value(VALUE(0x1008))
@@ -6591,7 +6615,7 @@ mod hir_opt_tests {
           v13:ArrayExact = NewArray
           v15:CPtr = GetEP 0
           v16:CInt64 = LoadField v15, :_env_data_index_flags@0x1000
-          v17:CInt64 = GuardNoBitsSet v16, CUInt64(512)
+          v17:CInt64 = GuardNoBitsSet v16, VM_FRAME_FLAG_MODIFIED_BLOCK_PARAM=CUInt64(512)
           v18:CInt64 = LoadField v15, :_env_data_index_specval@0x1001
           v19:CInt64[0] = GuardBitEquals v18, CInt64(0)
           v20:NilClass = Const Value(nil)
@@ -6625,7 +6649,7 @@ mod hir_opt_tests {
           v10:ArrayExact = NewArray
           v12:CPtr = GetEP 1
           v13:CInt64 = LoadField v12, :_env_data_index_flags@0x1000
-          v14:CInt64 = GuardNoBitsSet v13, CUInt64(512)
+          v14:CInt64 = GuardNoBitsSet v13, VM_FRAME_FLAG_MODIFIED_BLOCK_PARAM=CUInt64(512)
           v15:CInt64 = LoadField v12, :_env_data_index_specval@0x1001
           v16:CInt64 = GuardAnyBitSet v15, CUInt64(1)
           v17:HeapObject[BlockParamProxy] = Const Value(VALUE(0x1008))
@@ -6987,7 +7011,7 @@ mod hir_opt_tests {
           PatchPoint MethodRedefined(C@0x1000, foo=@0x1008, cme:0x1010)
           v29:HeapObject[class_exact:C] = GuardType v11, HeapObject[class_exact:C]
           v30:CUInt64 = LoadField v29, :_rbasic_flags@0x1038
-          v31:CUInt64 = GuardNoBitsSet v30, CUInt64(2048)
+          v31:CUInt64 = GuardNoBitsSet v30, RUBY_FL_FREEZE=CUInt64(2048)
           StoreField v29, :foo=@0x1039, v12
           WriteBarrier v29, v12
           CheckInterrupts
@@ -7020,7 +7044,7 @@ mod hir_opt_tests {
           PatchPoint MethodRedefined(C@0x1000, foo=@0x1008, cme:0x1010)
           v29:HeapObject[class_exact:C] = GuardType v11, HeapObject[class_exact:C]
           v30:CUInt64 = LoadField v29, :_rbasic_flags@0x1038
-          v31:CUInt64 = GuardNoBitsSet v30, CUInt64(2048)
+          v31:CUInt64 = GuardNoBitsSet v30, RUBY_FL_FREEZE=CUInt64(2048)
           v32:CPtr = LoadField v29, :_as_heap@0x1039
           StoreField v32, :foo=@0x103a, v12
           WriteBarrier v29, v12
@@ -7641,9 +7665,9 @@ mod hir_opt_tests {
           PatchPoint MethodRedefined(Array@0x1000, []=@0x1008, cme:0x1010)
           v31:ArrayExact = GuardType v9, ArrayExact
           v32:CUInt64 = LoadField v31, :_rbasic_flags@0x1038
-          v33:CUInt64 = GuardNoBitsSet v32, CUInt64(2048)
+          v33:CUInt64 = GuardNoBitsSet v32, RUBY_FL_FREEZE=CUInt64(2048)
           v34:CUInt64 = LoadField v31, :_rbasic_flags@0x1038
-          v35:CUInt64 = GuardNoBitsSet v34, CUInt64(4096)
+          v35:CUInt64 = GuardNoBitsSet v34, RUBY_ELTS_SHARED=CUInt64(4096)
           v36:CInt64[1] = UnboxFixnum v16
           v37:CInt64 = ArrayLength v31
           v38:CInt64[1] = GuardLess v36, v37
@@ -7683,9 +7707,9 @@ mod hir_opt_tests {
           v35:ArrayExact = GuardType v13, ArrayExact
           v36:Fixnum = GuardType v14, Fixnum
           v37:CUInt64 = LoadField v35, :_rbasic_flags@0x1038
-          v38:CUInt64 = GuardNoBitsSet v37, CUInt64(2048)
+          v38:CUInt64 = GuardNoBitsSet v37, RUBY_FL_FREEZE=CUInt64(2048)
           v39:CUInt64 = LoadField v35, :_rbasic_flags@0x1038
-          v40:CUInt64 = GuardNoBitsSet v39, CUInt64(4096)
+          v40:CUInt64 = GuardNoBitsSet v39, RUBY_ELTS_SHARED=CUInt64(4096)
           v41:CInt64 = UnboxFixnum v36
           v42:CInt64 = ArrayLength v35
           v43:CInt64 = GuardLess v41, v42
@@ -8011,7 +8035,7 @@ mod hir_opt_tests {
           v36:CInt64[0] = Const CInt64(0)
           v37:CInt64 = GuardGreaterEq v35, v36
           v38:CUInt64 = LoadField v30, :_rbasic_flags@0x1039
-          v39:CUInt64 = GuardNoBitsSet v38, CUInt64(2048)
+          v39:CUInt64 = GuardNoBitsSet v38, RUBY_FL_FREEZE=CUInt64(2048)
           v40:Fixnum = StringSetbyteFixnum v30, v31, v32
           IncrCounter inline_cfunc_optimized_send_count
           CheckInterrupts
@@ -8053,7 +8077,7 @@ mod hir_opt_tests {
           v36:CInt64[0] = Const CInt64(0)
           v37:CInt64 = GuardGreaterEq v35, v36
           v38:CUInt64 = LoadField v30, :_rbasic_flags@0x1039
-          v39:CUInt64 = GuardNoBitsSet v38, CUInt64(2048)
+          v39:CUInt64 = GuardNoBitsSet v38, RUBY_FL_FREEZE=CUInt64(2048)
           v40:Fixnum = StringSetbyteFixnum v30, v31, v32
           IncrCounter inline_cfunc_optimized_send_count
           CheckInterrupts
@@ -11885,6 +11909,148 @@ mod hir_opt_tests {
           SetIvar v28, :@d, v31
           CheckInterrupts
           Return v31
+        ");
+    }
+
+    #[test]
+    fn recompile_after_ep_escape_uses_ep_locals() {
+        // When a method creates a lambda, EP escapes to the heap. After
+        // invalidation and recompilation, the compiler must use EP-based
+        // locals (SetLocal/GetLocal) instead of SSA locals, because the
+        // spill target (stack) and the read target (heap EP) diverge.
+        eval("
+            CONST = {}.freeze
+            def test_ep_escape(list, sep=nil, iter_method=:each)
+                sep ||= lambda { }
+                kwsplat = CONST
+                list.__send__(iter_method) {|*v| yield(*v) }
+            end
+
+            test_ep_escape({a: 1}, nil, :each_pair) { |k, v|
+                test_ep_escape([1], lambda { }) { |x| }
+            }
+            test_ep_escape({a: 1}, nil, :each_pair) { |k, v|
+                test_ep_escape([1], lambda { }) { |x| }
+            }
+        ");
+        assert_snapshot!(hir_string("test_ep_escape"), @r"
+        fn test_ep_escape@<compiled>:3:
+        bb0():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          v2:BasicObject = GetLocal :list, l0, SP@7
+          v3:BasicObject = GetLocal :sep, l0, SP@6
+          v4:BasicObject = GetLocal :iter_method, l0, SP@5
+          v5:NilClass = Const Value(nil)
+          v6:CPtr = LoadPC
+          v7:CPtr[CPtr(0x1000)] = Const CPtr(0x1008)
+          v8:CBool = IsBitEqual v6, v7
+          IfTrue v8, bb2(v1, v2, v3, v4, v5)
+          v10:CPtr[CPtr(0x1000)] = Const CPtr(0x1008)
+          v11:CBool = IsBitEqual v6, v10
+          IfTrue v11, bb4(v1, v2, v3, v4, v5)
+          Jump bb6(v1, v2, v3, v4, v5)
+        bb1(v15:BasicObject, v16:BasicObject):
+          EntryPoint JIT(0)
+          v17:NilClass = Const Value(nil)
+          v18:NilClass = Const Value(nil)
+          v19:NilClass = Const Value(nil)
+          Jump bb2(v15, v16, v17, v18, v19)
+        bb2(v35:BasicObject, v36:BasicObject, v37:BasicObject, v38:BasicObject, v39:NilClass):
+          v42:NilClass = Const Value(nil)
+          SetLocal :sep, l0, EP@5, v42
+          Jump bb4(v35, v36, v42, v38, v39)
+        bb3(v22:BasicObject, v23:BasicObject, v24:BasicObject):
+          EntryPoint JIT(1)
+          v25:NilClass = Const Value(nil)
+          v26:NilClass = Const Value(nil)
+          Jump bb4(v22, v23, v24, v25, v26)
+        bb4(v46:BasicObject, v47:BasicObject, v48:BasicObject, v49:BasicObject, v50:NilClass):
+          v53:StaticSymbol[:each] = Const Value(VALUE(0x1010))
+          SetLocal :iter_method, l0, EP@4, v53
+          Jump bb6(v46, v47, v48, v53, v50)
+        bb5(v29:BasicObject, v30:BasicObject, v31:BasicObject, v32:BasicObject):
+          EntryPoint JIT(2)
+          v33:NilClass = Const Value(nil)
+          Jump bb6(v29, v30, v31, v32, v33)
+        bb6(v57:BasicObject, v58:BasicObject, v59:BasicObject, v60:BasicObject, v61:NilClass):
+          CheckInterrupts
+          v67:CBool = Test v59
+          v68:Truthy = RefineType v59, Truthy
+          IfTrue v67, bb7(v57, v58, v68, v60, v61)
+          v70:Falsy = RefineType v59, Falsy
+          PatchPoint NoSingletonClass(Object@0x1018)
+          PatchPoint MethodRedefined(Object@0x1018, lambda@0x1020, cme:0x1028)
+          v114:HeapObject[class_exact*:Object@VALUE(0x1018)] = GuardType v57, HeapObject[class_exact*:Object@VALUE(0x1018)]
+          v115:BasicObject = CCallWithFrame v114, :Kernel#lambda@0x1050, block=0x1058
+          v74:BasicObject = GetLocal :list, l0, EP@6
+          v76:BasicObject = GetLocal :iter_method, l0, EP@4
+          v77:BasicObject = GetLocal :kwsplat, l0, EP@3
+          SetLocal :sep, l0, EP@5, v115
+          Jump bb7(v57, v74, v115, v76, v77)
+        bb7(v81:BasicObject, v82:BasicObject, v83:BasicObject, v84:BasicObject, v85:BasicObject):
+          PatchPoint SingleRactorMode
+          PatchPoint StableConstantNames(0x1060, CONST)
+          v110:HashExact[VALUE(0x1068)] = Const Value(VALUE(0x1068))
+          SetLocal :kwsplat, l0, EP@3, v110
+          v95:BasicObject = GetLocal :list, l0, EP@6
+          v97:BasicObject = GetLocal :iter_method, l0, EP@4
+          v99:BasicObject = Send v95, 0x1070, :__send__, v97 # SendFallbackReason: Send: unsupported method type Optimized
+          v100:BasicObject = GetLocal :list, l0, EP@6
+          v101:BasicObject = GetLocal :sep, l0, EP@5
+          v102:BasicObject = GetLocal :iter_method, l0, EP@4
+          v103:BasicObject = GetLocal :kwsplat, l0, EP@3
+          CheckInterrupts
+          Return v99
+        ");
+    }
+
+    #[test]
+    fn test_array_each() {
+        eval("[1, 2, 3].each { |x| x }");
+        assert_snapshot!(hir_string_proc("Array.instance_method(:each)"), @r"
+        fn each@<internal:array>:
+        bb0():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          v2:NilClass = Const Value(nil)
+          Jump bb2(v1, v2)
+        bb1(v5:BasicObject):
+          EntryPoint JIT(0)
+          v6:NilClass = Const Value(nil)
+          Jump bb2(v5, v6)
+        bb2(v8:BasicObject, v9:NilClass):
+          v13:NilClass = Const Value(nil)
+          v15:TrueClass|NilClass = Defined yield, v13
+          v17:CBool = Test v15
+          IfFalse v17, bb3(v8, v9)
+          v35:Fixnum[0] = Const Value(0)
+          Jump bb7(v8, v35)
+        bb3(v23:BasicObject, v24:NilClass):
+          v28:BasicObject = InvokeBuiltin <inline_expr>, v23
+          CheckInterrupts
+          Return v28
+        bb7(v48:BasicObject, v49:Fixnum):
+          v83:Array = RefineType v48, Array
+          v84:CInt64 = ArrayLength v83
+          v85:Fixnum = BoxFixnum v84
+          v86:BoolExact = FixnumGe v49, v85
+          IncrCounter inline_cfunc_optimized_send_count
+          v54:CBool = Test v86
+          IfFalse v54, bb6(v48, v49)
+          CheckInterrupts
+          Return v48
+        bb6(v67:BasicObject, v68:Fixnum):
+          v88:Array = RefineType v67, Array
+          v89:CInt64 = UnboxFixnum v68
+          v90:BasicObject = ArrayAref v88, v89
+          IncrCounter inline_cfunc_optimized_send_count
+          v74:BasicObject = InvokeBlock, v90 # SendFallbackReason: Uncategorized(invokeblock)
+          v92:Fixnum[1] = Const Value(1)
+          v93:Fixnum = FixnumAdd v68, v92
+          IncrCounter inline_cfunc_optimized_send_count
+          PatchPoint NoEPEscape(each)
+          Jump bb7(v67, v93)
         ");
     }
 }

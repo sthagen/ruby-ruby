@@ -2694,18 +2694,33 @@ ary_enum_length(VALUE ary, VALUE args, VALUE eobj)
     return rb_ary_length(ary);
 }
 
-// Primitive to avoid a race condition in Array#each.
-// Return `true` and write `value` and `index` if the element exists.
-static VALUE
-ary_fetch_next(VALUE self, VALUE *index, VALUE *value)
+// Return true if the index is at or past the end of the array.
+VALUE
+rb_jit_ary_at_end(rb_execution_context_t *ec, VALUE self, VALUE index)
 {
-    long i = NUM2LONG(*index);
-    if (i >= RARRAY_LEN(self)) {
-        return Qfalse;
-    }
-    *value = RARRAY_AREF(self, i);
-    *index = LONG2NUM(i + 1);
-    return Qtrue;
+    return FIX2LONG(index) >= RARRAY_LEN(self) ? Qtrue : Qfalse;
+}
+
+// Return the element at the given fixnum index.
+VALUE
+rb_jit_ary_at(rb_execution_context_t *ec, VALUE self, VALUE index)
+{
+    return RARRAY_AREF(self, FIX2LONG(index));
+}
+
+// Increment a fixnum by 1.
+VALUE
+rb_jit_fixnum_inc(rb_execution_context_t *ec, VALUE self, VALUE num)
+{
+    return LONG2FIX(FIX2LONG(num) + 1);
+}
+
+// Push a value onto an array and return the value.
+VALUE
+rb_jit_ary_push(rb_execution_context_t *ec, VALUE self, VALUE ary, VALUE val)
+{
+    rb_ary_push(ary, val);
+    return val;
 }
 
 /*
@@ -6732,16 +6747,16 @@ flatten(VALUE ary, int level)
  *  With non-negative integer argument +depth+, flattens recursively through +depth+ levels:
  *
  *    a = [ 0, [ 1, [2, 3], 4 ], 5, {foo: 0}, Set.new([6, 7]) ]
- *    a                   # => [0, [1, [2, 3], 4], 5, {:foo=>0}, #<Set: {6, 7}>]
- *    a.dup.flatten!(1)   # => [0, 1, [2, 3], 4, 5, {:foo=>0}, #<Set: {6, 7}>]
- *    a.dup.flatten!(1.1) # => [0, 1, [2, 3], 4, 5, {:foo=>0}, #<Set: {6, 7}>]
- *    a.dup.flatten!(2)   # => [0, 1, 2, 3, 4, 5, {:foo=>0}, #<Set: {6, 7}>]
- *    a.dup.flatten!(3)   # => [0, 1, 2, 3, 4, 5, {:foo=>0}, #<Set: {6, 7}>]
+ *    a                   # => [0, [1, [2, 3], 4], 5, {foo: 0}, #<Set: {6, 7}>]
+ *    a.dup.flatten!(1)   # => [0, 1, [2, 3], 4, 5, {foo: 0}, #<Set: {6, 7}>]
+ *    a.dup.flatten!(1.1) # => [0, 1, [2, 3], 4, 5, {foo: 0}, #<Set: {6, 7}>]
+ *    a.dup.flatten!(2)   # => [0, 1, 2, 3, 4, 5, {foo: 0}, #<Set: {6, 7}>]
+ *    a.dup.flatten!(3)   # => [0, 1, 2, 3, 4, 5, {foo: 0}, #<Set: {6, 7}>]
  *
  *  With +nil+ or negative argument +depth+, flattens all levels:
  *
- *    a.dup.flatten!     # => [0, 1, 2, 3, 4, 5, {:foo=>0}, #<Set: {6, 7}>]
- *    a.dup.flatten!(-1) # => [0, 1, 2, 3, 4, 5, {:foo=>0}, #<Set: {6, 7}>]
+ *    a.dup.flatten!     # => [0, 1, 2, 3, 4, 5, {foo: 0}, #<Set: {6, 7}>]
+ *    a.dup.flatten!(-1) # => [0, 1, 2, 3, 4, 5, {foo: 0}, #<Set: {6, 7}>]
  *
  *  Related: Array#flatten;
  *  see also {Methods for Assigning}[rdoc-ref:Array@Methods+for+Assigning].
@@ -6788,17 +6803,17 @@ rb_ary_flatten_bang(int argc, VALUE *argv, VALUE ary)
  *  With non-negative integer argument +depth+, flattens recursively through +depth+ levels:
  *
  *    a = [ 0, [ 1, [2, 3], 4 ], 5, {foo: 0}, Set.new([6, 7]) ]
- *    a              # => [0, [1, [2, 3], 4], 5, {:foo=>0}, #<Set: {6, 7}>]
- *    a.flatten(0)   # => [0, [1, [2, 3], 4], 5, {:foo=>0}, #<Set: {6, 7}>]
- *    a.flatten(1  ) # => [0, 1, [2, 3], 4, 5, {:foo=>0}, #<Set: {6, 7}>]
- *    a.flatten(1.1) # => [0, 1, [2, 3], 4, 5, {:foo=>0}, #<Set: {6, 7}>]
- *    a.flatten(2)   # => [0, 1, 2, 3, 4, 5, {:foo=>0}, #<Set: {6, 7}>]
- *    a.flatten(3)   # => [0, 1, 2, 3, 4, 5, {:foo=>0}, #<Set: {6, 7}>]
+ *    a              # => [0, [1, [2, 3], 4], 5, {foo: 0}, #<Set: {6, 7}>]
+ *    a.flatten(0)   # => [0, [1, [2, 3], 4], 5, {foo: 0}, #<Set: {6, 7}>]
+ *    a.flatten(1  ) # => [0, 1, [2, 3], 4, 5, {foo: 0}, #<Set: {6, 7}>]
+ *    a.flatten(1.1) # => [0, 1, [2, 3], 4, 5, {foo: 0}, #<Set: {6, 7}>]
+ *    a.flatten(2)   # => [0, 1, 2, 3, 4, 5, {foo: 0}, #<Set: {6, 7}>]
+ *    a.flatten(3)   # => [0, 1, 2, 3, 4, 5, {foo: 0}, #<Set: {6, 7}>]
  *
  *  With +nil+ or negative +depth+, flattens all levels.
  *
- *    a.flatten     # => [0, 1, 2, 3, 4, 5, {:foo=>0}, #<Set: {6, 7}>]
- *    a.flatten(-1) # => [0, 1, 2, 3, 4, 5, {:foo=>0}, #<Set: {6, 7}>]
+ *    a.flatten     # => [0, 1, 2, 3, 4, 5, {foo: 0}, #<Set: {6, 7}>]
+ *    a.flatten(-1) # => [0, 1, 2, 3, 4, 5, {foo: 0}, #<Set: {6, 7}>]
  *
  *  Related: Array#flatten!;
  *  see also {Methods for Converting}[rdoc-ref:Array@Methods+for+Converting].

@@ -783,6 +783,12 @@ impl ID {
     }
 }
 
+impl Display for ID {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.contents_lossy())
+    }
+}
+
 /// Produce a Ruby string from a Rust string slice
 pub fn rust_str_to_ruby(str: &str) -> VALUE {
     unsafe { rb_utf8_str_new(str.as_ptr() as *const _, str.len() as i64) }
@@ -1127,6 +1133,12 @@ pub mod test_utils {
             crate::cruby::ids::init(); // for ID! usages in tests
         }
 
+        // Call ZJIT hooks to install Ruby implementations of builtins like Array#each
+        unsafe {
+            let zjit = rb_const_get(rb_cRubyVM, rust_str_to_id("ZJIT"));
+            rb_funcallv(zjit, rust_str_to_id("call_jit_hooks"), 0, std::ptr::null());
+        }
+
         // Set up globals for convenience
         let zjit_entry = ZJITState::init();
 
@@ -1401,6 +1413,9 @@ pub(crate) mod ids {
         name: _ep_method_entry
         name: _ep_specval
         name: _rbasic_flags
+        name: RUBY_FL_FREEZE
+        name: RUBY_ELTS_SHARED
+        name: VM_FRAME_FLAG_MODIFIED_BLOCK_PARAM
     }
 
     /// Get an CRuby `ID` to an interned string, e.g. a particular method name.
