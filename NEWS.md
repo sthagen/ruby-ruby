@@ -58,6 +58,7 @@ releases.
 * RubyGems 4.1.0.dev
 * bundler 4.1.0.dev
 * json 2.18.1
+* openssl 4.0.1
 * prism 1.9.0
 * resolv 0.7.1
 * stringio 3.2.1.dev
@@ -77,6 +78,7 @@ releases.
 * resolv-replace 0.2.0
 * syslog 0.4.0
 * repl_type_completor 0.1.13
+* pstore 0.2.1
 * rdoc 7.2.0
 * irb 1.17.0
 
