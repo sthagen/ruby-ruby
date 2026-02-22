@@ -22,6 +22,10 @@ jobs:
         with:
           token: ${{ (github.repository == 'ruby/ruby' && !startsWith(github.event_name, 'pull')) && secrets.MATZBOT_AUTO_UPDATE_TOKEN || secrets.GITHUB_TOKEN }}
 
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: head
+
       - uses: ./.github/actions/setup/directories
         with:
           makeup: true
@@ -111,7 +115,7 @@ jobs:
       - name: Generate docs
         id: docs
         run: |
-          make XRUBY=ruby RDOC_DEPENDS= RBCONFIG=update-rbconfig html
+          make XRUBY=ruby RDOC_DEPENDS= RBCONFIG=update-rbconfig HTMLOUT=html html
           echo htmlout=ruby-html-${GITHUB_SHA:0:10} >> $GITHUB_OUTPUT
         # Generate only when document commit/PR
         if: >-
