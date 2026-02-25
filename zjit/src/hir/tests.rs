@@ -25,6 +25,41 @@ mod snapshot_tests {
     }
 
     #[test]
+    fn test_remove_redundant_patch_points() {
+        eval("
+            def test = 1 + 2 + 3
+            test
+            test
+        ");
+        assert_snapshot!(optimized_hir_string("test"), @r"
+        fn test@<compiled>:2:
+        bb0():
+          Entries bb1, bb2
+        bb1():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          Jump bb3(v1)
+        bb2():
+          EntryPoint JIT(0)
+          v4:BasicObject = LoadArg :self@0
+          Jump bb3(v4)
+        bb3(v6:BasicObject):
+          v8:Any = Snapshot FrameState { pc: 0x1000, stack: [], locals: [] }
+          PatchPoint NoTracePoint
+          v10:Fixnum[1] = Const Value(1)
+          v12:Fixnum[2] = Const Value(2)
+          v13:Any = Snapshot FrameState { pc: 0x1008, stack: [v10, v12], locals: [] }
+          PatchPoint MethodRedefined(Integer@0x1010, +@0x1018, cme:0x1020)
+          IncrCounter inline_cfunc_optimized_send_count
+          v35:Fixnum[6] = Const Value(6)
+          IncrCounter inline_cfunc_optimized_send_count
+          v21:Any = Snapshot FrameState { pc: 0x1048, stack: [v35], locals: [] }
+          CheckInterrupts
+          Return v35
+        ");
+    }
+
+    #[test]
     fn test_new_array_with_elements() {
         eval("def test(a, b) = [a, b]");
         assert_snapshot!(hir_string("test"), @r"
@@ -946,18 +981,23 @@ pub mod hir_build_tests {
           v4:BasicObject = LoadArg :self@0
           Jump bb3(v4)
         bb3(v6:BasicObject):
-          v10:BasicObject = GetLocal :l2, l2, EP@4
-          SetLocal :l1, l1, EP@3, v10
-          v15:BasicObject = GetLocal :l1, l1, EP@3
-          v17:BasicObject = GetLocal :l2, l2, EP@4
-          v20:BasicObject = Send v15, :+, v17 # SendFallbackReason: Uncategorized(opt_plus)
-          SetLocal :l2, l2, EP@4, v20
-          v25:BasicObject = GetLocal :l2, l2, EP@4
-          v27:BasicObject = GetLocal :l3, l3, EP@5
-          v30:BasicObject = Send v25, :+, v27 # SendFallbackReason: Uncategorized(opt_plus)
-          SetLocal :l3, l3, EP@5, v30
+          v10:CPtr = GetEP 2
+          v11:BasicObject = LoadField v10, :l2@0x1000
+          SetLocal :l1, l1, EP@3, v11
+          v16:CPtr = GetEP 1
+          v17:BasicObject = LoadField v16, :l1@0x1001
+          v19:CPtr = GetEP 2
+          v20:BasicObject = LoadField v19, :l2@0x1000
+          v23:BasicObject = Send v17, :+, v20 # SendFallbackReason: Uncategorized(opt_plus)
+          SetLocal :l2, l2, EP@4, v23
+          v28:CPtr = GetEP 2
+          v29:BasicObject = LoadField v28, :l2@0x1000
+          v31:CPtr = GetEP 3
+          v32:BasicObject = LoadField v31, :l3@0x1002
+          v35:BasicObject = Send v29, :+, v32 # SendFallbackReason: Uncategorized(opt_plus)
+          SetLocal :l3, l3, EP@5, v35
           CheckInterrupts
-          Return v30
+          Return v35
         "
         );
     }
@@ -2279,20 +2319,20 @@ pub mod hir_build_tests {
           v4:BasicObject = LoadArg :self@0
           Jump bb3(v4)
         bb3(v6:BasicObject):
-          v11:BasicObject = GetConstantPath 0x1000
-          v13:NilClass = Const Value(nil)
-          v16:CBool = IsMethodCFunc v11, :new
-          IfFalse v16, bb4(v6, v13, v11)
-          v18:HeapBasicObject = ObjectAlloc v11
-          v20:BasicObject = Send v18, :initialize # SendFallbackReason: Uncategorized(opt_send_without_block)
+          v10:BasicObject = GetConstantPath 0x1000
+          v12:NilClass = Const Value(nil)
+          v15:CBool = IsMethodCFunc v10, :new
+          IfFalse v15, bb4(v6, v12, v10)
+          v17:HeapBasicObject = ObjectAlloc v10
+          v19:BasicObject = Send v17, :initialize # SendFallbackReason: Uncategorized(opt_send_without_block)
           CheckInterrupts
-          Jump bb5(v6, v18, v20)
-        bb4(v24:BasicObject, v25:NilClass, v26:BasicObject):
-          v29:BasicObject = Send v26, :new # SendFallbackReason: Uncategorized(opt_send_without_block)
-          Jump bb5(v24, v29, v25)
-        bb5(v32:BasicObject, v33:BasicObject, v34:BasicObject):
+          Jump bb5(v6, v17, v19)
+        bb4(v23:BasicObject, v24:NilClass, v25:BasicObject):
+          v28:BasicObject = Send v25, :new # SendFallbackReason: Uncategorized(opt_send_without_block)
+          Jump bb5(v23, v28, v24)
+        bb5(v31:BasicObject, v32:BasicObject, v33:BasicObject):
           CheckInterrupts
-          Return v33
+          Return v32
         ");
     }
 
@@ -3049,18 +3089,19 @@ pub mod hir_build_tests {
           v6:BasicObject = LoadArg :block@1
           Jump bb3(v5, v6)
         bb3(v8:BasicObject, v9:BasicObject):
-          v13:CBool = IsBlockParamModified l0
-          IfTrue v13, bb4(v8, v9)
+          v13:CPtr = GetEP 0
+          v14:CBool = IsBlockParamModified v13
+          IfTrue v14, bb4(v8, v9)
           Jump bb5(v8, v9)
-        bb4(v14:BasicObject, v15:BasicObject):
-          v22:BasicObject = GetLocal :block, l0, EP@3
-          Jump bb6(v14, v22, v22)
-        bb5(v17:BasicObject, v18:BasicObject):
-          v24:BasicObject = GetBlockParam :block, l0, EP@3
-          Jump bb6(v17, v24, v24)
-        bb6(v26:BasicObject, v27:BasicObject, v28:BasicObject):
+        bb4(v15:BasicObject, v16:BasicObject):
+          v23:BasicObject = GetLocal :block, l0, EP@3
+          Jump bb6(v15, v23, v23)
+        bb5(v18:BasicObject, v19:BasicObject):
+          v25:BasicObject = GetBlockParam :block, l0, EP@3
+          Jump bb6(v18, v25, v25)
+        bb6(v27:BasicObject, v28:BasicObject, v29:BasicObject):
           CheckInterrupts
-          Return v28
+          Return v29
         ");
     }
 
@@ -3084,18 +3125,20 @@ pub mod hir_build_tests {
           v4:BasicObject = LoadArg :self@0
           Jump bb3(v4)
         bb3(v6:BasicObject):
-          v10:CBool = IsBlockParamModified l1
-          IfTrue v10, bb4(v6)
+          v10:CPtr = GetEP 1
+          v11:CBool = IsBlockParamModified v10
+          IfTrue v11, bb4(v6)
           Jump bb5(v6)
-        bb4(v11:BasicObject):
-          v17:BasicObject = GetLocal :block, l1, EP@3
-          Jump bb6(v11, v17)
-        bb5(v13:BasicObject):
-          v19:BasicObject = GetBlockParam :block, l1, EP@3
-          Jump bb6(v13, v19)
-        bb6(v21:BasicObject, v22:BasicObject):
+        bb4(v12:BasicObject):
+          v18:CPtr = GetEP 1
+          v19:BasicObject = LoadField v18, :block@0x1000
+          Jump bb6(v12, v19)
+        bb5(v14:BasicObject):
+          v21:BasicObject = GetBlockParam :block, l1, EP@3
+          Jump bb6(v14, v21)
+        bb6(v23:BasicObject, v24:BasicObject):
           CheckInterrupts
-          Return v22
+          Return v24
         ");
     }
 

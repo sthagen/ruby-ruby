@@ -118,7 +118,7 @@ impl std::fmt::Display for BranchEdge {
 }
 
 /// Invalidation reasons
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Invariant {
     /// Basic operation is redefined
     BOPRedefined {
@@ -854,10 +854,11 @@ pub enum Insn {
     /// Get a local variable from a higher scope or the heap.
     /// If `use_sp` is true, it uses the SP register to optimize the read.
     /// `rest_param` is used by infer_types to infer the ArrayExact type.
+    /// TODO: Replace the level == 0 + use_sp path with LoadSP + LoadField.
     GetLocal { level: u32, ep_offset: u32, use_sp: bool, rest_param: bool },
     /// Check whether VM_FRAME_FLAG_MODIFIED_BLOCK_PARAM is set in the environment flags.
     /// Returns CBool (0/1).
-    IsBlockParamModified { level: u32 },
+    IsBlockParamModified { ep: InsnId },
     /// Get the block parameter as a Proc.
     GetBlockParam { level: u32, ep_offset: u32, state: InsnId },
     /// Set a local variable in a higher scope or the heap
@@ -1148,7 +1149,7 @@ impl Insn {
             Insn::IsNil { .. } => effects::Empty,
             Insn::IsMethodCfunc { .. } => effects::Any,
             Insn::IsBitEqual { .. } => effects::Empty,
-            Insn::IsBitNotEqual { .. } => effects::Any,
+            Insn::IsBitNotEqual { .. } => effects::Empty,
             Insn::BoxBool { .. } => effects::Empty,
             Insn::BoxFixnum { .. } => effects::Empty,
             Insn::UnboxFixnum { .. } => effects::Any,
@@ -1157,7 +1158,7 @@ impl Insn {
             Insn::GetConstant { .. } => effects::Any,
             Insn::GetConstantPath { .. } => effects::Any,
             Insn::IsBlockGiven { .. } => Effect::read_write(abstract_heaps::Other, abstract_heaps::Empty),
-            Insn::FixnumBitCheck { .. } => effects::Any,
+            Insn::FixnumBitCheck { .. } => effects::Empty,
             Insn::IsA { .. } => effects::Empty,
             Insn::GetGlobal { .. } => effects::Any,
             Insn::SetGlobal { .. } => effects::Any,
@@ -1169,7 +1170,7 @@ impl Insn {
             Insn::GetEP { .. } => effects::Empty,
             Insn::GetLEP { .. } => effects::Empty,
             Insn::LoadSelf { .. } => Effect::read_write(abstract_heaps::Frame, abstract_heaps::Empty),
-            Insn::LoadField { .. } => Effect::read_write(abstract_heaps::Other, abstract_heaps::Empty),
+            Insn::LoadField { .. } => Effect::read_write(abstract_heaps::Memory, abstract_heaps::Empty),
             Insn::StoreField { .. } => effects::Any,
             Insn::WriteBarrier { .. } => effects::Any,
             Insn::GetLocal   { .. } => Effect::read_write(abstract_heaps::Locals, abstract_heaps::Empty),
@@ -1229,18 +1230,18 @@ impl Insn {
             Insn::FixnumRShift { .. } => effects::Empty,
             Insn::ObjToString { .. } => effects::Any,
             Insn::AnyToString { .. } => effects::Any,
-            Insn::GuardType { .. } => effects::Any,
-            Insn::GuardTypeNot { .. } => effects::Any,
-            Insn::GuardBitEquals { .. } => effects::Any,
-            Insn::GuardAnyBitSet { .. } => effects::Any,
-            Insn::GuardNoBitsSet { .. } => effects::Any,
-            Insn::GuardGreaterEq { .. } => effects::Any,
-            Insn::GuardLess { .. } => effects::Any,
-            Insn::PatchPoint { .. } => effects::Any,
+            Insn::GuardType { .. } => Effect::read_write(abstract_heaps::Empty, abstract_heaps::Control),
+            Insn::GuardTypeNot { .. } => Effect::read_write(abstract_heaps::Empty, abstract_heaps::Control),
+            Insn::GuardBitEquals { .. } => Effect::read_write(abstract_heaps::Empty, abstract_heaps::Control),
+            Insn::GuardAnyBitSet { .. } => Effect::read_write(abstract_heaps::Empty, abstract_heaps::Control),
+            Insn::GuardNoBitsSet { .. } => Effect::read_write(abstract_heaps::Empty, abstract_heaps::Control),
+            Insn::GuardGreaterEq { .. } => Effect::read_write(abstract_heaps::Empty, abstract_heaps::Control),
+            Insn::GuardLess { .. } => Effect::read_write(abstract_heaps::Empty, abstract_heaps::Control),
+            Insn::PatchPoint { .. } => Effect::read_write(abstract_heaps::PatchPoint, abstract_heaps::Control),
             Insn::SideExit { .. } => effects::Any,
-            Insn::IncrCounter(_) => effects::Any,
-            Insn::IncrCounterPtr { .. } => effects::Any,
-            Insn::CheckInterrupts { .. } => effects::Any,
+            Insn::IncrCounter(_) => Effect::read_write(abstract_heaps::Empty, abstract_heaps::Other),
+            Insn::IncrCounterPtr { .. } => Effect::read_write(abstract_heaps::Empty, abstract_heaps::Other),
+            Insn::CheckInterrupts { .. } => Effect::read_write(abstract_heaps::InterruptFlag, abstract_heaps::Control),
             Insn::InvokeProc { .. } => effects::Any,
             Insn::RefineType { .. } => effects::Empty,
             Insn::HasType { .. } => effects::Empty,
@@ -1272,6 +1273,15 @@ pub struct InsnPrinter<'a> {
     iseq: Option<IseqPtr>,
 }
 
+fn get_local_var_id(iseq: IseqPtr, level: u32, ep_offset: u32) -> ID {
+    let mut current_iseq = iseq;
+    for _ in 0..level {
+        current_iseq = unsafe { rb_get_iseq_body_parent_iseq(current_iseq) };
+    }
+    let local_idx = ep_offset_to_local_idx(current_iseq, ep_offset);
+    unsafe { rb_zjit_local_id(current_iseq, local_idx.try_into().unwrap()) }
+}
+
 /// Get the name of a local variable given iseq, level, and ep_offset.
 /// Returns
 /// - `":name"` if iseq is available and name is a real identifier,
@@ -1281,12 +1291,7 @@ pub struct InsnPrinter<'a> {
 ///
 /// This mimics local_var_name() from iseq.c.
 fn get_local_var_name_for_printer(iseq: Option<IseqPtr>, level: u32, ep_offset: u32) -> Option<String> {
-    let mut current_iseq = iseq?;
-    for _ in 0..level {
-        current_iseq = unsafe { rb_get_iseq_body_parent_iseq(current_iseq) };
-    }
-    let local_idx = ep_offset_to_local_idx(current_iseq, ep_offset);
-    let id: ID = unsafe { rb_zjit_local_id(current_iseq, local_idx.try_into().unwrap()) };
+    let id = get_local_var_id(iseq?, level, ep_offset);
 
     if id.0 == 0 || unsafe { rb_id2str(id) } == Qfalse {
         return Some(String::from("<empty>"));
@@ -1653,8 +1658,8 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
                 let name = get_local_var_name_for_printer(self.iseq, level, ep_offset).map_or(String::new(), |x| format!("{x}, "));
                 write!(f, "GetLocal {name}l{level}, EP@{ep_offset}{}", if rest_param { ", *" } else { "" })
             },
-            &Insn::IsBlockParamModified { level } => {
-                write!(f, "IsBlockParamModified l{level}")
+            &Insn::IsBlockParamModified { ep } => {
+                write!(f, "IsBlockParamModified {ep}")
             },
             &Insn::SetLocal { val, level, ep_offset } => {
                 let name = get_local_var_name_for_printer(self.iseq, level, ep_offset).map_or(String::new(), |x| format!("{x}, "));
@@ -2220,7 +2225,6 @@ impl Function {
                     | PutSpecialObject {..}
                     | GetGlobal {..}
                     | GetLocal {..}
-                    | IsBlockParamModified {..}
                     | SideExit {..}
                     | EntryPoint {..}
                     | LoadPC
@@ -2273,6 +2277,7 @@ impl Function {
             &GuardGreaterEq { left, right, reason, state } => GuardGreaterEq { left: find!(left), right: find!(right), reason, state },
             &GuardLess { left, right, state } => GuardLess { left: find!(left), right: find!(right), state },
             &IsBlockGiven { lep } => IsBlockGiven { lep: find!(lep) },
+            &IsBlockParamModified { ep } => IsBlockParamModified { ep: find!(ep) },
             &GetBlockParam { level, ep_offset, state } => GetBlockParam { level, ep_offset, state: find!(state) },
             &FixnumAdd { left, right, state } => FixnumAdd { left: find!(left), right: find!(right), state },
             &FixnumSub { left, right, state } => FixnumSub { left: find!(left), right: find!(right), state },
@@ -3055,6 +3060,29 @@ impl Function {
     pub fn guard_not_shared(&mut self, block: BlockId, recv: InsnId, state: InsnId) {
         let flags = self.load_rbasic_flags(block, recv);
         self.push_insn(block, Insn::GuardNoBitsSet { val: flags, mask: Const::CUInt64(RUBY_ELTS_SHARED as u64), mask_name: Some(ID!(RUBY_ELTS_SHARED)), reason: SideExitReason::GuardNotShared, state });
+    }
+
+    // TODO: This helper is currently used for level>0 local reads only.
+    // Split GetLocal(level==0) into explicit SP/EP helpers in a follow-up.
+    fn get_local_from_ep(
+        &mut self,
+        block: BlockId,
+        ep_offset: u32,
+        level: u32,
+        return_type: Type,
+    ) -> InsnId {
+        let ep = self.push_insn(block, Insn::GetEP { level });
+        let local_id = get_local_var_id(self.iseq, level, ep_offset);
+        let ep_offset = i32::try_from(ep_offset)
+            .unwrap_or_else(|_| panic!("Could not convert ep_offset {ep_offset} to i32"));
+        let offset = -(SIZEOF_VALUE_I32 * ep_offset);
+
+        self.push_insn(block, Insn::LoadField {
+            recv: ep,
+            id: local_id,
+            offset,
+            return_type,
+        })
     }
 
     /// Rewrite eligible Send opcodes into SendDirect
@@ -4550,6 +4578,18 @@ impl Function {
                             _ => None,
                         })
                     }
+                    Insn::FixnumXor { left, right, .. } => {
+                        self.fold_fixnum_bop(insn_id, left, right, |l, r| match (l, r) {
+                            (Some(l), Some(r)) => Some(l ^ r),
+                            _ => None,
+                        })
+                    }
+                    Insn::FixnumAnd { left, right, .. } => {
+                        self.fold_fixnum_bop(insn_id, left, right, |l, r| match (l, r) {
+                            (Some(l), Some(r)) => Some(l & r),
+                            _ => None,
+                        })
+                    }
                     Insn::FixnumEq { left, right, .. } => {
                         self.fold_fixnum_pred(insn_id, left, right, |l, r| match (l, r) {
                             (Some(l), Some(r)) => Some(l == r),
@@ -4646,13 +4686,15 @@ impl Function {
             | &Insn::GetLEP
             | &Insn::LoadSelf
             | &Insn::GetLocal { .. }
-            | &Insn::IsBlockParamModified { .. }
             | &Insn::PutSpecialObject { .. }
             | &Insn::IncrCounter(_)
             | &Insn::IncrCounterPtr { .. } =>
                 {}
             | &Insn::IsBlockGiven { lep } => {
                 worklist.push_back(lep);
+            }
+            &Insn::IsBlockParamModified { ep } => {
+                worklist.push_back(ep);
             }
             &Insn::PatchPoint { state, .. }
             | &Insn::CheckInterrupts { state }
@@ -4997,6 +5039,29 @@ impl Function {
         }
     }
 
+    /// Remove duplicate PatchPoint instructions within each basic block.
+    /// Two PatchPoints are redundant if they assert the same Invariant and no
+    /// intervening instruction could invalidate it (i.e., writes to PatchPoint).
+    fn remove_redundant_patch_points(&mut self) {
+        for block_id in self.rpo() {
+            let mut seen = HashSet::new();
+            let insns = std::mem::take(&mut self.blocks[block_id.0].insns);
+            let mut new_insns = Vec::with_capacity(insns.len());
+            for insn_id in insns {
+                let insn = self.find(insn_id);
+                if let Insn::PatchPoint { invariant, .. } = insn {
+                    if !seen.insert(invariant) {
+                        continue;
+                    }
+                } else if insn.effects_of().write_bits().overlaps(abstract_heaps::PatchPoint) {
+                    seen.clear();
+                }
+                new_insns.push(insn_id);
+            }
+            self.blocks[block_id.0].insns = new_insns;
+        }
+    }
+
     /// Return a list that has entry_block and then jit_entry_blocks
     fn entry_blocks(&self) -> Vec<BlockId> {
         let mut entry_blocks = self.jit_entry_blocks.clone();
@@ -5220,6 +5285,8 @@ impl Function {
                     Counter::compile_hir_fold_constants_time_ns
                 } else if ident_equal!($name, clean_cfg) {
                     Counter::compile_hir_clean_cfg_time_ns
+                } else if ident_equal!($name, remove_redundant_patch_points) {
+                    Counter::compile_hir_remove_redundant_patch_points_time_ns
                 } else if ident_equal!($name, eliminate_dead_code) {
                     Counter::compile_hir_eliminate_dead_code_time_ns
                 } else {
@@ -5246,6 +5313,7 @@ impl Function {
         run_pass!(optimize_c_calls);
         run_pass!(fold_constants);
         run_pass!(clean_cfg);
+        run_pass!(remove_redundant_patch_points);
         run_pass!(eliminate_dead_code);
 
         if should_dump {
@@ -5478,6 +5546,7 @@ impl Function {
             | Insn::LoadField { .. }
             | Insn::GetConstantPath { .. }
             | Insn::IsBlockGiven { .. }
+            | Insn::IsBlockParamModified { .. }
             | Insn::GetGlobal { .. }
             | Insn::LoadPC
             | Insn::LoadEC
@@ -5498,7 +5567,6 @@ impl Function {
             | Insn::GetSpecialSymbol { .. }
             | Insn::GetLocal { .. }
             | Insn::GetBlockParam { .. }
-            | Insn::IsBlockParamModified { .. }
             | Insn::StoreField { .. } => {
                 Ok(())
             }
@@ -6674,9 +6742,7 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                 }
                 YARVINSN_opt_getconstant_path => {
                     let ic = get_arg(pc, 0).as_ptr();
-                    // TODO: Remove this extra Snapshot and pass `exit_id` to `GetConstantPath` instead.
-                    let snapshot = fun.push_insn(block, Insn::Snapshot { state: exit_state });
-                    state.stack_push(fun.push_insn(block, Insn::GetConstantPath { ic, state: snapshot }));
+                    state.stack_push(fun.push_insn(block, Insn::GetConstantPath { ic, state: exit_id }));
                 }
                 YARVINSN_branchunless | YARVINSN_branchunless_without_ints => {
                     if opcode == YARVINSN_branchunless {
@@ -6830,7 +6896,7 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                 }
                 YARVINSN_getlocal_WC_1 => {
                     let ep_offset = get_arg(pc, 0).as_u32();
-                    state.stack_push(fun.push_insn(block, Insn::GetLocal { ep_offset, level: 1, use_sp: false, rest_param: false }));
+                    state.stack_push(fun.get_local_from_ep(block, ep_offset, 1, types::BasicObject));
                 }
                 YARVINSN_setlocal_WC_1 => {
                     let ep_offset = get_arg(pc, 0).as_u32();
@@ -6839,7 +6905,11 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                 YARVINSN_getlocal => {
                     let ep_offset = get_arg(pc, 0).as_u32();
                     let level = get_arg(pc, 1).as_u32();
-                    state.stack_push(fun.push_insn(block, Insn::GetLocal { ep_offset, level, use_sp: false, rest_param: false }));
+                    if level == 0 {
+                        state.stack_push(fun.push_insn(block, Insn::GetLocal { ep_offset, level, use_sp: false, rest_param: false }));
+                    } else {
+                        state.stack_push(fun.get_local_from_ep(block, ep_offset, level, types::BasicObject));
+                    }
                 }
                 YARVINSN_setlocal => {
                     let ep_offset = get_arg(pc, 0).as_u32();
@@ -6927,7 +6997,8 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
 
                     // If the block param is already a Proc (modified), read it from EP.
                     // Otherwise, convert it to a Proc and store it to EP.
-                    let is_modified = fun.push_insn(block, Insn::IsBlockParamModified { level });
+                    let ep = fun.push_insn(block, Insn::GetEP { level });
+                    let is_modified = fun.push_insn(block, Insn::IsBlockParamModified { ep });
 
                     let locals_count = state.locals.len();
                     let stack_count = state.stack.len();
@@ -6950,12 +7021,11 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     }));
 
                     // Push modified block: read Proc from EP.
-                    let modified_val = fun.push_insn(modified_block, Insn::GetLocal {
-                        ep_offset,
-                        level,
-                        use_sp: false,
-                        rest_param: false,
-                    });
+                    let modified_val = if level == 0 {
+                        fun.push_insn(modified_block, Insn::GetLocal { ep_offset, level, use_sp: false, rest_param: false })
+                    } else {
+                        fun.get_local_from_ep(modified_block, ep_offset, level, types::BasicObject)
+                    };
                     finish_getblockparam_branch(
                         &mut fun,
                         modified_block,
@@ -8432,14 +8502,11 @@ mod graphviz_tests {
           bb3 [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0">
         <TR><TD ALIGN="LEFT" PORT="params" BGCOLOR="gray">bb3(v10:BasicObject, v11:BasicObject, v12:BasicObject)&nbsp;</TD></TR>
         <TR><TD ALIGN="left" PORT="v15">PatchPoint NoTracePoint&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v18">PatchPoint NoTracePoint&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v25">PatchPoint NoTracePoint&nbsp;</TD></TR>
         <TR><TD ALIGN="left" PORT="v26">PatchPoint MethodRedefined(Integer@0x1000, |@0x1008, cme:0x1010)&nbsp;</TD></TR>
         <TR><TD ALIGN="left" PORT="v27">v27:Fixnum = GuardType v11, Fixnum&nbsp;</TD></TR>
         <TR><TD ALIGN="left" PORT="v28">v28:Fixnum = GuardType v12, Fixnum&nbsp;</TD></TR>
         <TR><TD ALIGN="left" PORT="v29">v29:Fixnum = FixnumOr v27, v28&nbsp;</TD></TR>
         <TR><TD ALIGN="left" PORT="v30">IncrCounter inline_cfunc_optimized_send_count&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v21">PatchPoint NoTracePoint&nbsp;</TD></TR>
         <TR><TD ALIGN="left" PORT="v22">CheckInterrupts&nbsp;</TD></TR>
         <TR><TD ALIGN="left" PORT="v23">Return v29&nbsp;</TD></TR>
         </TABLE>>];
@@ -8495,7 +8562,6 @@ mod graphviz_tests {
         <TR><TD ALIGN="left" PORT="v18">v18:Truthy = RefineType v9, Truthy&nbsp;</TD></TR>
         <TR><TD ALIGN="left" PORT="v20">PatchPoint NoTracePoint&nbsp;</TD></TR>
         <TR><TD ALIGN="left" PORT="v21">v21:Fixnum[3] = Const Value(3)&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v23">PatchPoint NoTracePoint&nbsp;</TD></TR>
         <TR><TD ALIGN="left" PORT="v24">CheckInterrupts&nbsp;</TD></TR>
         <TR><TD ALIGN="left" PORT="v25">Return v21&nbsp;</TD></TR>
         </TABLE>>];
@@ -8504,7 +8570,6 @@ mod graphviz_tests {
         <TR><TD ALIGN="LEFT" PORT="params" BGCOLOR="gray">bb4(v26:BasicObject, v27:Falsy)&nbsp;</TD></TR>
         <TR><TD ALIGN="left" PORT="v30">PatchPoint NoTracePoint&nbsp;</TD></TR>
         <TR><TD ALIGN="left" PORT="v31">v31:Fixnum[4] = Const Value(4)&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v33">PatchPoint NoTracePoint&nbsp;</TD></TR>
         <TR><TD ALIGN="left" PORT="v34">CheckInterrupts&nbsp;</TD></TR>
         <TR><TD ALIGN="left" PORT="v35">Return v31&nbsp;</TD></TR>
         </TABLE>>];
