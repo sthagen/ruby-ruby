@@ -431,6 +431,16 @@ impl PtrPrintMap {
     }
 }
 
+struct Offset(i32);
+
+impl std::fmt::LowerHex for Offset {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let prefix = if f.alternate() { "0x" } else { "" };
+        let bare_hex = format!("{:x}", self.0.abs());
+        f.pad_integral(self.0 >= 0, prefix, &bare_hex)
+    }
+}
+
 impl PtrPrintMap {
     /// Map a pointer for printing
     pub fn map_ptr<T>(&self, ptr: *const T) -> *const T {
@@ -467,8 +477,8 @@ impl PtrPrintMap {
         self.map_ptr(id as *const c_void)
     }
 
-    fn map_offset(&self, id: i32) -> *const c_void {
-        self.map_ptr(id as *const c_void)
+    fn map_offset(&self, id: i32) -> Offset {
+        Offset(self.map_ptr(id as *const c_void) as i32)
     }
 
     /// Map shape ID into a pointer for printing
@@ -1644,8 +1654,8 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
             &Insn::GetEP { level } => write!(f, "GetEP {level}"),
             Insn::GetLEP => write!(f, "GetLEP"),
             Insn::LoadSelf => write!(f, "LoadSelf"),
-            &Insn::LoadField { recv, id, offset, return_type: _ } => write!(f, "LoadField {recv}, :{}@{:p}", id.contents_lossy(), self.ptr_map.map_offset(offset)),
-            &Insn::StoreField { recv, id, offset, val } => write!(f, "StoreField {recv}, :{}@{:p}, {val}", id.contents_lossy(), self.ptr_map.map_offset(offset)),
+            &Insn::LoadField { recv, id, offset, return_type: _ } => write!(f, "LoadField {recv}, :{}@{:#x}", id.contents_lossy(), self.ptr_map.map_offset(offset)),
+            &Insn::StoreField { recv, id, offset, val } => write!(f, "StoreField {recv}, :{}@{:#x}, {val}", id.contents_lossy(), self.ptr_map.map_offset(offset)),
             &Insn::WriteBarrier { recv, val } => write!(f, "WriteBarrier {recv}, {val}"),
             Insn::SetIvar { self_val, id, val, .. } => write!(f, "SetIvar {self_val}, :{}, {val}", id.contents_lossy()),
             Insn::GetGlobal { id, .. } => write!(f, "GetGlobal :{}", id.contents_lossy()),
@@ -1903,31 +1913,37 @@ fn can_direct_send(function: &mut Function, block: BlockId, iseq: *const rb_iseq
         return false;
     }
 
-    // Because we exclude e.g. post parameters above, they are also excluded from the sum below.
+    // Because we exclude e.g. post parameters above, they are also excluded from the checks below.
     let lead_num = params.lead_num;
     let opt_num = params.opt_num;
     let keyword = params.keyword;
     let kw_req_num = if keyword.is_null() { 0 } else { unsafe { (*keyword).required_num } };
     let kw_total_num = if keyword.is_null() { 0 } else { unsafe { (*keyword).num } };
-    // Minimum args: all required positional + all required keywords
-    let min_argc = lead_num + kw_req_num;
-    // Maximum args: all positional (required + optional) + all keywords (required + optional)
-    let max_argc = lead_num + opt_num + kw_total_num;
+    let kwarg = unsafe { rb_vm_ci_kwarg(ci) };
+    let caller_kw_count = if kwarg.is_null() { 0 } else { (unsafe { get_cikw_keyword_len(kwarg) }) as usize };
+    let caller_positional = match args.len().checked_sub(caller_kw_count) {
+        Some(count) => count,
+        None => {
+            function.set_dynamic_send_reason(send_insn, ArgcParamMismatch);
+            return false;
+        }
+    };
 
-    can_send = c_int::try_from(args.len())
+    let positional_ok = c_int::try_from(caller_positional)
         .as_ref()
-        .map(|argc| (min_argc..=max_argc).contains(argc))
+        .map(|argc| (lead_num..=lead_num + opt_num).contains(argc))
         .unwrap_or(false);
-    if !can_send {
+    let keyword_ok = c_int::try_from(caller_kw_count)
+        .as_ref()
+        .map(|argc| (kw_req_num..=kw_total_num).contains(argc))
+        .unwrap_or(false);
+    if !positional_ok || !keyword_ok {
         function.set_dynamic_send_reason(send_insn, ArgcParamMismatch);
         return false
     }
 
     // asm.ccall() doesn't support 6+ args. Compute the final argc after keyword setup:
     // final_argc = caller's positional args + callee's total keywords (all kw slots are filled).
-    let kwarg = unsafe { rb_vm_ci_kwarg(ci) };
-    let caller_kw_count = if kwarg.is_null() { 0 } else { (unsafe { get_cikw_keyword_len(kwarg) }) as usize };
-    let caller_positional = args.len() - caller_kw_count;
     // Right now, the JIT entrypoint accepts the block as an param
     // We may remove it, remove the block_arg addition to match
     // See: https://github.com/ruby/ruby/pull/15911#discussion_r2710544982
