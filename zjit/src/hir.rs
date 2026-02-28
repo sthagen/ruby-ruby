@@ -7,7 +7,7 @@
 #![allow(clippy::match_like_matches_macro)]
 use crate::{
     backend::lir::C_ARG_OPNDS,
-    cast::IntoUsize, codegen::local_idx_to_ep_offset, cruby::*, invariants::has_singleton_class_of, payload::{get_or_create_iseq_payload, IseqPayload}, options::{debug, get_option, DumpHIR}, state::ZJITState, json::Json
+    cast::IntoUsize, codegen::local_idx_to_ep_offset, cruby::*, invariants::{self, has_singleton_class_of}, payload::{get_or_create_iseq_payload, IseqPayload}, options::{debug, get_option, DumpHIR}, state::ZJITState, json::Json
 };
 use std::{
     cell::RefCell, collections::{BTreeSet, HashMap, HashSet, VecDeque}, ffi::{c_void, c_uint, c_int, CStr}, fmt::Display, mem::{align_of, size_of}, ptr, slice::Iter
@@ -151,6 +151,9 @@ pub enum Invariant {
     NoSingletonClass {
         klass: VALUE,
     },
+    /// Only the root box is active, so we can safely read from the prime classext.
+    /// Invalidated if a non-root box duplicates any classext.
+    RootBoxOnly,
 }
 
 impl Invariant {
@@ -290,6 +293,7 @@ impl<'a> std::fmt::Display for InvariantPrinter<'a> {
                     class_name,
                     self.ptr_map.map_ptr(klass.as_ptr::<VALUE>()))
             }
+            Invariant::RootBoxOnly => write!(f, "RootBoxOnly"),
         }
     }
 }
@@ -522,6 +526,9 @@ pub enum SideExitReason {
     FixnumModByZero,
     FixnumDivByZero,
     BoxFixnumOverflow,
+    SplatKwNotNilOrHash,
+    SplatKwPolymorphic,
+    SplatKwNotProfiled,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -853,6 +860,8 @@ pub enum Insn {
     LoadPC,
     /// Load EC
     LoadEC,
+    /// Load SP
+    LoadSP,
     /// Load cfp->self
     LoadSelf,
     LoadField { recv: InsnId, id: ID, offset: i32, return_type: Type },
@@ -861,11 +870,6 @@ pub enum Insn {
     StoreField { recv: InsnId, id: ID, offset: i32, val: InsnId },
     WriteBarrier { recv: InsnId, val: InsnId },
 
-    /// Get a local variable from a higher scope or the heap.
-    /// If `use_sp` is true, it uses the SP register to optimize the read.
-    /// `rest_param` is used by infer_types to infer the ArrayExact type.
-    /// TODO: Replace the level == 0 + use_sp path with LoadSP + LoadField.
-    GetLocal { level: u32, ep_offset: u32, use_sp: bool, rest_param: bool },
     /// Check whether VM_FRAME_FLAG_MODIFIED_BLOCK_PARAM is set in the environment flags.
     /// Returns CBool (0/1).
     IsBlockParamModified { ep: InsnId },
@@ -883,10 +887,6 @@ pub enum Insn {
 
     /// Get the EP at the given level from the current CFP.
     GetEP { level: u32 },
-
-    /// Get the EP of the ISeq of the containing method, or "local level", skipping over block-level EPs.
-    /// Equivalent of GET_LEP() macro.
-    GetLEP,
 
     /// Own a FrameState so that instructions can look up their dominating FrameState when
     /// generating deopt side-exits and frame reconstruction metadata. Does not directly generate
@@ -1169,7 +1169,8 @@ impl Insn {
             Insn::GetConstantPath { .. } => effects::Any,
             Insn::IsBlockGiven { .. } => Effect::read_write(abstract_heaps::Other, abstract_heaps::Empty),
             Insn::FixnumBitCheck { .. } => effects::Empty,
-            Insn::IsA { .. } => effects::Empty,
+            // IsA needs to read the class of the value and traverse the class hierarchy, which we model as reading from Memory.
+            Insn::IsA { .. } => Effect::read_write(abstract_heaps::Memory, abstract_heaps::Empty),
             Insn::GetGlobal { .. } => effects::Any,
             Insn::SetGlobal { .. } => effects::Any,
             Insn::GetIvar { .. } => effects::Any,
@@ -1177,13 +1178,13 @@ impl Insn {
             Insn::DefinedIvar { .. } => effects::Any,
             Insn::LoadPC { .. } => Effect::read_write(abstract_heaps::PC, abstract_heaps::Empty),
             Insn::LoadEC { .. } => effects::Empty,
-            Insn::GetEP { .. } => effects::Empty,
-            Insn::GetLEP { .. } => effects::Empty,
+            Insn::LoadSP { .. } => effects::Empty,
+            // GetEP reads from the current frame pointer (abstract_heaps::Frame) and also traverses previous frames too.
+            Insn::GetEP { .. } => Effect::read_write(abstract_heaps::Memory, abstract_heaps::Empty),
             Insn::LoadSelf { .. } => Effect::read_write(abstract_heaps::Frame, abstract_heaps::Empty),
             Insn::LoadField { .. } => Effect::read_write(abstract_heaps::Memory, abstract_heaps::Empty),
             Insn::StoreField { .. } => effects::Any,
             Insn::WriteBarrier { .. } => effects::Any,
-            Insn::GetLocal   { .. } => Effect::read_write(abstract_heaps::Locals, abstract_heaps::Empty),
             Insn::SetLocal { .. } => effects::Any,
             Insn::GetSpecialSymbol { .. } => effects::Any,
             Insn::GetSpecialNumber { .. } => effects::Any,
@@ -1240,8 +1241,16 @@ impl Insn {
             Insn::FixnumRShift { .. } => effects::Empty,
             Insn::ObjToString { .. } => effects::Any,
             Insn::AnyToString { .. } => effects::Any,
-            Insn::GuardType { .. } => Effect::read_write(abstract_heaps::Empty, abstract_heaps::Control),
-            Insn::GuardTypeNot { .. } => Effect::read_write(abstract_heaps::Empty, abstract_heaps::Control),
+            Insn::GuardType { guard_type, .. }
+                => Effect::read_write(
+                    if guard_type.is_subtype(types::Immediate) { abstract_heaps::Empty } else { abstract_heaps::Memory },
+                    abstract_heaps::Control
+                ),
+            Insn::GuardTypeNot { guard_type, .. }
+                => Effect::read_write(
+                    if guard_type.is_subtype(types::Immediate) { abstract_heaps::Empty } else { abstract_heaps::Memory },
+                    abstract_heaps::Control
+                ),
             Insn::GuardBitEquals { .. } => Effect::read_write(abstract_heaps::Empty, abstract_heaps::Control),
             Insn::GuardAnyBitSet { .. } => Effect::read_write(abstract_heaps::Empty, abstract_heaps::Control),
             Insn::GuardNoBitsSet { .. } => Effect::read_write(abstract_heaps::Empty, abstract_heaps::Control),
@@ -1254,7 +1263,11 @@ impl Insn {
             Insn::CheckInterrupts { .. } => Effect::read_write(abstract_heaps::InterruptFlag, abstract_heaps::Control),
             Insn::InvokeProc { .. } => effects::Any,
             Insn::RefineType { .. } => effects::Empty,
-            Insn::HasType { .. } => effects::Empty,
+            Insn::HasType { expected, .. }
+                => Effect::read_write(
+                    if expected.is_subtype(types::Immediate) { abstract_heaps::Empty } else { abstract_heaps::Memory },
+                    abstract_heaps::Control
+                ),
             Insn::Entries { .. } => effects::Any,
         }
     }
@@ -1303,11 +1316,16 @@ fn get_local_var_id(iseq: IseqPtr, level: u32, ep_offset: u32) -> ID {
 fn get_local_var_name_for_printer(iseq: Option<IseqPtr>, level: u32, ep_offset: u32) -> Option<String> {
     let id = get_local_var_id(iseq?, level, ep_offset);
 
-    if id.0 == 0 || unsafe { rb_id2str(id) } == Qfalse {
+    if id_is_empty(id) {
         return Some(String::from("<empty>"));
     }
 
     Some(format!(":{}", id.contents_lossy()))
+}
+
+
+fn id_is_empty(id: ID) -> bool {
+    id.0 == 0 || unsafe { rb_id2str(id) } == Qfalse
 }
 
 /// Construct a qualified method name for display/debug output.
@@ -1651,23 +1669,22 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
             Insn::GetIvar { self_val, id, .. } => write!(f, "GetIvar {self_val}, :{}", id.contents_lossy()),
             Insn::LoadPC => write!(f, "LoadPC"),
             Insn::LoadEC => write!(f, "LoadEC"),
+            Insn::LoadSP => write!(f, "LoadSP"),
             &Insn::GetEP { level } => write!(f, "GetEP {level}"),
-            Insn::GetLEP => write!(f, "GetLEP"),
             Insn::LoadSelf => write!(f, "LoadSelf"),
-            &Insn::LoadField { recv, id, offset, return_type: _ } => write!(f, "LoadField {recv}, :{}@{:#x}", id.contents_lossy(), self.ptr_map.map_offset(offset)),
+            &Insn::LoadField { recv, id, offset, return_type: _ } => {
+                let field_name = if id_is_empty(id) {
+                    std::borrow::Cow::Borrowed("<empty>")
+                } else {
+                    id.contents_lossy()
+                };
+                write!(f, "LoadField {recv}, :{}@{:#x}", field_name, self.ptr_map.map_offset(offset))
+            }
             &Insn::StoreField { recv, id, offset, val } => write!(f, "StoreField {recv}, :{}@{:#x}, {val}", id.contents_lossy(), self.ptr_map.map_offset(offset)),
             &Insn::WriteBarrier { recv, val } => write!(f, "WriteBarrier {recv}, {val}"),
             Insn::SetIvar { self_val, id, val, .. } => write!(f, "SetIvar {self_val}, :{}, {val}", id.contents_lossy()),
             Insn::GetGlobal { id, .. } => write!(f, "GetGlobal :{}", id.contents_lossy()),
             Insn::SetGlobal { id, val, .. } => write!(f, "SetGlobal :{}, {val}", id.contents_lossy()),
-            &Insn::GetLocal { level, ep_offset, use_sp: true, rest_param } => {
-                let name = get_local_var_name_for_printer(self.iseq, level, ep_offset).map_or(String::new(), |x| format!("{x}, "));
-                write!(f, "GetLocal {name}l{level}, SP@{}{}", ep_offset + 1, if rest_param { ", *" } else { "" })
-            },
-            &Insn::GetLocal { level, ep_offset, use_sp: false, rest_param } => {
-                let name = get_local_var_name_for_printer(self.iseq, level, ep_offset).map_or(String::new(), |x| format!("{x}, "));
-                write!(f, "GetLocal {name}l{level}, EP@{ep_offset}{}", if rest_param { ", *" } else { "" })
-            },
             &Insn::IsBlockParamModified { ep } => {
                 write!(f, "IsBlockParamModified {ep}")
             },
@@ -1828,7 +1845,9 @@ impl<T: Copy + Into<usize> + PartialEq> UnionFind<T> {
         if idx.into() >= self.forwarded.len() {
             self.forwarded.resize(idx.into()+1, None);
         }
-        self.forwarded[idx.into()] = Some(value);
+        if idx != value {
+            self.forwarded[idx.into()] = Some(value);
+        }
     }
 
     /// Find the set representative for `insn`. Perform path compression at the same time to speed
@@ -1857,7 +1876,10 @@ impl<T: Copy + Into<usize> + PartialEq> UnionFind<T> {
         loop {
             match self.at(result) {
                 None => return result,
-                Some(insn) => result = insn,
+                Some(insn) => {
+                    assert!(result != insn, "cycle detected");
+                    result = insn;
+                }
             }
         }
     }
@@ -2169,6 +2191,17 @@ impl Function {
         }
     }
 
+    /// Assume that only the root box is active, so we can safely read from the prime classext.
+    /// Returns true if safe to assume so and emits a PatchPoint.
+    pub fn assume_root_box(&mut self, block: BlockId, state: InsnId) -> bool {
+        if invariants::non_root_box_created() {
+            false
+        } else {
+            self.push_insn(block, Insn::PatchPoint { invariant: Invariant::RootBoxOnly, state });
+            true
+        }
+    }
+
     /// Assume that objects of a given class will have no singleton class.
     /// Returns true if safe to assume so and emits a PatchPoint.
     /// Returns false if we've already seen a singleton class for this class,
@@ -2240,13 +2273,12 @@ impl Function {
                     | PatchPoint {..}
                     | PutSpecialObject {..}
                     | GetGlobal {..}
-                    | GetLocal {..}
                     | SideExit {..}
                     | EntryPoint {..}
                     | LoadPC
+                    | LoadSP
                     | LoadEC
                     | GetEP {..}
-                    | GetLEP
                     | LoadSelf
                     | IncrCounterPtr {..}
                     | IncrCounter(_)) => result.clone(),
@@ -2583,9 +2615,9 @@ impl Function {
             Insn::GetGlobal { .. } => types::BasicObject,
             Insn::GetIvar { .. } => types::BasicObject,
             Insn::LoadPC => types::CPtr,
+            Insn::LoadSP => types::CPtr,
             Insn::LoadEC => types::CPtr,
             Insn::GetEP { .. } => types::CPtr,
-            Insn::GetLEP => types::CPtr,
             Insn::LoadSelf => types::BasicObject,
             &Insn::LoadField { return_type, .. } => return_type,
             Insn::GetSpecialSymbol { .. } => types::BasicObject,
@@ -2595,8 +2627,6 @@ impl Function {
             Insn::ToArray { .. } => types::ArrayExact,
             Insn::ObjToString { .. } => types::BasicObject,
             Insn::AnyToString { .. } => types::String,
-            Insn::GetLocal { rest_param: true, .. } => types::ArrayExact,
-            Insn::GetLocal { .. } => types::BasicObject,
             Insn::IsBlockParamModified { .. } => types::CBool,
             Insn::GetBlockParam { .. } => types::BasicObject,
             // The type of Snapshot doesn't really matter; it's never materialized. It's used only
@@ -3078,16 +3108,14 @@ impl Function {
         self.push_insn(block, Insn::GuardNoBitsSet { val: flags, mask: Const::CUInt64(RUBY_ELTS_SHARED as u64), mask_name: Some(ID!(RUBY_ELTS_SHARED)), reason: SideExitReason::GuardNotShared, state });
     }
 
-    // TODO: This helper is currently used for level>0 local reads only.
-    // Split GetLocal(level==0) into explicit SP/EP helpers in a follow-up.
     fn get_local_from_ep(
         &mut self,
         block: BlockId,
+        ep: InsnId,
         ep_offset: u32,
         level: u32,
         return_type: Type,
     ) -> InsnId {
-        let ep = self.push_insn(block, Insn::GetEP { level });
         let local_id = get_local_var_id(self.iseq, level, ep_offset);
         let ep_offset = i32::try_from(ep_offset)
             .unwrap_or_else(|_| panic!("Could not convert ep_offset {ep_offset} to i32"));
@@ -3095,6 +3123,26 @@ impl Function {
 
         self.push_insn(block, Insn::LoadField {
             recv: ep,
+            id: local_id,
+            offset,
+            return_type,
+        })
+    }
+
+    fn get_local_from_sp(
+        &mut self,
+        block: BlockId,
+        sp: InsnId,
+        ep_offset: u32,
+        return_type: Type,
+    ) -> InsnId {
+        let local_id = get_local_var_id(self.iseq, 0, ep_offset);
+        let ep_offset = i32::try_from(ep_offset)
+            .unwrap_or_else(|_| panic!("Could not convert ep_offset {ep_offset} to i32"));
+        let offset = -(SIZEOF_VALUE_I32 * (ep_offset + 1));
+
+        self.push_insn(block, Insn::LoadField {
+            recv: sp,
             id: local_id,
             offset,
             return_type,
@@ -3198,6 +3246,12 @@ impl Function {
                                 self.push_insn_id(block, insn_id); continue;
                             }
 
+                            // Check if the args are compatible before emitting any assmptions
+                            let Ok((send_state, processed_args, kw_bits)) = self.prepare_direct_send_args(block, &args, ci, iseq, state)
+                                .inspect_err(|&reason| self.set_dynamic_send_reason(insn_id, reason)) else {
+                                self.push_insn_id(block, insn_id); continue;
+                            };
+
                             // Check singleton class assumption first, before emitting other patchpoints
                             if !self.assume_no_singleton_classes(block, klass, state) {
                                 self.set_dynamic_send_reason(insn_id, SingletonClassSeen);
@@ -3211,11 +3265,6 @@ impl Function {
                             if let Some(profiled_type) = profiled_type {
                                 recv = self.push_insn(block, Insn::GuardType { val: recv, guard_type: Type::from_profiled_type(profiled_type), state });
                             }
-
-                            let Ok((send_state, processed_args, kw_bits)) = self.prepare_direct_send_args(block, &args, ci, iseq, state)
-                                .inspect_err(|&reason| self.set_dynamic_send_reason(insn_id, reason)) else {
-                                self.push_insn_id(block, insn_id); continue;
-                            };
 
                             let send_direct = self.push_insn(block, Insn::SendDirect { recv, cd, cme, iseq, args: processed_args, kw_bits, state: send_state, blockiseq });
                             self.make_equal_to(insn_id, send_direct);
@@ -3236,6 +3285,12 @@ impl Function {
                                 self.push_insn_id(block, insn_id); continue;
                             }
 
+                            // Check if the args are compatible before emitting any assmptions
+                            let Ok((send_state, processed_args, kw_bits)) = self.prepare_direct_send_args(block, &args, ci, iseq, state)
+                                .inspect_err(|&reason| self.set_dynamic_send_reason(insn_id, reason)) else {
+                                self.push_insn_id(block, insn_id); continue;
+                            };
+
                             // Patch points:
                             // Check for "defined with an un-shareable Proc in a different Ractor"
                             if !procv.shareable_p() && !self.assume_single_ractor_mode(block, state) {
@@ -3252,11 +3307,6 @@ impl Function {
                             if let Some(profiled_type) = profiled_type {
                                 recv = self.push_insn(block, Insn::GuardType { val: recv, guard_type: Type::from_profiled_type(profiled_type), state });
                             }
-
-                            let Ok((send_state, processed_args, kw_bits)) = self.prepare_direct_send_args(block, &args, ci, iseq, state)
-                                .inspect_err(|&reason| self.set_dynamic_send_reason(insn_id, reason)) else {
-                                self.push_insn_id(block, insn_id); continue;
-                            };
 
                             let send_direct = self.push_insn(block, Insn::SendDirect { recv, cd, cme, iseq, args: processed_args, kw_bits, state: send_state, blockiseq: None });
                             self.make_equal_to(insn_id, send_direct);
@@ -3505,7 +3555,10 @@ impl Function {
                                 state
                             });
 
-                            let lep = fun.push_insn(block, Insn::GetLEP);
+                            // Get the EP of the ISeq of the containing method, or "local level", skipping over block-level EPs.
+                            // Equivalent of GET_LEP() macro.
+                            let level = get_lvar_level(fun.iseq);
+                            let lep = fun.push_insn(block, Insn::GetEP { level });
                             // Load ep[VM_ENV_DATA_INDEX_ME_CREF]
                             let method_entry = fun.push_insn(block, Insn::LoadField { recv: lep, id: ID!(_ep_method_entry), offset: SIZEOF_VALUE_I32 * VM_ENV_DATA_INDEX_ME_CREF, return_type: types::RubyValue });
                             // Guard that it matches the expected CME
@@ -3601,6 +3654,7 @@ impl Function {
                                 continue;
                             }
 
+                            // Check if the args are compatible before emitting any assmptions
                             let Ok((send_state, processed_args, kw_bits)) = self.prepare_direct_send_args(block, &args, ci, super_iseq, state)
                                 .inspect_err(|&reason| self.set_dynamic_send_reason(insn_id, reason)) else {
                                 self.push_insn_id(block, insn_id); continue;
@@ -3865,10 +3919,52 @@ impl Function {
                             // entered the compiler.  That means we can just return nil for this
                             // shape + iv name
                             self.push_insn(block, Insn::Const { val: Const::Value(Qnil) })
+                        } else if recv_type.flags().is_t_class_or_module() {
+                            // Class/module ivar: load from prime classext's fields_obj
+                            if self.assume_root_box(block, state) {
+                                // Root box only: load directly from prime classext
+                                let fields_obj = self.push_insn(block, Insn::LoadField {
+                                    recv: self_val, id: ID!(_fields_obj),
+                                    offset: RCLASS_OFFSET_PRIME_FIELDS_OBJ as i32,
+                                    return_type: types::RubyValue,
+                                });
+                                if recv_type.flags().is_fields_embedded() {
+                                    let offset = ROBJECT_OFFSET_AS_ARY as i32
+                                        + (SIZEOF_VALUE * ivar_index.to_usize()) as i32;
+                                    self.push_insn(block, Insn::LoadField {
+                                        recv: fields_obj, id, offset,
+                                        return_type: types::BasicObject,
+                                    })
+                                } else {
+                                    let ptr = self.push_insn(block, Insn::LoadField {
+                                        recv: fields_obj, id: ID!(_as_heap),
+                                        offset: ROBJECT_OFFSET_AS_HEAP_FIELDS as i32,
+                                        return_type: types::CPtr,
+                                    });
+                                    let offset = SIZEOF_VALUE_I32 * ivar_index as i32;
+                                    self.push_insn(block, Insn::LoadField {
+                                        recv: ptr, id, offset,
+                                        return_type: types::BasicObject,
+                                    })
+                                }
+                            } else {
+                                // Non-root box active: fall back to C call
+                                // NOTE: it's fine to use rb_ivar_get_at_no_ractor_check because
+                                // getinstancevariable does assume_single_ractor_mode()
+                                let ivar_index_insn = self.push_insn(block, Insn::Const { val: Const::CUInt16(ivar_index as u16) });
+                                self.push_insn(block, Insn::CCall {
+                                    cfunc: rb_ivar_get_at_no_ractor_check as *const u8,
+                                    recv: self_val,
+                                    args: vec![ivar_index_insn],
+                                    name: ID!(rb_ivar_get_at_no_ractor_check),
+                                    return_type: types::BasicObject,
+                                    elidable: true })
+                            }
                         } else if !recv_type.flags().is_t_object() {
+                            // Non-T_OBJECT, non-class/module (e.g. T_DATA): fall back to C call
                             // NOTE: it's fine to use rb_ivar_get_at_no_ractor_check because
                             // getinstancevariable does assume_single_ractor_mode()
-                            let ivar_index_insn: InsnId = self.push_insn(block, Insn::Const { val: Const::CUInt16(ivar_index as u16) });
+                            let ivar_index_insn = self.push_insn(block, Insn::Const { val: Const::CUInt16(ivar_index as u16) });
                             self.push_insn(block, Insn::CCall {
                                 cfunc: rb_ivar_get_at_no_ractor_check as *const u8,
                                 recv: self_val,
@@ -4606,6 +4702,12 @@ impl Function {
                             _ => None,
                         })
                     }
+                    Insn::FixnumOr { left, right, .. } => {
+                        self.fold_fixnum_bop(insn_id, left, right, |l, r| match (l, r) {
+                            (Some(l), Some(r)) => Some(l | r),
+                            _ => None,
+                        })
+                    }
                     Insn::FixnumEq { left, right, .. } => {
                         self.fold_fixnum_pred(insn_id, left, right, |l, r| match (l, r) {
                             (Some(l), Some(r)) => Some(l == r),
@@ -4697,11 +4799,10 @@ impl Function {
             | &Insn::Entries { .. }
             | &Insn::EntryPoint { .. }
             | &Insn::LoadPC
+            | &Insn::LoadSP
             | &Insn::LoadEC
             | &Insn::GetEP { .. }
-            | &Insn::GetLEP
             | &Insn::LoadSelf
-            | &Insn::GetLocal { .. }
             | &Insn::PutSpecialObject { .. }
             | &Insn::IncrCounter(_)
             | &Insn::IncrCounterPtr { .. } =>
@@ -5565,9 +5666,9 @@ impl Function {
             | Insn::IsBlockParamModified { .. }
             | Insn::GetGlobal { .. }
             | Insn::LoadPC
+            | Insn::LoadSP
             | Insn::LoadEC
             | Insn::GetEP { .. }
-            | Insn::GetLEP
             | Insn::LoadSelf
             | Insn::Snapshot { .. }
             | Insn::Jump { .. }
@@ -5581,7 +5682,6 @@ impl Function {
             | Insn::GetClassVar { .. }
             | Insn::GetSpecialNumber { .. }
             | Insn::GetSpecialSymbol { .. }
-            | Insn::GetLocal { .. }
             | Insn::GetBlockParam { .. }
             | Insn::StoreField { .. } => {
                 Ok(())
@@ -6678,6 +6778,33 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     };
                     state.stack_push(obj);
                 }
+                YARVINSN_splatkw => {
+                    let block_val = state.stack_pop()?;
+                    let hash = state.stack_pop()?;
+                    // Get profiled type of hash (operand index 0)
+                    let summary = profiles.payload.profile.get_operand_types(exit_state.insn_idx)
+                        .and_then(|types| types.first())
+                        .map(|dist| TypeDistributionSummary::new(dist));
+                    let Some(summary) = summary else {
+                        fun.push_insn(block, Insn::SideExit { state: exit_id, reason: SideExitReason::SplatKwNotProfiled });
+                        break;  // End the block
+                    };
+                    if !summary.is_monomorphic() {
+                        fun.push_insn(block, Insn::SideExit { state: exit_id, reason: SideExitReason::SplatKwPolymorphic });
+                        break;  // End the block
+                    }
+                    let ty = Type::from_profiled_type(summary.bucket(0));
+                    let obj = if ty.is_subtype(types::NilClass) {
+                        fun.push_insn(block, Insn::GuardType { val: hash, guard_type: types::NilClass, state: exit_id })
+                    } else if ty.is_subtype(types::HashExact) {
+                        fun.push_insn(block, Insn::GuardType { val: hash, guard_type: types::HashExact, state: exit_id })
+                    } else {
+                        fun.push_insn(block, Insn::SideExit { state: exit_id, reason: SideExitReason::SplatKwNotNilOrHash });
+                        break;  // End the block
+                    };
+                    state.stack_push(obj);
+                    state.stack_push(block_val);
+                }
                 YARVINSN_concattoarray => {
                     let right = state.stack_pop()?;
                     let left = state.stack_pop()?;
@@ -6740,7 +6867,8 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     let val = if !local_inval {
                         state.getlocal(ep_offset)
                     } else if ep_escaped {
-                        fun.push_insn(block, Insn::GetLocal { ep_offset, level: 0, use_sp: false, rest_param: false })
+                        let ep = fun.push_insn(block, Insn::GetEP { level: 0 });
+                        fun.get_local_from_ep(block, ep, ep_offset, 0, types::BasicObject)
                     } else {
                         let exit_id = fun.push_insn(block, Insn::Snapshot { state: exit_state.without_locals() });
                         fun.push_insn(block, Insn::PatchPoint { invariant: Invariant::NoEPEscape(iseq), state: exit_id });
@@ -6878,7 +7006,8 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                         state.stack_push(val);
                     } else if ep_escaped {
                         // Read the local using EP
-                        let val = fun.push_insn(block, Insn::GetLocal { ep_offset, level: 0, use_sp: false, rest_param: false });
+                        let ep = fun.push_insn(block, Insn::GetEP { level: 0 });
+                        let val = fun.get_local_from_ep(block, ep, ep_offset, 0, types::BasicObject);
                         state.setlocal(ep_offset, val); // remember the result to spill on side-exits
                         state.stack_push(val);
                     } else {
@@ -6912,7 +7041,8 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                 }
                 YARVINSN_getlocal_WC_1 => {
                     let ep_offset = get_arg(pc, 0).as_u32();
-                    state.stack_push(fun.get_local_from_ep(block, ep_offset, 1, types::BasicObject));
+                    let ep = fun.push_insn(block, Insn::GetEP { level: 1 });
+                    state.stack_push(fun.get_local_from_ep(block, ep, ep_offset, 1, types::BasicObject));
                 }
                 YARVINSN_setlocal_WC_1 => {
                     let ep_offset = get_arg(pc, 0).as_u32();
@@ -6921,11 +7051,8 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                 YARVINSN_getlocal => {
                     let ep_offset = get_arg(pc, 0).as_u32();
                     let level = get_arg(pc, 1).as_u32();
-                    if level == 0 {
-                        state.stack_push(fun.push_insn(block, Insn::GetLocal { ep_offset, level, use_sp: false, rest_param: false }));
-                    } else {
-                        state.stack_push(fun.get_local_from_ep(block, ep_offset, level, types::BasicObject));
-                    }
+                    let ep = fun.push_insn(block, Insn::GetEP { level });
+                    state.stack_push(fun.get_local_from_ep(block, ep, ep_offset, level, types::BasicObject));
                 }
                 YARVINSN_setlocal => {
                     let ep_offset = get_arg(pc, 0).as_u32();
@@ -7037,11 +7164,13 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     }));
 
                     // Push modified block: read Proc from EP.
-                    let modified_val = if level == 0 {
-                        fun.push_insn(modified_block, Insn::GetLocal { ep_offset, level, use_sp: false, rest_param: false })
-                    } else {
-                        fun.get_local_from_ep(modified_block, ep_offset, level, types::BasicObject)
-                    };
+                    let ep = fun.push_insn(modified_block, Insn::GetEP { level });
+                    let modified_val = fun.get_local_from_ep(modified_block,
+                        ep,
+                        ep_offset,
+                        level,
+                        types::BasicObject,
+                    );
                     finish_getblockparam_branch(
                         &mut fun,
                         modified_block,
@@ -7311,11 +7440,14 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                         // Reload locals that may have been modified by the blockiseq.
                         // TODO: Avoid reloading locals that are not referenced by the blockiseq
                         // or not used after this. Max thinks we could eventually DCE them.
+                        let ep = fun.push_insn(block, Insn::GetEP { level: 0 });
                         for local_idx in 0..state.locals.len() {
-                            let ep_offset = local_idx_to_ep_offset(iseq, local_idx) as u32;
-                            // TODO: We could use `use_sp: true` with PatchPoint
-                            let val = fun.push_insn(block, Insn::GetLocal { ep_offset, level: 0, use_sp: false, rest_param: false });
-                            state.setlocal(ep_offset, val);
+                            let ep_offset = local_idx_to_ep_offset(iseq, local_idx);
+                            let ep_offset_u32 = u32::try_from(ep_offset)
+                                .unwrap_or_else(|_| panic!("Could not convert ep_offset {ep_offset} to u32"));
+                            // TODO: We could use `use_sp: true` with PatchPoint.
+                            let val = fun.get_local_from_ep(block, ep, ep_offset_u32, 0, types::BasicObject);
+                            state.setlocal(ep_offset_u32, val);
                         }
                     }
                 }
@@ -7339,11 +7471,14 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
 
                     if !blockiseq.is_null() {
                         // Reload locals that may have been modified by the blockiseq.
+                        let ep = fun.push_insn(block, Insn::GetEP { level: 0 });
                         for local_idx in 0..state.locals.len() {
-                            let ep_offset = local_idx_to_ep_offset(iseq, local_idx) as u32;
-                            // TODO: We could use `use_sp: true` with PatchPoint
-                            let val = fun.push_insn(block, Insn::GetLocal { ep_offset, level: 0, use_sp: false, rest_param: false });
-                            state.setlocal(ep_offset, val);
+                            let ep_offset = local_idx_to_ep_offset(iseq, local_idx);
+                            let ep_offset_u32 = u32::try_from(ep_offset)
+                                .unwrap_or_else(|_| panic!("Could not convert ep_offset {ep_offset} to u32"));
+                            // TODO: We could use `use_sp: true` with PatchPoint.
+                            let val = fun.get_local_from_ep(block, ep, ep_offset_u32, 0, types::BasicObject);
+                            state.setlocal(ep_offset_u32, val);
                         }
                     }
                 }
@@ -7368,11 +7503,14 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                         // Reload locals that may have been modified by the blockiseq.
                         // TODO: Avoid reloading locals that are not referenced by the blockiseq
                         // or not used after this. Max thinks we could eventually DCE them.
+                        let ep = fun.push_insn(block, Insn::GetEP { level: 0 });
                         for local_idx in 0..state.locals.len() {
-                            let ep_offset = local_idx_to_ep_offset(iseq, local_idx) as u32;
-                            // TODO: We could use `use_sp: true` with PatchPoint
-                            let val = fun.push_insn(block, Insn::GetLocal { ep_offset, level: 0, use_sp: false, rest_param: false });
-                            state.setlocal(ep_offset, val);
+                            let ep_offset = local_idx_to_ep_offset(iseq, local_idx);
+                            let ep_offset_u32 = u32::try_from(ep_offset)
+                                .unwrap_or_else(|_| panic!("Could not convert ep_offset {ep_offset} to u32"));
+                            // TODO: We could use `use_sp: true` with PatchPoint.
+                            let val = fun.get_local_from_ep(block, ep, ep_offset_u32, 0, types::BasicObject);
+                            state.setlocal(ep_offset_u32, val);
                         }
                     }
                 }
@@ -7397,11 +7535,14 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                         // Reload locals that may have been modified by the blockiseq.
                         // TODO: Avoid reloading locals that are not referenced by the blockiseq
                         // or not used after this. Max thinks we could eventually DCE them.
+                        let ep = fun.push_insn(block, Insn::GetEP { level: 0 });
                         for local_idx in 0..state.locals.len() {
-                            let ep_offset = local_idx_to_ep_offset(iseq, local_idx) as u32;
-                            // TODO: We could use `use_sp: true` with PatchPoint
-                            let val = fun.push_insn(block, Insn::GetLocal { ep_offset, level: 0, use_sp: false, rest_param: false });
-                            state.setlocal(ep_offset, val);
+                            let ep_offset = local_idx_to_ep_offset(iseq, local_idx);
+                            let ep_offset_u32 = u32::try_from(ep_offset)
+                                .unwrap_or_else(|_| panic!("Could not convert ep_offset {ep_offset} to u32"));
+                            // TODO: We could use `use_sp: true` with PatchPoint.
+                            let val = fun.get_local_from_ep(block, ep, ep_offset_u32, 0, types::BasicObject);
+                            state.setlocal(ep_offset_u32, val);
                         }
                     }
                 }
@@ -7692,12 +7833,31 @@ fn compile_entry_state(fun: &mut Function) -> (InsnId, FrameState) {
 
     let self_param = fun.push_insn(entry_block, Insn::LoadSelf);
     let mut entry_state = FrameState::new(iseq);
+    // If the ISEQ does not escape EP, we can assume EP + 1 == SP
+    // TODO: This should maybe also consider if the EP has historically been escaped in this iseq.
+    // (see: https://github.com/Shopify/ruby/issues/774)
+    let use_sp = !iseq_escapes_ep(iseq);
+    let mut base: Option<InsnId> = None;
     for local_idx in 0..num_locals(iseq) {
         if local_idx < param_size {
-            let ep_offset = local_idx_to_ep_offset(iseq, local_idx) as u32;
-            let use_sp = !iseq_escapes_ep(iseq); // If the ISEQ does not escape EP, we can assume EP + 1 == SP
-            let rest_param = Some(local_idx as i32) == rest_param_idx;
-            entry_state.locals.push(fun.push_insn(entry_block, Insn::GetLocal { level: 0, ep_offset, use_sp, rest_param }));
+            let ep_offset = local_idx_to_ep_offset(iseq, local_idx);
+            let ep_offset_u32 = u32::try_from(ep_offset)
+                .unwrap_or_else(|_| panic!("Could not convert ep_offset {ep_offset} to u32"));
+            let return_type = if Some(local_idx as i32) == rest_param_idx {
+                types::ArrayExact
+            } else {
+                types::BasicObject
+            };
+            let recv = *base.get_or_insert_with(|| {
+                let base_insn = if use_sp { Insn::LoadSP } else { Insn::GetEP { level: 0 } };
+                fun.push_insn(entry_block, base_insn)
+            });
+            let val = if use_sp {
+                fun.get_local_from_sp(entry_block, recv, ep_offset_u32, return_type)
+            } else {
+                fun.get_local_from_ep(entry_block, recv, ep_offset_u32, 0, return_type)
+            };
+            entry_state.locals.push(val);
         } else {
             entry_state.locals.push(fun.push_insn(entry_block, Insn::Const { val: Const::Value(Qnil) }));
         }
@@ -7742,6 +7902,7 @@ fn compile_jit_entry_state(fun: &mut Function, jit_entry_block: BlockId, jit_ent
     let self_param = fun.push_insn(jit_entry_block, Insn::LoadArg { idx: arg_idx, id: ID!(self_), val_type: types::BasicObject });
     arg_idx += 1;
     let mut entry_state = FrameState::new(iseq);
+    let mut ep: Option<InsnId> = None;
     for local_idx in 0..num_locals(iseq) {
         if (lead_num + passed_opt_num..lead_num + opt_num).contains(&local_idx) {
             // Omitted optionals are locals, so they start as nils before their code run
@@ -7750,9 +7911,18 @@ fn compile_jit_entry_state(fun: &mut Function, jit_entry_block: BlockId, jit_ent
             // Read the kw_bits value written by the caller to the callee frame.
             // This tells us which optional keywords were NOT provided and need their defaults evaluated.
             // Note: The caller writes kw_bits to memory via gen_send_iseq_direct but does NOT pass it
-            // as a C argument, so we must read it from memory using GetLocal rather than Param.
-            let ep_offset = local_idx_to_ep_offset(iseq, local_idx) as u32;
-            entry_state.locals.push(fun.push_insn(jit_entry_block, Insn::GetLocal { level: 0, ep_offset, use_sp: false, rest_param: false }));
+            // as a C argument, so we must read it from EP memory rather than Param.
+            let ep_offset = local_idx_to_ep_offset(iseq, local_idx);
+            let ep_offset_u32 = u32::try_from(ep_offset)
+                .unwrap_or_else(|_| panic!("Could not convert ep_offset {ep_offset} to u32"));
+            let ep = *ep.get_or_insert_with(|| fun.push_insn(jit_entry_block, Insn::GetEP { level: 0 }));
+            entry_state.locals.push(fun.get_local_from_ep(
+                jit_entry_block,
+                ep,
+                ep_offset_u32,
+                0,
+                types::BasicObject,
+            ));
         } else if local_idx < param_size {
             let id = unsafe { rb_zjit_local_id(iseq, local_idx.try_into().unwrap()) };
             entry_state.locals.push(fun.push_insn(jit_entry_block, Insn::LoadArg { idx: arg_idx, id, val_type: types::BasicObject }));
@@ -8063,6 +8233,13 @@ mod union_find_tests {
         let mut uf = UnionFind::new();
         uf.make_equal_to(3, 4);
         assert_eq!(uf.find(3usize), 4);
+    }
+
+    #[test]
+    fn test_find_halts_with_identity_make_equal_to() {
+        let mut uf = UnionFind::<usize>::new();
+        uf.make_equal_to(0, 0);
+        assert_eq!(uf.find(0), 0);
     }
 
     #[test]
@@ -8495,36 +8672,37 @@ mod graphviz_tests {
         mode=hier; overlap=false; splines=true;
           bb0 [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0">
         <TR><TD ALIGN="LEFT" PORT="params" BGCOLOR="gray">bb0()&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v24">Entries bb1, bb2&nbsp;</TD></TR>
+        <TR><TD ALIGN="left" PORT="v25">Entries bb1, bb2&nbsp;</TD></TR>
         </TABLE>>];
           bb1 [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0">
         <TR><TD ALIGN="LEFT" PORT="params" BGCOLOR="gray">bb1()&nbsp;</TD></TR>
         <TR><TD ALIGN="left" PORT="v0">EntryPoint interpreter&nbsp;</TD></TR>
         <TR><TD ALIGN="left" PORT="v1">v1:BasicObject = LoadSelf&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v2">v2:BasicObject = GetLocal :x, l0, SP@5&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v3">v3:BasicObject = GetLocal :y, l0, SP@4&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v4">Jump bb3(v1, v2, v3)&nbsp;</TD></TR>
+        <TR><TD ALIGN="left" PORT="v2">v2:CPtr = LoadSP&nbsp;</TD></TR>
+        <TR><TD ALIGN="left" PORT="v3">v3:BasicObject = LoadField v2, :x@0x1000&nbsp;</TD></TR>
+        <TR><TD ALIGN="left" PORT="v4">v4:BasicObject = LoadField v2, :y@0x1001&nbsp;</TD></TR>
+        <TR><TD ALIGN="left" PORT="v5">Jump bb3(v1, v3, v4)&nbsp;</TD></TR>
         </TABLE>>];
-          bb1:v4 -> bb3:params:n;
+          bb1:v5 -> bb3:params:n;
           bb2 [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0">
         <TR><TD ALIGN="LEFT" PORT="params" BGCOLOR="gray">bb2()&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v5">EntryPoint JIT(0)&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v6">v6:BasicObject = LoadArg :self@0&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v7">v7:BasicObject = LoadArg :x@1&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v8">v8:BasicObject = LoadArg :y@2&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v9">Jump bb3(v6, v7, v8)&nbsp;</TD></TR>
+        <TR><TD ALIGN="left" PORT="v6">EntryPoint JIT(0)&nbsp;</TD></TR>
+        <TR><TD ALIGN="left" PORT="v7">v7:BasicObject = LoadArg :self@0&nbsp;</TD></TR>
+        <TR><TD ALIGN="left" PORT="v8">v8:BasicObject = LoadArg :x@1&nbsp;</TD></TR>
+        <TR><TD ALIGN="left" PORT="v9">v9:BasicObject = LoadArg :y@2&nbsp;</TD></TR>
+        <TR><TD ALIGN="left" PORT="v10">Jump bb3(v7, v8, v9)&nbsp;</TD></TR>
         </TABLE>>];
-          bb2:v9 -> bb3:params:n;
+          bb2:v10 -> bb3:params:n;
           bb3 [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0">
-        <TR><TD ALIGN="LEFT" PORT="params" BGCOLOR="gray">bb3(v10:BasicObject, v11:BasicObject, v12:BasicObject)&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v15">PatchPoint NoTracePoint&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v26">PatchPoint MethodRedefined(Integer@0x1000, |@0x1008, cme:0x1010)&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v27">v27:Fixnum = GuardType v11, Fixnum&nbsp;</TD></TR>
+        <TR><TD ALIGN="LEFT" PORT="params" BGCOLOR="gray">bb3(v11:BasicObject, v12:BasicObject, v13:BasicObject)&nbsp;</TD></TR>
+        <TR><TD ALIGN="left" PORT="v16">PatchPoint NoTracePoint&nbsp;</TD></TR>
+        <TR><TD ALIGN="left" PORT="v27">PatchPoint MethodRedefined(Integer@0x1008, |@0x1010, cme:0x1018)&nbsp;</TD></TR>
         <TR><TD ALIGN="left" PORT="v28">v28:Fixnum = GuardType v12, Fixnum&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v29">v29:Fixnum = FixnumOr v27, v28&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v30">IncrCounter inline_cfunc_optimized_send_count&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v22">CheckInterrupts&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v23">Return v29&nbsp;</TD></TR>
+        <TR><TD ALIGN="left" PORT="v29">v29:Fixnum = GuardType v13, Fixnum&nbsp;</TD></TR>
+        <TR><TD ALIGN="left" PORT="v30">v30:Fixnum = FixnumOr v28, v29&nbsp;</TD></TR>
+        <TR><TD ALIGN="left" PORT="v31">IncrCounter inline_cfunc_optimized_send_count&nbsp;</TD></TR>
+        <TR><TD ALIGN="left" PORT="v23">CheckInterrupts&nbsp;</TD></TR>
+        <TR><TD ALIGN="left" PORT="v24">Return v30&nbsp;</TD></TR>
         </TABLE>>];
         }
         "#);
@@ -8550,44 +8728,45 @@ mod graphviz_tests {
         mode=hier; overlap=false; splines=true;
           bb0 [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0">
         <TR><TD ALIGN="LEFT" PORT="params" BGCOLOR="gray">bb0()&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v36">Entries bb1, bb2&nbsp;</TD></TR>
+        <TR><TD ALIGN="left" PORT="v37">Entries bb1, bb2&nbsp;</TD></TR>
         </TABLE>>];
           bb1 [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0">
         <TR><TD ALIGN="LEFT" PORT="params" BGCOLOR="gray">bb1()&nbsp;</TD></TR>
         <TR><TD ALIGN="left" PORT="v0">EntryPoint interpreter&nbsp;</TD></TR>
         <TR><TD ALIGN="left" PORT="v1">v1:BasicObject = LoadSelf&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v2">v2:BasicObject = GetLocal :c, l0, SP@4&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v3">Jump bb3(v1, v2)&nbsp;</TD></TR>
+        <TR><TD ALIGN="left" PORT="v2">v2:CPtr = LoadSP&nbsp;</TD></TR>
+        <TR><TD ALIGN="left" PORT="v3">v3:BasicObject = LoadField v2, :c@0x1000&nbsp;</TD></TR>
+        <TR><TD ALIGN="left" PORT="v4">Jump bb3(v1, v3)&nbsp;</TD></TR>
         </TABLE>>];
-          bb1:v3 -> bb3:params:n;
+          bb1:v4 -> bb3:params:n;
           bb2 [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0">
         <TR><TD ALIGN="LEFT" PORT="params" BGCOLOR="gray">bb2()&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v4">EntryPoint JIT(0)&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v5">v5:BasicObject = LoadArg :self@0&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v6">v6:BasicObject = LoadArg :c@1&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v7">Jump bb3(v5, v6)&nbsp;</TD></TR>
+        <TR><TD ALIGN="left" PORT="v5">EntryPoint JIT(0)&nbsp;</TD></TR>
+        <TR><TD ALIGN="left" PORT="v6">v6:BasicObject = LoadArg :self@0&nbsp;</TD></TR>
+        <TR><TD ALIGN="left" PORT="v7">v7:BasicObject = LoadArg :c@1&nbsp;</TD></TR>
+        <TR><TD ALIGN="left" PORT="v8">Jump bb3(v6, v7)&nbsp;</TD></TR>
         </TABLE>>];
-          bb2:v7 -> bb3:params:n;
+          bb2:v8 -> bb3:params:n;
           bb3 [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0">
-        <TR><TD ALIGN="LEFT" PORT="params" BGCOLOR="gray">bb3(v8:BasicObject, v9:BasicObject)&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v12">PatchPoint NoTracePoint&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v14">CheckInterrupts&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v15">v15:CBool = Test v9&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v16">v16:Falsy = RefineType v9, Falsy&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v17">IfFalse v15, bb4(v8, v16)&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v18">v18:Truthy = RefineType v9, Truthy&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v20">PatchPoint NoTracePoint&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v21">v21:Fixnum[3] = Const Value(3)&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v24">CheckInterrupts&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v25">Return v21&nbsp;</TD></TR>
+        <TR><TD ALIGN="LEFT" PORT="params" BGCOLOR="gray">bb3(v9:BasicObject, v10:BasicObject)&nbsp;</TD></TR>
+        <TR><TD ALIGN="left" PORT="v13">PatchPoint NoTracePoint&nbsp;</TD></TR>
+        <TR><TD ALIGN="left" PORT="v15">CheckInterrupts&nbsp;</TD></TR>
+        <TR><TD ALIGN="left" PORT="v16">v16:CBool = Test v10&nbsp;</TD></TR>
+        <TR><TD ALIGN="left" PORT="v17">v17:Falsy = RefineType v10, Falsy&nbsp;</TD></TR>
+        <TR><TD ALIGN="left" PORT="v18">IfFalse v16, bb4(v9, v17)&nbsp;</TD></TR>
+        <TR><TD ALIGN="left" PORT="v19">v19:Truthy = RefineType v10, Truthy&nbsp;</TD></TR>
+        <TR><TD ALIGN="left" PORT="v21">PatchPoint NoTracePoint&nbsp;</TD></TR>
+        <TR><TD ALIGN="left" PORT="v22">v22:Fixnum[3] = Const Value(3)&nbsp;</TD></TR>
+        <TR><TD ALIGN="left" PORT="v25">CheckInterrupts&nbsp;</TD></TR>
+        <TR><TD ALIGN="left" PORT="v26">Return v22&nbsp;</TD></TR>
         </TABLE>>];
-          bb3:v17 -> bb4:params:n;
+          bb3:v18 -> bb4:params:n;
           bb4 [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0">
-        <TR><TD ALIGN="LEFT" PORT="params" BGCOLOR="gray">bb4(v26:BasicObject, v27:Falsy)&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v30">PatchPoint NoTracePoint&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v31">v31:Fixnum[4] = Const Value(4)&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v34">CheckInterrupts&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v35">Return v31&nbsp;</TD></TR>
+        <TR><TD ALIGN="LEFT" PORT="params" BGCOLOR="gray">bb4(v27:BasicObject, v28:Falsy)&nbsp;</TD></TR>
+        <TR><TD ALIGN="left" PORT="v31">PatchPoint NoTracePoint&nbsp;</TD></TR>
+        <TR><TD ALIGN="left" PORT="v32">v32:Fixnum[4] = Const Value(4)&nbsp;</TD></TR>
+        <TR><TD ALIGN="left" PORT="v35">CheckInterrupts&nbsp;</TD></TR>
+        <TR><TD ALIGN="left" PORT="v36">Return v32&nbsp;</TD></TR>
         </TABLE>>];
         }
         "#);

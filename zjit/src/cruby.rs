@@ -565,7 +565,11 @@ impl VALUE {
     }
 
     pub fn shape_id_of(self) -> ShapeId {
-        ShapeId(unsafe { rb_obj_shape_id(self) })
+        if self.special_const_p() {
+            INVALID_SHAPE_ID
+        } else {
+            ShapeId(unsafe { rb_obj_shape_id(self) })
+        }
     }
 
     pub fn embedded_p(self) -> bool {
@@ -579,6 +583,10 @@ impl VALUE {
             RB_TYPE_P(self, RUBY_T_STRUCT) &&
             FL_TEST_RAW(self, VALUE(RSTRUCT_EMBED_LEN_MASK)) != VALUE(0)
         }
+    }
+
+    pub fn class_fields_embedded_p(self) -> bool {
+        unsafe { rb_jit_class_fields_embedded_p(self) }
     }
 
     pub fn as_fixnum(self) -> i64 {
@@ -829,6 +837,18 @@ pub fn iseq_name(iseq: IseqPtr) -> String {
     } else {
         ruby_str_to_rust_string(iseq_label)
     }
+}
+
+// Equivalent of get_lvar_level() in compile.c
+pub fn get_lvar_level(mut iseq: IseqPtr) -> u32 {
+    let local_iseq = unsafe { rb_get_iseq_body_local_iseq(iseq) };
+    let mut level = 0;
+    while iseq != local_iseq {
+        iseq = unsafe { rb_get_iseq_body_parent_iseq(iseq) };
+        level += 1;
+    }
+
+    level
 }
 
 // Location is the file defining the method, colon, method name.
@@ -1479,6 +1499,7 @@ pub(crate) mod ids {
         name: aref               content: b"[]"
         name: len
         name: _as_heap
+        name: _fields_obj
         name: thread_ptr
         name: self_              content: b"self"
         name: rb_ivar_get_at_no_ractor_check

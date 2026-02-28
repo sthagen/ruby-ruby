@@ -38,6 +38,10 @@ jobs:
         with:
           token: ${{ (github.repository == 'ruby/ruby' && !startsWith(github.event_name, 'pull')) && secrets.MATZBOT_AUTO_UPDATE_TOKEN || secrets.GITHUB_TOKEN }}
 
+      - uses: ruby/setup-ruby@09a7688d3b55cf0e976497ff046b70949eeaccfd # v1.288.0
+        with:
+          ruby-version: 4.0
+
       - uses: ./.github/actions/setup/directories
         with:
           # Skip overwriting MATZBOT_AUTO_UPDATE_TOKEN
@@ -72,6 +76,7 @@ jobs:
       - name: Maintain updated gems list in NEWS
         run: |
           ruby tool/update-NEWS-gemlist.rb bundled
+          ruby tool/update-NEWS-github-release.rb --update
         if: ${{ env.UPDATE_ENABLED == 'true' }}
 
       - name: Check diffs
