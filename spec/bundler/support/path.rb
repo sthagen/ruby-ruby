@@ -319,8 +319,15 @@ module Spec
         base64
         logger
         cgi
+        compact_index
       ]
-      Dir[scoped_base_system_gem_path.join("gems/{#{deps.join(",")}}-*/lib")].map(&:to_s)
+      path = if ruby_core? && deps.all? {|dep| !Dir[source_root.join(".bundle/gems/#{dep}-*")].empty? }
+        source_root.join(".bundle")
+      else
+        scoped_base_system_gem_path
+      end
+
+      Dir[path.join("gems/{#{deps.join(",")}}-*/lib")].map(&:to_s)
     end
 
     private
