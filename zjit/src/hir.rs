@@ -2699,7 +2699,9 @@ impl Function {
                 let newly_reachable = reachable.insert($target.target);
                 let mut target_changed = newly_reachable;
                 for (idx, arg) in $target.args.iter().enumerate() {
+                    let arg = self.union_find.borrow().find_const(*arg);
                     let param = $self.blocks[$target.target.0].params[idx];
+                    let param = self.union_find.borrow().find_const(param);
                     let new = self.insn_types[param.0].union(self.insn_types[arg.0]);
                     if !self.insn_types[param.0].bit_equal(new) {
                         self.insn_types[param.0] = new;
@@ -2717,37 +2719,38 @@ impl Function {
             in_worklist.remove(block);
             if !reachable.get(block) { continue; }
             for insn_id in &self.blocks[block.0].insns {
-                let insn_type = match self.find(*insn_id) {
-                    Insn::IfTrue { val, target } => {
+                let insn_id = self.union_find.borrow().find_const(*insn_id);
+                let insn_type = match &self.insns[insn_id.0] {
+                    &Insn::IfTrue { val, ref target } => {
                         assert!(!self.type_of(val).bit_equal(types::Empty));
                         if self.type_of(val).could_be(Type::from_cbool(true)) {
                             enqueue!(self, target);
                         }
                         continue;
                     }
-                    Insn::IfFalse { val, target } => {
+                    &Insn::IfFalse { val, ref target } => {
                         assert!(!self.type_of(val).bit_equal(types::Empty));
                         if self.type_of(val).could_be(Type::from_cbool(false)) {
                             enqueue!(self, target);
                         }
                         continue;
                     }
-                    Insn::Jump(target) => {
+                    &Insn::Jump(ref target) => {
                         enqueue!(self, target);
                         continue;
                     }
-                    Insn::Entries { targets } => {
-                        for target in &targets {
+                    &Insn::Entries { ref targets } => {
+                        for target in targets {
                             if reachable.insert(*target) {
                                 worklist_add!(*target);
                             }
                         }
                         continue;
                     }
-                    insn if insn.has_output() => self.infer_type(*insn_id),
+                    insn if insn.has_output() => self.infer_type(insn_id),
                     _ => continue,
                 };
-                if !self.type_of(*insn_id).bit_equal(insn_type) {
+                if !self.type_of(insn_id).bit_equal(insn_type) {
                     self.insn_types[insn_id.0] = insn_type;
                 }
             }
@@ -3949,8 +3952,34 @@ impl Function {
                                     return_type: types::BasicObject,
                                     elidable: true })
                             }
+                        } else if recv_type.flags().is_typed_data() {
+                            // Typed T_DATA: load from fields_obj at fixed offset in RTypedData
+                            let fields_obj = self.push_insn(block, Insn::LoadField {
+                                recv: self_val, id: ID!(_fields_obj),
+                                offset: RTYPEDDATA_OFFSET_FIELDS_OBJ as i32,
+                                return_type: types::RubyValue,
+                            });
+                            if recv_type.flags().is_fields_embedded() {
+                                let offset = ROBJECT_OFFSET_AS_ARY as i32
+                                    + (SIZEOF_VALUE * ivar_index.to_usize()) as i32;
+                                self.push_insn(block, Insn::LoadField {
+                                    recv: fields_obj, id, offset,
+                                    return_type: types::BasicObject,
+                                })
+                            } else {
+                                let ptr = self.push_insn(block, Insn::LoadField {
+                                    recv: fields_obj, id: ID!(_as_heap),
+                                    offset: ROBJECT_OFFSET_AS_HEAP_FIELDS as i32,
+                                    return_type: types::CPtr,
+                                });
+                                let offset = SIZEOF_VALUE_I32 * ivar_index as i32;
+                                self.push_insn(block, Insn::LoadField {
+                                    recv: ptr, id, offset,
+                                    return_type: types::BasicObject,
+                                })
+                            }
                         } else if !recv_type.flags().is_t_object() {
-                            // Non-T_OBJECT, non-class/module (e.g. T_DATA): fall back to C call
+                            // Non-T_OBJECT, non-class/module, non-typed-data: fall back to C call
                             // NOTE: it's fine to use rb_ivar_get_at_no_ractor_check because
                             // getinstancevariable does assume_single_ractor_mode()
                             let ivar_index_insn = self.push_insn(block, Insn::Const { val: Const::CUInt16(ivar_index as u16) });
@@ -5112,11 +5141,15 @@ impl Function {
         let mut num_in_edges = vec![0; self.blocks.len()];
         for block in self.rpo() {
             for &insn in &self.blocks[block.0].insns {
-                match self.find(insn) {
-                    Insn::IfTrue { target, .. } | Insn::IfFalse { target, .. } | Insn::Jump(target) => {
-                        num_in_edges[target.target.0] += 1;
+                // Instructions without output, including branch instructions, can't be targets of
+                // make_equal_to, so we don't need find() here.
+                match &self.insns[insn.0] {
+                    Insn::IfTrue { target: BranchEdge { target, .. }, .. }
+                    | Insn::IfFalse { target: BranchEdge { target, .. }, .. }
+                    | Insn::Jump(BranchEdge { target, .. }) => {
+                        num_in_edges[target.0] += 1;
                     }
-                    Insn::Entries { ref targets } => {
+                    Insn::Entries { targets } => {
                         for target in targets {
                             num_in_edges[target.0] += 1;
                         }
