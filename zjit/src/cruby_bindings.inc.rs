@@ -1464,12 +1464,12 @@ pub const VM_ENV_FLAG_ISOLATED: vm_frame_env_flags = 16;
 pub type vm_frame_env_flags = u32;
 pub type attr_index_t = u16;
 pub type shape_id_t = u32;
-pub const SHAPE_ID_HEAP_INDEX_MASK: shape_id_fl_type = 29360128;
-pub const SHAPE_ID_FL_FROZEN: shape_id_fl_type = 33554432;
-pub const SHAPE_ID_FL_HAS_OBJECT_ID: shape_id_fl_type = 67108864;
-pub const SHAPE_ID_FL_TOO_COMPLEX: shape_id_fl_type = 134217728;
-pub const SHAPE_ID_FL_NON_CANONICAL_MASK: shape_id_fl_type = 100663296;
-pub const SHAPE_ID_FLAGS_MASK: shape_id_fl_type = 264241152;
+pub const SHAPE_ID_HEAP_INDEX_MASK: shape_id_fl_type = 16252928;
+pub const SHAPE_ID_FL_FROZEN: shape_id_fl_type = 16777216;
+pub const SHAPE_ID_FL_HAS_OBJECT_ID: shape_id_fl_type = 33554432;
+pub const SHAPE_ID_FL_TOO_COMPLEX: shape_id_fl_type = 67108864;
+pub const SHAPE_ID_FL_NON_CANONICAL_MASK: shape_id_fl_type = 50331648;
+pub const SHAPE_ID_FLAGS_MASK: shape_id_fl_type = 133693440;
 pub type shape_id_fl_type = u32;
 #[repr(C)]
 pub struct rb_cvar_class_tbl_entry {
@@ -1505,8 +1505,8 @@ pub struct rb_callinfo {
     pub flags: VALUE,
     pub kwarg: *const rb_callinfo_kwarg,
     pub mid: VALUE,
-    pub flag: VALUE,
-    pub argc: VALUE,
+    pub flag: ::std::os::raw::c_uint,
+    pub argc: ::std::os::raw::c_uint,
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
