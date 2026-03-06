@@ -171,6 +171,7 @@ make_counters! {
         compile_hir_fold_constants_time_ns,
         compile_hir_clean_cfg_time_ns,
         compile_hir_remove_redundant_patch_points_time_ns,
+        compile_hir_remove_duplicate_check_interrupts_time_ns,
         compile_hir_eliminate_dead_code_time_ns,
         compile_lir_time_ns,
     }
@@ -434,6 +435,9 @@ make_counters! {
     // The number of times we ran a dynamic check
     guard_type_count,
     guard_shape_count,
+
+    load_field_count,
+    store_field_count,
 
     invokeblock_handler_monomorphic_iseq,
     invokeblock_handler_monomorphic_ifunc,

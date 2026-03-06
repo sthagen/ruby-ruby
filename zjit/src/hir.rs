@@ -5080,6 +5080,18 @@ impl Function {
                             _ => None,
                         })
                     }
+                    Insn::FixnumDiv { left, right, .. } => {
+                        self.fold_fixnum_bop(insn_id, left, right, |l, r| match (l, r) {
+                            (Some(l), Some(r)) if l == (RUBY_FIXNUM_MIN as i64) && r == -1 => None, // Avoid Fixnum overflow
+                            (Some(_l), Some(r)) if r == 0 => None, // Avoid Divide by zero.
+                            (Some(l), Some(r)) => {
+                                let l_obj = VALUE::fixnum_from_isize(l as isize);
+                                let r_obj = VALUE::fixnum_from_isize(r as isize);
+                                Some(unsafe { rb_jit_fix_div_fix(l_obj, r_obj) }.as_fixnum())
+                            },
+                            _ => None,
+                        })
+                    }
                     Insn::FixnumMod { left, right, .. } => {
                         self.fold_fixnum_bop(insn_id, left, right, |l, r| match (l, r) {
                             (Some(l), Some(r)) if r != 0 => {
@@ -5318,6 +5330,28 @@ impl Function {
         }
     }
 
+    /// Remove duplicate CheckInterrupts instructions within each basic block.
+    /// Only the first CheckInterrupts in a block is needed unless an intervening
+    /// instruction writes to InterruptFlag (e.g. a call), which resets tracking.
+    fn remove_duplicate_check_interrupts(&mut self) {
+        for block_id in self.rpo() {
+            let mut seen = false;
+            let insns = std::mem::take(&mut self.blocks[block_id.0].insns);
+            let mut new_insns = Vec::with_capacity(insns.len());
+            for insn_id in insns {
+                let insn = &self.insns[insn_id.0];
+                if matches!(insn, Insn::CheckInterrupts { .. }) {
+                    if seen { continue; }
+                    seen = true;
+                } else if insn.effects_of().write_bits().overlaps(abstract_heaps::InterruptFlag) {
+                    seen = false;
+                }
+                new_insns.push(insn_id);
+            }
+            self.blocks[block_id.0].insns = new_insns;
+        }
+    }
+
     /// Return a list that has entry_block and then jit_entry_blocks
     fn entry_blocks(&self) -> Vec<BlockId> {
         let mut entry_blocks = self.jit_entry_blocks.clone();
@@ -5545,6 +5579,8 @@ impl Function {
                     Counter::compile_hir_clean_cfg_time_ns
                 } else if ident_equal!($name, remove_redundant_patch_points) {
                     Counter::compile_hir_remove_redundant_patch_points_time_ns
+                } else if ident_equal!($name, remove_duplicate_check_interrupts) {
+                    Counter::compile_hir_remove_duplicate_check_interrupts_time_ns
                 } else if ident_equal!($name, eliminate_dead_code) {
                     Counter::compile_hir_eliminate_dead_code_time_ns
                 } else {
@@ -5573,6 +5609,7 @@ impl Function {
         run_pass!(fold_constants);
         run_pass!(clean_cfg);
         run_pass!(remove_redundant_patch_points);
+        run_pass!(remove_duplicate_check_interrupts);
         run_pass!(eliminate_dead_code);
 
         if should_dump {
