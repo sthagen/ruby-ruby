@@ -45,7 +45,7 @@ jobs:
           persist-credentials: false
 
       - name: Run zizmor
-        uses: zizmorcore/zizmor-action@195d10ad90f31d8cd6ea1efd6ecc12969ddbe73f # v0.5.1
+        uses: zizmorcore/zizmor-action@71321a20a9ded102f6e9ce5718a2fcec2c4f70d8 # v0.5.2
         continue-on-error: true
 
   analyze:
@@ -112,7 +112,7 @@ jobs:
           output: sarif-results
 
       - name: filter-sarif
-        uses: advanced-security/filter-sarif@f3b8118a9349d88f7b1c0c488476411145b6270d # v1.0.1
+        uses: advanced-security/filter-sarif@2da736ff05ef065cb2894ac6892e47b5eac2c3c0 # v1.1.0.1.1
         with:
           patterns: |
             +**/*.rb
