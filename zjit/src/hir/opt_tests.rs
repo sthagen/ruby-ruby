@@ -4514,7 +4514,10 @@ mod hir_opt_tests {
           v12:NilClass = Const Value(nil)
           PatchPoint MethodRedefined(Hash@0x1008, new@0x1009, cme:0x1010)
           v46:HashExact = ObjectAllocClass Hash:VALUE(0x1008)
-          v19:BasicObject = Send v46, :initialize # SendFallbackReason: Complex argument passing
+          v47:Fixnum[0] = Const Value(0)
+          PatchPoint NoSingletonClass(Hash@0x1008)
+          PatchPoint MethodRedefined(Hash@0x1008, initialize@0x1038, cme:0x1040)
+          v51:BasicObject = SendDirect v46, 0x1068, :initialize (0x1078), v47
           CheckInterrupts
           Return v46
         ");
@@ -7508,6 +7511,68 @@ mod hir_opt_tests {
     }
 
     #[test]
+    fn test_optimize_getivar_polymorphic_with_subclass() {
+        set_call_threshold(3);
+        eval(r#"
+            class C
+              def initialize
+                @foo = 3
+              end
+
+              def foo = @foo + 1
+            end
+
+            class D < C
+              def initialize
+                super
+                @bar = 4
+              end
+            end
+
+            O1 = C.new
+            O2 = D.new
+            O1.foo
+            O2.foo
+        "#);
+        assert_snapshot!(hir_string_proc("C.instance_method(:foo)"), @"
+        fn foo@<compiled>:7:
+        bb1():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          Jump bb3(v1)
+        bb2():
+          EntryPoint JIT(0)
+          v4:BasicObject = LoadArg :self@0
+          Jump bb3(v4)
+        bb3(v6:BasicObject):
+          PatchPoint SingleRactorMode
+          v11:HeapBasicObject = GuardType v6, HeapBasicObject
+          v12:CShape = LoadField v11, :_shape_id@0x1000
+          v14:CShape[0x1001] = Const CShape(0x1001)
+          v15:CBool = IsBitEqual v12, v14
+          IfTrue v15, bb5()
+          v19:CShape[0x1002] = Const CShape(0x1002)
+          v20:CBool = IsBitEqual v12, v19
+          IfTrue v20, bb6()
+          v24:BasicObject = GetIvar v11, :@foo
+          Jump bb4(v24)
+        bb5():
+          v17:BasicObject = LoadField v11, :@foo@0x1003
+          Jump bb4(v17)
+        bb6():
+          v22:BasicObject = LoadField v11, :@foo@0x1003
+          Jump bb4(v22)
+        bb4(v13:BasicObject):
+          v27:Fixnum[1] = Const Value(1)
+          PatchPoint MethodRedefined(Integer@0x1008, +@0x1010, cme:0x1018)
+          v38:Fixnum = GuardType v13, Fixnum
+          v39:Fixnum = FixnumAdd v38, v27
+          CheckInterrupts
+          Return v39
+        ");
+    }
+
+    #[test]
     fn test_dont_optimize_attr_accessor_polymorphic() {
         set_call_threshold(3);
         eval("
@@ -7795,6 +7860,67 @@ mod hir_opt_tests {
           v4:BasicObject = LoadArg :self@0
           Jump bb3(v4)
         bb3(v6:BasicObject):
+          PatchPoint MethodRedefined(Object@0x1000, foo@0x1008, cme:0x1010)
+          v19:ObjectSubclass[class_exact*:Object@VALUE(0x1000)] = GuardType v6, ObjectSubclass[class_exact*:Object@VALUE(0x1000)]
+          v20:BasicObject = SendDirect v19, 0x1038, :foo (0x1048)
+          CheckInterrupts
+          Return v20
+        ");
+    }
+
+    #[test]
+    fn test_send_iseq_with_block_param_no_block() {
+        let result = eval("
+            def foo(&blk)
+              blk ? blk.call : 42
+            end
+            def test = foo
+            test
+            test
+        ");
+        assert_eq!(VALUE::fixnum_from_usize(42), result);
+        assert_snapshot!(hir_string("test"), @"
+        fn test@<compiled>:5:
+        bb1():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          Jump bb3(v1)
+        bb2():
+          EntryPoint JIT(0)
+          v4:BasicObject = LoadArg :self@0
+          Jump bb3(v4)
+        bb3(v6:BasicObject):
+          PatchPoint MethodRedefined(Object@0x1000, foo@0x1008, cme:0x1010)
+          v18:ObjectSubclass[class_exact*:Object@VALUE(0x1000)] = GuardType v6, ObjectSubclass[class_exact*:Object@VALUE(0x1000)]
+          v19:BasicObject = SendDirect v18, 0x1038, :foo (0x1048)
+          CheckInterrupts
+          Return v19
+        ");
+    }
+
+    #[test]
+    fn test_send_bmethod_with_block_param_no_block() {
+        let result = eval("
+            define_method(:foo) { |&blk|
+              blk ? blk.call : 42
+            }
+            def test = foo
+            test
+            test
+        ");
+        assert_eq!(VALUE::fixnum_from_usize(42), result);
+        assert_snapshot!(hir_string("test"), @"
+        fn test@<compiled>:5:
+        bb1():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          Jump bb3(v1)
+        bb2():
+          EntryPoint JIT(0)
+          v4:BasicObject = LoadArg :self@0
+          Jump bb3(v4)
+        bb3(v6:BasicObject):
+          PatchPoint SingleRactorMode
           PatchPoint MethodRedefined(Object@0x1000, foo@0x1008, cme:0x1010)
           v19:ObjectSubclass[class_exact*:Object@VALUE(0x1000)] = GuardType v6, ObjectSubclass[class_exact*:Object@VALUE(0x1000)]
           v20:BasicObject = SendDirect v19, 0x1038, :foo (0x1048)

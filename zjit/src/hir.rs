@@ -498,7 +498,11 @@ pub enum SideExitReason {
     UnhandledNewarraySend(vm_opt_newarray_send_type),
     UnhandledDuparraySend(u64),
     UnknownSpecialVariable(u64),
-    UnhandledHIRInsn(InsnId),
+    UnhandledHIRArrayMax,
+    UnhandledHIRFixnumDiv,
+    UnhandledHIRThrow,
+    UnhandledHIRInvokeBuiltin,
+    UnhandledHIRUnknown(InsnId),
     UnhandledYARVInsn(u32),
     UnhandledCallType(CallType),
     UnhandledBlockArg,
@@ -847,6 +851,8 @@ pub enum Insn {
     /// Return Qtrue if `val` is an instance of `class`, else Qfalse.
     /// Equivalent to `class_search_ancestor(CLASS_OF(val), class)`.
     IsA { val: InsnId, class: InsnId },
+    /// `case`/`when`/`rescue` match check for `pattern` against `target`.
+    CheckMatch { target: InsnId, pattern: InsnId, flag: u32, state: InsnId },
 
     /// Get a global variable named `id`
     GetGlobal { id: ID, state: InsnId },
@@ -1102,6 +1108,11 @@ macro_rules! for_each_operand_impl {
             }
             Insn::IsBlockParamModified { ep } => {
                 $visit_one!(ep);
+            }
+            Insn::CheckMatch { target, pattern, state, .. } => {
+                $visit_one!(target);
+                $visit_one!(pattern);
+                $visit_one!(state);
             }
             Insn::PatchPoint { state, .. }
             | Insn::CheckInterrupts { state }
@@ -1495,6 +1506,8 @@ impl Insn {
             Insn::LoadSelf { .. } => Effect::read_write(abstract_heaps::Frame, abstract_heaps::Empty),
             Insn::LoadField { .. } => Effect::read_write(abstract_heaps::Memory, abstract_heaps::Empty),
             Insn::StoreField { .. } => effects::Any,
+            // TODO: Refine CheckMatch effects by flag.
+            Insn::CheckMatch { .. } => effects::Any,
             // WriteBarrier can write to object flags and mark bits in Allocator memory.
             // This is why WriteBarrier writes to the "Memory" effect. We do not yet have a more granular specialization for flags
             Insn::WriteBarrier { .. } => Effect::read_write(abstract_heaps::Allocator, abstract_heaps::Allocator.union(abstract_heaps::Memory)),
@@ -1984,6 +1997,23 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
             }
             Insn::DefinedIvar { self_val, id, .. } => write!(f, "DefinedIvar {self_val}, :{}", id.contents_lossy()),
             Insn::GetIvar { self_val, id, .. } => write!(f, "GetIvar {self_val}, :{}", id.contents_lossy()),
+            Insn::CheckMatch { target, pattern, flag, .. } => {
+                const TYPE_MASK: u32 = 0x03;
+                const ARRAY_FLAG: u32 = 0x04;
+
+                let match_type = match *flag & TYPE_MASK {
+                    VM_CHECKMATCH_TYPE_WHEN => "WHEN",
+                    VM_CHECKMATCH_TYPE_CASE => "CASE",
+                    VM_CHECKMATCH_TYPE_RESCUE => "RESCUE",
+                    _ => return write!(f, "CheckMatch {target}, {pattern}, {flag}"),
+                };
+                let flag = if *flag & ARRAY_FLAG != 0 {
+                    format!("{match_type}|ARRAY")
+                } else {
+                    match_type.to_string()
+                };
+                write!(f, "CheckMatch {target}, {pattern}, {flag}")
+            }
             Insn::LoadPC => write!(f, "LoadPC"),
             Insn::LoadEC => write!(f, "LoadEC"),
             Insn::LoadSP => write!(f, "LoadSP"),
@@ -2228,7 +2258,7 @@ pub enum ValidationError {
 }
 
 /// Check if we can do a direct send to the given iseq with the given args.
-fn can_direct_send(function: &mut Function, block: BlockId, iseq: *const rb_iseq_t, ci: *const rb_callinfo, send_insn: InsnId, args: &[InsnId], blockiseq: Option<IseqPtr>) -> bool {
+fn can_direct_send(function: &mut Function, block: BlockId, iseq: *const rb_iseq_t, ci: *const rb_callinfo, send_insn: InsnId, args: &[InsnId]) -> bool {
     let mut can_send = true;
     let mut count_failure = |counter| {
         can_send = false;
@@ -2236,16 +2266,15 @@ fn can_direct_send(function: &mut Function, block: BlockId, iseq: *const rb_iseq
     };
     let params = unsafe { iseq.params() };
 
-    let caller_has_literal_block: bool = blockiseq.is_some();
     let callee_has_block_param = 0 != params.flags.has_block();
+    let caller_passes_block_arg = (unsafe { rb_vm_ci_flag(ci) } & VM_CALL_ARGS_BLOCKARG) != 0;
 
     use Counter::*;
     if 0 != params.flags.has_rest()    { count_failure(complex_arg_pass_param_rest) }
     if 0 != params.flags.has_post()    { count_failure(complex_arg_pass_param_post) }
-    if callee_has_block_param && !caller_has_literal_block
-                                       { count_failure(complex_arg_pass_param_block) }
     if 0 != params.flags.forwardable() { count_failure(complex_arg_pass_param_forwardable) }
-
+    if callee_has_block_param && caller_passes_block_arg
+                                       { count_failure(complex_arg_pass_param_block) }
     if 0 != params.flags.has_kwrest()  { count_failure(complex_arg_pass_param_kwrest) }
 
     if !can_send {
@@ -2761,6 +2790,7 @@ impl Function {
             &CCallVariadic { cfunc, recv, ref args, cme, name, state, return_type, elidable, blockiseq } => CCallVariadic {
                 cfunc, recv: find!(recv), args: find_vec!(args), cme, name, state, return_type, elidable, blockiseq
             },
+            &CheckMatch { target, pattern, flag, state } => CheckMatch { target: find!(target), pattern: find!(pattern), flag, state: find!(state) },
             &Defined { op_type, obj, pushval, v, state } => Defined { op_type, obj, pushval, v: find!(v), state: find!(state) },
             &DefinedIvar { self_val, pushval, id, state } => DefinedIvar { self_val: find!(self_val), pushval, id, state },
             &GetConstant { klass, id, allow_nil, state } => GetConstant { klass: find!(klass), id, allow_nil: find!(allow_nil), state },
@@ -2899,6 +2929,7 @@ impl Function {
             &Insn::CCallWithFrame { return_type, .. } => return_type,
             Insn::CCall { return_type, .. } => *return_type,
             &Insn::CCallVariadic { return_type, .. } => return_type,
+            Insn::CheckMatch { .. } => types::BasicObject,
             Insn::GuardType { val, guard_type, .. } => self.type_of(*val).intersection(*guard_type),
             Insn::RefineType { val, new_type, .. } => self.type_of(*val).intersection(*new_type),
             Insn::HasType { .. } => types::CBool,
@@ -3570,7 +3601,7 @@ impl Function {
                             // Only specialize positional-positional calls
                             // TODO(max): Handle other kinds of parameter passing
                             let iseq = unsafe { get_def_iseq_ptr((*cme).def) };
-                            if !can_direct_send(self, block, iseq, ci, insn_id, args.as_slice(), blockiseq) {
+                            if !can_direct_send(self, block, iseq, ci, insn_id, args.as_slice()) {
                                 self.push_insn_id(block, insn_id); continue;
                             }
 
@@ -3609,7 +3640,7 @@ impl Function {
                             let capture = unsafe { proc_block.as_.captured.as_ref() };
                             let iseq = unsafe { *capture.code.iseq.as_ref() };
 
-                            if !can_direct_send(self, block, iseq, ci, insn_id, args.as_slice(), None) {
+                            if !can_direct_send(self, block, iseq, ci, insn_id, args.as_slice()) {
                                 self.push_insn_id(block, insn_id); continue;
                             }
 
@@ -3976,7 +4007,7 @@ impl Function {
                             // If not, we can't do direct dispatch.
                             let super_iseq = unsafe { get_def_iseq_ptr((*super_cme).def) };
                             // TODO: pass Option<blockiseq> to can_direct_send when we start specializing `super { ... }`.
-                            if !can_direct_send(self, block, super_iseq, ci, insn_id, args.as_slice(), None) {
+                            if !can_direct_send(self, block, super_iseq, ci, insn_id, args.as_slice()) {
                                 self.push_insn_id(block, insn_id);
                                 self.set_dynamic_send_reason(insn_id, SuperTargetComplexArgsPass);
                                 continue;
@@ -4260,6 +4291,9 @@ impl Function {
     }
 
     fn load_ivar(&mut self, block: BlockId, self_val: InsnId, recv_type: ProfiledType, id: ID, state: InsnId) -> InsnId {
+        // Too-complex shapes use hash tables; rb_shape_get_iv_index doesn't support them.
+        // Callers must filter these out before calling load_ivar.
+        assert!(!recv_type.shape().is_too_complex(), "load_ivar called with too-complex shape");
         let mut ivar_index: u16 = 0;
         if ! unsafe { rb_shape_get_iv_index(recv_type.shape().0, id, &mut ivar_index) } {
             // If there is no IVAR index, then the ivar was undefined when we
@@ -5930,6 +5964,7 @@ impl Function {
             Insn::SetIvar { self_val: left, val: right, .. }
             | Insn::NewRange { low: left, high: right, .. }
             | Insn::AnyToString { val: left, str: right, .. }
+            | Insn::CheckMatch { target: left, pattern: right, .. }
             | Insn::WriteBarrier { recv: left, val: right } => {
                 self.assert_subtype(insn_id, left, types::BasicObject)?;
                 self.assert_subtype(insn_id, right, types::BasicObject)
@@ -7098,6 +7133,13 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     };
                     state.stack_push(fun.push_insn(block, Insn::FixnumBitCheck { val, index }));
                 }
+                YARVINSN_checkmatch => {
+                    let flag = get_arg(pc, 0).as_u32();
+                    let pattern = state.stack_pop()?;
+                    let target = state.stack_pop()?;
+                    let result = fun.push_insn(block, Insn::CheckMatch { target, pattern, flag, state: exit_id });
+                    state.stack_push(result);
+                }
                 YARVINSN_getconstant => {
                     let id = ID(get_arg(pc, 0).as_u64());
                     let allow_nil = state.stack_pop()?;
@@ -7905,6 +7947,8 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                         let join_block = insn_idx_to_block.get(&insn_idx).copied().unwrap_or_else(|| fun.new_block(insn_idx));
                         let join_param = fun.push_insn(join_block, Insn::Param);
                         // Dedup by expected shape so objects with different classes but the same shape can share code
+                        // TODO(max): De-duplicate further by checking ivar offsets to allow
+                        // different shapes with the same ivar layout to share code
                         let mut seen_shapes = Vec::with_capacity(summary.buckets().len());
                         for &profiled_type in summary.buckets() {
                             // End of the buckets
@@ -7913,6 +7957,10 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                             if profiled_type.flags().is_immediate() { continue; }
                             let expected_shape = profiled_type.shape();
                             assert!(expected_shape.is_valid());
+                            // Too-complex shapes use hash tables for ivars;
+                            // rb_shape_get_iv_index doesn't work for them.
+                            // Let the fallthrough GetIvar handle these.
+                            if expected_shape.is_too_complex() { continue; }
                             if seen_shapes.contains(&expected_shape) { continue; }
                             seen_shapes.push(expected_shape);
                             let expected_shape_const = fun.push_insn(block, Insn::Const { val: Const::CShape(expected_shape) });
