@@ -7517,7 +7517,7 @@ mod hir_opt_tests {
           v4:BasicObject = LoadArg :self@0
           Jump bb3(v4)
         bb3(v6:BasicObject):
-          v11:BasicObject = Send v6, :foo # SendFallbackReason: Uncategorized(opt_send_without_block)
+          v11:BasicObject = Send v6, :foo # SendFallbackReason: Single-ractor mode required
           CheckInterrupts
           Return v11
         ");
@@ -14810,7 +14810,7 @@ mod hir_opt_tests {
           v88:Array = RefineType v67, Array
           v89:CInt64 = UnboxFixnum v68
           v90:BasicObject = ArrayAref v88, v89
-          v74:BasicObject = InvokeBlock, v90 # SendFallbackReason: Uncategorized(invokeblock)
+          v74:BasicObject = InvokeBlock, v90 # SendFallbackReason: InvokeBlock: not yet specialized
           v91:Fixnum[1] = Const Value(1)
           v92:Fixnum = FixnumAdd v68, v91
           PatchPoint NoEPEscape(each)
@@ -14961,6 +14961,51 @@ mod hir_opt_tests {
     }
 
     #[test]
+    fn test_exit_from_function_stub_for_opt_keyword_callee() {
+        // We have a SendDirect to a callee that fails to compile,
+        // so the function stub has to take care of exiting to
+        // interpreter.
+        eval("
+            def target(a = binding.local_variable_get(:a), b: nil)
+              ::RubyVM::ZJIT.induce_compile_failure!
+              [a, b]
+            end
+
+            def entry = target(b: -1)
+
+            raise 'wrong' unless [nil, -1] == entry
+            raise 'wrong' unless [nil, -1] == entry
+        ");
+
+        crate::hir::tests::hir_build_tests::assert_compile_fails("target", ParseError::DirectiveInduced);
+        let hir = hir_string("entry");
+        assert!(hir.contains("SendDirect"), "{hir}");
+    }
+
+    #[test]
+    fn test_exit_from_function_stub_for_lead_opt() {
+        // We have a SendDirect to a callee that fails to compile,
+        // so the function stub has to take care of exiting to
+        // interpreter.
+        let result = eval("
+            def target(_required, a = a, b = b)
+              ::RubyVM::ZJIT.induce_compile_failure!
+              a
+            end
+
+            def entry = target(1)
+
+            entry
+            entry
+        ");
+        assert_eq!(Qnil, result);
+
+        crate::hir::tests::hir_build_tests::assert_compile_fails("target", ParseError::DirectiveInduced);
+        let hir = hir_string("entry");
+        assert!(hir.contains("SendDirect"), "{hir}");
+    }
+
+    #[test]
     fn test_recompile_no_profile_send() {
         // Test the SideExit → recompile flow: a no-profile send becomes a SideExit,
         // the exit profiles the send, triggers recompilation, and the new version
@@ -15073,6 +15118,48 @@ mod hir_opt_tests {
           v36:StringExact = StringCopy v35
           CheckInterrupts
           Return v36
+        ");
+    }
+
+    #[test]
+    fn test_invokeblock_ifunc() {
+        eval("
+            class IFuncTestList
+              include Enumerable
+              def each
+                yield 1
+                yield 2
+              end
+            end
+            IFuncTestList.new.map { |x| x }
+        ");
+        assert_snapshot!(hir_string_proc("IFuncTestList.instance_method(:each)"), @"
+        fn each@<compiled>:5:
+        bb1():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          Jump bb3(v1)
+        bb2():
+          EntryPoint JIT(0)
+          v4:BasicObject = LoadArg :self@0
+          Jump bb3(v4)
+        bb3(v6:BasicObject):
+          v10:Fixnum[1] = Const Value(1)
+          v12:CPtr = GetEP 0
+          v13:CInt64 = LoadField v12, :_env_data_index_specval@0x1000
+          v14:CInt64[3] = Const CInt64(3)
+          v15:CInt64 = IntAnd v13, v14
+          v16:CInt64[3] = GuardBitEquals v15, CInt64(3)
+          v17:BasicObject = InvokeBlockIfunc v13, v10
+          v21:Fixnum[2] = Const Value(2)
+          v23:CPtr = GetEP 0
+          v24:CInt64 = LoadField v23, :_env_data_index_specval@0x1000
+          v25:CInt64[3] = Const CInt64(3)
+          v26:CInt64 = IntAnd v24, v25
+          v27:CInt64[3] = GuardBitEquals v26, CInt64(3)
+          v28:BasicObject = InvokeBlockIfunc v24, v21
+          CheckInterrupts
+          Return v28
         ");
     }
 }
