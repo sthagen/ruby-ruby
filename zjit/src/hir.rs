@@ -820,7 +820,7 @@ pub enum Insn {
     ArrayMax { elements: Vec<InsnId>, state: InsnId },
     ArrayMin { elements: Vec<InsnId>, state: InsnId },
     ArrayInclude { elements: Vec<InsnId>, target: InsnId, state: InsnId },
-    ArrayPackBuffer { elements: Vec<InsnId>, fmt: InsnId, buffer: InsnId, state: InsnId },
+    ArrayPackBuffer { elements: Vec<InsnId>, fmt: InsnId, buffer: Option<InsnId>, state: InsnId },
     DupArrayInclude { ary: VALUE, target: InsnId, state: InsnId },
     /// Extend `left` with the elements from `right`. `left` and `right` must both be `Array`.
     ArrayExtend { left: InsnId, right: InsnId, state: InsnId },
@@ -1179,7 +1179,9 @@ macro_rules! for_each_operand_impl {
             Insn::ArrayPackBuffer { elements, fmt, buffer, state, .. } => {
                 $visit_many!(elements);
                 $visit_one!(fmt);
-                $visit_one!(buffer);
+                if let Some(buffer) = buffer {
+                    $visit_one!(buffer);
+                }
                 $visit_one!(state);
             }
             Insn::DupArrayInclude { target, state, .. } => {
@@ -1831,7 +1833,11 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
                 for element in elements {
                     write!(f, "{element}, ")?;
                 }
-                write!(f, "fmt: {fmt}, buf: {buffer}")
+                write!(f, "fmt: {fmt}")?;
+                if let Some(buffer) = buffer {
+                    write!(f, ", buf: {buffer}")?;
+                }
+                Ok(())
             }
             Insn::DupArrayInclude { ary, target, .. } => {
                 write!(f, "DupArrayInclude {} | {}", ary.print(self.ptr_map), target)
@@ -2222,22 +2228,6 @@ impl<'a> FunctionPrinter<'a> {
     }
 }
 
-/// Pretty printer for [`Function`].
-pub struct FunctionGraphvizPrinter<'a> {
-    fun: &'a Function,
-    ptr_map: PtrPrintMap,
-}
-
-impl<'a> FunctionGraphvizPrinter<'a> {
-    pub fn new(fun: &'a Function) -> Self {
-        let mut ptr_map = PtrPrintMap::identity();
-        if cfg!(test) {
-            ptr_map.map_ptrs = true;
-        }
-        Self { fun, ptr_map }
-    }
-}
-
 /// Union-Find (Disjoint-Set) is a data structure for managing disjoint sets that has an interface
 /// of two operations:
 ///
@@ -2351,7 +2341,7 @@ pub enum ValidationError {
 }
 
 /// Check if we can do a direct send to the given iseq with the given args.
-fn can_direct_send(function: &mut Function, block: BlockId, iseq: *const rb_iseq_t, ci: *const rb_callinfo, send_insn: InsnId, args: &[InsnId]) -> bool {
+fn can_direct_send(function: &mut Function, block: BlockId, iseq: *const rb_iseq_t, ci: *const rb_callinfo, send_insn: InsnId, args: &[InsnId], has_block: bool) -> bool {
     let mut can_send = true;
     let mut count_failure = |counter| {
         can_send = false;
@@ -2369,6 +2359,16 @@ fn can_direct_send(function: &mut Function, block: BlockId, iseq: *const rb_iseq
     if callee_has_block_param && caller_passes_block_arg
                                        { count_failure(complex_arg_pass_param_block) }
     if 0 != params.flags.has_kwrest()  { count_failure(complex_arg_pass_param_kwrest) }
+
+    // If the caller passes a block (literal or &block), we need to fall back to the
+    // interpreter for two cases it handles that we don't:
+    // 1. Methods with &nil reject blocks with ArgumentError
+    // 2. Methods that don't use blocks emit "unused block" warnings
+    let caller_passes_block = has_block || caller_passes_block_arg;
+    if caller_passes_block && 0 != params.flags.accepts_no_block()
+                                       { count_failure(complex_arg_pass_accepts_no_block) }
+    if caller_passes_block && 0 == params.flags.use_block()
+                                       { count_failure(complex_arg_pass_does_not_use_block) }
 
     if !can_send {
         function.set_dynamic_send_reason(send_insn, ComplexArgPass);
@@ -2917,7 +2917,7 @@ impl Function {
             &ArrayMax { ref elements, state } => ArrayMax { elements: find_vec!(elements), state: find!(state) },
             &ArrayMin { ref elements, state } => ArrayMin { elements: find_vec!(elements), state: find!(state) },
             &ArrayInclude { ref elements, target, state } => ArrayInclude { elements: find_vec!(elements), target: find!(target), state: find!(state) },
-            &ArrayPackBuffer { ref elements, fmt, buffer, state } => ArrayPackBuffer { elements: find_vec!(elements), fmt: find!(fmt), buffer: find!(buffer), state: find!(state) },
+            &ArrayPackBuffer { ref elements, fmt, ref buffer, state } => ArrayPackBuffer { elements: find_vec!(elements), fmt: find!(fmt), buffer: (*buffer).map(|buffer| find!(buffer)), state: find!(state) },
             &DupArrayInclude { ary, target, state } => DupArrayInclude { ary, target: find!(target), state: find!(state) },
             &ArrayHash { ref elements, state } => ArrayHash { elements: find_vec!(elements), state },
             &SetGlobal { id, val, state } => SetGlobal { id, val: find!(val), state },
@@ -3717,7 +3717,7 @@ impl Function {
                             // Only specialize positional-positional calls
                             // TODO(max): Handle other kinds of parameter passing
                             let iseq = unsafe { get_def_iseq_ptr((*cme).def) };
-                            if !can_direct_send(self, block, iseq, ci, insn_id, args.as_slice()) {
+                            if !can_direct_send(self, block, iseq, ci, insn_id, args.as_slice(), has_block) {
                                 self.push_insn_id(block, insn_id); continue;
                             }
 
@@ -3756,7 +3756,7 @@ impl Function {
                             let capture = unsafe { proc_block.as_.captured.as_ref() };
                             let iseq = unsafe { *capture.code.iseq.as_ref() };
 
-                            if !can_direct_send(self, block, iseq, ci, insn_id, args.as_slice()) {
+                            if !can_direct_send(self, block, iseq, ci, insn_id, args.as_slice(), has_block) {
                                 self.push_insn_id(block, insn_id); continue;
                             }
 
@@ -4129,7 +4129,7 @@ impl Function {
                             // If not, we can't do direct dispatch.
                             let super_iseq = unsafe { get_def_iseq_ptr((*super_cme).def) };
                             // TODO: pass Option<blockiseq> to can_direct_send when we start specializing `super { ... }`.
-                            if !can_direct_send(self, block, super_iseq, ci, insn_id, args.as_slice()) {
+                            if !can_direct_send(self, block, super_iseq, ci, insn_id, args.as_slice(), false) {
                                 self.push_insn_id(block, insn_id);
                                 self.set_dynamic_send_reason(insn_id, SuperTargetComplexArgsPass);
                                 continue;
@@ -4415,6 +4415,23 @@ impl Function {
         }
     }
 
+    /// This puts a guard that establishes the preconditon for [Self::load_ivar]
+    fn load_ivar_guard_type(&mut self, block: BlockId, recv: InsnId, recv_type: ProfiledType, state: InsnId) -> InsnId {
+        if recv_type.class().is_subclass_of(unsafe { rb_cClass }) == ClassRelationship::Subclass {
+            // Check class first since `Class < Module`
+            self.push_insn(block, Insn::GuardType { val: recv, guard_type: types::Class, state })
+        } else if recv_type.class().is_subclass_of(unsafe { rb_cModule }) == ClassRelationship::Subclass {
+            self.push_insn(block, Insn::GuardType { val: recv, guard_type: types::Module, state })
+        } else if recv_type.flags().is_typed_data() {
+            self.push_insn(block, Insn::GuardType { val: recv, guard_type: types::TypedTData, state })
+        } else {
+            // HeapBasicObject is wider than T_OBJECT, but shapes for T_OBJECTs are in a pool of
+            // its own and are guaranteed to be different from shapes of any other T_* types. So
+            // the shape check that follows already covers checking for T_OBJECT.
+            self.push_insn(block, Insn::GuardType { val: recv, guard_type: types::HeapBasicObject, state })
+        }
+    }
+
     fn load_ivar(&mut self, block: BlockId, self_val: InsnId, recv_type: ProfiledType, id: ID, state: InsnId) -> InsnId {
         // Too-complex shapes use hash tables; rb_shape_get_iv_index doesn't support them.
         // Callers must filter these out before calling load_ivar.
@@ -4484,7 +4501,7 @@ impl Function {
                             self.count(block, Counter::getivar_fallback_too_complex);
                             self.push_insn_id(block, insn_id); continue;
                         }
-                        let self_val = self.push_insn(block, Insn::GuardType { val: self_val, guard_type: types::HeapBasicObject, state });
+                        let self_val = self.load_ivar_guard_type(block, self_val, recv_type, state);
                         let shape = self.load_shape(block, self_val);
                         self.guard_shape(block, shape, recv_type.shape(), state);
                         let replacement = self.load_ivar(block, self_val, recv_type, id, state);
@@ -4513,7 +4530,7 @@ impl Function {
                             self.count(block, Counter::definedivar_fallback_too_complex);
                             self.push_insn_id(block, insn_id); continue;
                         }
-                        let self_val = self.push_insn(block, Insn::GuardType { val: self_val, guard_type: types::HeapBasicObject, state });
+                        let self_val = self.load_ivar_guard_type(block, self_val, recv_type, state);
                         let shape = self.load_shape(block, self_val);
                         self.guard_shape(block, shape, recv_type.shape(), state);
                         let mut ivar_index: u16 = 0;
@@ -4585,7 +4602,7 @@ impl Function {
                             }
                             // Fall through to emitting the ivar write
                         }
-                        let self_val = self.push_insn(block, Insn::GuardType { val: self_val, guard_type: types::HeapBasicObject, state });
+                        let self_val = self.load_ivar_guard_type(block, self_val, recv_type, state);
                         let shape = self.load_shape(block, self_val);
                         self.guard_shape(block, shape, recv_type.shape(), state);
                         // Current shape contains this ivar
@@ -5896,13 +5913,6 @@ impl Function {
             Some(DumpHIR::Debug) => println!("Optimized HIR:\n{:#?}", &self),
             None => {},
         }
-
-        if let Some(filename) = &get_option!(dump_hir_graphviz) {
-            use std::fs::OpenOptions;
-            use std::io::Write;
-            let mut file = OpenOptions::new().append(true).open(filename).unwrap();
-            writeln!(file, "{}", FunctionGraphvizPrinter::new(self)).unwrap();
-        }
     }
 
     pub fn dump_iongraph(&self, function_name: &str, passes: Vec<Json>) {
@@ -6161,7 +6171,9 @@ impl Function {
             }
             Insn::ArrayPackBuffer { ref elements, fmt, buffer, .. } => {
                 self.assert_subtype(insn_id, fmt, types::BasicObject)?;
-                self.assert_subtype(insn_id, buffer, types::BasicObject)?;
+                if let Some(buffer) = buffer {
+                    self.assert_subtype(insn_id, buffer, types::BasicObject)?;
+                }
                 for &element in elements {
                     self.assert_subtype(insn_id, element, types::BasicObject)?;
                 }
@@ -6439,87 +6451,6 @@ impl<'a> std::fmt::Display for FunctionPrinter<'a> {
             }
         }
         Ok(())
-    }
-}
-
-struct HtmlEncoder<'a, 'b> {
-    formatter: &'a mut std::fmt::Formatter<'b>,
-}
-
-impl<'a, 'b> std::fmt::Write for HtmlEncoder<'a, 'b> {
-    fn write_str(&mut self, s: &str) -> std::fmt::Result {
-        for ch in s.chars() {
-            match ch {
-                '<' => self.formatter.write_str("&lt;")?,
-                '>' => self.formatter.write_str("&gt;")?,
-                '&' => self.formatter.write_str("&amp;")?,
-                '"' => self.formatter.write_str("&quot;")?,
-                '\'' => self.formatter.write_str("&#39;")?,
-                _ => self.formatter.write_char(ch)?,
-            }
-        }
-        Ok(())
-    }
-}
-
-impl<'a> std::fmt::Display for FunctionGraphvizPrinter<'a> {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        macro_rules! write_encoded {
-            ($f:ident, $($arg:tt)*) => {
-                HtmlEncoder { formatter: $f }.write_fmt(format_args!($($arg)*))
-            };
-        }
-        use std::fmt::Write;
-        let fun = &self.fun;
-        let iseq_name = iseq_get_location(fun.iseq, 0);
-        write!(f, "digraph G {{ # ")?;
-        write_encoded!(f, "{iseq_name}")?;
-        writeln!(f)?;
-        writeln!(f, "node [shape=plaintext];")?;
-        writeln!(f, "mode=hier; overlap=false; splines=true;")?;
-        for block_id in fun.rpo() {
-            writeln!(f, r#"  {block_id} [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0">"#)?;
-            write!(f, r#"<TR><TD ALIGN="LEFT" PORT="params" BGCOLOR="gray">{block_id}("#)?;
-            if !fun.blocks[block_id.0].params.is_empty() {
-                let mut sep = "";
-                for param in &fun.blocks[block_id.0].params {
-                    write_encoded!(f, "{sep}{param}")?;
-                    let insn_type = fun.type_of(*param);
-                    if !insn_type.is_subtype(types::Empty) {
-                        write_encoded!(f, ":{}", insn_type.print(&self.ptr_map))?;
-                    }
-                    sep = ", ";
-                }
-            }
-            let mut edges = vec![];
-            writeln!(f, ")&nbsp;</TD></TR>")?;
-            for insn_id in &fun.blocks[block_id.0].insns {
-                let insn_id = fun.union_find.borrow().find_const(*insn_id);
-                let insn = fun.find(insn_id);
-                if matches!(insn, Insn::Snapshot {..}) {
-                    continue;
-                }
-                write!(f, r#"<TR><TD ALIGN="left" PORT="{insn_id}">"#)?;
-                if insn.has_output() {
-                    let insn_type = fun.type_of(insn_id);
-                    if insn_type.is_subtype(types::Empty) {
-                        write_encoded!(f, "{insn_id} = ")?;
-                    } else {
-                        write_encoded!(f, "{insn_id}:{} = ", insn_type.print(&self.ptr_map))?;
-                    }
-                }
-                if let Insn::Jump(ref target) | Insn::IfTrue { ref target, .. } | Insn::IfFalse { ref target, .. } = insn {
-                    edges.push((insn_id, target.target));
-                }
-                write_encoded!(f, "{}", insn.print(&self.ptr_map, Some(fun.iseq)))?;
-                writeln!(f, "&nbsp;</TD></TR>")?;
-            }
-            writeln!(f, "</TABLE>>];")?;
-            for (src, dst) in edges {
-                writeln!(f, "  {block_id}:{src} -> {dst}:params:n;")?;
-            }
-        }
-        writeln!(f, "}}")
     }
 }
 
@@ -7141,11 +7072,16 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                             let elements = state.stack_pop_n(count - 1)?;
                             (BOP_INCLUDE_P, Insn::ArrayInclude { elements, target, state: exit_id })
                         }
+                        VM_OPT_NEWARRAY_SEND_PACK => {
+                            let fmt = state.stack_pop()?;
+                            let elements = state.stack_pop_n(count - 1)?;
+                            (BOP_PACK, Insn::ArrayPackBuffer { elements, fmt, buffer: None, state: exit_id })
+                        }
                         VM_OPT_NEWARRAY_SEND_PACK_BUFFER => {
                             let buffer = state.stack_pop()?;
                             let fmt = state.stack_pop()?;
                             let elements = state.stack_pop_n(count - 2)?;
-                            (BOP_PACK, Insn::ArrayPackBuffer { elements, fmt, buffer, state: exit_id })
+                            (BOP_PACK, Insn::ArrayPackBuffer { elements, fmt, buffer: Some(buffer), state: exit_id })
                         }
                         _ => {
                             // Unknown opcode; side-exit into the interpreter
@@ -7857,81 +7793,45 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                         break;
                     }
 
-                    {
-                        fn new_branch_block(
-                            fun: &mut Function,
-                            cd: *const rb_call_data,
-                            argc: usize,
-                            opcode: u32,
-                            new_type: Type,
-                            insn_idx: u32,
-                            exit_state: &FrameState,
-                            locals_count: usize,
-                            stack_count: usize,
-                            join_block: BlockId,
-                        ) -> BlockId {
-                            let block = fun.new_block(insn_idx);
-                            let self_param = fun.push_insn(block, Insn::Param);
-                            let mut state = exit_state.clone();
-                            state.locals.clear();
-                            state.stack.clear();
-                            state.locals.extend((0..locals_count).map(|_| fun.push_insn(block, Insn::Param)));
-                            state.stack.extend((0..stack_count).map(|_| fun.push_insn(block, Insn::Param)));
-                            let snapshot = fun.push_insn(block, Insn::Snapshot { state: state.clone() });
-                            let args = state.stack_pop_n(argc).unwrap();
-                            let recv = state.stack_pop().unwrap();
-                            let refined_recv = fun.push_insn(block, Insn::RefineType { val: recv, new_type });
-                            state.replace(recv, refined_recv);
-                            let send = fun.push_insn(block, Insn::Send { recv: refined_recv, cd, block: None, args, state: snapshot, reason: Uncategorized(opcode) });
-                            state.stack_push(send);
-                            fun.push_insn(block, Insn::Jump(BranchEdge { target: join_block, args: state.as_args(self_param) }));
-                            block
-                        }
-                        let branch_insn_idx = exit_state.insn_idx as u32;
-                        let locals_count = state.locals.len();
-                        let stack_count = state.stack.len();
-                        let recv = state.stack_topn(argc as usize)?;  // args are on top
-                        let entry_args = state.as_args(self_param);
-                        if let Some(summary) = fun.polymorphic_summary(&profiles, recv, exit_state.insn_idx) {
-                            let join_block = insn_idx_to_block.get(&insn_idx).copied().unwrap_or_else(|| fun.new_block(insn_idx));
-                            // Dedup by expected type so immediate/heap variants
-                            // under the same Ruby class can still get separate branches.
-                            let mut seen_types = Vec::with_capacity(summary.buckets().len());
-                            for &profiled_type in summary.buckets() {
-                                if profiled_type.is_empty() { break; }
-                                let expected = Type::from_profiled_type(profiled_type);
-                                if seen_types.iter().any(|ty: &Type| ty.bit_equal(expected)) {
-                                    continue;
-                                }
-                                seen_types.push(expected);
-                                let has_type = fun.push_insn(block, Insn::HasType { val: recv, expected });
-                                let iftrue_block =
-                                    new_branch_block(&mut fun, cd, argc as usize, opcode, expected, branch_insn_idx, &exit_state, locals_count, stack_count, join_block);
-                                let target = BranchEdge { target: iftrue_block, args: entry_args.clone() };
-                                fun.push_insn(block, Insn::IfTrue { val: has_type, target });
-                            }
-                            // Continue compilation from the join block at the next instruction.
-                            // Make a copy of the current state without the args (pop the receiver
-                            // and push the result) because we just use the locals/stack sizes to
-                            // make the right number of Params
-                            let mut join_state = state.clone();
-                            join_state.stack_pop_n(argc as usize)?;
-                            queue.push_back((join_state, join_block, insn_idx, local_inval));
-                            // In the fallthrough case, do a generic interpreter send and then join.
-                            let args = state.stack_pop_n(argc as usize)?;
-                            let recv = state.stack_pop()?;
-                            let reason = SendWithoutBlockPolymorphicFallback;
-                            let send = fun.push_insn(block, Insn::Send { recv, cd, block: None, args, state: exit_id, reason });
-                            state.stack_push(send);
-                            fun.push_insn(block, Insn::Jump(BranchEdge { target: join_block, args: state.as_args(self_param) }));
-                            break;  // End the block
-                        }
-                    }
-
+                    let branch_insn_idx = exit_state.insn_idx as u32;
                     let args = state.stack_pop_n(argc as usize)?;
                     let recv = state.stack_pop()?;
-                    let send = fun.push_insn(block, Insn::Send { recv, cd, block: None, args, state: exit_id, reason: Uncategorized(opcode) });
-                    state.stack_push(send);
+
+                    if let Some(summary) = fun.polymorphic_summary(&profiles, recv, exit_state.insn_idx) {
+                        let join_block = insn_idx_to_block.get(&insn_idx).copied().unwrap_or_else(|| fun.new_block(insn_idx));
+                        let join_param = fun.push_insn(join_block, Insn::Param);
+                        // Dedup by expected type so immediate/heap variants
+                        // under the same Ruby class can still get separate branches.
+                        let mut seen_types = Vec::with_capacity(summary.buckets().len());
+                        for &profiled_type in summary.buckets() {
+                            if profiled_type.is_empty() { break; }
+                            let expected = Type::from_profiled_type(profiled_type);
+                            if seen_types.iter().any(|ty: &Type| ty.bit_equal(expected)) {
+                                continue;
+                            }
+                            seen_types.push(expected);
+                            let has_type = fun.push_insn(block, Insn::HasType { val: recv, expected });
+                            let iftrue_block = fun.new_block(branch_insn_idx);
+                            let target = BranchEdge { target: iftrue_block, args: vec![] };
+                            fun.push_insn(block, Insn::IfTrue { val: has_type, target });
+
+                            let refined_recv = fun.push_insn(iftrue_block, Insn::RefineType { val: recv, new_type: expected });
+                            let send = fun.push_insn(iftrue_block, Insn::Send { recv: refined_recv, cd, block: None, args: args.clone(), state: exit_id, reason: Uncategorized(opcode) });
+                            fun.push_insn(iftrue_block, Insn::Jump(BranchEdge { target: join_block, args: vec![send] }));
+                        }
+                        // In the fallthrough case, do a generic interpreter send and then join.
+                        let reason = SendWithoutBlockPolymorphicFallback;
+                        let send = fun.push_insn(block, Insn::Send { recv, cd, block: None, args, state: exit_id, reason });
+                        fun.push_insn(block, Insn::Jump(BranchEdge { target: join_block, args: vec![send] }));
+
+                        // Continue compilation in the join_block
+                        block = join_block;
+                        state.stack_push(join_param);
+                    } else {
+                        // Maybe monomorphic; handled in type_specialize
+                        let send = fun.push_insn(block, Insn::Send { recv, cd, block: None, args, state: exit_id, reason: Uncategorized(opcode) });
+                        state.stack_push(send);
+                    }
                 }
                 YARVINSN_send => {
                     let cd: *const rb_call_data = get_arg(pc, 0).as_ptr();
@@ -9249,133 +9149,5 @@ mod infer_tests {
             function.infer_types();
             assert_bit_equal(function.type_of(param), types::TrueClass.union(types::FalseClass));
         });
-    }
-}
-
-#[cfg(test)]
-mod graphviz_tests {
-    use super::*;
-    use insta::assert_snapshot;
-
-    #[track_caller]
-    fn hir_string(method: &str) -> String {
-        let iseq = crate::cruby::with_rubyvm(|| get_method_iseq("self", method));
-        unsafe { crate::cruby::rb_zjit_profile_disable(iseq) };
-        let mut function = iseq_to_hir(iseq).unwrap();
-        function.optimize();
-        function.validate().unwrap();
-        format!("{}", FunctionGraphvizPrinter::new(&function))
-    }
-
-    #[test]
-    fn test_guard_fixnum_or_fixnum() {
-        eval(r#"
-            def test(x, y) = x | y
-
-            test(1, 2)
-        "#);
-        assert_snapshot!(hir_string("test"), @r#"
-        digraph G { # test@&lt;compiled&gt;:2
-        node [shape=plaintext];
-        mode=hier; overlap=false; splines=true;
-          bb0 [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0">
-        <TR><TD ALIGN="LEFT" PORT="params" BGCOLOR="gray">bb0()&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v25">Entries bb1, bb2&nbsp;</TD></TR>
-        </TABLE>>];
-          bb1 [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0">
-        <TR><TD ALIGN="LEFT" PORT="params" BGCOLOR="gray">bb1()&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v0">EntryPoint interpreter&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v1">v1:BasicObject = LoadSelf&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v2">v2:CPtr = LoadSP&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v3">v3:BasicObject = LoadField v2, :x@0x1000&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v4">v4:BasicObject = LoadField v2, :y@0x1001&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v5">Jump bb3(v1, v3, v4)&nbsp;</TD></TR>
-        </TABLE>>];
-          bb1:v5 -> bb3:params:n;
-          bb2 [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0">
-        <TR><TD ALIGN="LEFT" PORT="params" BGCOLOR="gray">bb2()&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v6">EntryPoint JIT(0)&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v7">v7:BasicObject = LoadArg :self@0&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v8">v8:BasicObject = LoadArg :x@1&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v9">v9:BasicObject = LoadArg :y@2&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v10">Jump bb3(v7, v8, v9)&nbsp;</TD></TR>
-        </TABLE>>];
-          bb2:v10 -> bb3:params:n;
-          bb3 [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0">
-        <TR><TD ALIGN="LEFT" PORT="params" BGCOLOR="gray">bb3(v11:BasicObject, v12:BasicObject, v13:BasicObject)&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v16">PatchPoint NoTracePoint&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v27">PatchPoint MethodRedefined(Integer@0x1008, |@0x1010, cme:0x1018)&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v28">v28:Fixnum = GuardType v12, Fixnum&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v29">v29:Fixnum = GuardType v13, Fixnum&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v30">v30:Fixnum = FixnumOr v28, v29&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v23">CheckInterrupts&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v24">Return v30&nbsp;</TD></TR>
-        </TABLE>>];
-        }
-        "#);
-    }
-
-    #[test]
-    fn test_multiple_blocks() {
-        eval(r#"
-            def test(c)
-              if c
-                3
-              else
-                4
-              end
-            end
-
-            test(1)
-            test("x")
-        "#);
-        assert_snapshot!(hir_string("test"), @r#"
-        digraph G { # test@&lt;compiled&gt;:3
-        node [shape=plaintext];
-        mode=hier; overlap=false; splines=true;
-          bb0 [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0">
-        <TR><TD ALIGN="LEFT" PORT="params" BGCOLOR="gray">bb0()&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v37">Entries bb1, bb2&nbsp;</TD></TR>
-        </TABLE>>];
-          bb1 [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0">
-        <TR><TD ALIGN="LEFT" PORT="params" BGCOLOR="gray">bb1()&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v0">EntryPoint interpreter&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v1">v1:BasicObject = LoadSelf&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v2">v2:CPtr = LoadSP&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v3">v3:BasicObject = LoadField v2, :c@0x1000&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v4">Jump bb3(v1, v3)&nbsp;</TD></TR>
-        </TABLE>>];
-          bb1:v4 -> bb3:params:n;
-          bb2 [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0">
-        <TR><TD ALIGN="LEFT" PORT="params" BGCOLOR="gray">bb2()&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v5">EntryPoint JIT(0)&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v6">v6:BasicObject = LoadArg :self@0&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v7">v7:BasicObject = LoadArg :c@1&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v8">Jump bb3(v6, v7)&nbsp;</TD></TR>
-        </TABLE>>];
-          bb2:v8 -> bb3:params:n;
-          bb3 [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0">
-        <TR><TD ALIGN="LEFT" PORT="params" BGCOLOR="gray">bb3(v9:BasicObject, v10:BasicObject)&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v13">PatchPoint NoTracePoint&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v15">CheckInterrupts&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v16">v16:CBool = Test v10&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v17">v17:Falsy = RefineType v10, Falsy&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v18">IfFalse v16, bb4(v9, v17)&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v19">v19:Truthy = RefineType v10, Truthy&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v21">PatchPoint NoTracePoint&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v22">v22:Fixnum[3] = Const Value(3)&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v25">CheckInterrupts&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v26">Return v22&nbsp;</TD></TR>
-        </TABLE>>];
-          bb3:v18 -> bb4:params:n;
-          bb4 [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0">
-        <TR><TD ALIGN="LEFT" PORT="params" BGCOLOR="gray">bb4(v27:BasicObject, v28:Falsy)&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v31">PatchPoint NoTracePoint&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v32">v32:Fixnum[4] = Const Value(4)&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v35">CheckInterrupts&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v36">Return v32&nbsp;</TD></TR>
-        </TABLE>>];
-        }
-        "#);
     }
 }
