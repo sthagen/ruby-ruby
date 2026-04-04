@@ -7,7 +7,7 @@
 #![allow(clippy::match_like_matches_macro)]
 use crate::{
     backend::lir::C_ARG_OPNDS,
-    cast::IntoUsize, codegen::local_idx_to_ep_offset, cruby::*, invariants::{self}, payload::{get_or_create_iseq_payload, IseqPayload}, options::{debug, get_option, DumpHIR}, state::ZJITState, json::Json,
+    cast::IntoUsize, codegen::{local_idx_to_ep_offset, max_iseq_versions}, cruby::*, invariants::{self}, payload::{get_or_create_iseq_payload, IseqPayload}, options::{debug, get_option, DumpHIR}, state::ZJITState, json::Json,
     state,
 };
 use std::{
@@ -1090,7 +1090,9 @@ pub enum Insn {
     GuardType { val: InsnId, guard_type: Type, state: InsnId },
     GuardTypeNot { val: InsnId, guard_type: Type, state: InsnId },
     /// Side-exit if val is not the expected Const.
-    GuardBitEquals { val: InsnId, expected: Const, reason: SideExitReason, state: InsnId },
+    /// `recompile`: if Some(argc), the side exit triggers exit_recompile.
+    /// argc >= 0 profiles receiver + args from stack; argc == -1 profiles self from CFP.
+    GuardBitEquals { val: InsnId, expected: Const, reason: SideExitReason, state: InsnId, recompile: Option<i32> },
     /// Side-exit if (val & mask) == 0
     GuardAnyBitSet { val: InsnId, mask: Const, mask_name: Option<ID>, reason: SideExitReason, state: InsnId },
     /// Side-exit if (val & mask) != 0
@@ -2425,6 +2427,32 @@ fn can_direct_send(function: &mut Function, block: BlockId, iseq: *const rb_iseq
     can_send
 }
 
+/// Policy that controls how optimization passes generate code.
+/// Determined at compile time based on the ISEQ's compilation history.
+#[derive(Debug)]
+struct CompilePolicy {
+    /// When true, optimization passes should avoid generating guards that
+    /// side-exit, and instead use fallback paths (e.g. C calls) on mismatch.
+    /// Set when this is the final version of an ISEQ after recompilation.
+    no_side_exits: bool,
+}
+
+impl CompilePolicy {
+    fn new(iseq: *const rb_iseq_t) -> Self {
+        // When a previous version was invalidated and we've reached the version
+        // limit, avoid speculative optimizations that may side-exit.
+        let no_side_exits = if iseq.is_null() {
+            false
+        } else {
+            let payload = get_or_create_iseq_payload(iseq);
+            payload.versions.iter().any(
+                |v| unsafe { v.as_ref() }.is_invalidated()
+            ) && payload.versions.len() + 1 >= max_iseq_versions()
+        };
+        Self { no_side_exits }
+    }
+}
+
 /// A [`Function`], which is analogous to a Ruby ISeq, is a control-flow graph of [`Block`]s
 /// containing instructions.
 #[derive(Debug)]
@@ -2434,6 +2462,8 @@ pub struct Function {
     /// Whether previously, a function for this ISEQ was invalidated due to
     /// singleton class creation (violation of NoSingletonClass invariant).
     was_invalidated_for_singleton_class_creation: bool,
+    /// Controls code generation strategy for optimization passes.
+    policy: CompilePolicy,
     /// The types for the parameters of this function. They are copied to the type
     /// of entry block params after infer_types() fills Empty to all insn_types.
     param_types: Vec<Type>,
@@ -2541,6 +2571,7 @@ impl Function {
         Function {
             iseq,
             was_invalidated_for_singleton_class_creation: false,
+            policy: CompilePolicy::new(iseq),
             insns: vec![],
             insn_types: vec![],
             union_find: UnionFind::new().into(),
@@ -2782,7 +2813,7 @@ impl Function {
             &HasType { val, expected } => HasType { val: find!(val), expected },
             &GuardType { val, guard_type, state } => GuardType { val: find!(val), guard_type, state },
             &GuardTypeNot { val, guard_type, state } => GuardTypeNot { val: find!(val), guard_type, state },
-            &GuardBitEquals { val, expected, reason, state } => GuardBitEquals { val: find!(val), expected, reason, state },
+            &GuardBitEquals { val, expected, reason, state, recompile } => GuardBitEquals { val: find!(val), expected, reason, state, recompile },
             &GuardAnyBitSet { val, mask, mask_name, reason, state } => GuardAnyBitSet { val: find!(val), mask, mask_name, reason, state },
             &GuardNoBitsSet { val, mask, mask_name, reason, state } => GuardNoBitsSet { val: find!(val), mask, mask_name, reason, state },
             &GuardGreaterEq { left, right, reason, state } => GuardGreaterEq { left: find!(left), right: find!(right), reason, state },
@@ -4043,14 +4074,15 @@ impl Function {
                             // Load ep[VM_ENV_DATA_INDEX_ME_CREF]
                             let method_entry = fun.push_insn(block, Insn::LoadField { recv: lep, id: ID!(_ep_method_entry), offset: SIZEOF_VALUE_I32 * VM_ENV_DATA_INDEX_ME_CREF, return_type: types::RubyValue });
                             // Guard that it matches the expected CME
-                            fun.push_insn(block, Insn::GuardBitEquals { val: method_entry, expected: Const::Value(current_cme.into()), reason: SideExitReason::GuardSuperMethodEntry, state });
+                            fun.push_insn(block, Insn::GuardBitEquals { val: method_entry, expected: Const::Value(current_cme.into()), reason: SideExitReason::GuardSuperMethodEntry, state, recompile: None });
 
                             let block_handler = fun.push_insn(block, Insn::LoadField { recv: lep, id: ID!(_ep_specval), offset: SIZEOF_VALUE_I32 * VM_ENV_DATA_INDEX_SPECVAL, return_type: types::RubyValue });
                             fun.push_insn(block, Insn::GuardBitEquals {
                                 val: block_handler,
                                 expected: Const::Value(VALUE(VM_BLOCK_HANDLER_NONE as usize)),
                                 reason: SideExitReason::UnhandledBlockArg,
-                                state
+                                state,
+                                recompile: None,
                             });
                         }
 
@@ -4360,12 +4392,13 @@ impl Function {
         })
     }
 
-    fn guard_shape(&mut self, block: BlockId, val: InsnId, expected: ShapeId, state: InsnId) -> InsnId {
+    fn guard_shape(&mut self, block: BlockId, val: InsnId, expected: ShapeId, state: InsnId, recompile: Option<i32>) -> InsnId {
         self.push_insn(block, Insn::GuardBitEquals {
             val,
             expected: Const::CShape(expected),
             reason: SideExitReason::GuardShape(expected),
-            state
+            state,
+            recompile,
         })
     }
 
@@ -4501,9 +4534,16 @@ impl Function {
                             self.count(block, Counter::getivar_fallback_too_complex);
                             self.push_insn_id(block, insn_id); continue;
                         }
+                        if self.policy.no_side_exits {
+                            // On the final version, skip GetIvar shape specialization.
+                            // iseq_to_hir already generates polymorphic branches with a
+                            // GetIvar C call fallback for getinstancevariable, so we don't
+                            // need to wrap it again here.
+                            self.push_insn_id(block, insn_id); continue;
+                        }
                         let self_val = self.load_ivar_guard_type(block, self_val, recv_type, state);
                         let shape = self.load_shape(block, self_val);
-                        self.guard_shape(block, shape, recv_type.shape(), state);
+                        self.guard_shape(block, shape, recv_type.shape(), state, Some(-1));
                         let replacement = self.load_ivar(block, self_val, recv_type, id, state);
                         self.make_equal_to(insn_id, replacement);
                     }
@@ -4532,7 +4572,7 @@ impl Function {
                         }
                         let self_val = self.load_ivar_guard_type(block, self_val, recv_type, state);
                         let shape = self.load_shape(block, self_val);
-                        self.guard_shape(block, shape, recv_type.shape(), state);
+                        self.guard_shape(block, shape, recv_type.shape(), state, None);
                         let mut ivar_index: u16 = 0;
                         let replacement = if unsafe { rb_shape_get_iv_index(recv_type.shape().0, id, &mut ivar_index) } {
                             self.push_insn(block, Insn::Const { val: Const::Value(pushval) })
@@ -4604,7 +4644,7 @@ impl Function {
                         }
                         let self_val = self.load_ivar_guard_type(block, self_val, recv_type, state);
                         let shape = self.load_shape(block, self_val);
-                        self.guard_shape(block, shape, recv_type.shape(), state);
+                        self.guard_shape(block, shape, recv_type.shape(), state, None);
                         // Current shape contains this ivar
                         let (ivar_storage, offset) = if recv_type.flags().is_embedded() {
                             // See ROBJECT_FIELDS() from include/ruby/internal/core/robject.h
@@ -5239,12 +5279,31 @@ impl Function {
         for block in self.rpo() {
             let old_insns = std::mem::take(&mut self.blocks[block.0].insns);
             let mut new_insns = vec![];
+            // Track guards seen so far in this block: (val, guard_type, result_insn_id).
+            // When we encounter a GuardType whose (val, guard_type) pair is already covered
+            // by a previous guard, we can eliminate it by reusing the earlier result.
+            let mut seen_guards: Vec<(InsnId, Type, InsnId)> = vec![];
             for insn_id in old_insns {
                 let replacement_id = match self.find(insn_id) {
                     Insn::GuardType { val, guard_type, .. } if self.is_a(val, guard_type) => {
                         self.make_equal_to(insn_id, val);
                         // Don't bother re-inferring the type of val; we already know it.
                         continue;
+                    }
+                    // Deduplicate GuardType: if we already guarded the same val with a
+                    // type that is the same or narrower, the new guard is redundant.
+                    // e.g. if we already proved val is Fixnum, a later Fixnum or
+                    // BasicObject guard on the same val is guaranteed to pass.
+                    // TODO: Move into global value numbering
+                    Insn::GuardType { val, guard_type, .. } => {
+                        if let Some(&(_, _, prev_result)) = seen_guards.iter().find(
+                            |&&(prev_val, prev_type, _)| prev_val == val && prev_type.is_subtype(guard_type)
+                        ) {
+                            self.make_equal_to(insn_id, prev_result);
+                            continue;
+                        }
+                        seen_guards.push((val, guard_type, insn_id));
+                        insn_id
                     }
                     Insn::LoadField { recv, offset, return_type, .. } if return_type.is_subtype(types::BasicObject) &&
                             u32::try_from(offset).is_ok() => {
@@ -7533,7 +7592,7 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
 
                     match profiled_block_type {
                         Some(ty) if ty.nil_p() => {
-                            fun.push_insn(unmodified_block, Insn::GuardBitEquals { val: block_handler, expected: Const::CInt64(VM_BLOCK_HANDLER_NONE.into()), reason: SideExitReason::BlockParamProxyNotNil, state: exit_id });
+                            fun.push_insn(unmodified_block, Insn::GuardBitEquals { val: block_handler, expected: Const::CInt64(VM_BLOCK_HANDLER_NONE.into()), reason: SideExitReason::BlockParamProxyNotNil, state: exit_id, recompile: None });
                             let nil_val = fun.push_insn(unmodified_block, Insn::Const { val: Const::Value(Qnil) });
                             let mut unmodified_args = vec![nil_val];
                             if let Some(local) = original_local { unmodified_args.push(local); }
@@ -8051,7 +8110,7 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                         });
 
                     let result = if is_ifunc {
-                        // Get the local EP to load the block handler
+                        // Load the block handler from LEP
                         let level = get_lvar_level(fun.iseq);
                         let lep = fun.push_insn(block, Insn::GetEP { level });
                         let block_handler = fun.push_insn(block, Insn::LoadField {
@@ -8061,23 +8120,34 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                             return_type: types::CInt64,
                         });
 
-                        // Guard that the block handler is an IFUNC (tag bits & 0x3 == 0x3),
-                        // matching VM_BH_IFUNC_P() in the interpreter.
+                        // Check IFUNC tag: (block_handler & 0x3) == 0x3
                         let tag_mask = fun.push_insn(block, Insn::Const { val: Const::CInt64(0x3) });
                         let tag_bits = fun.push_insn(block, Insn::IntAnd { left: block_handler, right: tag_mask });
-                        fun.push_insn(block, Insn::GuardBitEquals {
-                            val: tag_bits,
-                            expected: Const::CInt64(0x3),
-                            reason: SideExitReason::InvokeBlockNotIfunc,
-                            state: exit_id,
-                        });
+                        let ifunc_tag = fun.push_insn(block, Insn::Const { val: Const::CInt64(0x3) });
+                        let is_ifunc_match = fun.push_insn(block, Insn::IsBitEqual { left: tag_bits, right: ifunc_tag });
 
-                        fun.push_insn(block, Insn::InvokeBlockIfunc {
+                        // Branch: on match, call InvokeBlockIfunc directly
+                        let join_block = fun.new_block(insn_idx);
+                        let join_param = fun.push_insn(join_block, Insn::Param);
+                        let ifunc_block = fun.new_block(insn_idx);
+                        fun.push_insn(block, Insn::IfTrue { val: is_ifunc_match, target: BranchEdge { target: ifunc_block, args: vec![] } });
+                        let ifunc_result = fun.push_insn(ifunc_block, Insn::InvokeBlockIfunc {
                             cd,
                             block_handler,
-                            args,
+                            args: args.clone(),
                             state: exit_id,
-                        })
+                        });
+                        fun.push_insn(ifunc_block, Insn::Jump(BranchEdge { target: join_block, args: vec![ifunc_result] }));
+
+                        // In the fallthrough case, use generic rb_vm_invokeblock and join
+                        let fallback_result = fun.push_insn(block, Insn::InvokeBlock {
+                            cd, args, state: exit_id, reason: InvokeBlockNotSpecialized,
+                        });
+                        fun.push_insn(block, Insn::Jump(BranchEdge { target: join_block, args: vec![fallback_result] }));
+
+                        // Continue compilation from the join block
+                        block = join_block;
+                        join_param
                     } else {
                         fun.push_insn(block, Insn::InvokeBlock { cd, args, state: exit_id, reason: InvokeBlockNotSpecialized })
                     };
