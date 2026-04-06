@@ -120,8 +120,8 @@ class LeakChecker
           else
             @@try_lsof |= $?.success?
           end
-          if @@try_lsof
-            columns = (header = open_list.shift).split
+          if header = open_list&.shift
+            columns = header.split
             fd_index, node_index = columns.index('FD'), columns.index('NODE')
             open_list.reject! do |of|
               of = of.chomp.split(' ', node_index + 2)
@@ -135,8 +135,8 @@ class LeakChecker
                 false
               end
             end
+            puts(header, open_list) unless open_list.empty?
           end
-          puts(header, open_list) unless open_list.empty?
         end
       end
       inspect.each {|fd, (str, pos)|
