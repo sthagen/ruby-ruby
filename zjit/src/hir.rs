@@ -393,12 +393,17 @@ impl<'a> std::fmt::Display for ConstPrinter<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self.inner {
             Const::Value(val) => write!(f, "Value({})", val.print(self.ptr_map)),
-            // TODO: Break out CPtr as a special case. For some reason,
-            // when we do that now, {:p} prints a completely different
-            // number than {:?} does and we don't know why.
-            // We'll have to resolve that first.
-            Const::CPtr(val) => write!(f, "CPtr({:?})", self.ptr_map.map_ptr(val)),
+            // Since `&` coerces to a raw pointer, be careful to get `val` and not `&val` here.
+            &Const::CPtr(val) => write!(f, "CPtr({:p})", self.ptr_map.map_ptr(val)),
             &Const::CShape(shape_id) => write!(f, "CShape({:p})", self.ptr_map.map_shape(shape_id)),
+            &Const::CUInt64(int) => {
+                // Print in hex if signed bit is set
+                if 0 != int & (1 << (u64::BITS - 1)) {
+                    write!(f, "CUInt64(0x{int:x})")
+                } else {
+                    write!(f, "CUInt64({int})")
+                }
+            }
             _ => write!(f, "{:?}", self.inner),
         }
     }
@@ -538,6 +543,15 @@ pub enum SideExitReason {
     SendWhileTracing,
     NoProfileSend,
     InvokeBlockNotIfunc,
+}
+
+/// Controls how a side exit triggers recompilation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Recompile {
+    /// Profile receiver + arguments from the stack (for sends without profile data).
+    ProfileSend { argc: i32 },
+    /// Profile self from the CFP (for shape guard failures).
+    ProfileSelf,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1090,9 +1104,7 @@ pub enum Insn {
     GuardType { val: InsnId, guard_type: Type, state: InsnId },
     GuardTypeNot { val: InsnId, guard_type: Type, state: InsnId },
     /// Side-exit if val is not the expected Const.
-    /// `recompile`: if Some(argc), the side exit triggers exit_recompile.
-    /// argc >= 0 profiles receiver + args from stack; argc == -1 profiles self from CFP.
-    GuardBitEquals { val: InsnId, expected: Const, reason: SideExitReason, state: InsnId, recompile: Option<i32> },
+    GuardBitEquals { val: InsnId, expected: Const, reason: SideExitReason, state: InsnId, recompile: Option<Recompile> },
     /// Side-exit if (val & mask) == 0
     GuardAnyBitSet { val: InsnId, mask: Const, mask_name: Option<ID>, reason: SideExitReason, state: InsnId },
     /// Side-exit if (val & mask) != 0
@@ -1107,9 +1119,9 @@ pub enum Insn {
     PatchPoint { invariant: Invariant, state: InsnId },
 
     /// Side-exit into the interpreter.
-    /// If `recompile` is set, the side exit will profile the send and invalidate the ISEQ
+    /// If recompile is not None, the side exit will profile and invalidate the ISEQ
     /// so that it gets recompiled with the new profile data.
-    SideExit { state: InsnId, reason: SideExitReason, recompile: Option<i32> },
+    SideExit { state: InsnId, reason: SideExitReason, recompile: Option<Recompile> },
 
     /// Increment a counter in ZJIT stats
     IncrCounter(Counter),
@@ -4392,7 +4404,7 @@ impl Function {
         })
     }
 
-    fn guard_shape(&mut self, block: BlockId, val: InsnId, expected: ShapeId, state: InsnId, recompile: Option<i32>) -> InsnId {
+    fn guard_shape(&mut self, block: BlockId, val: InsnId, expected: ShapeId, state: InsnId, recompile: Option<Recompile>) -> InsnId {
         self.push_insn(block, Insn::GuardBitEquals {
             val,
             expected: Const::CShape(expected),
@@ -4450,10 +4462,10 @@ impl Function {
 
     /// This puts a guard that establishes the preconditon for [Self::load_ivar]
     fn load_ivar_guard_type(&mut self, block: BlockId, recv: InsnId, recv_type: ProfiledType, state: InsnId) -> InsnId {
-        if recv_type.class().is_subclass_of(unsafe { rb_cClass }) == ClassRelationship::Subclass {
+        if recv_type.flags().is_t_class() {
             // Check class first since `Class < Module`
             self.push_insn(block, Insn::GuardType { val: recv, guard_type: types::Class, state })
-        } else if recv_type.class().is_subclass_of(unsafe { rb_cModule }) == ClassRelationship::Subclass {
+        } else if recv_type.flags().is_t_module() {
             self.push_insn(block, Insn::GuardType { val: recv, guard_type: types::Module, state })
         } else if recv_type.flags().is_typed_data() {
             self.push_insn(block, Insn::GuardType { val: recv, guard_type: types::TypedTData, state })
@@ -4476,7 +4488,7 @@ impl Function {
             // shape + iv name
             return self.push_insn(block, Insn::Const { val: Const::Value(Qnil) });
         }
-        if recv_type.flags().is_t_class_or_module() {
+        if recv_type.flags().is_t_class() || recv_type.flags().is_t_module() {
             // Class/module ivar: load from prime classext's fields_obj
             if !self.assume_root_box(block, state) {
                 // Non-root box active: fall back to C call
@@ -4543,7 +4555,7 @@ impl Function {
                         }
                         let self_val = self.load_ivar_guard_type(block, self_val, recv_type, state);
                         let shape = self.load_shape(block, self_val);
-                        self.guard_shape(block, shape, recv_type.shape(), state, Some(-1));
+                        self.guard_shape(block, shape, recv_type.shape(), state, Some(Recompile::ProfileSelf));
                         let replacement = self.load_ivar(block, self_val, recv_type, id, state);
                         self.make_equal_to(insn_id, replacement);
                     }
@@ -5178,7 +5190,7 @@ impl Function {
                 match self.find(insn_id) {
                     Insn::Send { cd, state, reason: SendFallbackReason::SendWithoutBlockNoProfiles | SendFallbackReason::SendNoProfiles, .. } => {
                         let argc = unsafe { vm_ci_argc((*cd).ci) } as i32;
-                        self.push_insn(block, Insn::SideExit { state, reason: SideExitReason::NoProfileSend, recompile: Some(argc) });
+                        self.push_insn(block, Insn::SideExit { state, reason: SideExitReason::NoProfileSend, recompile: Some(Recompile::ProfileSend { argc }) });
                         // SideExit is a terminator; don't add remaining instructions
                         break;
                     }
@@ -5930,8 +5942,10 @@ impl Function {
         macro_rules! run_pass {
             ($name:ident) => {
                 let counter = counter_for!($name);
-                crate::stats::with_time_stat(counter, || self.$name());
-                #[cfg(debug_assertions)] self.assert_validates();
+                crate::stats::trace_compile_phase(stringify!($name), ||
+                    crate::stats::with_time_stat(counter, || self.$name())
+                );
+                #[cfg(debug_assertions)] crate::stats::trace_compile_phase("validate", || self.assert_validates());
                 if should_dump {
                     passes.push(
                         self.to_iongraph_pass(stringify!($name))
@@ -6333,8 +6347,16 @@ impl Function {
             Insn::IntAnd { left, right }
             | Insn::IntOr { left, right } => {
                 // TODO: Expand this to other matching C integer sizes when we need them.
-                self.assert_subtype(insn_id, left, types::CInt64)?;
-                self.assert_subtype(insn_id, right, types::CInt64)
+                let left_type = self.type_of(left);
+                if left_type.is_subtype(types::CInt64) {
+                    self.assert_subtype(insn_id, right, types::CInt64)
+                } else if left_type.is_subtype(types::CUInt64) {
+                    self.assert_subtype(insn_id, right, types::CUInt64)
+                } else {
+                    let all_ints = types::CInt64.union(types::CUInt64);
+                    self.assert_subtype(insn_id, left, all_ints)?;
+                    self.assert_subtype(insn_id, right, all_ints)
+                }
             }
             Insn::BoxBool { val }
             | Insn::IfTrue { val, .. }
@@ -8176,31 +8198,37 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     }
                     if let Some(summary) = fun.polymorphic_summary(&profiles, self_param, exit_state.insn_idx) {
                         self_param = fun.push_insn(block, Insn::GuardType { val: self_param, guard_type: types::HeapBasicObject, state: exit_id });
-                        let shape = fun.load_shape(block, self_param);
+                        let rbasic_flags = fun.load_rbasic_flags(block, self_param);
                         let join_block = insn_idx_to_block.get(&insn_idx).copied().unwrap_or_else(|| fun.new_block(insn_idx));
                         let join_param = fun.push_insn(join_block, Insn::Param);
                         // Dedup by expected shape so objects with different classes but the same shape can share code
                         // TODO(max): De-duplicate further by checking ivar offsets to allow
                         // different shapes with the same ivar layout to share code
-                        let mut seen_shapes = Vec::with_capacity(summary.buckets().len());
+                        let mut seen_shape_and_flags = Vec::with_capacity(summary.buckets().len());
                         for &profiled_type in summary.buckets() {
                             // End of the buckets
                             if profiled_type.is_empty() { break; }
                             // Instance variable lookups on immediate values are always nil; don't bother
                             if profiled_type.flags().is_immediate() { continue; }
                             let expected_shape = profiled_type.shape();
+                            let (expected_rbasic_flags, rbasic_flags_mask) = profiled_type.rbasic_flags_and_mask();
                             assert!(expected_shape.is_valid());
                             // Too-complex shapes use hash tables for ivars;
                             // rb_shape_get_iv_index doesn't work for them.
                             // Let the fallthrough GetIvar handle these.
                             if expected_shape.is_too_complex() { continue; }
-                            if seen_shapes.contains(&expected_shape) { continue; }
-                            seen_shapes.push(expected_shape);
-                            let expected_shape_const = fun.push_insn(block, Insn::Const { val: Const::CShape(expected_shape) });
-                            let has_shape = fun.push_insn(block, Insn::IsBitEqual { left: shape, right: expected_shape_const });
+                            if seen_shape_and_flags.contains(&expected_rbasic_flags) { continue; }
+                            seen_shape_and_flags.push(expected_rbasic_flags);
+                            let rbasic_flags_mask = fun.push_insn(block, Insn::Const { val: Const::CUInt64(rbasic_flags_mask) });
+                            // The expected shape can change over run, so we put it
+                            // as a pointer to keep it stable in snapshot tests.
+                            let expected_rbasic_flags = fun.push_insn(block, Insn::Const { val: Const::CPtr(ptr::without_provenance(expected_rbasic_flags.to_usize())) });
+                            let expected_rbasic_flags = fun.push_insn(block, Insn::RefineType { val: expected_rbasic_flags, new_type: types::CUInt64 });
+                            let masked = fun.push_insn(block, Insn::IntAnd { left: rbasic_flags, right: rbasic_flags_mask});
+                            let has_shape_and_type = fun.push_insn(block, Insn::IsBitEqual { left: masked, right: expected_rbasic_flags });
                             let iftrue_block = fun.new_block(insn_idx);
                             let target = BranchEdge { target: iftrue_block, args: vec![] };
-                            fun.push_insn(block, Insn::IfTrue { val: has_shape, target });
+                            fun.push_insn(block, Insn::IfTrue { val: has_shape_and_type, target });
                             let result = fun.load_ivar(iftrue_block, self_param, profiled_type, id, exit_id);
                             fun.push_insn(iftrue_block, Insn::Jump(BranchEdge { target: join_block, args: vec![result] }));
                         }
@@ -8412,7 +8440,7 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
     }
 
     fun.profiles = Some(profiles);
-    if let Err(err) = fun.validate() {
+    if let Err(err) = crate::stats::trace_compile_phase("validate", || fun.validate()) {
         debug!("ZJIT: {err:?}: Initial HIR:\n{}", FunctionPrinter::without_snapshot(&fun));
         return Err(ParseError::Validation(err));
     }
