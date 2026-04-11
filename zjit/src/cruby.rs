@@ -248,7 +248,7 @@ pub struct rb_iseq_constant_body {
 /// that this is a handle. Sometimes the C code briefly uses VALUE as
 /// an unsigned integer type and don't necessarily store valid handles but
 /// thankfully those cases are rare and don't cross the FFI boundary.
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash)]
 #[repr(transparent)] // same size and alignment as simply `usize`
 pub struct VALUE(pub usize);
 
@@ -753,6 +753,17 @@ impl IseqParameters {
         } else {
             // The ISeq entry point is index 0 when there are no optional parameters
             &[VALUE(0)]
+        }
+    }
+}
+
+impl Debug for VALUE {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        // Only use rb_obj_info() when {:#?} since it dereferences the pointer so carries some risk.
+        if f.alternate() {
+            write!(f, "VALUE({})", self.obj_info())
+        } else {
+            write!(f, "VALUE(0x{:x})", self.0)
         }
     }
 }
@@ -1280,11 +1291,23 @@ pub mod test_utils {
     }
 
     /// Like inspect, but also asserts that all compilations triggered by this program succeed.
-    pub fn assert_compiles(program: &str) -> String {
+    pub fn assert_compiles_allowing_exits(program: &str) -> String {
         use crate::state::ZJITState;
         ZJITState::enable_assert_compiles();
         let result = inspect(program);
         ZJITState::disable_assert_compiles();
+        result
+    }
+
+    /// Like inspect, but also asserts that all compilations triggered by this program succeed and
+    /// no side exits occurr during the program.
+    pub fn assert_compiles(program: &str) -> String {
+        use crate::state::ZJITState;
+        let exits_before = crate::stats::total_exit_count();
+        ZJITState::enable_assert_compiles();
+        let result = inspect(program);
+        ZJITState::disable_assert_compiles();
+        assert_eq!(exits_before, crate::stats::total_exit_count(), "Program side-exited");
         result
     }
 
@@ -1405,6 +1428,13 @@ pub mod test_utils {
     #[should_panic]
     fn value_from_fixnum_too_small_isize() {
         assert_eq!(VALUE::fixnum_from_isize(RUBY_FIXNUM_MIN-1), VALUE(1));
+    }
+
+    #[test]
+    fn value_fmt_debug() {
+        assert_eq!("VALUE(0xcafe)", format!("{:?}", VALUE(0xcafe)));
+        let alternate = format!("{:#?}", eval("::Hash"));
+        assert!(alternate.contains("Hash"), "'Hash' not substring of '{alternate}'");
     }
 }
 #[cfg(test)]
