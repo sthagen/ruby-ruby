@@ -1092,6 +1092,14 @@ pub enum Insn {
     FixnumLShift { left: InsnId, right: InsnId, state: InsnId },
     FixnumRShift { left: InsnId, right: InsnId },
 
+    /// Float arithmetic: delegates to rb_float_plus/minus/mul/div with GC preparation
+    FloatAdd  { recv: InsnId, other: InsnId, state: InsnId },
+    FloatSub  { recv: InsnId, other: InsnId, state: InsnId },
+    FloatMul  { recv: InsnId, other: InsnId, state: InsnId },
+    FloatDiv  { recv: InsnId, other: InsnId, state: InsnId },
+    /// Float#to_i: truncate float to integer via rb_jit_flo_to_i
+    FloatToInt { recv: InsnId, state: InsnId },
+
     // Distinct from `Send` with `mid:to_s` because does not have a patch point for String to_s being redefined
     ObjToString { val: InsnId, cd: *const rb_call_data, state: InsnId },
     AnyToString { val: InsnId, str: InsnId, state: InsnId },
@@ -1282,6 +1290,18 @@ macro_rules! for_each_operand_impl {
             | Insn::FixnumLShift { left, right, state } => {
                 $visit_one!(left);
                 $visit_one!(right);
+                $visit_one!(state);
+            }
+            Insn::FloatAdd { recv, other, state }
+            | Insn::FloatSub { recv, other, state }
+            | Insn::FloatMul { recv, other, state }
+            | Insn::FloatDiv { recv, other, state } => {
+                $visit_one!(recv);
+                $visit_one!(other);
+                $visit_one!(state);
+            }
+            Insn::FloatToInt { recv, state } => {
+                $visit_one!(recv);
                 $visit_one!(state);
             }
             Insn::FixnumLt { left, right }
@@ -1627,6 +1647,11 @@ impl Insn {
             Insn::FixnumMult { .. } => effects::Empty,
             Insn::FixnumDiv { .. } => effects::Any,
             Insn::FixnumMod { .. } => effects::Any,
+            Insn::FloatAdd { .. } => effects::Any,
+            Insn::FloatSub { .. } => effects::Any,
+            Insn::FloatMul { .. } => effects::Any,
+            Insn::FloatDiv { .. } => effects::Any,
+            Insn::FloatToInt { .. } => effects::Any,
             Insn::FixnumEq { .. } => effects::Empty,
             Insn::FixnumNeq { .. } => effects::Empty,
             Insn::FixnumLt { .. } => effects::Empty,
@@ -2021,6 +2046,11 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
             Insn::FixnumMult { left, right, .. } => { write!(f, "FixnumMult {left}, {right}") },
             Insn::FixnumDiv  { left, right, .. } => { write!(f, "FixnumDiv {left}, {right}") },
             Insn::FixnumMod  { left, right, .. } => { write!(f, "FixnumMod {left}, {right}") },
+            Insn::FloatAdd   { recv, other, .. } => { write!(f, "FloatAdd {recv}, {other}") },
+            Insn::FloatSub   { recv, other, .. } => { write!(f, "FloatSub {recv}, {other}") },
+            Insn::FloatMul   { recv, other, .. } => { write!(f, "FloatMul {recv}, {other}") },
+            Insn::FloatDiv   { recv, other, .. } => { write!(f, "FloatDiv {recv}, {other}") },
+            Insn::FloatToInt { recv, .. } => { write!(f, "FloatToInt {recv}") },
             Insn::FixnumEq   { left, right, .. } => { write!(f, "FixnumEq {left}, {right}") },
             Insn::FixnumNeq  { left, right, .. } => { write!(f, "FixnumNeq {left}, {right}") },
             Insn::FixnumLt   { left, right, .. } => { write!(f, "FixnumLt {left}, {right}") },
@@ -2840,6 +2870,11 @@ impl Function {
             &FixnumMult { left, right, state } => FixnumMult { left: find!(left), right: find!(right), state },
             &FixnumDiv { left, right, state } => FixnumDiv { left: find!(left), right: find!(right), state },
             &FixnumMod { left, right, state } => FixnumMod { left: find!(left), right: find!(right), state },
+            &FloatAdd { recv, other, state } => FloatAdd { recv: find!(recv), other: find!(other), state },
+            &FloatSub { recv, other, state } => FloatSub { recv: find!(recv), other: find!(other), state },
+            &FloatMul { recv, other, state } => FloatMul { recv: find!(recv), other: find!(other), state },
+            &FloatDiv { recv, other, state } => FloatDiv { recv: find!(recv), other: find!(other), state },
+            &FloatToInt { recv, state } => FloatToInt { recv: find!(recv), state },
             &FixnumNeq { left, right } => FixnumNeq { left: find!(left), right: find!(right) },
             &FixnumEq { left, right } => FixnumEq { left: find!(left), right: find!(right) },
             &FixnumGt { left, right } => FixnumGt { left: find!(left), right: find!(right) },
@@ -3103,6 +3138,11 @@ impl Function {
             Insn::FixnumMult { .. } => types::Fixnum,
             Insn::FixnumDiv  { .. } => types::Fixnum,
             Insn::FixnumMod  { .. } => types::Fixnum,
+            Insn::FloatAdd   { .. } => types::Float,
+            Insn::FloatSub   { .. } => types::Float,
+            Insn::FloatMul   { .. } => types::Float,
+            Insn::FloatDiv   { .. } => types::Float,
+            Insn::FloatToInt { .. } => types::Integer,
             Insn::FixnumEq   { .. } => types::BoolExact,
             Insn::FixnumNeq  { .. } => types::BoolExact,
             Insn::FixnumLt   { .. } => types::BoolExact,
@@ -6211,6 +6251,18 @@ impl Function {
                 self.assert_subtype(insn_id, left, types::Fixnum)?;
                 self.assert_subtype(insn_id, right, types::Fixnum)
             }
+            Insn::FloatAdd { recv, other, .. }
+            | Insn::FloatSub { recv, other, .. }
+            | Insn::FloatMul { recv, other, .. }
+            | Insn::FloatDiv { recv, other, .. }
+            => {
+                self.assert_subtype(insn_id, recv, types::Flonum)?;
+                // other can be Flonum or Fixnum (rb_float_plus etc. handle both)
+                self.assert_subtype(insn_id, other, types::Flonum.union(types::Fixnum))
+            }
+            Insn::FloatToInt { recv, .. } => {
+                self.assert_subtype(insn_id, recv, types::Flonum)
+            }
             Insn::FixnumLShift { left, right, .. }
             | Insn::FixnumRShift { left, right, .. } => {
                 self.assert_subtype(insn_id, left, types::Fixnum)?;
@@ -7363,8 +7415,18 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                 YARVINSN_getlocal => {
                     let ep_offset = get_arg(pc, 0).as_u32();
                     let level = get_arg(pc, 1).as_u32();
-                    let ep = fun.push_insn(block, Insn::GetEP { level });
-                    state.stack_push(fun.get_local_from_ep(block, ep, ep_offset, level, types::BasicObject));
+                    if level == 0 && !local_inval {
+                        // Same optimization as getlocal_WC_0: use FrameState
+                        let val = state.getlocal(ep_offset);
+                        state.stack_push(val);
+                    } else {
+                        let ep = fun.push_insn(block, Insn::GetEP { level });
+                        let val = fun.get_local_from_ep(block, ep, ep_offset, level, types::BasicObject);
+                        if level == 0 {
+                            state.setlocal(ep_offset, val);
+                        }
+                        state.stack_push(val);
+                    }
                 }
                 YARVINSN_setlocal => {
                     let ep_offset = get_arg(pc, 0).as_u32();

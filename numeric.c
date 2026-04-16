@@ -2565,6 +2565,12 @@ flo_to_i(VALUE num)
     return dbl2ival(f);
 }
 
+VALUE
+rb_flo_to_i(VALUE num)
+{
+    return flo_to_i(num);
+}
+
 /*
  *  call-seq:
  *    truncate(ndigits = 0) -> float or integer

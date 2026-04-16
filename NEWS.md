@@ -69,6 +69,8 @@ releases.
 
 * RubyGems 4.1.0.dev
 * bundler 4.1.0.dev
+* erb 6.0.3
+  * 6.0.1 to [v6.0.2][erb-v6.0.2], [v6.0.3][erb-v6.0.3]
 * json 2.19.3
   * 2.18.0 to [v2.18.1][json-v2.18.1], [v2.19.0][json-v2.19.0], [v2.19.1][json-v2.19.1], [v2.19.2][json-v2.19.2], [v2.19.3][json-v2.19.3]
 * openssl 4.0.1
@@ -80,7 +82,7 @@ releases.
 * stringio 3.2.1.dev
 * strscan 3.1.7.dev
   * 3.1.6 to [v3.1.7][strscan-v3.1.7]
-* syntax_suggest 2.0.3
+* syntax_suggest 3.0.0
 * timeout 0.6.1
   * 0.6.0 to [v0.6.1][timeout-v0.6.1]
 * zlib 3.2.3
@@ -88,7 +90,9 @@ releases.
 
 ### The following bundled gems are updated.
 
-* minitest 6.0.3
+* minitest 6.0.4
+* rake 13.4.2
+  * 13.3.1 to [v13.4.0][rake-v13.4.0], [v13.4.1][rake-v13.4.1], [v13.4.2][rake-v13.4.2]
 * test-unit 3.7.7
   * 3.7.5 to [3.7.6][test-unit-3.7.6], [3.7.7][test-unit-3.7.7]
 * net-imap 0.6.3
@@ -172,6 +176,8 @@ A lot of work has gone into making Ractors more stable, performant, and usable. 
 [prism-v1.8.1]: https://github.com/ruby/prism/releases/tag/v1.8.1
 [zlib-v3.2.3]: https://github.com/ruby/zlib/releases/tag/v3.2.3
 [pstore-v0.2.1]: https://github.com/ruby/pstore/releases/tag/v0.2.1
+[erb-v6.0.2]: https://github.com/ruby/erb/releases/tag/v6.0.2
+[erb-v6.0.3]: https://github.com/ruby/erb/releases/tag/v6.0.3
 [json-v2.18.1]: https://github.com/ruby/json/releases/tag/v2.18.1
 [json-v2.19.0]: https://github.com/ruby/json/releases/tag/v2.19.0
 [json-v2.19.1]: https://github.com/ruby/json/releases/tag/v2.19.1
@@ -182,6 +188,9 @@ A lot of work has gone into making Ractors more stable, performant, and usable. 
 [resolv-v0.7.1]: https://github.com/ruby/resolv/releases/tag/v0.7.1
 [strscan-v3.1.7]: https://github.com/ruby/strscan/releases/tag/v3.1.7
 [timeout-v0.6.1]: https://github.com/ruby/timeout/releases/tag/v0.6.1
+[rake-v13.4.0]: https://github.com/ruby/rake/releases/tag/v13.4.0
+[rake-v13.4.1]: https://github.com/ruby/rake/releases/tag/v13.4.1
+[rake-v13.4.2]: https://github.com/ruby/rake/releases/tag/v13.4.2
 [test-unit-3.7.6]: https://github.com/test-unit/test-unit/releases/tag/3.7.6
 [test-unit-3.7.7]: https://github.com/test-unit/test-unit/releases/tag/3.7.7
 [net-imap-v0.6.3]: https://github.com/ruby/net-imap/releases/tag/v0.6.3
