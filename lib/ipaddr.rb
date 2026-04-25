@@ -41,7 +41,7 @@ require 'socket'
 
 class IPAddr
   # The version string
-  VERSION = "1.2.8"
+  VERSION = "1.2.9"
 
   # 32 bit mask for IPv4
   IN4MASK = 0xffffffff
@@ -164,6 +164,10 @@ class IPAddr
 
   # Returns true if two ipaddrs are equal.
   def ==(other)
+    if other.nil?
+      return false
+    end
+
     other = coerce_other(other)
   rescue
     false
