@@ -251,7 +251,6 @@ rb_gc_get_objspace(void)
     return GET_VM()->gc.objspace;
 }
 
-
 void
 rb_gc_ractor_newobj_cache_foreach(void (*func)(void *cache, void *data), void *data)
 {
@@ -1032,9 +1031,11 @@ gc_newobj_hook(VALUE obj)
     RB_GC_VM_UNLOCK_NO_BARRIER(lev);
 }
 
-static inline VALUE
-newobj_of(rb_ractor_t *cr, VALUE klass, VALUE flags, shape_id_t shape_id, bool wb_protected, size_t size)
+VALUE
+rb_ec_newobj_of(rb_execution_context_t *ec, VALUE klass, VALUE flags, shape_id_t shape_id, bool wb_protected, size_t size)
 {
+    GC_ASSERT((flags & FL_WB_PROTECTED) == 0);
+    rb_ractor_t *cr = rb_ec_ractor_ptr(ec);
     VALUE obj = rb_gc_impl_new_obj(rb_gc_get_objspace(), cr->newobj_cache, klass, flags, wb_protected, size);
     RBASIC_SET_SHAPE_ID_NO_CHECKS(obj, shape_id);
 
@@ -1060,17 +1061,9 @@ newobj_of(rb_ractor_t *cr, VALUE klass, VALUE flags, shape_id_t shape_id, bool w
 }
 
 VALUE
-rb_wb_unprotected_newobj_of(VALUE klass, VALUE flags, shape_id_t shape_id, size_t size)
+rb_newobj_of(VALUE klass, VALUE flags, shape_id_t shape_id, bool wb_protected, size_t size)
 {
-    GC_ASSERT((flags & FL_WB_PROTECTED) == 0);
-    return newobj_of(GET_RACTOR(), klass, flags, shape_id, FALSE, size);
-}
-
-VALUE
-rb_wb_protected_newobj_of(rb_execution_context_t *ec, VALUE klass, VALUE flags, shape_id_t shape_id, size_t size)
-{
-    GC_ASSERT((flags & FL_WB_PROTECTED) == 0);
-    return newobj_of(rb_ec_ractor_ptr(ec), klass, flags, shape_id, TRUE, size);
+    return rb_ec_newobj_of(GET_EC(), klass, flags, shape_id, wb_protected, size);
 }
 
 VALUE
@@ -1129,7 +1122,7 @@ rb_data_object_wrap(VALUE klass, void *datap, RUBY_DATA_FUNC dmark, RUBY_DATA_FU
 {
     RUBY_ASSERT_ALWAYS(dfree != (RUBY_DATA_FUNC)1);
     if (klass) rb_data_object_check(klass);
-    VALUE obj = newobj_of(GET_RACTOR(), klass, T_DATA, ROOT_SHAPE_ID, !dmark, sizeof(struct RTypedData));
+    VALUE obj = rb_newobj_of(klass, T_DATA, ROOT_SHAPE_ID, !dmark, sizeof(struct RTypedData));
 
     rb_gc_register_pinning_obj(obj);
 
@@ -1159,7 +1152,7 @@ typed_data_alloc(VALUE klass, VALUE typed_flag, void *datap, const rb_data_type_
     RBIMPL_NONNULL_ARG(type);
     if (klass) rb_data_object_check(klass);
     bool wb_protected = (type->flags & RUBY_FL_WB_PROTECTED) || !type->function.dmark;
-    VALUE obj = newobj_of(GET_RACTOR(), klass, T_DATA | RUBY_TYPED_FL_IS_TYPED_DATA, ROOT_SHAPE_ID, wb_protected, size);
+    VALUE obj = rb_newobj_of(klass, T_DATA | RUBY_TYPED_FL_IS_TYPED_DATA, ROOT_SHAPE_ID, wb_protected, size);
 
     rb_gc_register_pinning_obj(obj);
 
@@ -1203,6 +1196,21 @@ rb_data_typed_object_zalloc(VALUE klass, size_t size, const rb_data_type_t *type
 }
 
 static size_t
+ruby_xmalloc_usable_size(void *ptr)
+{
+#ifdef HAVE_MALLOC_USABLE_SIZE
+#if CALC_EXACT_MALLOC_SIZE
+    struct malloc_obj_info *info = (struct malloc_obj_info *)ptr - 1;
+    return malloc_usable_size(info) - sizeof(struct malloc_obj_info);
+#else
+    return malloc_usable_size(ptr);
+#endif
+#else
+    return 0;
+#endif
+}
+
+static size_t
 rb_objspace_data_type_memsize(VALUE obj)
 {
     size_t size = 0;
@@ -1210,13 +1218,11 @@ rb_objspace_data_type_memsize(VALUE obj)
         const void *ptr = RTYPEDDATA_GET_DATA(obj);
 
         if (ptr) {
-            const rb_data_type_t *type = RTYPEDDATA_TYPE(obj);
             if (RTYPEDDATA_EMBEDDABLE_P(obj) && !RTYPEDDATA_EMBEDDED_P(obj)) {
-#ifdef HAVE_MALLOC_USABLE_SIZE
-                size += malloc_usable_size((void *)ptr);
-#endif
+                size += ruby_xmalloc_usable_size((void *)ptr);
             }
 
+            const rb_data_type_t *type = RTYPEDDATA_TYPE(obj);
             if (type->function.dsize) {
                 size += type->function.dsize(ptr);
             }
