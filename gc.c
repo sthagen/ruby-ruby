@@ -1032,7 +1032,7 @@ gc_newobj_hook(VALUE obj)
 }
 
 VALUE
-rb_ec_newobj_of(rb_execution_context_t *ec, VALUE klass, VALUE flags, shape_id_t shape_id, bool wb_protected, size_t size)
+rb_newobj(rb_execution_context_t *ec, VALUE klass, VALUE flags, shape_id_t shape_id, bool wb_protected, size_t size)
 {
     GC_ASSERT((flags & FL_WB_PROTECTED) == 0);
     rb_ractor_t *cr = rb_ec_ractor_ptr(ec);
@@ -1061,9 +1061,21 @@ rb_ec_newobj_of(rb_execution_context_t *ec, VALUE klass, VALUE flags, shape_id_t
 }
 
 VALUE
-rb_newobj_of(VALUE klass, VALUE flags, shape_id_t shape_id, bool wb_protected, size_t size)
+rb_ec_newobj_of(rb_execution_context_t *ec, VALUE klass, VALUE flags, size_t size)
 {
-    return rb_ec_newobj_of(GET_EC(), klass, flags, shape_id, wb_protected, size);
+    return rb_newobj(ec, klass, flags, ROOT_SHAPE_ID, true, size);
+}
+
+VALUE
+rb_newobj_of_with_shape(VALUE klass, VALUE flags, shape_id_t shape_id, size_t size)
+{
+    return rb_newobj(GET_EC(), klass, flags, shape_id, true, size);
+}
+
+VALUE
+rb_newobj_of(VALUE klass, VALUE flags, size_t size)
+{
+    return rb_newobj(GET_EC(), klass, flags, ROOT_SHAPE_ID, true, size);
 }
 
 VALUE
@@ -1078,9 +1090,7 @@ rb_class_allocate_instance(VALUE klass)
 
     // There might be a NEWOBJ tracepoint callback, and it may set fields.
     // So the shape must be passed to `NEWOBJ_OF`.
-    VALUE flags = T_OBJECT | (RGENGC_WB_PROTECTED_OBJECT ? FL_WB_PROTECTED : 0);
-    NEWOBJ_OF_WITH_SHAPE(o, struct RObject, klass, flags, rb_shape_root(rb_gc_heap_id_for_size(size)), size, 0);
-    VALUE obj = (VALUE)o;
+    VALUE obj = rb_newobj_of_with_shape(klass, T_OBJECT, rb_shape_root(rb_gc_heap_id_for_size(size)), size);
 
 #if RUBY_DEBUG
     RUBY_ASSERT(!rb_shape_obj_too_complex_p(obj));
@@ -1122,7 +1132,7 @@ rb_data_object_wrap(VALUE klass, void *datap, RUBY_DATA_FUNC dmark, RUBY_DATA_FU
 {
     RUBY_ASSERT_ALWAYS(dfree != (RUBY_DATA_FUNC)1);
     if (klass) rb_data_object_check(klass);
-    VALUE obj = rb_newobj_of(klass, T_DATA, ROOT_SHAPE_ID, !dmark, sizeof(struct RTypedData));
+    VALUE obj = rb_newobj(GET_EC(), klass, T_DATA, ROOT_SHAPE_ID, !dmark, sizeof(struct RTypedData));
 
     rb_gc_register_pinning_obj(obj);
 
@@ -1152,7 +1162,7 @@ typed_data_alloc(VALUE klass, VALUE typed_flag, void *datap, const rb_data_type_
     RBIMPL_NONNULL_ARG(type);
     if (klass) rb_data_object_check(klass);
     bool wb_protected = (type->flags & RUBY_FL_WB_PROTECTED) || !type->function.dmark;
-    VALUE obj = rb_newobj_of(klass, T_DATA | RUBY_TYPED_FL_IS_TYPED_DATA, ROOT_SHAPE_ID, wb_protected, size);
+    VALUE obj = rb_newobj(GET_EC(), klass, T_DATA | RUBY_TYPED_FL_IS_TYPED_DATA, ROOT_SHAPE_ID, wb_protected, size);
 
     rb_gc_register_pinning_obj(obj);
 
@@ -1610,7 +1620,7 @@ rb_gc_obj_free(void *objspace, VALUE obj)
         break;
       case T_MATCH:
         {
-            rb_matchext_t *rm = RMATCH_EXT(obj);
+            struct RMatch *rm = RMATCH(obj);
 #if USE_DEBUG_COUNTER
             if (rm->regs.num_regs >= 8) {
                 RB_DEBUG_COUNTER_INC(obj_match_ge8);
@@ -2608,7 +2618,7 @@ rb_obj_memsize_of(VALUE obj)
         break;
       case T_MATCH:
         {
-            rb_matchext_t *rm = RMATCH_EXT(obj);
+            struct RMatch *rm = RMATCH(obj);
             size += onig_region_memsize(&rm->regs);
             size += sizeof(struct rmatch_offset) * rm->char_offset_num_allocated;
         }

@@ -1025,8 +1025,7 @@ str_alloc_embed(VALUE klass, size_t capa)
     RUBY_ASSERT(size > 0);
     RUBY_ASSERT(rb_gc_size_allocatable_p(size));
 
-    NEWOBJ_OF(str, struct RString, klass,
-            T_STRING | (RGENGC_WB_PROTECTED_STRING ? FL_WB_PROTECTED : 0), size, 0);
+    NEWOBJ_OF(str, struct RString, klass, T_STRING, size);
 
     str->len = 0;
     str->as.embed.ary[0] = 0;
@@ -1037,8 +1036,7 @@ str_alloc_embed(VALUE klass, size_t capa)
 static inline VALUE
 str_alloc_heap(VALUE klass)
 {
-    NEWOBJ_OF(str, struct RString, klass,
-            T_STRING | STR_NOEMBED | (RGENGC_WB_PROTECTED_STRING ? FL_WB_PROTECTED : 0), sizeof(struct RString), 0);
+    NEWOBJ_OF(str, struct RString, klass, T_STRING | STR_NOEMBED, sizeof(struct RString));
 
     str->len = 0;
     str->as.heap.aux.capa = 0;
@@ -1902,8 +1900,7 @@ ec_str_alloc_embed(struct rb_execution_context_struct *ec, VALUE klass, size_t c
     RUBY_ASSERT(size > 0);
     RUBY_ASSERT(rb_gc_size_allocatable_p(size));
 
-    NEWOBJ_OF(str, struct RString, klass,
-            T_STRING | (RGENGC_WB_PROTECTED_STRING ? FL_WB_PROTECTED : 0), size, ec);
+    EC_NEWOBJ_OF(str, struct RString, klass, T_STRING, size, ec);
 
     str->len = 0;
 
@@ -1913,8 +1910,7 @@ ec_str_alloc_embed(struct rb_execution_context_struct *ec, VALUE klass, size_t c
 static inline VALUE
 ec_str_alloc_heap(struct rb_execution_context_struct *ec, VALUE klass)
 {
-    NEWOBJ_OF(str, struct RString, klass,
-            T_STRING | STR_NOEMBED | (RGENGC_WB_PROTECTED_STRING ? FL_WB_PROTECTED : 0), sizeof(struct RString), ec);
+    EC_NEWOBJ_OF(str, struct RString, klass, T_STRING | STR_NOEMBED, sizeof(struct RString), ec);
 
     str->as.heap.aux.capa = 0;
     str->as.heap.ptr = NULL;

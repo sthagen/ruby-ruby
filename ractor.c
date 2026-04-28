@@ -1993,16 +1993,16 @@ rb_obj_traverse_replace(VALUE obj,
 }
 
 static const bool wb_protected_types[RUBY_T_MASK] = {
-    [T_OBJECT] = RGENGC_WB_PROTECTED_OBJECT,
-    [T_HASH] = RGENGC_WB_PROTECTED_HASH,
-    [T_ARRAY] = RGENGC_WB_PROTECTED_ARRAY,
-    [T_STRING] = RGENGC_WB_PROTECTED_STRING,
-    [T_STRUCT] = RGENGC_WB_PROTECTED_STRUCT,
-    [T_COMPLEX] = RGENGC_WB_PROTECTED_COMPLEX,
-    [T_REGEXP] = RGENGC_WB_PROTECTED_REGEXP,
-    [T_MATCH] = RGENGC_WB_PROTECTED_MATCH,
-    [T_FLOAT] = RGENGC_WB_PROTECTED_FLOAT,
-    [T_RATIONAL] = RGENGC_WB_PROTECTED_RATIONAL,
+    [T_OBJECT] = true,
+    [T_HASH] = true,
+    [T_ARRAY] = true,
+    [T_STRING] = true,
+    [T_STRUCT] = true,
+    [T_COMPLEX] = true,
+    [T_REGEXP] = true,
+    [T_MATCH] = true,
+    [T_FLOAT] = true,
+    [T_RATIONAL] = true,
 };
 
 static enum obj_traverse_iterator_result
@@ -2015,9 +2015,8 @@ move_enter(VALUE obj, struct obj_traverse_replace_data *data)
     else {
         VALUE type = RB_BUILTIN_TYPE(obj);
         size_t slot_size = rb_gc_obj_slot_size(obj);
-        type |= wb_protected_types[type] ? FL_WB_PROTECTED : 0;
-        NEWOBJ_OF(moved, struct RBasic, 0, type, slot_size, 0);
-        MEMZERO(&moved[1], char, slot_size - sizeof(*moved));
+        VALUE moved = rb_newobj(GET_EC(), 0, type, 0, wb_protected_types[type], slot_size);
+        MEMZERO(((struct RBasic *)moved) + 1, char, slot_size - sizeof(struct RBasic));
         data->replacement = (VALUE)moved;
         return traverse_cont;
     }
