@@ -311,6 +311,7 @@ pub enum Const {
     CUInt8(u8),
     CUInt16(u16),
     CUInt32(u32),
+    CAttrIndex(attr_index_t),
     CShape(ShapeId),
     CUInt64(u64),
     CPtr(*const u8),
@@ -2402,7 +2403,6 @@ fn can_direct_send(function: &mut Function, block: BlockId, iseq: *const rb_iseq
 
     use Counter::*;
     if 0 != params.flags.has_rest()    { count_failure(complex_arg_pass_param_rest) }
-    if 0 != params.flags.has_post()    { count_failure(complex_arg_pass_param_post) }
     if 0 != params.flags.forwardable() { count_failure(complex_arg_pass_param_forwardable) }
     if callee_has_block_param && caller_passes_block_arg
                                        { count_failure(complex_arg_pass_param_block) }
@@ -2423,9 +2423,9 @@ fn can_direct_send(function: &mut Function, block: BlockId, iseq: *const rb_iseq
         return false;
     }
 
-    // Because we exclude e.g. post parameters above, they are also excluded from the checks below.
     let lead_num = params.lead_num;
     let opt_num = params.opt_num;
+    let post_num = params.post_num;
     let keyword = params.keyword;
     let kw_req_num = if keyword.is_null() { 0 } else { unsafe { (*keyword).required_num } };
     let kw_total_num = if keyword.is_null() { 0 } else { unsafe { (*keyword).num } };
@@ -2441,7 +2441,7 @@ fn can_direct_send(function: &mut Function, block: BlockId, iseq: *const rb_iseq
 
     let positional_ok = c_int::try_from(caller_positional)
         .as_ref()
-        .map(|argc| (lead_num..=lead_num + opt_num).contains(argc))
+        .map(|argc| (lead_num + post_num..=lead_num + opt_num + post_num).contains(argc))
         .unwrap_or(false);
     let keyword_ok = c_int::try_from(caller_kw_count)
         .as_ref()
@@ -3080,6 +3080,7 @@ impl Function {
             Insn::Const { val: Const::CUInt8(val) } => Type::from_cint(types::CUInt8, *val as i64),
             Insn::Const { val: Const::CUInt16(val) } => Type::from_cint(types::CUInt16, *val as i64),
             Insn::Const { val: Const::CUInt32(val) } => Type::from_cint(types::CUInt32, *val as i64),
+            Insn::Const { val: Const::CAttrIndex(val) } => Type::from_cint(types::CAttrIndex, *val as i64),
             Insn::Const { val: Const::CShape(val) } => Type::from_cint(types::CShape, val.0 as i64),
             Insn::Const { val: Const::CUInt64(val) } => Type::from_cint(types::CUInt64, *val as i64),
             Insn::Const { val: Const::CPtr(val) } => Type::from_cptr(*val),
@@ -3618,6 +3619,21 @@ impl Function {
         self.push_insn_id(block, orig_insn_id);
     }
 
+    pub fn try_inline_object_alloc(&mut self, block: BlockId, recv: InsnId, state: InsnId) -> Option<InsnId> {
+        let recv_type = self.type_of(recv);
+        if recv_type.is_subtype(types::Class) {
+            if let Some(class) = recv_type.ruby_object() {
+                // See class_get_alloc_func in object.c; if the class isn't initialized, is
+                // a singleton class, or has a custom allocator, ObjectAlloc might raise an
+                // exception or run arbitrary code.
+                if class_has_leaf_allocator(class) {
+                    return Some(self.push_insn(block, Insn::ObjectAllocClass { class, state }));
+                }
+            }
+        }
+        None
+    }
+
     fn try_rewrite_freeze(&mut self, block: BlockId, orig_insn_id: InsnId, self_val: InsnId, state: InsnId) {
         if self.is_a(self_val, types::StringExact) {
             self.rewrite_if_frozen(block, orig_insn_id, self_val, STRING_REDEFINED_OP_FLAG, BOP_FREEZE, state);
@@ -4051,32 +4067,12 @@ impl Function {
                         self.make_equal_to(insn_id, replacement);
                     }
                     Insn::ObjectAlloc { val, state } => {
-                        let val_type = self.type_of(val);
-                        if !val_type.is_subtype(types::Class) {
-                            self.push_insn_id(block, insn_id); continue;
+                        if let Some(replacement) = self.try_inline_object_alloc(block, val, state) {
+                            self.insn_types[replacement.0] = self.infer_type(replacement);
+                            self.make_equal_to(insn_id, replacement);
+                        } else {
+                            self.push_insn_id(block, insn_id);
                         }
-                        let Some(class) = val_type.ruby_object() else {
-                            self.push_insn_id(block, insn_id); continue;
-                        };
-                        // See class_get_alloc_func in object.c; if the class isn't initialized, is
-                        // a singleton class, or has a custom allocator, ObjectAlloc might raise an
-                        // exception or run arbitrary code.
-                        //
-                        // We also need to check if the class is initialized or a singleton before
-                        // trying to read the allocator, otherwise it might raise.
-                        if !unsafe { rb_zjit_class_initialized_p(class) } {
-                            self.push_insn_id(block, insn_id); continue;
-                        }
-                        if unsafe { rb_zjit_singleton_class_p(class) } {
-                            self.push_insn_id(block, insn_id); continue;
-                        }
-                        if !class_has_leaf_allocator(class) {
-                            // Custom, known unsafe, or NULL allocator; could run arbitrary code.
-                            self.push_insn_id(block, insn_id); continue;
-                        }
-                        let replacement = self.push_insn(block, Insn::ObjectAllocClass { class, state });
-                        self.insn_types[replacement.0] = self.infer_type(replacement);
-                        self.make_equal_to(insn_id, replacement);
                     }
                     Insn::NewRange { low, high, flag, state } => {
                         let low_is_fix  = self.is_a(low,  types::Fixnum);
@@ -4446,10 +4442,10 @@ impl Function {
         })
     }
 
-    fn load_ivar_c_call(&mut self, block: BlockId, recv: InsnId, ivar_index: u16) -> InsnId {
+    fn load_ivar_c_call(&mut self, block: BlockId, recv: InsnId, ivar_index: attr_index_t) -> InsnId {
         // NOTE: it's fine to use rb_ivar_get_at_no_ractor_check because
         // getinstancevariable does assume_single_ractor_mode()
-        let ivar_index_insn = self.push_insn(block, Insn::Const { val: Const::CUInt16(ivar_index) });
+        let ivar_index_insn = self.push_insn(block, Insn::Const { val: Const::CAttrIndex(ivar_index) });
         self.push_insn(block, Insn::CCall {
             cfunc: rb_ivar_get_at_no_ractor_check as *const u8,
             recv,
@@ -4460,7 +4456,7 @@ impl Function {
             elidable: true })
     }
 
-    fn load_ivar_heap(&mut self, block: BlockId,  recv: InsnId, id: ID, ivar_index: u16) -> InsnId {
+    fn load_ivar_heap(&mut self, block: BlockId,  recv: InsnId, id: ID, ivar_index: attr_index_t) -> InsnId {
         // See ROBJECT_FIELDS() from include/ruby/internal/core/robject.h
         let ptr = self.push_insn(block, Insn::LoadField {
             recv, id: ID!(_as_heap),
@@ -4474,7 +4470,7 @@ impl Function {
         })
     }
 
-    fn load_ivar_embedded(&mut self, block: BlockId, recv: InsnId, id: ID, ivar_index: u16) -> InsnId {
+    fn load_ivar_embedded(&mut self, block: BlockId, recv: InsnId, id: ID, ivar_index: attr_index_t) -> InsnId {
         // See ROBJECT_FIELDS() from include/ruby/internal/core/robject.h
         let offset = ROBJECT_OFFSET_AS_ARY as i32
             + (SIZEOF_VALUE * ivar_index.to_usize()) as i32;
@@ -4484,7 +4480,7 @@ impl Function {
         })
     }
 
-    fn load_ivar_from_fields(&mut self, block: BlockId, recv: InsnId, is_embedded: bool, id: ID, ivar_index: u16) -> InsnId {
+    fn load_ivar_from_fields(&mut self, block: BlockId, recv: InsnId, is_embedded: bool, id: ID, ivar_index: attr_index_t) -> InsnId {
         if is_embedded {
             return self.load_ivar_embedded(block, recv, id, ivar_index);
         } else {
@@ -4513,7 +4509,7 @@ impl Function {
         // Too-complex shapes use hash tables; rb_shape_get_iv_index doesn't support them.
         // Callers must filter these out before calling load_ivar.
         assert!(!recv_type.shape().is_too_complex(), "load_ivar called with too-complex shape");
-        let mut ivar_index: u16 = 0;
+        let mut ivar_index: attr_index_t = 0;
         if ! unsafe { rb_shape_get_iv_index(recv_type.shape().0, id, &mut ivar_index) } {
             // If there is no IVAR index, then the ivar was undefined when we
             // entered the compiler.  That means we can just return nil for this
@@ -4617,7 +4613,7 @@ impl Function {
                         let self_val = self.load_ivar_guard_type(block, self_val, recv_type, state);
                         let shape = self.load_shape(block, self_val);
                         self.guard_shape(block, shape, recv_type.shape(), state, None);
-                        let mut ivar_index: u16 = 0;
+                        let mut ivar_index: attr_index_t = 0;
                         let replacement = if unsafe { rb_shape_get_iv_index(recv_type.shape().0, id, &mut ivar_index) } {
                             self.push_insn(block, Insn::Const { val: Const::Value(pushval) })
                         } else {
@@ -4656,7 +4652,7 @@ impl Function {
                             self.count(block, Counter::setivar_fallback_frozen);
                             self.push_insn_id(block, insn_id); continue;
                         }
-                        let mut ivar_index: u16 = 0;
+                        let mut ivar_index: attr_index_t = 0;
                         let mut next_shape_id = recv_type.shape();
                         if !unsafe { rb_shape_get_iv_index(recv_type.shape().0, id, &mut ivar_index) } {
                             // Current shape does not contain this ivar; do a shape transition.
@@ -4718,6 +4714,17 @@ impl Function {
     fn gen_patch_points_for_optimized_ccall(&mut self, block: BlockId, recv_class: VALUE, method_id: ID, cme: *const rb_callable_method_entry_struct, state: InsnId) {
         self.push_insn(block, Insn::PatchPoint { invariant: Invariant::NoTracePoint, state });
         self.push_insn(block, Insn::PatchPoint { invariant: Invariant::MethodRedefined { klass: recv_class, method: method_id, cme }, state });
+    }
+
+    /// Side exit back to the state after a block-backed send.
+    /// Using the pre-send snapshot would re-execute the send in the interpreter.
+    fn gen_post_send_no_ep_escape_patch_point(&mut self, block: BlockId, state: &FrameState, insn_idx: u32) {
+        let iseq = state.iseq;
+        let mut reload_state = state.clone();
+        reload_state.insn_idx = insn_idx as usize;
+        reload_state.pc = unsafe { rb_iseq_pc_at_idx(iseq, insn_idx) };
+        let reload_exit_id = self.push_insn(block, Insn::Snapshot { state: reload_state.without_locals() });
+        self.push_insn(block, Insn::PatchPoint { invariant: Invariant::NoEPEscape(iseq), state: reload_exit_id });
     }
 
     fn count_not_inlined_cfunc(&mut self, block: BlockId, cme: *const rb_callable_method_entry_t) {
@@ -6188,8 +6195,7 @@ impl Function {
             Insn::HashDup { val, .. } => self.assert_subtype(insn_id, val, types::HashExact),
             // Other
             Insn::ObjectAllocClass { class, .. } => {
-                let has_leaf_allocator = unsafe { rb_zjit_class_has_default_allocator(class) } || class_has_leaf_allocator(class);
-                if !has_leaf_allocator {
+                if !class_has_leaf_allocator(class) {
                     return Err(ValidationError::MiscValidationError(insn_id, "ObjectAllocClass must have leaf allocator".to_string()));
                 }
                 Ok(())
@@ -6290,6 +6296,7 @@ impl Function {
                     Const::CUInt8(_) => self.assert_subtype(insn_id, val, types::CUInt8),
                     Const::CUInt16(_) => self.assert_subtype(insn_id, val, types::CUInt16),
                     Const::CUInt32(_) => self.assert_subtype(insn_id, val, types::CUInt32),
+                    Const::CAttrIndex(_) => self.assert_subtype(insn_id, val, types::CAttrIndex),
                     Const::CShape(_) => self.assert_subtype(insn_id, val, types::CShape),
                     Const::CUInt64(_) => self.assert_subtype(insn_id, val, types::CUInt64),
                     Const::CBool(_) => self.assert_subtype(insn_id, val, types::CBool),
@@ -6973,12 +6980,12 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     };
                     state.stack_push(fun.push_insn(block, insn));
                 }
-                YARVINSN_putstring => {
+                YARVINSN_dupstring => {
                     let val = fun.push_insn(block, Insn::Const { val: Const::Value(get_arg(pc, 0)) });
                     let insn_id = fun.push_insn(block, Insn::StringCopy { val, chilled: false, state: exit_id });
                     state.stack_push(insn_id);
                 }
-                YARVINSN_putchilledstring => {
+                YARVINSN_dupchilledstring => {
                     let val = fun.push_insn(block, Insn::Const { val: Const::Value(get_arg(pc, 0)) });
                     let insn_id = fun.push_insn(block, Insn::StringCopy { val, chilled: true, state: exit_id });
                     state.stack_push(insn_id);
@@ -8004,13 +8011,23 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                         // Reload locals that may have been modified by the blockiseq.
                         // TODO: Avoid reloading locals that are not referenced by the blockiseq
                         // or not used after this. Max thinks we could eventually DCE them.
-                        let ep = fun.push_insn(block, Insn::GetEP { level: 0 });
+                        if !ep_escaped && !state.locals.is_empty() {
+                            fun.gen_post_send_no_ep_escape_patch_point(block, &state, insn_idx);
+                        }
+                        let mut base: Option<InsnId> = None;
                         for local_idx in 0..state.locals.len() {
                             let ep_offset = local_idx_to_ep_offset(iseq, local_idx);
                             let ep_offset_u32 = u32::try_from(ep_offset)
                                 .unwrap_or_else(|_| panic!("Could not convert ep_offset {ep_offset} to u32"));
-                            // TODO: We could use `use_sp: true` with PatchPoint.
-                            let val = fun.get_local_from_ep(block, ep, ep_offset_u32, 0, types::BasicObject);
+                            let recv = *base.get_or_insert_with(|| {
+                                let base_insn = if !ep_escaped { Insn::LoadSP } else { Insn::GetEP { level: 0 } };
+                                fun.push_insn(block, base_insn)
+                            });
+                            let val = if !ep_escaped {
+                                fun.get_local_from_sp(block, recv, ep_offset_u32, types::BasicObject)
+                            } else {
+                                fun.get_local_from_ep(block, recv, ep_offset_u32, 0, types::BasicObject)
+                            };
                             state.setlocal(ep_offset_u32, val);
                         }
                     }
@@ -8040,13 +8057,23 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
 
                     if !blockiseq.is_null() {
                         // Reload locals that may have been modified by the blockiseq.
-                        let ep = fun.push_insn(block, Insn::GetEP { level: 0 });
+                        if !ep_escaped && !state.locals.is_empty() {
+                            fun.gen_post_send_no_ep_escape_patch_point(block, &state, insn_idx);
+                        }
+                        let mut base: Option<InsnId> = None;
                         for local_idx in 0..state.locals.len() {
                             let ep_offset = local_idx_to_ep_offset(iseq, local_idx);
                             let ep_offset_u32 = u32::try_from(ep_offset)
                                 .unwrap_or_else(|_| panic!("Could not convert ep_offset {ep_offset} to u32"));
-                            // TODO: We could use `use_sp: true` with PatchPoint.
-                            let val = fun.get_local_from_ep(block, ep, ep_offset_u32, 0, types::BasicObject);
+                            let recv = *base.get_or_insert_with(|| {
+                                let base_insn = if !ep_escaped { Insn::LoadSP } else { Insn::GetEP { level: 0 } };
+                                fun.push_insn(block, base_insn)
+                            });
+                            let val = if !ep_escaped {
+                                fun.get_local_from_sp(block, recv, ep_offset_u32, types::BasicObject)
+                            } else {
+                                fun.get_local_from_ep(block, recv, ep_offset_u32, 0, types::BasicObject)
+                            };
                             state.setlocal(ep_offset_u32, val);
                         }
                     }
@@ -8077,13 +8104,23 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                         // Reload locals that may have been modified by the blockiseq.
                         // TODO: Avoid reloading locals that are not referenced by the blockiseq
                         // or not used after this. Max thinks we could eventually DCE them.
-                        let ep = fun.push_insn(block, Insn::GetEP { level: 0 });
+                        if !ep_escaped && !state.locals.is_empty() {
+                            fun.gen_post_send_no_ep_escape_patch_point(block, &state, insn_idx);
+                        }
+                        let mut base: Option<InsnId> = None;
                         for local_idx in 0..state.locals.len() {
                             let ep_offset = local_idx_to_ep_offset(iseq, local_idx);
                             let ep_offset_u32 = u32::try_from(ep_offset)
                                 .unwrap_or_else(|_| panic!("Could not convert ep_offset {ep_offset} to u32"));
-                            // TODO: We could use `use_sp: true` with PatchPoint.
-                            let val = fun.get_local_from_ep(block, ep, ep_offset_u32, 0, types::BasicObject);
+                            let recv = *base.get_or_insert_with(|| {
+                                let base_insn = if !ep_escaped { Insn::LoadSP } else { Insn::GetEP { level: 0 } };
+                                fun.push_insn(block, base_insn)
+                            });
+                            let val = if !ep_escaped {
+                                fun.get_local_from_sp(block, recv, ep_offset_u32, types::BasicObject)
+                            } else {
+                                fun.get_local_from_ep(block, recv, ep_offset_u32, 0, types::BasicObject)
+                            };
                             state.setlocal(ep_offset_u32, val);
                         }
                     }
@@ -8114,13 +8151,23 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                         // Reload locals that may have been modified by the blockiseq.
                         // TODO: Avoid reloading locals that are not referenced by the blockiseq
                         // or not used after this. Max thinks we could eventually DCE them.
-                        let ep = fun.push_insn(block, Insn::GetEP { level: 0 });
+                        if !ep_escaped && !state.locals.is_empty() {
+                            fun.gen_post_send_no_ep_escape_patch_point(block, &state, insn_idx);
+                        }
+                        let mut base: Option<InsnId> = None;
                         for local_idx in 0..state.locals.len() {
                             let ep_offset = local_idx_to_ep_offset(iseq, local_idx);
                             let ep_offset_u32 = u32::try_from(ep_offset)
                                 .unwrap_or_else(|_| panic!("Could not convert ep_offset {ep_offset} to u32"));
-                            // TODO: We could use `use_sp: true` with PatchPoint.
-                            let val = fun.get_local_from_ep(block, ep, ep_offset_u32, 0, types::BasicObject);
+                            let recv = *base.get_or_insert_with(|| {
+                                let base_insn = if !ep_escaped { Insn::LoadSP } else { Insn::GetEP { level: 0 } };
+                                fun.push_insn(block, base_insn)
+                            });
+                            let val = if !ep_escaped {
+                                fun.get_local_from_sp(block, recv, ep_offset_u32, types::BasicObject)
+                            } else {
+                                fun.get_local_from_ep(block, recv, ep_offset_u32, 0, types::BasicObject)
+                            };
                             state.setlocal(ep_offset_u32, val);
                         }
                     }

@@ -69,22 +69,22 @@ fn test_putobject() {
 }
 
 #[test]
-fn test_putstring() {
+fn test_dupstring() {
     eval(r##"
         def test = "#{""}"
         test
     "##);
-    assert_contains_opcode("test", YARVINSN_putstring);
+    assert_contains_opcode("test", YARVINSN_dupstring);
     assert_snapshot!(assert_compiles(r##"test"##), @r#""""#);
 }
 
 #[test]
-fn test_putchilledstring() {
+fn test_dupchilledstring() {
     eval(r#"
         def test = ""
         test
     "#);
-    assert_contains_opcode("test", YARVINSN_putchilledstring);
+    assert_contains_opcode("test", YARVINSN_dupchilledstring);
     assert_snapshot!(assert_compiles(r#"test"#), @r#""""#);
 }
 
@@ -650,6 +650,24 @@ fn test_send_with_local_written_by_blockiseq() {
         test
         test
     "), @"[1, 2]");
+}
+
+#[test]
+fn test_no_ep_escape_patch_point_after_send_does_not_repeat_send() {
+    eval(r#"
+        $send_count = 0
+
+        def test
+          captured = nil
+          tap do |_|
+            $send_count += 1
+            -> { captured } if $send_count == 2
+          end
+          $send_count
+        end
+    "#);
+    assert_contains_opcode("test", YARVINSN_send);
+    assert_snapshot!(assert_compiles_allowing_exits("[test, test, test]"), @"[1, 2, 3]");
 }
 
 #[test]

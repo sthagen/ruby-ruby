@@ -614,6 +614,7 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
         &Insn::Const { val: Const::CUInt16(val) } => gen_const_uint16(val),
         &Insn::Const { val: Const::CUInt32(val) } => gen_const_uint32(val),
         &Insn::Const { val: Const::CUInt64(val) } => Opnd::UImm(val),
+        &Insn::Const { val: Const::CAttrIndex(val) } => gen_const_attr_index_t(val),
         &Insn::Const { val: Const::CShape(val) } => {
             assert_eq!(SHAPE_ID_NUM_BITS, 32);
             gen_const_uint32(val.0)
@@ -1455,6 +1456,10 @@ fn gen_const_uint32(val: u32) -> lir::Opnd {
     Opnd::UImm(val as u64)
 }
 
+fn gen_const_attr_index_t(val: attr_index_t) -> lir::Opnd {
+    Opnd::UImm(val as u64)
+}
+
 /// Compile a basic block argument
 fn gen_param(asm: &mut Assembler, _idx: usize) -> lir::Opnd {
     let vreg = asm.new_block_param(VALUE_BITS);
@@ -1671,12 +1676,14 @@ fn gen_send_iseq_direct(
         // See vm_call_iseq_setup_normal_opt_start in vm_inshelper.c
         let lead_num = params.lead_num as u32;
         let opt_num = params.opt_num as u32;
+        let post_num = params.post_num as u32;
         let keyword = params.keyword;
         let kw_total_num = if keyword.is_null() { 0 } else { unsafe { (*keyword).num } } as u32;
-        assert!(args.len() as u32 <= lead_num + opt_num + kw_total_num);
+        assert!(args.len() as u32 <= lead_num + opt_num + post_num + kw_total_num);
         // For computing optional positional entry point, only count positional args
+        // and exclude the always-present lead and post slots.
         let positional_argc = args.len() as u32 - kw_total_num;
-        let num_optionals_passed = positional_argc.saturating_sub(lead_num);
+        let num_optionals_passed = positional_argc.saturating_sub(lead_num + post_num);
         num_optionals_passed
     } else {
         0

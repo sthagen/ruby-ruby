@@ -2764,7 +2764,7 @@ fn gen_newhash(
     Some(KeepCompiling)
 }
 
-fn gen_putstring(
+fn gen_dupstring(
     jit: &mut JITState,
     asm: &mut Assembler,
 ) -> Option<CodegenStatus> {
@@ -2784,7 +2784,7 @@ fn gen_putstring(
     Some(KeepCompiling)
 }
 
-fn gen_putchilledstring(
+fn gen_dupchilledstring(
     jit: &mut JITState,
     asm: &mut Assembler,
 ) -> Option<CodegenStatus> {
@@ -2975,7 +2975,7 @@ fn gen_get_ivar(
 
     let ivar_index = unsafe {
         let shape_id = comptime_receiver.shape_id_of();
-        let mut ivar_index: u16 = 0;
+        let mut ivar_index: attr_index_t = 0;
         if rb_shape_get_iv_index(shape_id, ivar_name, &mut ivar_index) {
             Some(ivar_index as usize)
         } else {
@@ -3171,7 +3171,7 @@ fn gen_set_ivar(
     let shape_too_complex = comptime_receiver.shape_too_complex();
     let ivar_index = if !comptime_receiver.special_const_p() && !shape_too_complex {
         let shape_id = comptime_receiver.shape_id_of();
-        let mut ivar_index: u16 = 0;
+        let mut ivar_index: attr_index_t = 0;
         if unsafe { rb_shape_get_iv_index(shape_id, ivar_name, &mut ivar_index) } {
             Some(ivar_index as usize)
         } else {
@@ -3461,7 +3461,7 @@ fn gen_definedivar(
 
     let shape_id = comptime_receiver.shape_id_of();
     let ivar_exists = unsafe {
-        let mut ivar_index: u16 = 0;
+        let mut ivar_index: attr_index_t = 0;
         rb_shape_get_iv_index(shape_id, ivar_name, &mut ivar_index)
     };
 
@@ -8987,9 +8987,9 @@ fn gen_struct_aref(
         handle_opt_send_shift_stack(asm, argc);
     }
 
-    // All structs from the same Struct class should have the same
+    // All structs from the same Struct class and shape_id should have the same
     // length. So if our comptime_recv is embedded all runtime
-    // structs of the same class should be as well, and the same is
+    // structs of the same class and shape_id should be as well, and the same is
     // true of the converse.
     let embedded = unsafe { FL_TEST_RAW(comptime_recv, VALUE(RSTRUCT_EMBED_LEN_MASK)) };
 
@@ -10814,8 +10814,8 @@ fn get_gen_fn(opcode: VALUE) -> Option<InsnGenFn> {
         YARVINSN_concattoarray => Some(gen_concattoarray),
         YARVINSN_pushtoarray => Some(gen_pushtoarray),
         YARVINSN_newrange => Some(gen_newrange),
-        YARVINSN_putstring => Some(gen_putstring),
-        YARVINSN_putchilledstring => Some(gen_putchilledstring),
+        YARVINSN_dupstring => Some(gen_dupstring),
+        YARVINSN_dupchilledstring => Some(gen_dupchilledstring),
         YARVINSN_expandarray => Some(gen_expandarray),
         YARVINSN_defined => Some(gen_defined),
         YARVINSN_definedivar => Some(gen_definedivar),

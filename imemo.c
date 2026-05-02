@@ -99,55 +99,56 @@ rb_free_tmp_buffer(volatile VALUE *store)
 }
 
 struct MEMO *
-rb_imemo_memo_new(VALUE a, VALUE b, VALUE c)
+rb_imemo_memo_new(VALUE a, VALUE b, long c)
 {
     struct MEMO *memo = IMEMO_NEW(struct MEMO, imemo_memo, 0);
 
-    rb_gc_register_pinning_obj((VALUE)memo);
-
     *((VALUE *)&memo->v1) = a;
     *((VALUE *)&memo->v2) = b;
-    *((VALUE *)&memo->u3.value) = c;
+    memo->u3.cnt = c;
 
     return memo;
 }
 
-static VALUE
-imemo_fields_new(VALUE owner, size_t capa, bool shareable)
+struct MEMO *
+rb_imemo_memo_new_value(VALUE a, VALUE b, VALUE c)
 {
-    size_t embedded_size = offsetof(struct rb_fields, as.embed) + capa * sizeof(VALUE);
-    if (rb_gc_size_allocatable_p(embedded_size)) {
-        VALUE fields = rb_imemo_new(imemo_fields, owner, embedded_size, shareable);
-        RUBY_ASSERT(IMEMO_TYPE_P(fields, imemo_fields));
-        return fields;
-    }
-    else {
-        VALUE fields = rb_imemo_new(imemo_fields, owner, sizeof(struct rb_fields), shareable);
-        IMEMO_OBJ_FIELDS(fields)->as.external.ptr = ALLOC_N(VALUE, capa);
-        FL_SET_RAW(fields, OBJ_FIELD_HEAP);
-        return fields;
-    }
+    struct MEMO *memo = IMEMO_NEW(struct MEMO, imemo_memo, 0);
+
+    *((VALUE *)&memo->v1) = a;
+    *((VALUE *)&memo->v2) = b;
+    *((VALUE *)&memo->u3.value) = c;
+    memo->flags |= MEMO_U3_IS_VALUE;
+
+    return memo;
 }
 
 VALUE
-rb_imemo_fields_new(VALUE owner, size_t capa, bool shareable)
+rb_imemo_fields_new(VALUE owner, shape_id_t shape_id, bool shareable)
 {
-    return imemo_fields_new(owner, capa, shareable);
-}
-
-static VALUE
-imemo_fields_new_complex(VALUE owner, size_t capa, bool shareable)
-{
-    VALUE fields = rb_imemo_new(imemo_fields, owner, sizeof(struct rb_fields), shareable);
-    IMEMO_OBJ_FIELDS(fields)->as.complex.table = st_init_numtable_with_size(capa);
-    FL_SET_RAW(fields, OBJ_FIELD_HEAP);
+    size_t capa = RSHAPE_CAPACITY(shape_id);
+    size_t embedded_size = offsetof(struct rb_fields, as.embed) + capa * sizeof(VALUE);
+    VALUE fields;
+    if (rb_gc_size_allocatable_p(embedded_size)) {
+        fields = rb_imemo_new(imemo_fields, owner, embedded_size, shareable);
+    }
+    else {
+        fields = rb_imemo_new(imemo_fields, owner, sizeof(struct rb_fields), shareable);
+        IMEMO_OBJ_FIELDS(fields)->as.external.ptr = ALLOC_N(VALUE, capa);
+        FL_SET_RAW(fields, OBJ_FIELD_HEAP);
+    }
+    RBASIC_SET_SHAPE_ID(fields, shape_id);
     return fields;
 }
 
 VALUE
-rb_imemo_fields_new_complex(VALUE owner, size_t capa, bool shareable)
+rb_imemo_fields_new_complex(VALUE owner, shape_id_t shape_id, size_t capa, bool shareable)
 {
-    return imemo_fields_new_complex(owner, capa, shareable);
+    VALUE fields = rb_imemo_new(imemo_fields, owner, sizeof(struct rb_fields), shareable);
+    IMEMO_OBJ_FIELDS(fields)->as.complex.table = st_init_numtable_with_size(capa);
+    FL_SET_RAW(fields, OBJ_FIELD_HEAP);
+    RBASIC_SET_SHAPE_ID(fields, shape_id);
+    return fields;
 }
 
 static int
@@ -166,11 +167,12 @@ imemo_fields_complex_wb_i(st_data_t key, st_data_t value, st_data_t arg)
 }
 
 VALUE
-rb_imemo_fields_new_complex_tbl(VALUE owner, st_table *tbl, bool shareable)
+rb_imemo_fields_new_complex_tbl(VALUE owner, shape_id_t shape_id, st_table *tbl, bool shareable)
 {
     VALUE fields = rb_imemo_new(imemo_fields, owner, sizeof(struct rb_fields), shareable);
     IMEMO_OBJ_FIELDS(fields)->as.complex.table = tbl;
     FL_SET_RAW(fields, OBJ_FIELD_HEAP);
+    RBASIC_SET_SHAPE_ID(fields, shape_id);
     st_foreach(tbl, imemo_fields_trigger_wb_i, (st_data_t)fields);
     return fields;
 }
@@ -185,16 +187,14 @@ rb_imemo_fields_clone(VALUE fields_obj)
         st_table *src_table = rb_imemo_fields_complex_tbl(fields_obj);
 
         st_table *dest_table = xcalloc(1, sizeof(st_table));
-        clone = rb_imemo_fields_new_complex_tbl(rb_imemo_fields_owner(fields_obj), dest_table, false /* TODO: check */);
+        clone = rb_imemo_fields_new_complex_tbl(rb_imemo_fields_owner(fields_obj), shape_id, dest_table, false /* TODO: check */);
 
         st_replace(dest_table, src_table);
-        RBASIC_SET_SHAPE_ID(clone, shape_id);
 
         st_foreach(dest_table, imemo_fields_complex_wb_i, (st_data_t)clone);
     }
     else {
-        clone = imemo_fields_new(rb_imemo_fields_owner(fields_obj), RSHAPE_CAPACITY(shape_id), false /* TODO: check */);
-        RBASIC_SET_SHAPE_ID(clone, shape_id);
+        clone = rb_imemo_fields_new(rb_imemo_fields_owner(fields_obj), shape_id, false /* TODO: check */);
         VALUE *fields = rb_imemo_fields_ptr(clone);
         attr_index_t fields_count = RSHAPE_LEN(shape_id);
         MEMCPY(fields, rb_imemo_fields_ptr(fields_obj), VALUE, fields_count);
@@ -476,8 +476,8 @@ rb_imemo_mark_and_move(VALUE obj, bool reference_updating)
 
         rb_gc_mark_and_move((VALUE *)&memo->v1);
         rb_gc_mark_and_move((VALUE *)&memo->v2);
-        if (!reference_updating) {
-            rb_gc_mark_maybe(memo->u3.value);
+        if (FL_TEST_RAW(obj, MEMO_U3_IS_VALUE)) {
+            rb_gc_mark_and_move((VALUE *)&memo->u3.value);
         }
 
         break;

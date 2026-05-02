@@ -744,7 +744,7 @@ pub(crate) mod hir_build_tests {
     #[test]
     fn test_string_copy() {
         eval("def test = \"hello\"");
-        assert_contains_opcode("test", YARVINSN_putchilledstring);
+        assert_contains_opcode("test", YARVINSN_dupchilledstring);
         assert_snapshot!(hir_string("test"), @"
         fn test@<compiled>:1:
         bb1():
@@ -1983,8 +1983,9 @@ pub(crate) mod hir_build_tests {
           Jump bb3(v6, v7)
         bb3(v9:BasicObject, v10:BasicObject):
           v15:BasicObject = Send v10, 0x1008, :each # SendFallbackReason: Uncategorized(send)
-          v16:CPtr = GetEP 0
-          v17:BasicObject = LoadField v16, :a@0x1030
+          PatchPoint NoEPEscape(test)
+          v18:CPtr = LoadSP
+          v19:BasicObject = LoadField v18, :a@0x1000
           CheckInterrupts
           Return v15
         ");
@@ -2266,8 +2267,9 @@ pub(crate) mod hir_build_tests {
           Jump bb3(v6, v7)
         bb3(v9:BasicObject, v10:BasicObject):
           v16:BasicObject = InvokeSuperForward v9, 0x1008, v10 # SendFallbackReason: InvokeSuperForward: not yet specialized
-          v17:CPtr = GetEP 0
-          v18:BasicObject = LoadField v17, :...@0x1010
+          PatchPoint NoEPEscape(test)
+          v19:CPtr = LoadSP
+          v20:BasicObject = LoadField v19, :...@0x1000
           CheckInterrupts
           Return v16
         ");

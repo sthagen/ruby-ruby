@@ -1086,12 +1086,29 @@ class Pathname    # * File *
   #   pn.atime            # => 2026-03-31 11:51:10.1210092 -0500
   #   Dir.delete(dirpath)
   #
+  # See {File System Timestamps}[rdoc-ref:file/timestamps.md].
   def atime() File.atime(@path) end
 
-  # Returns the birth time for the file.
-  # If the platform doesn't have birthtime, raises NotImplementedError.
+  # call-seq:
+  #   birthtime -> new_time
   #
-  # See File.birthtime.
+  # Returns a new Time object containing the create time of the entry
+  # represented by +self+:
+  #
+  #   filepath = 't.tmp'
+  #   pn = Pathname.new(filepath)
+  #   pn.birthtime   # Raises Errno::ENOENT: No such file or directory
+  #   file = File.open(filepath, 'w')
+  #   pn.birthtime   # => 2026-04-14 16:14:47.494846 -0500
+  #   file.birthtime # => 2026-04-14 16:14:47.494846 -0500
+  #   file.write('foo')
+  #   pn.birthtime   # => 2026-04-14 16:14:47.494846 -0500
+  #   file.close
+  #   pn.birthtime   # => 2026-04-14 16:14:47.494846 -0500
+  #   File.delete(filepath)
+  #   pn.birthtime   # Raises Errno::ENOENT: No such file or directory
+  #
+  # See {File System Timestamps}[rdoc-ref:file/timestamps.md].
   def birthtime() File.birthtime(@path) end
 
   # See <tt>File.ctime</tt>.  Returns last (directory entry, not file) change time.
@@ -1159,7 +1176,40 @@ class Pathname    # * File *
   # See File.lutime.
   def lutime(atime, mtime) File.lutime(atime, mtime, @path) end
 
-  # See <tt>File.basename</tt>.  Returns the last component of the path.
+  # call-seq:
+  #   basename(path, suffix = '') -> new_pathname
+  #
+  # Returns a new \Pathname object containing all or part of the last entry
+  # of the path represented by +self+.
+  # Entries are delimited by the value of constant File::SEPARATOR
+  # and, if non-nil, the value of constant File::ALT_SEPARATOR.
+  #
+  # When +suffix+ is the empty string <tt>''</tt>, returns all of the last entry:
+  #
+  #   Pathname.new('foo/bar/baz/bat.txt').basename # => #<Pathname:bat.txt>
+  #   Pathname.new('foo/bar/baz').basename         # => #<Pathname:baz>
+  #
+  #   File::SEPARATOR                              # => "/"
+  #   Pathname.new('foo/bar.txt////').basename     # => #<Pathname:bar.txt>
+  #   File::ALT_SEPARATOR # => "\\"                # On Windows.
+  #   Pathname.new('foo/bar.txt//\\\\//').basename # => #<Pathname:bar.txt>
+  #
+  # When +suffix+ is <tt>'.*'</tt>,
+  # the last {filename extension}[https://en.wikipedia.org/wiki/Filename_extension],
+  # if any, is removed:
+  #
+  #   Pathname.new('foo/bar.txt').basename('.*')     # => #<Pathname:bar>
+  #   Pathname.new('foo/bar.txt.old').basename('.*') # => #<Pathname:bar.txt>
+  #   Pathname.new('foo/bar').basename('.*')         # => #<Pathname:bar>
+  #
+  # When +suffix+ is any string other than <tt>''</tt> or <tt>'.*'</tt>,
+  # the matching trailing substring, if any, is removed:
+  #
+  #   Pathname.new('foo/bar.txt').basename('.txt') # => #<Pathname:bar>
+  #   Pathname.new('foo/bar.txt').basename('txt')  # => #<Pathname:bar.>
+  #   Pathname.new('foo/bar.txt').basename('*')    # => #<Pathname:bar.txt>
+  #   Pathname.new('foo/bar.txt').basename('.')    # => #<Pathname:bar.txt>
+  #
   def basename(...) self.class.new(File.basename(@path, ...)) end
 
   # See <tt>File.dirname</tt>.  Returns all but the last component of the path.
