@@ -2008,7 +2008,8 @@ rb_vm_set_ivar_id(VALUE obj, ID id, VALUE val)
     return val;
 }
 
-void rb_obj_freeze_inline(VALUE x)
+void
+rb_obj_freeze_inline(VALUE x)
 {
     if (RB_FL_ABLE(x)) {
         RB_FL_SET_RAW(x, RUBY_FL_FREEZE);

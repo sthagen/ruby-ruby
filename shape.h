@@ -23,9 +23,10 @@ STATIC_ASSERT(shape_id_num_bits, SHAPE_ID_NUM_BITS == sizeof(shape_id_t) * CHAR_
 // shape_id_t bits:
 //      0-18 SHAPE_ID_OFFSET_MASK
 //              index in rb_shape_tree.shape_list. Allow to access `rb_shape_t *`.
+//              This is the part that describe how fields are laid out in memory.
 //      19-22 SHAPE_ID_HEAP_INDEX_MASK
 //              index in rb_shape_tree.capacities. Allow to access slot size.
-//              Always 0 except for T_OBJECT.
+//              Currently always 0 except for T_OBJECT.
 //      23 SHAPE_ID_FL_FROZEN
 //              Whether the object is frozen or not.
 //      24 SHAPE_ID_FL_HAS_OBJECT_ID
@@ -38,9 +39,9 @@ enum shape_id_fl_type {
 
     SHAPE_ID_HEAP_INDEX_MASK = ((1 << SHAPE_ID_HEAP_INDEX_BITS) - 1) << SHAPE_ID_HEAP_INDEX_OFFSET,
 
-    SHAPE_ID_FL_FROZEN = RBIMPL_SHAPE_ID_FL(0),
-    SHAPE_ID_FL_HAS_OBJECT_ID = RBIMPL_SHAPE_ID_FL(1),
-    SHAPE_ID_FL_TOO_COMPLEX = RBIMPL_SHAPE_ID_FL(2),
+    SHAPE_ID_FL_TOO_COMPLEX = RBIMPL_SHAPE_ID_FL(0),
+    SHAPE_ID_FL_FROZEN = RBIMPL_SHAPE_ID_FL(1),
+    SHAPE_ID_FL_HAS_OBJECT_ID = RBIMPL_SHAPE_ID_FL(2),
 
     SHAPE_ID_FL_NON_CANONICAL_MASK = SHAPE_ID_FL_FROZEN | SHAPE_ID_FL_HAS_OBJECT_ID,
     SHAPE_ID_FLAGS_MASK = SHAPE_ID_HEAP_INDEX_MASK | SHAPE_ID_FL_NON_CANONICAL_MASK | SHAPE_ID_FL_TOO_COMPLEX,
@@ -54,10 +55,12 @@ enum shape_id_mask {
     SHAPE_ID_HAS_IVAR_MASK = SHAPE_ID_FL_TOO_COMPLEX | (SHAPE_ID_OFFSET_MASK - 1),
 };
 
-// The interpreter doesn't care about frozen status or slot size when reading ivars.
+// The interpreter doesn't care about frozen status, slot size or object id when reading ivars.
 // So we normalize shape_id by clearing these bits to improve cache hits.
-// JITs however might care about it.
-#define SHAPE_ID_READ_ONLY_MASK (~(SHAPE_ID_FL_FROZEN | SHAPE_ID_HEAP_INDEX_MASK))
+// JITs however might care about some of it.
+#define SHAPE_ID_READ_ONLY_MASK (~(SHAPE_ID_FL_FROZEN | SHAPE_ID_HEAP_INDEX_MASK | SHAPE_ID_FL_HAS_OBJECT_ID))
+// For write it's the same idea, but here we do care about frozen status.
+#define SHAPE_ID_WRITE_MASK (~(SHAPE_ID_HEAP_INDEX_MASK | SHAPE_ID_FL_HAS_OBJECT_ID))
 
 typedef uint32_t redblack_id_t;
 
@@ -169,13 +172,23 @@ RBASIC_SET_SHAPE_ID(VALUE obj, shape_id_t shape_id)
     RUBY_ASSERT(rb_shape_verify_consistency(obj, shape_id));
 }
 
+static inline shape_id_t
+RSHAPE_FLAGS(shape_id_t shape_id)
+{
+    return shape_id & SHAPE_ID_FLAGS_MASK;
+}
+
+static inline shape_id_t
+RSHAPE_OFFSET(shape_id_t shape_id)
+{
+    return shape_id & SHAPE_ID_OFFSET_MASK;
+}
+
 static inline rb_shape_t *
 RSHAPE(shape_id_t shape_id)
 {
-    uint32_t offset = (shape_id & SHAPE_ID_OFFSET_MASK);
-    RUBY_ASSERT(offset != INVALID_SHAPE_ID);
-
-    return &rb_shape_tree.shape_list[offset];
+    RUBY_ASSERT(shape_id != INVALID_SHAPE_ID);
+    return &rb_shape_tree.shape_list[RSHAPE_OFFSET(shape_id)];
 }
 
 int32_t rb_shape_id_offset(void);
@@ -195,6 +208,12 @@ shape_id_t rb_shape_object_id(shape_id_t original_shape_id);
 shape_id_t rb_shape_rebuild(shape_id_t initial_shape_id, shape_id_t dest_shape_id);
 void rb_shape_copy_fields(VALUE dest, VALUE *dest_buf, shape_id_t dest_shape_id, VALUE *src_buf, shape_id_t src_shape_id);
 void rb_shape_copy_complex_ivars(VALUE dest, VALUE obj, shape_id_t src_shape_id, st_table *fields_table);
+
+static inline bool
+rb_shape_frozen_p(shape_id_t shape_id)
+{
+    return shape_id & SHAPE_ID_FL_FROZEN;
+}
 
 static inline bool
 rb_shape_too_complex_p(shape_id_t shape_id)
@@ -239,7 +258,7 @@ rb_shape_root(size_t heap_id)
 }
 
 static inline shape_id_t
-RSHAPE_PARENT_RAW_ID(shape_id_t shape_id)
+RSHAPE_PARENT_OFFSET(shape_id_t shape_id)
 {
     return RSHAPE(shape_id)->parent_id;
 }
@@ -247,8 +266,8 @@ RSHAPE_PARENT_RAW_ID(shape_id_t shape_id)
 static inline bool
 RSHAPE_DIRECT_CHILD_P(shape_id_t parent_id, shape_id_t child_id)
 {
-    return (parent_id & SHAPE_ID_FLAGS_MASK) == (child_id & SHAPE_ID_FLAGS_MASK) &&
-        RSHAPE(child_id)->parent_id == (parent_id & SHAPE_ID_OFFSET_MASK);
+    return (RSHAPE_FLAGS(parent_id) == RSHAPE_FLAGS(child_id) &&
+        RSHAPE_PARENT_OFFSET(child_id) == RSHAPE_OFFSET(parent_id));
 }
 
 static inline enum shape_type
@@ -322,17 +341,17 @@ ROBJECT_FIELDS_HASH(VALUE obj)
     RUBY_ASSERT(rb_shape_obj_too_complex_p(obj));
     RUBY_ASSERT(FL_TEST_RAW(obj, ROBJECT_HEAP));
 
-    return (st_table *)ROBJECT(obj)->as.heap.fields;
+    return ROBJECT(obj)->as.hash;
 }
 
 static inline void
-ROBJECT_SET_FIELDS_HASH(VALUE obj, const st_table *tbl)
+ROBJECT_SET_FIELDS_HASH(VALUE obj, st_table *tbl)
 {
     RBIMPL_ASSERT_TYPE(obj, RUBY_T_OBJECT);
     RUBY_ASSERT(rb_shape_obj_too_complex_p(obj));
     RUBY_ASSERT(FL_TEST_RAW(obj, ROBJECT_HEAP));
 
-    ROBJECT(obj)->as.heap.fields = (VALUE *)tbl;
+    ROBJECT(obj)->as.hash = tbl;
 }
 
 static inline uint32_t
@@ -454,6 +473,14 @@ rb_shape_transition_complex(shape_id_t shape_id)
     RUBY_ASSERT(rb_shape_has_object_id(shape_id) == rb_shape_has_object_id(next_shape_id));
 
     return next_shape_id;
+}
+
+static inline shape_id_t
+rb_shape_transition_offset(shape_id_t shape_id, shape_id_t offset)
+{
+    offset = RSHAPE_OFFSET(offset);
+    RUBY_ASSERT(RSHAPE_OFFSET(shape_id) == offset || RSHAPE_DIRECT_CHILD_P(shape_id, offset));
+    return RSHAPE_FLAGS(shape_id) | offset;
 }
 
 static inline shape_id_t
