@@ -5645,15 +5645,26 @@ mod hir_opt_tests {
 
     #[test]
     fn test_specialize_multiple_monomorphic_setivar_with_shape_transition() {
-        eval("
-            def test
-              @foo = 1
-              @bar = 2
+        eval(r#"
+            klass = Class.new do
+              def test
+                @foo = 1
+                @bar = 2
+              end
             end
-            test
-        ");
-        assert_snapshot!(hir_string("test"), @"
-        fn test@<compiled>:3:
+
+            # Grow class max_iv_count so fresh instances can keep both writes
+            # on the embedded fast path.
+            warm = klass.new
+            warm.instance_variable_set(:@warm1, 1)
+            warm.instance_variable_set(:@warm2, 2)
+
+            obj = klass.new
+            obj.test
+            TEST = klass.instance_method(:test)
+        "#);
+        assert_snapshot!(hir_string_proc("TEST"), @"
+        fn test@<compiled>:4:
         bb1():
           EntryPoint interpreter
           v1:BasicObject = LoadSelf
@@ -5675,7 +5686,10 @@ mod hir_opt_tests {
           v14:HeapBasicObject = RefineType v6, HeapBasicObject
           v17:Fixnum[2] = Const Value(2)
           PatchPoint SingleRactorMode
-          SetIvar v14, :@bar, v17
+          StoreField v14, :@bar@0x1004, v17
+          WriteBarrier v14, v17
+          v40:CShape[0x1005] = Const CShape(0x1005)
+          StoreField v14, :_shape_id@0x1000, v40
           CheckInterrupts
           Return v17
         ");
@@ -7912,12 +7926,13 @@ mod hir_opt_tests {
         set_call_threshold(3);
         eval(r#"
             class C
-              def foo_then_bar
+              def foo_then_many
                 @foo = 1
+                1000.times { |i| instance_variable_set(:"@v#{i}", i) }
                 @bar = 2
               end
 
-              def bar_then_foo
+              def many_then_foo
                 1000.times { |i| instance_variable_set(:"@v#{i}", i) }
                 @bar = 3
                 @foo = 4
@@ -7927,14 +7942,14 @@ mod hir_opt_tests {
             end
 
             O1 = C.new
-            O1.foo_then_bar
+            O1.foo_then_many
             O2 = C.new
-            O2.bar_then_foo
+            O2.many_then_foo
             O1.foo
             O2.foo
         "#);
         assert_snapshot!(hir_string_proc("C.instance_method(:foo)"), @"
-        fn foo@<compiled>:14:
+        fn foo@<compiled>:15:
         bb1():
           EntryPoint interpreter
           v1:BasicObject = LoadSelf
@@ -7986,12 +8001,13 @@ mod hir_opt_tests {
         set_call_threshold(6);
         eval(r#"
             class C
-              def foo_then_bar
+              def foo_then_many
                 @foo = 1
+                1000.times { |i| instance_variable_set(:"@v#{i}", i) }
                 @bar = 2
               end
 
-              def bar_then_foo
+              def many_then_foo
                 1000.times { |i| instance_variable_set(:"@v#{i}", i) }
                 @bar = 3
                 @foo = 4
@@ -8001,9 +8017,9 @@ mod hir_opt_tests {
             end
 
             O1 = C.new
-            O1.foo_then_bar
+            O1.foo_then_many
             O2 = C.new
-            O2.bar_then_foo
+            O2.many_then_foo
             O1.foo
             O1.foo
             O1.foo
@@ -8011,7 +8027,7 @@ mod hir_opt_tests {
             O2.foo
         "#);
         assert_snapshot!(hir_string_proc("C.instance_method(:foo)"), @"
-        fn foo@<compiled>:14:
+        fn foo@<compiled>:15:
         bb1():
           EntryPoint interpreter
           v1:BasicObject = LoadSelf
@@ -15111,17 +15127,46 @@ mod hir_opt_tests {
 
     #[test]
     fn upgrade_self_type_to_heap_after_setivar() {
-        eval("
-        def test
-          @a = 1
-          @b = 2
-          @c = 3
-          @d = 4
-        end
-        test
-        ");
-        assert_snapshot!(hir_string("test"), @"
-        fn test@<compiled>:3:
+        // Snapshot the overflow path only when this build naturally keeps five
+        // ivars embedded and overflows on the next write.
+        let obj = eval(r#"
+            klass = Class.new do
+              def initialize
+                @v0 = 0
+                @v1 = 1
+                @v2 = 2
+                @v3 = 3
+                @v4 = 4
+              end
+
+              def test
+                @overflow = 1
+                @after = 2
+              end
+            end
+
+            TEST = klass.instance_method(:test)
+            OBJ = klass.new
+            OBJ
+        "#);
+        // Skip builds where five ivars already force heap-backed storage.
+        if !obj.embedded_p() {
+            return;
+        }
+
+        // Make sure the next write is the one that overflows into heap-backed
+        // storage, so this snapshot still exercises the self-type upgrade path.
+        let probe = eval(r#"
+            probe = OBJ.class.new
+            probe.instance_variable_set(:@overflow, 1)
+            probe
+        "#);
+        if probe.embedded_p() {
+            return;
+        }
+        eval("OBJ.test");
+        assert_snapshot!(hir_string_proc("TEST"), @"
+        fn test@<compiled>:12:
         bb1():
           EntryPoint interpreter
           v1:BasicObject = LoadSelf
@@ -15133,33 +15178,19 @@ mod hir_opt_tests {
         bb3(v6:BasicObject):
           v10:Fixnum[1] = Const Value(1)
           PatchPoint SingleRactorMode
-          v42:HeapBasicObject = GuardType v6, HeapBasicObject
-          v43:CShape = LoadField v42, :_shape_id@0x1000
-          v44:CShape[0x1001] = GuardBitEquals v43, CShape(0x1001)
-          StoreField v42, :@a@0x1002, v10
-          WriteBarrier v42, v10
-          v47:CShape[0x1003] = Const CShape(0x1003)
-          StoreField v42, :_shape_id@0x1000, v47
+          SetIvar v6, :@overflow, v10
           v14:HeapBasicObject = RefineType v6, HeapBasicObject
           v17:Fixnum[2] = Const Value(2)
           PatchPoint SingleRactorMode
-          SetIvar v14, :@b, v17
-          v21:HeapBasicObject = RefineType v14, HeapBasicObject
-          v24:Fixnum[3] = Const Value(3)
-          PatchPoint SingleRactorMode
-          SetIvar v21, :@c, v24
-          v28:HeapBasicObject = RefineType v21, HeapBasicObject
-          v31:Fixnum[4] = Const Value(4)
-          PatchPoint SingleRactorMode
-          v50:CShape = LoadField v28, :_shape_id@0x1000
-          v51:CShape[0x1004] = GuardBitEquals v50, CShape(0x1004)
-          v52:CPtr = LoadField v28, :_as_heap@0x1002
-          StoreField v52, :@d@0x1005, v31
-          WriteBarrier v28, v31
-          v55:CShape[0x1006] = Const CShape(0x1006)
-          StoreField v28, :_shape_id@0x1000, v55
+          v29:CShape = LoadField v14, :_shape_id@0x1000
+          v30:CShape[0x1001] = GuardBitEquals v29, CShape(0x1001)
+          v31:CPtr = LoadField v14, :_as_heap@0x1002
+          StoreField v31, :@after@0x1003, v17
+          WriteBarrier v14, v17
+          v34:CShape[0x1004] = Const CShape(0x1004)
+          StoreField v14, :_shape_id@0x1000, v34
           CheckInterrupts
-          Return v31
+          Return v17
         ");
     }
 

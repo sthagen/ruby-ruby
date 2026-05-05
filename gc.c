@@ -191,7 +191,6 @@ rb_gc_get_ractor_newobj_cache(void)
     return GET_RACTOR()->newobj_cache;
 }
 
-#if USE_MODULAR_GC
 void
 rb_gc_initialize_vm_context(struct rb_gc_vm_context *context)
 {
@@ -199,6 +198,7 @@ rb_gc_initialize_vm_context(struct rb_gc_vm_context *context)
     context->ec = GET_EC();
 }
 
+#if USE_MODULAR_GC
 void
 rb_gc_worker_thread_set_vm_context(struct rb_gc_vm_context *context)
 {
@@ -367,24 +367,12 @@ rb_gc_shutdown_call_finalizer_p(VALUE obj)
     }
 }
 
-uint32_t
-rb_gc_get_shape(VALUE obj)
-{
-    return (uint32_t)rb_obj_shape_id(obj);
-}
-
 void
-rb_gc_set_shape(VALUE obj, uint32_t shape_id)
-{
-    RBASIC_SET_SHAPE_ID(obj, (uint32_t)shape_id);
-}
-
-uint32_t
-rb_gc_rebuild_shape(VALUE obj, size_t heap_id)
+rb_gc_obj_changed_pool(VALUE obj, size_t heap_id)
 {
     RUBY_ASSERT(RB_TYPE_P(obj, T_OBJECT));
 
-    return (uint32_t)rb_obj_shape_transition_heap(obj, heap_id);
+    RBASIC_SET_SHAPE_ID(obj, rb_obj_shape_transition_heap(obj, heap_id));
 }
 
 void rb_vm_update_references(void *ptr);
@@ -626,6 +614,7 @@ typedef struct gc_function_map {
     void (*config_set)(void *objspace_ptr, VALUE hash);
     void (*stress_set)(void *objspace_ptr, VALUE flag);
     VALUE (*stress_get)(void *objspace_ptr);
+    struct rb_gc_vm_context *(*get_vm_context)(void *objspace_ptr);
     // Object allocation
     VALUE (*new_obj)(void *objspace_ptr, void *cache_ptr, VALUE klass, VALUE flags, bool wb_protected, size_t alloc_size);
     size_t (*obj_slot_size)(VALUE obj);
@@ -804,6 +793,7 @@ ruby_modular_gc_init(void)
     load_modular_gc_func(config_get);
     load_modular_gc_func(stress_set);
     load_modular_gc_func(stress_get);
+    load_modular_gc_func(get_vm_context);
     // Object allocation
     load_modular_gc_func(new_obj);
     load_modular_gc_func(obj_slot_size);
@@ -891,6 +881,7 @@ ruby_modular_gc_init(void)
 # define rb_gc_impl_config_set rb_gc_functions.config_set
 # define rb_gc_impl_stress_set rb_gc_functions.stress_set
 # define rb_gc_impl_stress_get rb_gc_functions.stress_get
+# define rb_gc_impl_get_vm_context rb_gc_functions.get_vm_context
 // Object allocation
 # define rb_gc_impl_new_obj rb_gc_functions.new_obj
 # define rb_gc_impl_obj_slot_size rb_gc_functions.obj_slot_size
@@ -3238,10 +3229,23 @@ gc_declarative_marking_p(const rb_data_type_t *type)
     return (type->flags & RUBY_TYPED_DECL_MARKING) != 0;
 }
 
+rb_execution_context_t *
+rb_gc_get_ec(void)
+{
+    void *objspace = rb_gc_get_objspace();
+
+    if (RB_LIKELY(rb_gc_impl_during_gc_p(objspace))) {
+        return rb_gc_impl_get_vm_context(objspace)->ec;
+    }
+    else {
+        return GET_EC();
+    }
+}
+
 void
 rb_gc_mark_roots(void *objspace, const char **categoryp)
 {
-    rb_execution_context_t *ec = GET_EC();
+    rb_execution_context_t *ec = rb_gc_get_ec();
     rb_vm_t *vm = rb_ec_vm_ptr(ec);
 
 #define MARK_CHECKPOINT(category) do { \
