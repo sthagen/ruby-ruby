@@ -1069,27 +1069,46 @@ rb_newobj_of(VALUE klass, VALUE flags, size_t size)
     return rb_newobj(GET_EC(), klass, flags, ROOT_SHAPE_ID, true, size);
 }
 
+static
+VALUE class_allocate_complex_instance(VALUE klass, uint32_t capacity)
+{
+    shape_id_t initial_shape_id = rb_shape_root(rb_gc_heap_id_for_size(sizeof(struct RObject)));
+    VALUE obj = rb_newobj_of_with_shape(klass, T_OBJECT, initial_shape_id, sizeof(struct RObject));
+    rb_obj_init_complex(obj, rb_st_init_numtable_with_size(capacity));
+    return obj;
+}
+
 VALUE
 rb_class_allocate_instance(VALUE klass)
 {
     uint32_t index_tbl_num_entries = RCLASS_MAX_IV_COUNT(klass);
+    VALUE obj;
 
-    size_t size = rb_obj_embedded_size(index_tbl_num_entries);
-    if (!rb_gc_size_allocatable_p(size)) {
-        size = sizeof(struct RObject);
+    // Directly start as COMPLEX if we know we're over the limit.
+    RUBY_ASSERT(rb_shape_tree.max_capacity > 0);
+    if (RB_UNLIKELY(index_tbl_num_entries > rb_shape_tree.max_capacity)) {
+        obj = class_allocate_complex_instance(klass, index_tbl_num_entries);
     }
+    else {
+        size_t size = rb_obj_embedded_size(index_tbl_num_entries);
+        if (!rb_gc_size_allocatable_p(size)) {
+            size = sizeof(struct RObject);
+        }
 
-    // There might be a NEWOBJ tracepoint callback, and it may set fields.
-    // So the shape must be passed to `NEWOBJ_OF`.
-    VALUE obj = rb_newobj_of_with_shape(klass, T_OBJECT, rb_shape_root(rb_gc_heap_id_for_size(size)), size);
+        // There might be a NEWOBJ tracepoint callback, and it may set fields.
+        // So the shape must be passed to `NEWOBJ_OF`.
+        obj = rb_newobj_of_with_shape(klass, T_OBJECT, rb_shape_root(rb_gc_heap_id_for_size(size)), size);
+
+        #if RUBY_DEBUG
+            VALUE *ptr = ROBJECT_FIELDS(obj);
+            size_t fields_count = RSHAPE_LEN(RBASIC_SHAPE_ID(obj));
+            for (size_t i = fields_count; i < ROBJECT_FIELDS_CAPACITY(obj); i++) {
+                ptr[i] = Qundef;
+            }
+        #endif
+    }
 
 #if RUBY_DEBUG
-    RUBY_ASSERT(!rb_shape_obj_too_complex_p(obj));
-    VALUE *ptr = ROBJECT_FIELDS(obj);
-    size_t fields_count = RSHAPE_LEN(RBASIC_SHAPE_ID(obj));
-    for (size_t i = fields_count; i < ROBJECT_FIELDS_CAPACITY(obj); i++) {
-        ptr[i] = Qundef;
-    }
     if (rb_obj_class(obj) != rb_class_real(klass)) {
         rb_bug("Expected rb_class_allocate_instance to set the class correctly");
     }
@@ -1322,7 +1341,7 @@ rb_gc_imemo_needs_cleanup_p(VALUE obj)
         return ((rb_imemo_tmpbuf_t *)obj)->ptr != NULL;
 
       case imemo_fields:
-        return FL_TEST_RAW(obj, OBJ_FIELD_HEAP) || (id2ref_tbl && rb_shape_obj_has_id(obj));
+        return FL_TEST_RAW(obj, OBJ_FIELD_HEAP) || (id2ref_tbl && rb_obj_shape_has_id(obj));
     }
     UNREACHABLE_RETURN(true);
 }
@@ -1524,8 +1543,8 @@ rb_gc_obj_free(void *objspace, VALUE obj)
     switch (BUILTIN_TYPE(obj)) {
       case T_OBJECT:
         if (FL_TEST_RAW(obj, ROBJECT_HEAP)) {
-            if (rb_shape_obj_too_complex_p(obj)) {
-                RB_DEBUG_COUNTER_INC(obj_obj_too_complex);
+            if (rb_obj_shape_complex_p(obj)) {
+                RB_DEBUG_COUNTER_INC(obj_obj_complex);
                 st_free_table(ROBJECT_FIELDS_HASH(obj));
             }
             else {
@@ -2127,8 +2146,8 @@ static inline VALUE
 object_id_get(VALUE obj, shape_id_t shape_id)
 {
     VALUE id;
-    if (rb_shape_too_complex_p(shape_id)) {
-        id = rb_obj_field_get(obj, ROOT_TOO_COMPLEX_WITH_OBJ_ID);
+    if (rb_shape_complex_p(shape_id)) {
+        id = rb_obj_field_get(obj, ROOT_COMPLEX_WITH_OBJ_ID);
     }
     else {
         id = rb_obj_field_get(obj, rb_shape_object_id(shape_id));
@@ -2160,7 +2179,7 @@ object_id0(VALUE obj)
     rb_obj_field_set(obj, object_id_shape_id, 0, id);
 
     RUBY_ASSERT(RBASIC_SHAPE_ID(obj) == object_id_shape_id);
-    RUBY_ASSERT(rb_shape_obj_has_id(obj));
+    RUBY_ASSERT(rb_obj_shape_has_id(obj));
 
     if (RB_UNLIKELY(id2ref_tbl)) {
         RB_VM_LOCKING() {
@@ -2212,13 +2231,13 @@ build_id2ref_i(VALUE obj, void *data)
         break;
       case T_IMEMO:
         RUBY_ASSERT(!rb_objspace_garbage_object_p(obj));
-        if (IMEMO_TYPE_P(obj, imemo_fields) && rb_shape_obj_has_id(obj)) {
+        if (IMEMO_TYPE_P(obj, imemo_fields) && rb_obj_shape_has_id(obj)) {
             st_insert(id2ref_tbl, rb_obj_id(obj), rb_imemo_fields_owner(obj));
         }
         break;
       case T_OBJECT:
         RUBY_ASSERT(!rb_objspace_garbage_object_p(obj));
-        if (rb_shape_obj_has_id(obj)) {
+        if (rb_obj_shape_has_id(obj)) {
             st_insert(id2ref_tbl, rb_obj_id(obj), obj);
         }
         break;
@@ -2485,7 +2504,7 @@ rb_obj_id(VALUE obj)
 bool
 rb_obj_id_p(VALUE obj)
 {
-    return !RB_TYPE_P(obj, T_IMEMO) && rb_shape_obj_has_id(obj);
+    return !RB_TYPE_P(obj, T_IMEMO) && rb_obj_shape_has_id(obj);
 }
 
 /*
@@ -2566,7 +2585,7 @@ rb_obj_memsize_of(VALUE obj)
     switch (BUILTIN_TYPE(obj)) {
       case T_OBJECT:
         if (FL_TEST_RAW(obj, ROBJECT_HEAP)) {
-            if (rb_shape_obj_too_complex_p(obj)) {
+            if (rb_obj_shape_complex_p(obj)) {
                 size += rb_st_memsize(ROBJECT_FIELDS_HASH(obj));
             }
             else {
@@ -2690,29 +2709,34 @@ count_objects_i(VALUE obj, void *d)
 
 /*
  *  call-seq:
- *     ObjectSpace.count_objects([result_hash]) -> hash
+ *     ObjectSpace.count_objects(result_hash = {}) -> hash
  *
- *  Counts all objects grouped by type.
+ *  Counts the number of objects, grouped by type.
  *
- *  It returns a hash, such as:
- *	{
- *	  TOTAL: 10000,
- *	  FREE: 3011,
- *	  T_OBJECT: 6,
- *	  T_CLASS: 404,
- *	  # ...
- *	}
+ *  It returns a hash that looks like:
  *
- *  The contents of the returned hash are implementation specific.
- *  It may be changed in future.
+ *    {
+ *      TOTAL: 10000,
+ *      FREE: 3011,
+ *      T_OBJECT: 6,
+ *      T_CLASS: 404,
+ *      # ...
+ *    }
  *
- *  The keys starting with +:T_+ means live objects.
+ *  The contents of the returned hash are implementation specific and
+ *  may be changed in future versions without notice.
+ *
+ *  The keys starting with +:T_+ are live objects of a particular type.
  *  For example, +:T_ARRAY+ is the number of arrays.
- *  +:FREE+ means object slots which is not used now.
- *  +:TOTAL+ means sum of above.
+ *
+ *  The key +:FREE+ is the number of object slots which are empty.
+ *
+ *  The key +:TOTAL+ is the total number of slots (which is the sum of
+ *  all of the other values).
  *
  *  If the optional argument +result_hash+ is given,
- *  it is overwritten and returned. This is intended to avoid probe effect.
+ *  it is overwritten and returned.
+ *  This is intended to avoid the probe effect.
  *
  *    h = {}
  *    ObjectSpace.count_objects(h)
@@ -3472,7 +3496,7 @@ rb_gc_mark_children(void *objspace, VALUE obj)
 
       case T_OBJECT: {
         uint32_t len;
-        if (rb_shape_obj_too_complex_p(obj)) {
+        if (rb_obj_shape_complex_p(obj)) {
             gc_mark_tbl_no_pin(ROBJECT_FIELDS_HASH(obj));
             len = ROBJECT_FIELDS_COUNT_COMPLEX(obj);
         }
@@ -3530,7 +3554,7 @@ rb_gc_mark_children(void *objspace, VALUE obj)
             gc_mark_internal(ptr[i]);
         }
 
-        if (rb_shape_obj_has_fields(obj) && !FL_TEST_RAW(obj, RSTRUCT_GEN_FIELDS)) {
+        if (rb_obj_shape_has_fields(obj) && !FL_TEST_RAW(obj, RSTRUCT_GEN_FIELDS)) {
             gc_mark_internal(RSTRUCT_FIELDS_OBJ(obj));
         }
 
@@ -3563,7 +3587,7 @@ rb_gc_obj_optimal_size(VALUE obj)
         }
 
       case T_OBJECT:
-        if (rb_shape_obj_too_complex_p(obj)) {
+        if (rb_obj_shape_complex_p(obj)) {
             return sizeof(struct RObject);
         }
         else {
@@ -3830,7 +3854,7 @@ gc_ref_update_object(void *objspace, VALUE v)
     VALUE *ptr = ROBJECT_FIELDS(v);
 
     if (FL_TEST_RAW(v, ROBJECT_HEAP)) {
-        if (rb_shape_obj_too_complex_p(v)) {
+        if (rb_obj_shape_complex_p(v)) {
             gc_ref_update_table_values_only(ROBJECT_FIELDS_HASH(v));
             return;
         }
@@ -5018,9 +5042,9 @@ rb_raw_obj_info_buitin_type(char *const buff, const size_t buff_size, const VALU
           case T_OBJECT:
             {
                 if (FL_TEST_RAW(obj, ROBJECT_HEAP)) {
-                    if (rb_shape_obj_too_complex_p(obj)) {
+                    if (rb_obj_shape_complex_p(obj)) {
                         size_t hash_len = rb_st_table_size(ROBJECT_FIELDS_HASH(obj));
-                        APPEND_F("(too_complex) len:%zu", hash_len);
+                        APPEND_F("(complex) len:%zu", hash_len);
                     }
                     else {
                         APPEND_F("(embed) len:%d capa:%d", RSHAPE_LEN(RBASIC_SHAPE_ID(obj)), ROBJECT_FIELDS_CAPACITY(obj));

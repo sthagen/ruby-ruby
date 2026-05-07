@@ -83,9 +83,9 @@ struct rb_classext_struct {
             const VALUE includer;
         } iclass;
     } as;
-    attr_index_t max_iv_count;
     uint16_t superclass_depth;
-    unsigned char variation_count;
+    attr_index_t max_iv_count;
+    uint8_t variation_count;
     bool permanent_classpath : 1;
     bool cloned : 1;
     bool shared_const_tbl : 1;
@@ -550,7 +550,7 @@ RCLASS_FIELDS_COUNT(VALUE obj)
 
     VALUE fields_obj = RCLASS_WRITABLE_FIELDS_OBJ(obj);
     if (fields_obj) {
-        if (rb_shape_obj_too_complex_p(fields_obj)) {
+        if (rb_obj_shape_complex_p(fields_obj)) {
             return (uint32_t)rb_st_table_size(rb_imemo_fields_complex_tbl(fields_obj));
         }
         else {

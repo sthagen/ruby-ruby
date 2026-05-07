@@ -1105,8 +1105,12 @@ class Pathname    # * File *
   #
   def read(...) File.read(@path, ...) end
 
-  # See <tt>File.binread</tt>.  Returns all the bytes from the file, or the first +N+
-  # if specified.
+  # call-seq:
+  #   binread(length = nil, offset = 0) -> string or nil
+  #
+  # Behaves like #read, except that the file is opened in binary mode
+  # with ASCII-8BIT encoding.
+  #
   def binread(...) File.binread(@path, ...) end
 
   # See <tt>File.readlines</tt>.  Returns all the lines from the file.
@@ -1152,9 +1156,11 @@ class Pathname    # * File *
   #
   def write(...) File.write(@path, ...) end
 
-  # Writes +contents+ to the file, opening it in binary mode.
+  # call-seq:
+  #   binwrite(string, offset = 0, **opts) -> nonnegative_integer
   #
-  # See File.binwrite.
+  # Behaves like #write, except that the file is opened in binary mode
+  # with ASCII-8BIT encoding.
   def binwrite(...) File.binwrite(@path, ...) end
 
   # call-seq:
@@ -1342,10 +1348,34 @@ end
 
 class Pathname    # * FileTest *
 
-  # See <tt>FileTest.blockdev?</tt>.
+  # call-seq:
+  #   blockdev? => true or false
+  #
+  # Returns whether +self+ represents a block device
+  # (i.e., a random-access device):
+  #
+  #   Pathname.new('/dev/nvme0n1').blockdev? # => true
+  #   Pathname.new('/dev/loop0').blockdev?   # => true
+  #   Pathname.new('/dev/tty').blockdev?     # => false
+  #   Pathname.new('/dev/null').blockdev?    # => false
+  #   Pathname.new('nosuch').blockdev?       # => false
+  #
+  # The returned value is OS-dependent; on Windows, almost always +false+.
   def blockdev?() FileTest.blockdev?(@path) end
 
-  # See <tt>FileTest.chardev?</tt>.
+  # call-seq:
+  #   chardev? => true or false
+  #
+  # Returns whether +self+ represents a character device
+  # (i.e., a sequential-access device):
+  #
+  #   Pathname.new('/dev/tty').chardev?     # => true
+  #   Pathname.new('/dev/null').chardev?    # => true
+  #   Pathname.new('/dev/nvme0n1').chardev? # => false
+  #   Pathname.new('/dev/loop0').chardev?   # => false
+  #   Pathname.new('nosuch').chardev?       # => false
+  #
+  # The returned value is OS-dependent; on Windows, almost always +false+.
   def chardev?() FileTest.chardev?(@path) end
 
   # Tests the file is empty.

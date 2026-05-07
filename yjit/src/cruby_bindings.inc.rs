@@ -634,7 +634,7 @@ pub const VM_ENV_FLAG_ESCAPED: vm_frame_env_flags = 4;
 pub const VM_ENV_FLAG_WB_REQUIRED: vm_frame_env_flags = 8;
 pub const VM_ENV_FLAG_ISOLATED: vm_frame_env_flags = 16;
 pub type vm_frame_env_flags = u32;
-pub type attr_index_t = u16;
+pub type attr_index_t = u8;
 pub type shape_id_t = u32;
 pub const SHAPE_ID_HAS_IVAR_MASK: shape_id_mask = 8912894;
 pub type shape_id_mask = u32;
@@ -1205,7 +1205,7 @@ extern "C" {
         line: ::std::os::raw::c_int,
     );
     pub fn rb_object_shape_count() -> VALUE;
-    pub fn rb_yjit_shape_obj_too_complex_p(obj: VALUE) -> bool;
+    pub fn rb_yjit_shape_obj_complex_p(obj: VALUE) -> bool;
     pub fn rb_yjit_shape_capacity(shape_id: shape_id_t) -> attr_index_t;
     pub fn rb_yjit_shape_index(shape_id: shape_id_t) -> attr_index_t;
     pub fn rb_yjit_sendish_sp_pops(ci: *const rb_callinfo) -> usize;
@@ -1308,7 +1308,7 @@ extern "C" {
     pub fn rb_jit_array_len(a: VALUE) -> ::std::os::raw::c_long;
     pub fn rb_set_cfp_pc(cfp: *mut rb_control_frame_struct, pc: *const VALUE);
     pub fn rb_set_cfp_sp(cfp: *mut rb_control_frame_struct, sp: *mut VALUE);
-    pub fn rb_jit_shape_too_complex_p(shape_id: shape_id_t) -> bool;
+    pub fn rb_jit_shape_complex_p(shape_id: shape_id_t) -> bool;
     pub fn rb_jit_multi_ractor_p() -> bool;
     pub fn rb_jit_vm_lock_then_barrier(
         recursive_lock_level: *mut ::std::os::raw::c_uint,
