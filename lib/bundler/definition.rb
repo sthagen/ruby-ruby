@@ -111,6 +111,7 @@ module Bundler
         @locked_bundler_version = @locked_gems.bundler_version
         @locked_ruby_version = @locked_gems.ruby_version
         @locked_deps = @locked_gems.dependencies
+        Override.attach(@locked_gems.specs, @overrides)
         @originally_locked_specs = SpecSet.new(@locked_gems.specs)
         @originally_locked_sources = @locked_gems.sources
         @locked_checksums = @locked_gems.checksums
@@ -644,7 +645,7 @@ module Bundler
     end
 
     def apply_override_to(dep)
-      override = @overrides.find {|o| o.target == dep.name && o.field == :version }
+      override = Override.find_for(@overrides, dep.name, :version)
       return dep unless override
       new_dep = dep.dup
       new_dep.instance_variable_set(:@requirement, override.apply_to(dep.requirement))
@@ -1061,12 +1062,19 @@ module Bundler
 
     def converge_overrides_outside_dependencies
       @overrides.each do |override|
+        # :all overrides are intentionally not pre-unlocked. They take effect on
+        # fresh resolution (no lockfile) or when the user runs `bundle update`.
+        # Forcing a full re-resolve from a single :all directive would surprise
+        # users with unrelated dependency churn.
         next unless override.target.is_a?(String)
 
         name = override.target
         next if @changed_dependencies.include?(name)
-        next if @dependencies.any? {|d| d.name == name }
         next if @originally_locked_specs[name].empty?
+        # version: overrides on direct deps are detected in the per-dep
+        # converge_dependencies loop via apply_override_to + matches_spec?.
+        # Other fields are not visible there, so they always reach here.
+        next if override.field == :version && @dependencies.any? {|d| d.name == name }
 
         @gems_to_unlock << name
         @changed_dependencies << name

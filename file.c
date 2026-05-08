@@ -3913,10 +3913,6 @@ static VALUE
 copy_home_path(VALUE result, const char *dir)
 {
     char *buf;
-#if defined DOSISH || defined __CYGWIN__
-    char *p, *bend;
-    rb_encoding *enc;
-#endif
     long dirlen;
     int encidx;
 
@@ -3925,11 +3921,11 @@ copy_home_path(VALUE result, const char *dir)
     memcpy(buf = RSTRING_PTR(result), dir, dirlen);
     encidx = rb_filesystem_encindex();
     rb_enc_associate_index(result, encidx);
-#if defined DOSISH || defined __CYGWIN__
-    enc = rb_enc_from_index(encidx);
+#if defined FILE_ALT_SEPARATOR
+    rb_encoding *enc = rb_enc_from_index(encidx);
     bool mb_enc = enc_mbclen_needed(enc);
-    for (bend = (p = buf) + dirlen; p < bend; Inc(p, bend, mb_enc, enc)) {
-        if (*p == '\\') {
+    for (char *p = buf, *bend = p + dirlen; p < bend; Inc(p, bend, mb_enc, enc)) {
+        if (*p == FILE_ALT_SEPARATOR) {
             *p = '/';
         }
     }
@@ -4173,14 +4169,14 @@ rb_file_expand_path_internal(VALUE fname, VALUE dname, int abs_mode, int long_na
             BUFINIT();
             p = e;
         }
-#if defined DOSISH || defined __CYGWIN__
+#if defined DOSISH_DRIVE_LETTER || defined DOSISH_UNC
         if (s < fend && isdirsep(*s)) {
             /* specified full path, but not drive letter nor UNC */
             /* we need to get the drive letter or UNC share name */
             p = skipprefix(buf, p, mb_enc, enc);
         }
         else
-#endif /* defined DOSISH || defined __CYGWIN__ */
+#endif /* defined DOSISH_DRIVE_LETTER || defined DOSISH_UNC */
             p = chompdirsep(skiproot(buf, p), p, mb_enc, enc);
     }
     else {
@@ -4237,8 +4233,8 @@ rb_file_expand_path_internal(VALUE fname, VALUE dname, int abs_mode, int long_na
 #endif /* USE_NTFS */
                     break;
                   case '/':
-#if defined DOSISH || defined __CYGWIN__
-                  case '\\':
+#if defined FILE_ALT_SEPARATOR
+                  case FILE_ALT_SEPARATOR:
 #endif
                     b = ++s;
                     break;
@@ -4262,8 +4258,8 @@ rb_file_expand_path_internal(VALUE fname, VALUE dname, int abs_mode, int long_na
 #endif /* USE_NTFS */
             break;
           case '/':
-#if defined DOSISH || defined __CYGWIN__
-          case '\\':
+#if defined FILE_ALT_SEPARATOR
+          case FILE_ALT_SEPARATOR:
 #endif
             if (s > b) {
                 WITH_ROOTDIFF(BUFCOPY(b, s-b));
@@ -4985,9 +4981,6 @@ static inline const char *
 enc_find_basename(const char *name, long *baselen, long *alllen, bool mb_enc, rb_encoding *enc)
 {
     const char *p, *q, *e, *end;
-#if defined DOSISH_DRIVE_LETTER || defined DOSISH_UNC
-    const char *root;
-#endif
     long f = 0, n = -1;
 
     long len = (alllen ? (size_t)*alllen : strlen(name));
@@ -4999,7 +4992,7 @@ enc_find_basename(const char *name, long *baselen, long *alllen, bool mb_enc, rb
     end = name + len;
     name = skipprefix(name, end, mb_enc, enc);
 #if defined DOSISH_DRIVE_LETTER || defined DOSISH_UNC
-    root = name;
+    const char *root = name;
 #endif
 
     while (name < end && isdirsep(*name)) {

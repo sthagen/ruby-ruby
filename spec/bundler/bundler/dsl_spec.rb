@@ -425,8 +425,38 @@ RSpec.describe Bundler::Dsl do
 
     it "raises ArgumentError for an unsupported field" do
       expect do
-        subject.override("rails", required_ruby_version: :ignore_upper)
-      end.to raise_error(ArgumentError, /unsupported override field `required_ruby_version:`/)
+        subject.override("rails", as: "y")
+      end.to raise_error(ArgumentError, /unsupported override field `as:`/)
+    end
+
+    it "stores an Override for a gem with a required_ruby_version: operation" do
+      subject.override("rails", required_ruby_version: :ignore_upper)
+      override = subject.overrides.first
+      expect(override.target).to eq("rails")
+      expect(override.field).to eq(:required_ruby_version)
+      expect(override.operation).to eq(:ignore_upper)
+    end
+
+    it "stores an Override for a gem with a required_rubygems_version: operation" do
+      subject.override("rails", required_rubygems_version: nil)
+      override = subject.overrides.first
+      expect(override.field).to eq(:required_rubygems_version)
+      expect(override.operation).to be_nil
+    end
+
+    it "stores an Override targeting :all with a metadata field" do
+      subject.override(:all, required_ruby_version: :ignore_upper)
+      override = subject.overrides.first
+      expect(override.target).to eq(:all)
+      expect(override.field).to eq(:required_ruby_version)
+      expect(override.operation).to eq(:ignore_upper)
+    end
+
+    it "stores an Override targeting :all with required_rubygems_version" do
+      subject.override(:all, required_rubygems_version: nil)
+      override = subject.overrides.first
+      expect(override.target).to eq(:all)
+      expect(override.field).to eq(:required_rubygems_version)
     end
 
     it "raises ArgumentError for a non-string, non-symbol, non-nil operation" do
@@ -441,9 +471,22 @@ RSpec.describe Bundler::Dsl do
       end.to raise_error(ArgumentError, /unsupported override operation/)
     end
 
+    it "raises ArgumentError for an unparsable version string" do
+      expect do
+        subject.override("rails", version: "not a version")
+      end.to raise_error(ArgumentError, /invalid override version requirement/)
+    end
+
+    it "does not record an override when the version string is invalid" do
+      expect do
+        subject.override("rails", version: "not a version")
+      end.to raise_error(ArgumentError)
+      expect(subject.overrides).to eq([])
+    end
+
     it "rejects atomically when one field in a multi-field call is invalid" do
       expect do
-        subject.override("rails", version: ">= 8.0", required_ruby_version: :ignore_upper)
+        subject.override("rails", version: ">= 8.0", as: "y")
       end.to raise_error(ArgumentError, /unsupported override field/)
       expect(subject.overrides).to eq([])
     end
