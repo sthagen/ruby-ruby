@@ -60,9 +60,6 @@
 # define HAVE_CRYPT_R 1
 #endif
 
-#define BEG(no) (regs->beg[(no)])
-#define END(no) (regs->end[(no)])
-
 #undef rb_str_new
 #undef rb_usascii_str_new
 #undef rb_utf8_str_new
@@ -4620,8 +4617,7 @@ rb_str_index_m(int argc, VALUE *argv, VALUE str)
 
         if (rb_reg_search(sub, str, pos, 0) >= 0) {
             VALUE match = rb_backref_get();
-            struct re_registers *regs = RMATCH_REGS(match);
-            pos = rb_str_sublen(str, BEG(0));
+            pos = rb_str_sublen(str, RMATCH_BEG(match, 0));
             return LONG2NUM(pos);
         }
     }
@@ -4747,8 +4743,7 @@ rb_str_byteindex_m(int argc, VALUE *argv, VALUE str)
     if (RB_TYPE_P(sub, T_REGEXP)) {
         if (rb_reg_search(sub, str, pos, 0) >= 0) {
             VALUE match = rb_backref_get();
-            struct re_registers *regs = RMATCH_REGS(match);
-            pos = BEG(0);
+            pos = RMATCH_BEG(match, 0);
             return LONG2NUM(pos);
         }
     }
@@ -4879,8 +4874,7 @@ rb_str_rindex_m(int argc, VALUE *argv, VALUE str)
 
         if (rb_reg_search(sub, str, pos, 1) >= 0) {
             VALUE match = rb_backref_get();
-            struct re_registers *regs = RMATCH_REGS(match);
-            pos = rb_str_sublen(str, BEG(0));
+            pos = rb_str_sublen(str, RMATCH_BEG(match, 0));
             return LONG2NUM(pos);
         }
     }
@@ -5037,8 +5031,7 @@ rb_str_byterindex_m(int argc, VALUE *argv, VALUE str)
     if (RB_TYPE_P(sub, T_REGEXP)) {
         if (rb_reg_search(sub, str, pos, 1) >= 0) {
             VALUE match = rb_backref_get();
-            struct re_registers *regs = RMATCH_REGS(match);
-            pos = BEG(0);
+            pos = RMATCH_BEG(match, 0);
             return LONG2NUM(pos);
         }
     }
@@ -5915,26 +5908,25 @@ rb_str_subpat_set(VALUE str, VALUE re, VALUE backref, VALUE val)
     VALUE match;
     long start, end, len;
     rb_encoding *enc;
-    struct re_registers *regs;
 
     if (rb_reg_search(re, str, 0, 0) < 0) {
         rb_raise(rb_eIndexError, "regexp not matched");
     }
     match = rb_backref_get();
     nth = rb_reg_backref_number(match, backref);
-    regs = RMATCH_REGS(match);
-    if ((nth >= regs->num_regs) || ((nth < 0) && (-nth >= regs->num_regs))) {
+    int num_regs = RMATCH_NREGS(match);
+    if ((nth >= num_regs) || ((nth < 0) && (-nth >= num_regs))) {
         rb_raise(rb_eIndexError, "index %d out of regexp", nth);
     }
     if (nth < 0) {
-        nth += regs->num_regs;
+        nth += num_regs;
     }
 
-    start = BEG(nth);
+    start = RMATCH_BEG(match, nth);
     if (start == -1) {
         rb_raise(rb_eIndexError, "regexp group %d not matched", nth);
     }
-    end = END(nth);
+    end = RMATCH_END(match, nth);
     len = end - start;
     StringValue(val);
     enc = rb_enc_check_str(str, val);
@@ -6069,14 +6061,14 @@ rb_str_slice_bang(int argc, VALUE *argv, VALUE str)
     if (RB_TYPE_P(indx, T_REGEXP)) {
         if (rb_reg_search(indx, str, 0, 0) < 0) return Qnil;
         VALUE match = rb_backref_get();
-        struct re_registers *regs = RMATCH_REGS(match);
+        int num_regs = RMATCH_NREGS(match);
         int nth = 0;
         if (argc > 1 && (nth = rb_reg_backref_number(match, argv[1])) < 0) {
-            if ((nth += regs->num_regs) <= 0) return Qnil;
+            if ((nth += num_regs) <= 0) return Qnil;
         }
-        else if (nth >= regs->num_regs) return Qnil;
-        beg = BEG(nth);
-        len = END(nth) - beg;
+        else if (nth >= num_regs) return Qnil;
+        beg = RMATCH_BEG(match, nth);
+        len = RMATCH_END(match, nth) - beg;
         goto subseq;
     }
     else if (argc == 2) {
@@ -6278,8 +6270,8 @@ rb_str_sub_bang(int argc, VALUE *argv, VALUE str)
             match0 = pat;
         }
         else {
-            beg0 = BEG(0);
-            end0 = END(0);
+            beg0 = RMATCH_BEG(match, 0);
+            end0 = RMATCH_END(match, 0);
             if (iter) match0 = rb_reg_nth_match(0, match);
         }
 
@@ -6424,8 +6416,8 @@ str_gsub(int argc, VALUE *argv, VALUE str, int bang)
             match0 = pat;
         }
         else {
-            beg0 = BEG(0);
-            end0 = END(0);
+            beg0 = RMATCH_BEG(match, 0);
+            end0 = RMATCH_END(match, 0);
             if (mode == ITER) match0 = rb_reg_nth_match(0, match);
         }
 
@@ -9337,18 +9329,16 @@ rb_str_split_m(int argc, VALUE *argv, VALUE str)
         if (result) result = rb_ary_new();
         long len = RSTRING_LEN(str);
         long start = beg;
-        long idx;
+        int idx;
         int last_null = 0;
-        struct re_registers *regs;
         VALUE match = 0;
 
         for (; rb_reg_search(spat, str, start, 0) >= 0;
              (match ? (rb_match_unbusy(match), rb_backref_set(match)) : (void)0)) {
             match = rb_backref_get();
             if (!result) rb_match_busy(match);
-            regs = RMATCH_REGS(match);
-            end = BEG(0);
-            if (start == end && BEG(0) == END(0)) {
+            end = RMATCH_BEG(match, 0);
+            if (start == end && RMATCH_BEG(match, 0) == RMATCH_END(match, 0)) {
                 if (!ptr) {
                     SPLIT_STR(0, 0);
                     break;
@@ -9368,13 +9358,13 @@ rb_str_split_m(int argc, VALUE *argv, VALUE str)
             }
             else {
                 SPLIT_STR(beg, end-beg);
-                beg = start = END(0);
+                beg = start = RMATCH_END(match, 0);
             }
             last_null = 0;
 
-            for (idx=1; idx < regs->num_regs; idx++) {
-                if (BEG(idx) == -1) continue;
-                SPLIT_STR(BEG(idx), END(idx)-BEG(idx));
+            for (idx = 1; idx < RMATCH_NREGS(match); idx++) {
+                if (RMATCH_BEG(match, idx) == -1) continue;
+                SPLIT_STR(RMATCH_BEG(match, idx), RMATCH_END(match, idx) - RMATCH_BEG(match, idx));
             }
             if (!NIL_P(limit) && lim <= ++i) break;
         }
@@ -10652,17 +10642,14 @@ scan_once(VALUE str, VALUE pat, long *start, int set_backref_str)
     VALUE result = Qnil;
     long end, pos = rb_pat_search(pat, str, *start, set_backref_str);
     if (pos >= 0) {
-        VALUE match;
-        struct re_registers *regs;
+        VALUE match = Qnil;
         if (BUILTIN_TYPE(pat) == T_STRING) {
-            regs = NULL;
             end = pos + RSTRING_LEN(pat);
         }
         else {
             match = rb_backref_get();
-            regs = RMATCH_REGS(match);
-            pos = BEG(0);
-            end = END(0);
+            pos = RMATCH_BEG(match, 0);
+            end = RMATCH_END(match, 0);
         }
 
         if (pos == end) {
@@ -10680,16 +10667,17 @@ scan_once(VALUE str, VALUE pat, long *start, int set_backref_str)
             *start = end;
         }
 
-        if (!regs || regs->num_regs == 1) {
+        if (NIL_P(match) || RMATCH_NREGS(match) == 1) {
             result = rb_str_subseq(str, pos, end - pos);
             return result;
         }
         else {
-            result = rb_ary_new2(regs->num_regs);
-            for (int i = 1; i < regs->num_regs; i++) {
+            int num_regs = RMATCH_NREGS(match);
+            result = rb_ary_new2(num_regs);
+            for (int i = 1; i < num_regs; i++) {
                 VALUE s = Qnil;
-                if (BEG(i) >= 0) {
-                    s = rb_str_subseq(str, BEG(i), END(i)-BEG(i));
+                if (RMATCH_BEG(match, i) >= 0) {
+                    s = rb_str_subseq(str, RMATCH_BEG(match, i), RMATCH_END(match, i) - RMATCH_BEG(match, i));
                 }
 
                 rb_ary_push(result, s);
@@ -11255,10 +11243,9 @@ rb_str_partition(VALUE str, VALUE sep)
             goto failed;
         }
         VALUE match = rb_backref_get();
-        struct re_registers *regs = RMATCH_REGS(match);
 
-        pos = BEG(0);
-        sep = rb_str_subseq(str, pos, END(0) - pos);
+        pos = RMATCH_BEG(match, 0);
+        sep = rb_str_subseq(str, pos, RMATCH_END(match, 0) - pos);
     }
     else {
         pos = rb_str_index(str, sep, 0);
@@ -11292,10 +11279,9 @@ rb_str_rpartition(VALUE str, VALUE sep)
             goto failed;
         }
         VALUE match = rb_backref_get();
-        struct re_registers *regs = RMATCH_REGS(match);
 
-        pos = BEG(0);
-        sep = rb_str_subseq(str, pos, END(0) - pos);
+        pos = RMATCH_BEG(match, 0);
+        sep = rb_str_subseq(str, pos, RMATCH_END(match, 0) - pos);
     }
     else {
         pos = rb_str_sublen(str, pos);

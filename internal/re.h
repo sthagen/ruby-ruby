@@ -10,6 +10,37 @@
  */
 #include "ruby/internal/stdbool.h"     /* for bool */
 #include "ruby/ruby.h"          /* for VALUE */
+#include "ruby/re.h"            /* for struct RMatch and struct re_registers */
+
+static inline OnigPosition *
+RMATCH_BEG_PTR(VALUE match)
+{
+    return RMATCH(match)->regs.beg;
+}
+
+static inline OnigPosition *
+RMATCH_END_PTR(VALUE match)
+{
+    return RMATCH(match)->regs.end;
+}
+
+static inline long
+RMATCH_BEG(VALUE match, int i)
+{
+    return RMATCH_BEG_PTR(match)[i];
+}
+
+static inline long
+RMATCH_END(VALUE match, int i)
+{
+    return RMATCH_END_PTR(match)[i];
+}
+
+static inline int
+RMATCH_NREGS(VALUE match)
+{
+    return RMATCH(match)->regs.num_regs;
+}
 
 /* re.c */
 VALUE rb_reg_s_alloc(VALUE klass);
