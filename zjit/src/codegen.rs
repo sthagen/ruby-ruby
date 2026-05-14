@@ -21,7 +21,7 @@ use crate::stats::{counter_ptr, with_time_stat, trace_compile_phase, Counter, Co
 use crate::{asm::CodeBlock, cruby::*, options::debug, virtualmem::CodePtr};
 use crate::backend::lir::{self, Assembler, C_ARG_OPNDS, C_RET_OPND, CFP, EC, NATIVE_STACK_PTR, Opnd, SP, SideExit, SideExitRecompile, Target, asm_ccall, asm_comment};
 use crate::hir::{iseq_to_hir, BlockId, Invariant, RangeType, SideExitReason::{self, *}, SpecialBackrefSymbol, SpecialObjectType};
-use crate::hir::{BlockHandler, Const, FrameState, Function, Insn, InsnId, Recompile, SendFallbackReason};
+use crate::hir::{BlockHandler, Const, FieldName, FrameState, Function, Insn, InsnId, Recompile, SendFallbackReason};
 use crate::hir_type::{types, Type};
 use crate::options::{get_option, PerfMap};
 use crate::cast::IntoUsize;
@@ -172,7 +172,7 @@ pub extern "C" fn rb_zjit_iseq_gen_entry_point(iseq: IseqPtr, ec: EcPtr, jit_exc
             // We assert only `jit_exception: false` cases until we support exception handlers.
             if ZJITState::assert_compiles_enabled() && !jit_exception {
                 let iseq_location = iseq_get_location(iseq, 0);
-                panic!("Failed to compile: {iseq_location}");
+                panic!("Failed to compile: {iseq_location}: {err:?}");
             }
 
             // For --zjit-stats, generate an entry that just increments exit_compilation_failure and exits
@@ -394,7 +394,7 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, version: IseqVersionRef, func
         }
 
         // Compile each basic block
-        for (rpo_idx, &block_id) in reverse_post_order.iter().enumerate() {
+        for &block_id in reverse_post_order.iter() {
             // Skip the entries superblock — it's an internal CFG artifact
             if block_id == function.entries_block { continue; }
             // Set the current block to the LIR block that corresponds to this
@@ -437,62 +437,27 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, version: IseqVersionRef, func
             for (insn_idx, &insn_id) in block.insns().enumerate() {
                 let insn = function.find(insn_id);
 
-                // IfTrue and IfFalse should never be terminators
-                if matches!(insn, Insn::IfTrue {..} | Insn::IfFalse {..}) {
-                    assert!(!insn.is_terminator(), "IfTrue/IfFalse should not be terminators");
-                }
-
                 match insn {
-                    Insn::IfFalse { val, target } => {
-
+                    Insn::CondBranch { val, if_true, if_false } => {
                         let val_opnd = jit.get_opnd(val);
+                        let true_target = hir_to_lir[if_true.target.0].unwrap();
+                        let false_target = hir_to_lir[if_false.target.0].unwrap();
 
-                        let lir_target = hir_to_lir[target.target.0].unwrap();
-
-                        let fall_through_target = asm.new_block(block_id, false, rpo_idx);
-
-                        let branch_edge = lir::BranchEdge {
-                            target: lir_target,
-                            args: target.args.iter().map(|insn_id| jit.get_opnd(*insn_id)).collect()
+                        let true_branch = lir::BranchEdge {
+                            target: true_target,
+                            args: if_true.args.iter().map(|insn_id| jit.get_opnd(*insn_id)).collect()
                         };
 
-                        let fall_through_edge = lir::BranchEdge {
-                            target: fall_through_target,
-                            args: vec![]
+                        let false_branch = lir::BranchEdge {
+                            target: false_target,
+                            args: if_false.args.iter().map(|insn_id| jit.get_opnd(*insn_id)).collect()
                         };
 
-                        gen_if_false(&mut asm, val_opnd, branch_edge, fall_through_edge);
+                        asm.test(val_opnd, val_opnd);
+                        asm.push_insn(lir::Insn::Jnz(Target::Block(true_branch)));
+                        asm.jmp(Target::Block(false_branch));
+
                         assert!(asm.current_block().insns.last().unwrap().is_terminator());
-
-                        asm.set_current_block(fall_through_target);
-
-                        let label = jit.get_label(&mut asm, fall_through_target, block_id);
-                        asm.write_label(label);
-                    },
-                    Insn::IfTrue { val, target } => {
-                        let val_opnd = jit.get_opnd(val);
-
-                        let lir_target = hir_to_lir[target.target.0].unwrap();
-
-                        let fall_through_target = asm.new_block(block_id, false, rpo_idx);
-
-                        let branch_edge = lir::BranchEdge {
-                            target: lir_target,
-                            args: target.args.iter().map(|insn_id| jit.get_opnd(*insn_id)).collect()
-                        };
-
-                        let fall_through_edge = lir::BranchEdge {
-                            target: fall_through_target,
-                            args: vec![]
-                        };
-
-                        gen_if_true(&mut asm, val_opnd, branch_edge, fall_through_edge);
-                        assert!(asm.current_block().insns.last().unwrap().is_terminator());
-
-                        asm.set_current_block(fall_through_target);
-
-                        let label = jit.get_label(&mut asm, fall_through_target, block_id);
-                        asm.write_label(label);
                     }
                     Insn::Jump(target) => {
                         let lir_target = hir_to_lir[target.target.0].unwrap();
@@ -500,7 +465,7 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, version: IseqVersionRef, func
                             target: lir_target,
                             args: target.args.iter().map(|insn_id| jit.get_opnd(*insn_id)).collect()
                         };
-                        gen_jump(&mut asm, branch_edge);
+                        asm.jmp(Target::Block(branch_edge));
                         assert!(asm.current_block().insns.last().unwrap().is_terminator());
 
                         // Jump should always be the last instruction in an HIR block
@@ -713,7 +678,6 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
         Insn::RefineType { val, .. } => opnd!(val),
         Insn::HasType { val, expected } => gen_has_type(jit, asm, opnd!(val), *expected),
         Insn::GuardType { val, guard_type, state } => gen_guard_type(jit, asm, opnd!(val), *guard_type, &function.frame_state(*state)),
-        Insn::GuardTypeNot { val, guard_type, state } => gen_guard_type_not(jit, asm, opnd!(val), *guard_type, &function.frame_state(*state)),
         &Insn::GuardBitEquals { val, expected, reason, state, recompile } => gen_guard_bit_equals(jit, asm, opnd!(val), expected, reason, recompile, &function.frame_state(state)),
         &Insn::GuardAnyBitSet { val, mask, reason, state, .. } => gen_guard_any_bit_set(jit, asm, opnd!(val), mask, reason, &function.frame_state(state)),
         &Insn::GuardNoBitsSet { val, mask, reason, state, .. } => gen_guard_no_bits_set(jit, asm, opnd!(val), mask, reason, &function.frame_state(state)),
@@ -780,7 +744,7 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
         &Insn::ArrayMax { ref elements, state } => gen_array_max(jit, asm, opnds!(elements), &function.frame_state(state)),
         &Insn::ArrayMin { ref elements, state } => gen_array_min(jit, asm, opnds!(elements), &function.frame_state(state)),
         &Insn::Throw { state, .. } => return Err(state),
-        &Insn::IfFalse { .. } | Insn::IfTrue { .. }
+        &Insn::CondBranch { .. }
         | &Insn::Jump { .. } | Insn::Entries { .. } => unreachable!(),
     };
 
@@ -1374,16 +1338,16 @@ fn gen_load_self() -> Opnd {
     Opnd::mem(64, CFP, RUBY_OFFSET_CFP_SELF)
 }
 
-fn gen_load_field(asm: &mut Assembler, recv: Opnd, id: ID, offset: i32, return_type: Type) -> Opnd {
+fn gen_load_field(asm: &mut Assembler, recv: Opnd, id: FieldName, offset: i32, return_type: Type) -> Opnd {
     gen_incr_counter(asm, Counter::load_field_count);
-    asm_comment!(asm, "Load field id={} offset={}", id.contents_lossy(), offset);
+    asm_comment!(asm, "Load field id={id} offset={offset}");
     let recv = asm.load_mem(recv);
     asm.load(Opnd::mem(return_type.num_bits(), recv, offset))
 }
 
-fn gen_store_field(asm: &mut Assembler, recv: Opnd, id: ID, offset: i32, val: Opnd, val_type: Type) {
+fn gen_store_field(asm: &mut Assembler, recv: Opnd, id: FieldName, offset: i32, val: Opnd, val_type: Type) {
     gen_incr_counter(asm, Counter::store_field_count);
-    asm_comment!(asm, "Store field id={} offset={}", id.contents_lossy(), offset);
+    asm_comment!(asm, "Store field id={id} offset={offset}");
     let recv = asm.load_mem(recv);
     asm.store(Opnd::mem(val_type.num_bits(), recv, offset), val);
 }
@@ -1466,28 +1430,6 @@ fn gen_param(asm: &mut Assembler, _idx: usize) -> lir::Opnd {
     let vreg = asm.new_block_param(VALUE_BITS);
     asm.current_block().add_parameter(vreg);
     vreg
-}
-
-/// Compile a jump to a basic block
-fn gen_jump(asm: &mut Assembler, branch: lir::BranchEdge) {
-    // Jump to the basic block
-    asm.jmp(Target::Block(branch));
-}
-
-/// Compile a conditional branch to a basic block
-fn gen_if_true(asm: &mut Assembler, val: lir::Opnd, branch: lir::BranchEdge, fall_through: lir::BranchEdge) {
-    // If val is zero, move on to the next instruction.
-    asm.test(val, val);
-    asm.push_insn(lir::Insn::Jz(Target::Block(fall_through)));
-    asm.jmp(Target::Block(branch));
-}
-
-/// Compile a conditional branch to a basic block
-fn gen_if_false(asm: &mut Assembler, val: lir::Opnd, branch: lir::BranchEdge, fall_through: lir::BranchEdge) {
-    // If val is not zero, move on to the next instruction.
-    asm.test(val, val);
-    asm.push_insn(lir::Insn::Jnz(Target::Block(fall_through)));
-    asm.jmp(Target::Block(branch));
 }
 
 /// Compile a dynamic dispatch with block
@@ -2635,45 +2577,6 @@ fn gen_guard_type(jit: &mut JITState, asm: &mut Assembler, val: lir::Opnd, guard
         asm.je(jit, side_exit.clone());
         asm.test(val, (RUBY_IMMEDIATE_MASK as u64).into());
         asm.jnz(jit, side_exit);
-    } else {
-        unimplemented!("unsupported type: {guard_type}");
-    }
-    val
-}
-
-fn gen_guard_type_not(jit: &mut JITState, asm: &mut Assembler, val: lir::Opnd, guard_type: Type, state: &FrameState) -> lir::Opnd {
-    if guard_type.is_subtype(types::String) {
-        // We only exit if val *is* a String. Otherwise we fall through.
-        let hir_block_id = asm.current_block().hir_block_id;
-        let rpo_idx = asm.current_block().rpo_index;
-
-        // Create continuation block upfront so early-out jumps can target it
-        let cont_block = asm.new_block(hir_block_id, false, rpo_idx);
-        let cont_edge = || Target::Block(lir::BranchEdge { target: cont_block, args: vec![] });
-
-        let side = side_exit(jit, state, GuardTypeNot(guard_type));
-
-        // Continue if special constant (not string)
-        asm.test(val, Opnd::UImm(RUBY_IMMEDIATE_MASK as u64));
-        asm.jnz(jit, cont_edge());
-
-        // Continue if false (not string)
-        asm.cmp(val, Qfalse.into());
-        asm.je(jit, cont_edge());
-
-        let val = asm.load_mem(val);
-
-        let flags = asm.load(Opnd::mem(VALUE_BITS, val, RUBY_OFFSET_RBASIC_FLAGS));
-        let tag   = asm.and(flags, Opnd::UImm(RUBY_T_MASK as u64));
-        asm.cmp(tag, Opnd::UImm(RUBY_T_STRING as u64));
-        asm.je(jit, side);
-
-        // Fall through to continuation block
-        asm.jmp(cont_edge());
-
-        asm.set_current_block(cont_block);
-        let label = jit.get_label(asm, cont_block, hir_block_id);
-        asm.write_label(label);
     } else {
         unimplemented!("unsupported type: {guard_type}");
     }

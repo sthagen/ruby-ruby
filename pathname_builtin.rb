@@ -221,13 +221,6 @@ class Pathname
 
   # :stopdoc:
 
-  if File::FNM_SYSCASE.nonzero?
-    # Avoid #zero? here because #casecmp can return nil.
-    private def same_paths?(a, b) a.casecmp(b) == 0 end
-  else
-    private def same_paths?(a, b) a == b end
-  end
-
   attr_reader :path
   protected :path
 
@@ -267,13 +260,13 @@ class Pathname
   #
   # Returns whether the stored paths in +self+ and +other+ are equal:
   #
-  #   pn = Pathname.new('lib')
-  #   pn == Pathname.new('lib')   # => true
-  #   pn == Pathname.new('./lib') # => false
+  #   pn = Pathname('lib')
+  #   pn == Pathname('lib')   # => true
+  #   pn == Pathname('./lib') # => false
   #
   # Returns +false+ if +other+ is not a pathname:
   #
-  #   pn == 'lib'                 # => false
+  #   pn == 'lib'             # => false
   #
   def ==(other)
     return false unless Pathname === other
@@ -281,14 +274,6 @@ class Pathname
   end
   alias === ==
   alias eql? ==
-
-  unless method_defined?(:<=>, false)
-    # Provides for comparing pathnames, case-sensitively.
-    def <=>(other)
-      return nil unless Pathname === other
-      @path.tr('/', "\0") <=> other.path.tr('/', "\0")
-    end
-  end
 
   def hash # :nodoc:
     @path.hash
@@ -306,70 +291,6 @@ class Pathname
     "#<#{self.class}:#{@path}>"
   end
 
-  unless method_defined?(:sub, false)
-    # Return a pathname which is substituted by String#sub.
-    def sub(pattern, *args, **kwargs, &block)
-      if block
-        path = @path.sub(pattern, *args, **kwargs) {|*sub_args|
-          begin
-            old = Thread.current[:pathname_sub_matchdata]
-            Thread.current[:pathname_sub_matchdata] = $~
-            eval("$~ = Thread.current[:pathname_sub_matchdata]", block.binding)
-          ensure
-            Thread.current[:pathname_sub_matchdata] = old
-          end
-          yield(*sub_args)
-        }
-      else
-        path = @path.sub(pattern, *args, **kwargs)
-      end
-      self.class.new(path)
-    end
-  end
-
-  # Return a pathname with +repl+ added as a suffix to the basename.
-  #
-  # If self has no extension part, +repl+ is appended.
-  #
-  #	Pathname.new('/usr/bin/shutdown').sub_ext('.rb')
-  #	    #=> #<Pathname:/usr/bin/shutdown.rb>
-  def sub_ext(repl)
-    ext = File.extname(@path)
-
-    # File.extname("foo.bar:stream") returns ".bar" on NTFS and not ".bar:stream"
-    # (see ruby_enc_find_extname()).
-    # The behavior of Pathname#sub_ext is to replace everything
-    # from the start of the extname until the end of the path with repl.
-    unless @path.end_with?(ext)
-      ext = @path[@path.rindex(ext)..]
-    end
-
-    self.class.new(@path.chomp(ext) + repl)
-  end
-
-  if File::ALT_SEPARATOR
-    # Separator list string.
-    separator_list = Regexp.quote "#{File::ALT_SEPARATOR}#{File::SEPARATOR}"
-    # Regexp that matches a separator.
-    SEPARATOR_PAT = /[#{separator_list}]/
-  else
-    separator_list = Regexp.quote File::SEPARATOR
-    SEPARATOR_PAT = /#{separator_list}/
-  end
-  SEPARATOR_PAT.freeze
-  private_constant :SEPARATOR_PAT
-
-  if File.dirname('A:') == 'A:.' # DOSish drive letter
-    # Regexp that matches an absolute path.
-    ABSOLUTE_PATH = /\A(?:[A-Za-z]:|#{SEPARATOR_PAT})/
-  else
-    ABSOLUTE_PATH = /\A#{SEPARATOR_PAT}/
-  end
-  ABSOLUTE_PATH.freeze
-  private_constant :ABSOLUTE_PATH
-
-  # :startdoc:
-
   # Creates a full path, including any intermediate directories that don't yet
   # exist.
   #
@@ -378,9 +299,9 @@ class Pathname
     path = @path == '/' ? @path : @path.chomp('/')
 
     stack = []
-    until File.directory?(path) || File.dirname(path) == path
+    until File.directory?(path) || (parent = File.dirname(path)) == path
       stack.push path
-      path = File.dirname(path)
+      path = parent
     end
 
     stack.reverse_each do |dir|
@@ -398,35 +319,11 @@ class Pathname
     self
   end
 
-  # chop_basename(path) -> [pre-basename, basename] or nil
-  def chop_basename(path) # :nodoc:
-    base = File.basename(path)
-    if /\A#{SEPARATOR_PAT}?\z/o.match?(base)
-      return nil
-    else
-      return path[0, path.rindex(base)], base
-    end
-  end
-  private :chop_basename
-
-  # split_names(path) -> prefix, [name, ...]
-  def split_names(path) # :nodoc:
-    names = []
-    while r = chop_basename(path)
-      path, basename = r
-      names.unshift basename
-    end
-    return path, names
-  end
-  private :split_names
-
   def prepend_prefix(prefix, relpath) # :nodoc:
     if relpath.empty?
       File.dirname(prefix)
-    elsif SEPARATOR_PAT.match?(prefix)
-      prefix = File.dirname(prefix)
-      prefix = File.join(prefix, "") if File.basename(prefix + 'a') != 'a'
-      prefix + relpath
+    elsif has_separator?(prefix)
+      add_trailing_separator(File.dirname(prefix)) + relpath
     else
       prefix + relpath
     end
@@ -564,45 +461,12 @@ class Pathname
       end
     end
     pre.tr!(File::ALT_SEPARATOR, File::SEPARATOR) if File::ALT_SEPARATOR
-    if SEPARATOR_PAT.match?(File.basename(pre))
+    if has_separator?(File.basename(pre))
       names.shift while names[0] == '..'
     end
     self.class.new(prepend_prefix(pre, File.join(*names)))
   end
   private :cleanpath_aggressive
-
-  # has_trailing_separator?(path) -> bool
-  def has_trailing_separator?(path) # :nodoc:
-    if r = chop_basename(path)
-      pre, basename = r
-      pre.length + basename.length < path.length
-    else
-      false
-    end
-  end
-  private :has_trailing_separator?
-
-  # add_trailing_separator(path) -> path
-  def add_trailing_separator(path) # :nodoc:
-    if File.basename(path + 'a') == 'a'
-      path
-    else
-      File.join(path, "") # xxx: Is File.join is appropriate to add separator?
-    end
-  end
-  private :add_trailing_separator
-
-  def del_trailing_separator(path) # :nodoc:
-    if r = chop_basename(path)
-      pre, basename = r
-      pre + basename
-    elsif /#{SEPARATOR_PAT}+\z/o =~ path
-      $` + File.dirname(path)[/#{SEPARATOR_PAT}*\z/o]
-    else
-      path
-    end
-  end
-  private :del_trailing_separator
 
   def cleanpath_conservative # :nodoc:
     path = @path
@@ -613,7 +477,7 @@ class Pathname
       names.unshift base if base != '.'
     end
     pre.tr!(File::ALT_SEPARATOR, File::SEPARATOR) if File::ALT_SEPARATOR
-    if SEPARATOR_PAT.match?(File.basename(pre))
+    if has_separator?(File.basename(pre))
       names.shift while names[0] == '..'
     end
     if names.empty?
@@ -648,34 +512,6 @@ class Pathname
     rescue Errno::ENOENT
       false
     end
-  end
-
-  #
-  # Predicate method for root directories.  Returns +true+ if the
-  # pathname consists of consecutive slashes.
-  #
-  # It doesn't access the filesystem.  So it may return +false+ for some
-  # pathnames which points to roots such as <tt>/usr/..</tt>.
-  #
-  def root?
-    chop_basename(@path) == nil && SEPARATOR_PAT.match?(@path)
-  end
-
-  # call-seq:
-  #   absolute? -> true or false
-  #
-  # Returns whether +self+ contains an absolute path:
-  #
-  #   Pathname.new('/home').absolute? # => true
-  #   Pathname.new('lib').absolute?   # => false
-  #
-  # OS-dependent for some paths:
-  #
-  #   Pathname.new('C:/').absolute?   # => true   # On Windows.
-  #   Pathname.new('C:/').absolute?   # => false  # Elsewhere.
-  #
-  def absolute?
-    ABSOLUTE_PATH.match? @path
   end
 
   # The opposite of Pathname#absolute?
@@ -779,60 +615,60 @@ class Pathname
   # Returns a new \Pathname object based on the content of +self+ and +other+;
   # argument +other+ may be a String, a File, a Dir, or another \Pathname:
   #
-  #   pn = Pathname.new('foo') # => #<Pathname:foo>
+  #   pn = Pathname('foo')     # => #<Pathname:foo>
   #   pn + 'bar'               # => #<Pathname:foo/bar>
   #   pn + File.new('LEGAL')   # => #<Pathname:foo/LEGAL>
   #   pn + Dir.new('lib')      # => #<Pathname:foo/lib>
-  #   pn + Pathname.new('bar') # => #<Pathname:foo/bar>
+  #   pn + Pathname('bar')     # => #<Pathname:foo/bar>
   #
   # When +other+ specifies a relative path (see #relative?),
   # it is combined with +self+ to form a new pathname:
   #
-  #   Pathname.new('/a/b') + 'c' # => #<Pathname:/a/b/c>
+  #   Pathname('/a/b') + 'c' # => #<Pathname:/a/b/c>
   #
   # Extra component separators (<tt>'/'</tt>) are removed:
   #
-  #   Pathname.new('/a/b/') + 'c' # => #<Pathname:/a/b/c>
+  #   Pathname('/a/b/') + 'c' # => #<Pathname:/a/b/c>
   #
   # Extra current-directory components (<tt>'.'</tt>) are removed:
   #
-  #   Pathname.new('a') + '.' # => #<Pathname:a>
-  #   Pathname.new('.') + 'a' # => #<Pathname:a>
-  #   Pathname.new('.') + '.' # => #<Pathname:.>
+  #   Pathname('a') + '.' # => #<Pathname:a>
+  #   Pathname('.') + 'a' # => #<Pathname:a>
+  #   Pathname('.') + '.' # => #<Pathname:.>
   #
   # Parent-directory components (<tt>'..'</tt>) are:
   #
   # - Resolved, when possible:
   #
-  #     Pathname.new('a')      + '..'      # => #<Pathname:.>
-  #     Pathname.new('a/b')    + '..'      # => #<Pathname:a>
-  #     Pathname.new('/')      + '../a'    # => #<Pathname:/a>
-  #     Pathname.new('a')      + '../b'    # => #<Pathname:b>
-  #     Pathname.new('a/b')    + '../c'    # => #<Pathname:a/c>
-  #     Pathname.new('a//b/c') + '../d//e' # => #<Pathname:a//b/d//e>
+  #     Pathname('a')      + '..'      # => #<Pathname:.>
+  #     Pathname('a/b')    + '..'      # => #<Pathname:a>
+  #     Pathname('/')      + '../a'    # => #<Pathname:/a>
+  #     Pathname('a')      + '../b'    # => #<Pathname:b>
+  #     Pathname('a/b')    + '../c'    # => #<Pathname:a/c>
+  #     Pathname('a//b/c') + '../d//e' # => #<Pathname:a//b/d//e>
   #
   # - Removed, when not needed:
   #
-  #     Pathname.new('/') + '..' # => #<Pathname:/>
+  #     Pathname('/') + '..' # => #<Pathname:/>
   #
   # - Retained, when needed:
   #
-  #     Pathname.new('..') + '..'   # => #<Pathname:../..>
-  #     Pathname.new('..') + '../a' # => #<Pathname:../../a>
+  #     Pathname('..') + '..'   # => #<Pathname:../..>
+  #     Pathname('..') + '../a' # => #<Pathname:../../a>
   #
   # When +other+ specifies an absolute path (see #absolute?),
-  # equivalent to <tt>Pathname.new(other.to_s)</tt>:
+  # equivalent to <tt>Pathname(other.to_s)</tt>:
   #
-  #   Pathname.new('/a') + '/b/c' # => #<Pathname:/b/c>
+  #   Pathname('/a') + '/b/c' # => #<Pathname:/b/c>
   #
   # Occurrences of <tt>'/'</tt>, <tt>'.'</tt>, and <tt>'..'</tt> are preserved:
   #
-  #   Pathname.new('/a') + '//b//c/./../d' # => #<Pathname://b//c/./../d>
+  #   Pathname('/a') + '//b//c/./../d' # => #<Pathname://b//c/./../d>
   #
   # This method does not access the file system, so +other+ need not represent
   # an existing (or even a valid) file or directory path:
   #
-  #   Pathname.new('/var') + 'nosuch:ever' # => #<Pathname:/var/nosuch:ever>
+  #   Pathname('/var') + 'nosuch:ever' # => #<Pathname:/var/nosuch:ever>
   #
   def +(other)
     other = Pathname.new(other) unless Pathname === other
@@ -868,7 +704,7 @@ class Pathname
       basename_list2.shift
     end
     r1 = chop_basename(prefix1)
-    if !r1 && (r1 = SEPARATOR_PAT.match?(File.basename(prefix1)))
+    if !r1 && (r1 = has_separator?(File.basename(prefix1)))
       while !basename_list2.empty? && basename_list2.first == '..'
         index_list2.shift
         basename_list2.shift
@@ -930,15 +766,12 @@ class Pathname
   #
   def children(with_directory=true)
     with_directory = false if @path == '.'
-    result = []
-    Dir.foreach(@path) {|e|
-      next if e == '.' || e == '..'
-      if with_directory
-        result << self.class.new(File.join(@path, e))
-      else
-        result << self.class.new(e)
-      end
-    }
+    result = Dir.children(@path)
+    if with_directory
+      result.map! {|e| self.class.new(File.join(@path, e))}
+    else
+      result.map! {|e| self.class.new(e)}
+    end
     result
   end
 
@@ -1217,7 +1050,49 @@ class Pathname    # * File *
   # See <tt>File.mtime</tt>.  Returns last modification time.
   def mtime() File.mtime(@path) end
 
-  # See <tt>File.chmod</tt>.  Changes permissions.
+
+  # call-seq:
+  #   chmod(mode) -> 1
+  #
+  # Changes the mode (i.e., permissions) of the entry represented by +self+;
+  # see {File Permissions}[rdoc-ref:File@File+Permissions];
+  # returns +1+:
+  #
+  #   # A helper method to make an integer mode display as octal.
+  #   def pretty(mode); '0' + (mode & 0777).to_s(8); end
+  #
+  #   # Work in a temporary directory.
+  #   require 'tmpdir'
+  #   Dir.mktmpdir do |tmpdirpath|
+  #     # A subdirectory therein, and its Pathname.
+  #     dirpath = File.join(tmpdirpath, 'subdir')
+  #     Dir.mkdir(dirpath)
+  #     dir_pn = Pathname(dirpath)
+  #     # The directory mode.
+  #     puts "Original directory mode: #{pretty(dir_pn.stat.mode)}"
+  #     # Change the directory mode.
+  #     dir_pn.chmod(0777)
+  #     puts "New directory mode:      #{pretty(dir_pn.stat.mode)}"
+  #
+  #     # A file in the subdirectory, and its Pathname.
+  #     filepath = File.join(dirpath, 't.txt')
+  #     file_pn = Pathname(filepath)
+  #     # Create the file.
+  #     File.write(filepath, 'foo')
+  #     # The file mode.
+  #     puts "Original file mode:      #{pretty(file_pn.stat.mode)}"
+  #     # Change the file modes.
+  #     file_pn.chmod(0777)
+  #     puts "New file mode:           #{pretty(file_pn.stat.mode)}"
+  #   end
+  #
+  # Output:
+  #
+  #   Original directory mode: 0775
+  #   New directory mode:      0777
+  #   Original file mode:      0664
+  #   New file mode:           0777
+  #
   def chmod(mode) File.chmod(mode, @path) end
 
   # See <tt>File.lchmod</tt>.

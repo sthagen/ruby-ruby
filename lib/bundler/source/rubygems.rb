@@ -477,8 +477,13 @@ module Bundler
         Bundler.ui.confirm("Fetching #{version_message(spec, previous_spec)}")
         gem_remote_fetcher = remote_fetchers.fetch(spec.remote).gem_remote_fetcher
 
-        Gem.time("Downloaded #{spec.name} in", 0, true) do
-          Bundler.rubygems.download_gem(spec, uri, download_cache_path, gem_remote_fetcher)
+        Plugin.hook(Plugin::Events::GEM_BEFORE_FETCH, spec)
+        begin
+          Gem.time("Downloaded #{spec.name} in", 0, true) do
+            Bundler.rubygems.download_gem(spec, uri, download_cache_path, gem_remote_fetcher)
+          end
+        ensure
+          Plugin.hook(Plugin::Events::GEM_AFTER_FETCH, spec)
         end
       end
 
