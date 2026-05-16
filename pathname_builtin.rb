@@ -590,7 +590,7 @@ class Pathname
   # yields +self+, then a new pathname for each successive dirname in the stored path;
   # see File.dirname:
   #
-  #   Pathname.new('/path/to/some/file.rb').ascend {|dirname| p dirname}
+  #   Pathname('/path/to/some/file.rb').ascend {|dirname| p dirname}
   #   #<Pathname:/path/to/some/file.rb>
   #   #<Pathname:/path/to/some>
   #   #<Pathname:/path/to>
@@ -1001,47 +1001,93 @@ class Pathname    # * File *
   # Returns a new Time object containing the time of the most recent
   # access (read or write) to the entry represented by +self+:
   #
-  #   filepath = 't.tmp'
-  #   pn = Pathname.new(filepath)
-  #   File.exist?(filepath) # => false
-  #   pn.atime              # Raises Errno::ENOENT: No such file or directory
-  #   File.write(filepath, 'foo')
-  #   pn.atime              # => 2026-03-22 13:49:44.5165608 -0500
-  #   File.read(filepath)
-  #   pn.atime              # => 2026-03-22 13:49:57.5359349 -0500
-  #   File.delete(filepath)
+  #   # Work in a temporary directory.
+  #   require 'tmpdir'
+  #   Dir.mktmpdir do |tmpdirpath|
+  #     # A subdirectory therein, and its Pathname.
+  #     dirpath = File.join(tmpdirpath, 'subdir')
+  #     Dir.mkdir(dirpath)
+  #     dir_pn = Pathname(dirpath)
+  #     puts "Create directory; establishes atime for directory."
+  #     puts "  Directory atime: #{dir_pn.atime}"
+  #     sleep(1)
   #
-  #   dirpath = 'tmp'
-  #   Dir.mkdir(dirpath)
-  #   pn = Pathname.new(dirpath)
-  #   pn.atime            # => 2026-03-31 11:46:35.4813492 -0500
-  #   Dir.empty?(dirname) # => true
-  #   pn.atime            # => 2026-03-31 11:51:10.1210092 -0500
-  #   Dir.delete(dirpath)
+  #     # A file in the subdirectory, and its Pathname.
+  #     filepath = File.join(dirpath, 't.txt')
+  #     puts "Create file; establishes atime for file, updates atime for directory."
+  #     File.write(filepath, 'foo')
+  #     file_pn = Pathname(filepath)
+  #     puts "  File atime:      #{file_pn.atime}"
+  #     puts "  Directory atime: #{dir_pn.atime}"
+  #     sleep(1)
+  #     puts "Write file; updates atimes for file and directory."
+  #     File.write(filepath, 'bar')
+  #     puts "  File atime:      #{file_pn.atime}"
+  #     puts "  Directory atime: #{dir_pn.atime}"
+  #   end
+  #
+  # Output:
+  #
+  #   Create directory; establishes atime for directory.
+  #     Directory atime: 2026-05-14 14:36:43 +0100
+  #   Create file; establishes atime for file, updates atime for directory.
+  #     File atime:      2026-05-14 14:36:44 +0100
+  #     Directory atime: 2026-05-14 14:36:44 +0100
+  #   Write file; updates atimes for file and directory.
+  #     File atime:      2026-05-14 14:36:45 +0100
+  #     Directory atime: 2026-05-14 14:36:45 +0100
   #
   # See {File System Timestamps}[rdoc-ref:file/timestamps.md].
   def atime() File.atime(@path) end
 
+  # :markup: markdown
+  #
   # call-seq:
   #   birthtime -> new_time
   #
   # Returns a new Time object containing the create time of the entry
   # represented by +self+:
   #
-  #   filepath = 't.tmp'
-  #   pn = Pathname.new(filepath)
-  #   pn.birthtime   # Raises Errno::ENOENT: No such file or directory
-  #   file = File.open(filepath, 'w')
-  #   pn.birthtime   # => 2026-04-14 16:14:47.494846 -0500
-  #   file.birthtime # => 2026-04-14 16:14:47.494846 -0500
-  #   file.write('foo')
-  #   pn.birthtime   # => 2026-04-14 16:14:47.494846 -0500
-  #   file.close
-  #   pn.birthtime   # => 2026-04-14 16:14:47.494846 -0500
-  #   File.delete(filepath)
-  #   pn.birthtime   # Raises Errno::ENOENT: No such file or directory
+  # ```ruby
+  # # Work in a temporary directory.
+  # Pathname.mktmpdir do |tmpdirpath|
+  #   # A subdirectory therein, and its Pathname.
+  #   dirpath = File.join(tmpdirpath, 'subdir')
+  #   dir_pn = Pathname(dirpath)
+  #   puts "Create directory; directory birthtime established."
+  #   dir_pn.mkdir
+  #   puts "  Directory birthtime: #{dir_pn.birthtime}"
+  #   sleep(1)
   #
-  # See {File System Timestamps}[rdoc-ref:file/timestamps.md].
+  #   # A file in the subdirectory, and its Pathname.
+  #   filepath = File.join(dirpath, 't.txt')
+  #   file_pn = Pathname(filepath)
+  #   puts "Create file; file birthtime established; directory birthtime not updated."
+  #   file_pn.write('foo')
+  #   puts "  File birthtime:      #{file_pn.birthtime}"
+  #   puts "  Directory birthtime: #{dir_pn.birthtime}"
+  #   sleep(1)
+  #   puts "Write file; neither birthtime updated."
+  #   file_pn.write('bar')
+  #   puts "  File birthtime:      #{file_pn.birthtime}"
+  #   puts "  Directory birthtime: #{dir_pn.birthtime}"
+  # end
+  # ```
+  #
+  # Output:
+  #
+  # ```text
+  # Create directory; directory birthtime established.
+  #   Directory birthtime: 2026-05-14 23:41:12 +0100
+  # Create file; file birthtime established; directory birthtime not updated.
+  #   File birthtime:      2026-05-14 23:41:13 +0100
+  #   Directory birthtime: 2026-05-14 23:41:12 +0100
+  # Write file; neither birthtime updated.
+  #   File birthtime:      2026-05-14 23:41:13 +0100
+  #   Directory birthtime: 2026-05-14 23:41:12 +0100
+  # ```
+  #
+  # See [File System Timestamps](rdoc-ref:file/timestamps.md).
   def birthtime() File.birthtime(@path) end
 
   # See <tt>File.ctime</tt>.  Returns last (directory entry, not file) change time.
@@ -1098,7 +1144,61 @@ class Pathname    # * File *
   # See <tt>File.lchmod</tt>.
   def lchmod(mode) File.lchmod(mode, @path) end
 
-  # See <tt>File.chown</tt>.  Change owner and group of file.
+  # call-seq:
+  #   chown(owner_id, group_id) -> 0
+  #
+  # Changes the owner and group of an entry (directory or file):
+  #
+  #   # Work in a temporary directory.
+  #   require 'tmpdir'
+  #   Dir.mktmpdir do |tmpdirpath|
+  #     # A subdirectory therein, and its Pathname.
+  #     dirpath = File.join(tmpdirpath, 'subdir')
+  #     Dir.mkdir(dirpath)
+  #     dir_stat = File.stat(dirpath)
+  #     puts "Original directory owner: #{dir_stat.uid}"
+  #     puts "Original directory group: #{dir_stat.gid}"
+  #     dir_pn = Pathname(dirpath)
+  #     dir_pn.chown(1000, 1000)
+  #     dir_stat = File.stat(dirpath)
+  #     puts "New directory owner:      #{dir_stat.uid}"
+  #     puts "New directory group:      #{dir_stat.gid}"
+  #
+  #     # A file in the subdirectory, and its Pathname.
+  #     filepath = File.join(dirpath, 't.txt')
+  #     file_pn = Pathname(filepath)
+  #     # Create the file.
+  #     File.write(filepath, 'foo')
+  #     file_stat = File.stat(filepath)
+  #     puts "Original file owner:      #{file_stat.uid}"
+  #     puts "Original file group:      #{file_stat.gid}"
+  #     file_pn = Pathname(dirpath)
+  #     file_pn.chown(1000, 1000)
+  #     file_stat = File.stat(dirpath)
+  #     puts "New file owner:           #{file_stat.uid}"
+  #     puts "New file group:           #{file_stat.gid}"
+  #   end
+  #
+  # Output:
+  #
+  #   Original directory owner: 0
+  #   Original directory group: 0
+  #   New directory owner:      1000
+  #   New directory group:      1000
+  #   Original file owner:      0
+  #   Original file group:      0
+  #   New file owner:           1000
+  #   New file group:           1000
+  #
+  # Notes:
+  #
+  # - On Windows, the owner and group are not changed.
+  # - Only a process with superuser privileges can change the owner of an entry.
+  # - The owner of an entry can change its group to any group
+  #   to which the owner belongs.
+  # - A +nil+ or +-1+ owner or group id is ignored.
+  # - The method follows symbolic links to the target entry.
+  #
   def chown(owner, group) File.chown(owner, group, @path) end
 
   # See <tt>File.lchown</tt>.

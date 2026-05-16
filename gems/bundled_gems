@@ -17,7 +17,7 @@ net-smtp            0.5.1   https://github.com/ruby/net-smtp
 matrix              0.4.3   https://github.com/ruby/matrix
 prime               0.1.4   https://github.com/ruby/prime
 rbs                 4.0.2   https://github.com/ruby/rbs 36a7e8e38df9efd33db83c3f30f0308bdeb84bd9
-typeprof            0.31.1  https://github.com/ruby/typeprof
+typeprof            0.32.0  https://github.com/ruby/typeprof
 debug               1.11.1  https://github.com/ruby/debug 9dc2024a5a05116b3d38afbc5579d9503d8913f3
 racc                1.8.1   https://github.com/ruby/racc
 mutex_m             0.3.0   https://github.com/ruby/mutex_m
@@ -37,7 +37,7 @@ ostruct             0.6.3   https://github.com/ruby/ostruct
 pstore              0.2.1   https://github.com/ruby/pstore
 benchmark           0.5.0   https://github.com/ruby/benchmark
 logger              1.7.0   https://github.com/ruby/logger
-rdoc                7.2.0   https://github.com/ruby/rdoc 1f93543615928b6d45357432f16ec6006e2d8b1e
+rdoc                7.2.0   https://github.com/ruby/rdoc bc0baee787609f2205e8f1103f3e1d36b923184a
 win32ole            1.9.3   https://github.com/ruby/win32ole
 irb                 1.18.0  https://github.com/ruby/irb
 reline              0.6.3   https://github.com/ruby/reline

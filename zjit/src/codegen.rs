@@ -314,7 +314,7 @@ fn gen_iseq(cb: &mut CodeBlock, iseq: IseqPtr, function: Option<&Function>) -> R
     }
 
     // Compile the ISEQ. When function is None, this is a lazy compile
-    // from a stub hit — wrap in a trace event covering the full compile.
+    // from a stub hit -- wrap in a trace event covering the full compile.
     let mut version = IseqVersion::new(iseq);
     let code_ptrs = if function.is_none() {
         trace_compile_phase(&iseq_get_location(iseq, 0), || gen_iseq_body(cb, iseq, version, function))
@@ -387,7 +387,7 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, version: IseqVersionRef, func
 
         // Create all LIR basic blocks corresponding to HIR basic blocks
         for (rpo_idx, &block_id) in reverse_post_order.iter().enumerate() {
-            // Skip the entries superblock — it's an internal CFG artifact
+            // Skip the entries superblock -- it's an internal CFG artifact
             if block_id == function.entries_block { continue; }
             let lir_block_id = asm.new_block(block_id, function.is_entry_block(block_id), rpo_idx);
             hir_to_lir[block_id.0] = Some(lir_block_id);
@@ -395,7 +395,7 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, version: IseqVersionRef, func
 
         // Compile each basic block
         for &block_id in reverse_post_order.iter() {
-            // Skip the entries superblock — it's an internal CFG artifact
+            // Skip the entries superblock -- it's an internal CFG artifact
             if block_id == function.entries_block { continue; }
             // Set the current block to the LIR block that corresponds to this
             // HIR block.
@@ -707,11 +707,11 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
         Insn::SetIvar { self_val, id, ic, val, state } => no_output!(gen_setivar(jit, asm, opnd!(self_val), *id, *ic, opnd!(val), &function.frame_state(*state))),
         Insn::FixnumBitCheck { val, index } => gen_fixnum_bit_check(asm, opnd!(val), *index),
         Insn::SideExit { state, reason, recompile } => no_output!(gen_side_exit(jit, asm, reason, *recompile, &function.frame_state(*state))),
-        Insn::PutSpecialObject { value_type } => gen_putspecialobject(asm, *value_type),
+        Insn::PutSpecialObject { value_type, state } => gen_putspecialobject(jit, asm, *value_type, &function.frame_state(*state)),
         Insn::AnyToString { val, str, state } => gen_anytostring(asm, opnd!(val), opnd!(str), &function.frame_state(*state)),
         Insn::Defined { op_type, obj, pushval, v, lep_level, state } => gen_defined(jit, asm, *op_type, *obj, *pushval, opnd!(v), *lep_level, &function.frame_state(*state)),
         Insn::CheckMatch { target, pattern, flag, state } => gen_checkmatch(jit, asm, opnd!(target), opnd!(pattern), *flag, &function.frame_state(*state)),
-        Insn::GetSpecialSymbol { symbol_type, state: _ } => gen_getspecial_symbol(asm, *symbol_type),
+        Insn::GetSpecialSymbol { symbol_type, state } => gen_getspecial_symbol(asm, *symbol_type, &function.frame_state(*state)),
         Insn::GetSpecialNumber { nth, state } => gen_getspecial_number(asm, *nth, &function.frame_state(*state)),
         &Insn::IncrCounter(counter) => no_output!(gen_incr_counter(asm, counter)),
         Insn::IncrCounterPtr { counter_ptr } => no_output!(gen_incr_counter_ptr(asm, *counter_ptr)),
@@ -1219,7 +1219,13 @@ fn gen_side_exit(jit: &mut JITState, asm: &mut Assembler, reason: &SideExitReaso
 }
 
 /// Emit a special object lookup
-fn gen_putspecialobject(asm: &mut Assembler, value_type: SpecialObjectType) -> Opnd {
+fn gen_putspecialobject(jit: &JITState, asm: &mut Assembler, value_type: SpecialObjectType, state: &FrameState) -> Opnd {
+    // rb_vm_get_special_object for CBASE/CONST_BASE can call rb_singleton_class,
+    // which allocates (may trigger GC) and can raise TypeError on non-class
+    // receivers (e.g. `123.instance_eval { Const = 1 }`). Treat as non-leaf so
+    // the PC is saved for GC and stack/locals are spilled for rescue.
+    gen_prepare_non_leaf_call(jit, asm, state);
+
     // Get the EP of the current CFP and load it into a register
     let ep_opnd = Opnd::mem(64, CFP, RUBY_OFFSET_CFP_EP);
     let ep_reg = asm.load(ep_opnd);
@@ -1227,9 +1233,12 @@ fn gen_putspecialobject(asm: &mut Assembler, value_type: SpecialObjectType) -> O
     asm_ccall!(asm, rb_vm_get_special_object, ep_reg, Opnd::UImm(u64::from(value_type)))
 }
 
-fn gen_getspecial_symbol(asm: &mut Assembler, symbol_type: SpecialBackrefSymbol) -> Opnd {
-    // Fetch a "special" backref based on the symbol type
+fn gen_getspecial_symbol(asm: &mut Assembler, symbol_type: SpecialBackrefSymbol, state: &FrameState) -> Opnd {
+    // rb_backref_get reaches rb_vm_svar_lep, which calls CFP_PC/CFP_ISEQ on the
+    // current frame, so the PC must be saved before the call.
+    gen_prepare_leaf_call_with_gc(asm, state);
 
+    // Fetch a "special" backref based on the symbol type
     let backref = asm_ccall!(asm, rb_backref_get,);
 
     match symbol_type {
@@ -1249,11 +1258,12 @@ fn gen_getspecial_symbol(asm: &mut Assembler, symbol_type: SpecialBackrefSymbol)
 }
 
 fn gen_getspecial_number(asm: &mut Assembler, nth: u64, state: &FrameState) -> Opnd {
-    // Fetch the N-th match from the last backref based on type shifted by 1
-
-    let backref = asm_ccall!(asm, rb_backref_get,);
-
+    // rb_backref_get reaches rb_vm_svar_lep, which calls CFP_PC/CFP_ISEQ on the
+    // current frame, so the PC must be saved before the call.
     gen_prepare_leaf_call_with_gc(asm, state);
+
+    // Fetch the N-th match from the last backref based on type shifted by 1
+    let backref = asm_ccall!(asm, rb_backref_get,);
 
     asm_ccall!(asm, rb_reg_nth_match, Opnd::Imm((nth >> 1).try_into().unwrap()), backref)
 }
@@ -2069,22 +2079,22 @@ fn gen_is_a(jit: &mut JITState, asm: &mut Assembler, obj: Opnd, class: Opnd) -> 
 
         let val = asm.load_mem(obj);
 
-        // Immediate → definitely not String/Array/Hash
+        // Immediate -> definitely not String/Array/Hash
         asm.test(val, Opnd::UImm(RUBY_IMMEDIATE_MASK as u64));
         asm.jnz(jit, result_edge(Qfalse.into()));
 
-        // Qfalse → definitely not String/Array/Hash
+        // Qfalse -> definitely not String/Array/Hash
         asm.cmp(val, Qfalse.into());
         asm.je(jit, result_edge(Qfalse.into()));
 
-        // Heap object → check builtin type
+        // Heap object -> check builtin type
         let flags = asm.load(Opnd::mem(VALUE_BITS, val, RUBY_OFFSET_RBASIC_FLAGS));
         let obj_builtin_type = asm.and(flags, Opnd::UImm(RUBY_T_MASK as u64));
         asm.cmp(obj_builtin_type, Opnd::UImm(builtin_type as u64));
         let result = asm.csel_e(Qtrue.into(), Qfalse.into());
         asm.jmp(result_edge(result));
 
-        // Result block — receives the value via block parameter (phi node)
+        // Result block -- receives the value via block parameter (phi node)
         asm.set_current_block(result_block);
         let label = jit.get_label(asm, result_block, hir_block_id);
         asm.write_label(label);
@@ -2458,21 +2468,21 @@ fn gen_has_type(jit: &mut JITState, asm: &mut Assembler, val: lir::Opnd, ty: Typ
         // TODO: Max thinks codegen should not care about the shapes of the operands except to create them. (Shopify/ruby#685)
         let val = asm.load_mem(val);
 
-        // Immediate → definitely not the class
+        // Immediate -> definitely not the class
         asm.test(val, (RUBY_IMMEDIATE_MASK as u64).into());
         asm.jnz(jit, result_edge(Opnd::Imm(0)));
 
-        // Qfalse → definitely not the class
+        // Qfalse -> definitely not the class
         asm.cmp(val, Qfalse.into());
         asm.je(jit, result_edge(Opnd::Imm(0)));
 
-        // Heap object → check klass field
+        // Heap object -> check klass field
         let klass = asm.load(Opnd::mem(64, val, RUBY_OFFSET_RBASIC_KLASS));
         asm.cmp(klass, Opnd::Value(expected_class));
         let result = asm.csel_e(Opnd::UImm(1), Opnd::Imm(0));
         asm.jmp(result_edge(result));
 
-        // Result block — receives the value via block parameter (phi node)
+        // Result block -- receives the value via block parameter (phi node)
         asm.set_current_block(result_block);
         let label = jit.get_label(asm, result_block, hir_block_id);
         asm.write_label(label);
@@ -2855,8 +2865,11 @@ fn gen_push_frame(asm: &mut Assembler, argc: usize, state: &FrameState, frame: C
         // Without this, stale data from a previous frame occupying this CFP slot
         // can be used as an ifunc pointer, causing a segfault.
         asm.mov(cfp_opnd(RUBY_OFFSET_CFP_BLOCK_CODE), 0.into());
-        let jit_frame = JITFrame::new_cfunc();
-        asm.mov(cfp_opnd(RUBY_OFFSET_CFP_JIT_RETURN), Opnd::const_ptr(jit_frame));
+        // C frames share a single static JITFrame (rb_zjit_c_frame). Setting
+        // cfp->jit_return to the ZJIT_JIT_RETURN_C_FRAME sentinel tells
+        // CFP_ZJIT_FRAME() to use that shared frame, so we don't need to
+        // allocate a per-call JITFrame for C method pushes.
+        asm.mov(cfp_opnd(RUBY_OFFSET_CFP_JIT_RETURN), (ZJIT_JIT_RETURN_C_FRAME as usize).into());
     }
 
     asm.mov(cfp_opnd(RUBY_OFFSET_CFP_SELF), frame.recv);

@@ -1022,6 +1022,12 @@ rb_newobj(rb_execution_context_t *ec, VALUE klass, VALUE flags, shape_id_t shape
     GC_ASSERT((flags & FL_WB_PROTECTED) == 0);
     rb_ractor_t *cr = rb_ec_ractor_ptr(ec);
     VALUE obj = rb_gc_impl_new_obj(rb_gc_get_objspace(), cr->newobj_cache, klass, flags, wb_protected, size);
+
+#if RACTOR_CHECK_MODE
+    void rb_ractor_setup_belonging(VALUE obj);
+    rb_ractor_setup_belonging(obj);
+#endif
+
     RBASIC_SET_SHAPE_ID_NO_CHECKS(obj, shape_id);
 
     gc_validate_pc(obj);
@@ -1392,6 +1398,7 @@ rb_gc_obj_needs_cleanup_p(VALUE obj)
       case T_FLOAT:
       case T_RATIONAL:
       case T_COMPLEX:
+      case T_MATCH:
         break;
 
       case T_FILE:
@@ -1400,7 +1407,6 @@ rb_gc_obj_needs_cleanup_p(VALUE obj)
       case T_ICLASS:
       case T_MODULE:
       case T_REGEXP:
-      case T_MATCH:
         return true;
     }
 
@@ -1434,6 +1440,10 @@ rb_gc_obj_needs_cleanup_p(VALUE obj)
 
       case T_HASH:
         if (flags & RHASH_ST_TABLE_FLAG) return true;
+        return rb_shape_has_fields(shape_id);
+
+      case T_MATCH:
+        if ((flags & (RMATCH_ONIG | RMATCH_OFFSETS_EXTERNAL)) || USE_DEBUG_COUNTER) return true;
         return rb_shape_has_fields(shape_id);
 
       case T_BIGNUM:

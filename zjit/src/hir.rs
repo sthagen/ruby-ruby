@@ -856,7 +856,7 @@ pub enum Insn {
     ToRegexp { opt: usize, values: Vec<InsnId>, state: InsnId },
 
     /// Put special object (VMCORE, CBASE, etc.) based on value_type
-    PutSpecialObject { value_type: SpecialObjectType },
+    PutSpecialObject { value_type: SpecialObjectType, state: InsnId },
 
     /// Call `to_a` on `val` if the method is defined, or make a new array `[val]` otherwise.
     ToArray { val: InsnId, state: InsnId },
@@ -1205,7 +1205,6 @@ macro_rules! for_each_operand_impl {
             | Insn::GetEP { .. }
             | Insn::LoadSelf
             | Insn::BreakPoint | Insn::Unreachable
-            | Insn::PutSpecialObject { .. }
             | Insn::IncrCounter(_)
             | Insn::IncrCounterPtr { .. } => {}
 
@@ -1222,6 +1221,7 @@ macro_rules! for_each_operand_impl {
             }
             Insn::PatchPoint { state, .. }
             | Insn::CheckInterrupts { state }
+            | Insn::PutSpecialObject { state, .. }
             | Insn::GetBlockParam { state, .. }
             | Insn::GetConstantPath { state, .. } => {
                 $visit_one!(state);
@@ -2224,7 +2224,7 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
                     write!(f, "SideExit {reason}")
                 }
             }
-            Insn::PutSpecialObject { value_type } => write!(f, "PutSpecialObject {value_type}"),
+            Insn::PutSpecialObject { value_type, .. } => write!(f, "PutSpecialObject {value_type}"),
             Insn::Throw { throw_state, val, .. } => {
                 write!(f, "Throw ")?;
                 match throw_state & VM_THROW_STATE_MASK {
@@ -6233,7 +6233,7 @@ impl<'a> std::fmt::Display for FunctionPrinter<'a> {
         writeln!(f, "fn {iseq_name}:")?;
         for block_id in fun.rpo() {
             if !self.display_snapshot_and_tp_patchpoints && block_id == fun.entries_block {
-                // Unless we're doing --zjit-dump-hir=all, skip the entries superblock — it's an
+                // Unless we're doing --zjit-dump-hir=all, skip the entries superblock -- it's an
                 // internal CFG artifact
                 continue;
             }
@@ -6830,7 +6830,7 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     let insn = if value_type == SpecialObjectType::VMCore {
                         Insn::Const { val: Const::Value(unsafe { rb_mRubyVMFrozenCore }) }
                     } else {
-                        Insn::PutSpecialObject { value_type }
+                        Insn::PutSpecialObject { value_type, state: exit_id }
                     };
                     state.stack_push(fun.push_insn(block, insn));
                 }
@@ -7041,7 +7041,7 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                         // gen_is_block_given) to check for a block handler. Precompute the lexical
                         // distance from this iseq up to local_iseq so codegen does not have to
                         // walk the parent chain. Any DEFINED_YIELD reaching this branch has a
-                        // method local_iseq by construction — the above branch has already
+                        // method local_iseq by construction -- the above branch has already
                         // diverted the non-method case to Qnil.
                         let lep_level = if op_type == DEFINED_YIELD as usize {
                             get_lvar_level(iseq)
@@ -8606,7 +8606,7 @@ impl Dominators {
         let rpo = f.rpo();
         let num_blocks = f.blocks.len();
 
-        // Map BlockId → RPO index for O(1) lookup in intersect.
+        // Map BlockId -> RPO index for O(1) lookup in intersect.
         let mut rpo_order = vec![usize::MAX; num_blocks];
         for (idx, &block) in rpo.iter().enumerate() {
             rpo_order[block.0] = idx;
