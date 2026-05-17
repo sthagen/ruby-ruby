@@ -330,78 +330,102 @@ class Pathname
   end
   private :prepend_prefix
 
+  # :markup: markdown
+  #
   # call-seq:
   #   cleanpath(symlinks = false) -> new_pathname
   #
   # Returns a new \Pathname object, "cleaned" of unnecessary separators,
   # single-dot entries, and double-dot entries.
   #
-  # When +self+ is empty, returns pathname with a single-dot entry:
+  # When `self` is empty, returns a pathname with a single-dot entry:
   #
-  #   Pathname.new('').cleanpath # => #<Pathname:.>
+  # ```
+  # Pathname('').cleanpath # => #<Pathname:.>
+  # ```
   #
   # <b>Separators</b>
   #
   # A lone separator is preserved:
   #
-  #   Pathname.new('/').cleanpath # => #<Pathname:/>
+  # ```
+  # Pathname('/').cleanpath # => #<Pathname:/>
+  # ```
   #
-  # Non-lone trailing separators are removed:
+  # Multiple trailing separators are removed:
   #
-  #   Pathname.new('foo/////').cleanpath # => #<Pathname:foo>
-  #   Pathname.new('foo/').cleanpath     # => #<Pathname:foo>
+  # ```
+  # Pathname('foo/////').cleanpath # => #<Pathname:foo>
+  # Pathname('foo/').cleanpath     # => #<Pathname:foo>
+  # ```
   #
   # Multiple embedded separators are reduced to a single separator:
   #
-  #   Pathname.new('foo///bar').cleanpath # => #<Pathname:foo/bar>
+  # ```
+  # Pathname('foo///bar').cleanpath # => #<Pathname:foo/bar>
+  # ```
   #
   # Multiple leading separators are reduced:
   #
-  #   # On Windows, where File.dirname('//') == '//'.
-  #   Pathname.new('/////foo').cleanpath # => #<Pathname://foo>
-  #   Pathname.new('/////').cleanpath    # => #<Pathname://>
-  #   # Otherwise, where File.dirname('//') == '/'.
-  #   Pathname.new('/////foo').cleanpath # => #<Pathname:/foo>
-  #   Pathname.new('/////').cleanpath    # => #<Pathname:/>
+  # ```
+  # # On Windows, where File.dirname('//') == '//'.
+  # Pathname('/////foo').cleanpath # => #<Pathname://foo>
+  # Pathname('/////').cleanpath    # => #<Pathname://>
+  # # Otherwise, where File.dirname('//') == '/'.
+  # Pathname('/////foo').cleanpath # => #<Pathname:/foo>
+  # Pathname('/////').cleanpath    # => #<Pathname:/>
+  # ```
   #
   # <b>Single-Dot Entries</b>
   #
   # A lone single-dot entry is preserved:
   #
-  #   Pathname.new('.').cleanpath  # => #<Pathname:.>
+  # ```
+  # Pathname('.').cleanpath  # => #<Pathname:.>
+  # ```
   #
   # A non-lone single-dot entry, regardless of its location, is removed:
   #
-  #   Pathname.new('foo/././././bar').cleanpath  # => #<Pathname:foo/bar>
-  #   Pathname.new('./foo/./././bar').cleanpath  # => #<Pathname:foo/bar>
-  #   Pathname.new('foo/./././bar/./').cleanpath # => #<Pathname:foo/bar>
+  # ```
+  # Pathname('foo/././././bar').cleanpath  # => #<Pathname:foo/bar>
+  # Pathname('./foo/./././bar').cleanpath  # => #<Pathname:foo/bar>
+  # Pathname('foo/./././bar/./').cleanpath # => #<Pathname:foo/bar>
+  # ```
   #
   # <b>Double-Dot Entries</b>
   #
   # A lone double-dot entry is preserved:
   #
-  #   Pathname.new('..').cleanpath # => #<Pathname:..>
+  # ```
+  # Pathname('..').cleanpath # => #<Pathname:..>
+  # ```
   #
   # When a non-lone double-dot entry is preceded by a named entry, both are removed:
   #
-  #   Pathname.new('foo/..').cleanpath          # => #<Pathname:.>
-  #   Pathname.new('foo/../bar').cleanpath      # => #<Pathname:bar>
-  #   Pathname.new('foo/../bar/..').cleanpath   # => #<Pathname:.>
-  #   Pathname.new('foo/bar/./../..').cleanpath # => #<Pathname:.>
+  # ```
+  # Pathname('foo/..').cleanpath          # => #<Pathname:.>
+  # Pathname('foo/../bar').cleanpath      # => #<Pathname:bar>
+  # Pathname('foo/../bar/..').cleanpath   # => #<Pathname:.>
+  # Pathname('foo/bar/./../..').cleanpath # => #<Pathname:.>
+  # ```
   #
   # When a non-lone double-dot entry is _not_ preceded by a named entry,
   # it is preserved:
   #
-  #   Pathname.new('../..').cleanpath # => #<Pathname:../..>
+  # ```
+  # Pathname('../..').cleanpath # => #<Pathname:../..>
+  # ```
   #
   # A non-lone meaningless double-dot entry is removed:
   #
-  #   Pathname.new('/..').cleanpath    # => #<Pathname:/>
-  #   Pathname.new('/../..').cleanpath # => #<Pathname:/>
+  # ```
+  # Pathname('/..').cleanpath    # => #<Pathname:/>
+  # Pathname('/../..').cleanpath # => #<Pathname:/>
+  # ```
   #
   # <b> Symbolic Links</b>
   #
-  # If the path may contain {symbolic links}[https://en.wikipedia.org/wiki/Symbolic_link],
+  # If the path may contain [symbolic links][symbolic link],
   # consider give optional argument `symlinks` as `true`;
   # the method then uses a more conservative algorithm
   # that avoids breaking symbolic links.
@@ -410,25 +434,29 @@ class Pathname
   #
   # Examples:
   #
-  #   Pathname.new('a/').cleanpath           # => #<Pathname:a>
-  #   Pathname.new('a/').cleanpath(true)     # => #<Pathname:a/>
+  # ```
+  # Pathname('a/').cleanpath           # => #<Pathname:a>
+  # Pathname('a/').cleanpath(true)     # => #<Pathname:a/>
   #
-  #   Pathname.new('a/.').cleanpath          # => #<Pathname:a>
-  #   Pathname.new('a/.').cleanpath(true)    # => #<Pathname:a/.>
+  # Pathname('a/.').cleanpath          # => #<Pathname:a>
+  # Pathname('a/.').cleanpath(true)    # => #<Pathname:a/.>
   #
-  #   Pathname.new('a/./').cleanpath         # => #<Pathname:a>
-  #   Pathname.new('a/./').cleanpath(true)   # => #<Pathname:a/.>
+  # Pathname('a/./').cleanpath         # => #<Pathname:a>
+  # Pathname('a/./').cleanpath(true)   # => #<Pathname:a/.>
   #
-  #   Pathname.new('a/b/.').cleanpath        # => #<Pathname:a/b>
-  #   Pathname.new('a/b/.').cleanpath(true)  # => #<Pathname:a/b/.>
+  # Pathname('a/b/.').cleanpath        # => #<Pathname:a/b>
+  # Pathname('a/b/.').cleanpath(true)  # => #<Pathname:a/b/.>
   #
-  #   Pathname.new('a/../.').cleanpath       # => #<Pathname:.>
-  #   Pathname.new('a/../.').cleanpath(true) # => #<Pathname:a/..>
+  # Pathname('a/../.').cleanpath       # => #<Pathname:.>
+  # Pathname('a/../.').cleanpath(true) # => #<Pathname:a/..>
   #
-  #   Pathname.new('a/b/../../../../c/../d').cleanpath
-  #   # => #<Pathname:../../d>
-  #   Pathname.new('a/b/../../../../c/../d').cleanpath(true)
-  #   # => #<Pathname:a/b/../../../../c/../d>
+  # Pathname('a/b/../../../../c/../d').cleanpath
+  # # => #<Pathname:../../d>
+  # Pathname('a/b/../../../../c/../d').cleanpath(true)
+  # # => #<Pathname:a/b/../../../../c/../d>
+  # ```
+  #
+  # [symbolic link]: https://en.wikipedia.org/wiki/Symbolic_link
   #
   def cleanpath(consider_symlink=false)
     if consider_symlink
@@ -744,26 +772,33 @@ class Pathname
     self + result
   end
 
+  # :markup: markdown
   #
-  # Returns the children of the directory (files and subdirectories, not
-  # recursive) as an array of Pathname objects.
+  # call-seq:
+  #   children(with_dirnames = true) -> array_of_pathnames
   #
-  # By default, the returned pathnames will have enough information to access
-  # the files. If you set +with_directory+ to +false+, then the returned
-  # pathnames will contain the filename only.
+  # Returns an array of pathnames;
+  # each represents a child of the entry represented by `self`,
+  # which must be an existing directory in the underlying file system.
   #
-  # For example:
-  #   pn = Pathname("/usr/lib/ruby/1.8")
-  #   pn.children
-  #       # -> [ Pathname:/usr/lib/ruby/1.8/English.rb,
-  #              Pathname:/usr/lib/ruby/1.8/Env.rb,
-  #              Pathname:/usr/lib/ruby/1.8/abbrev.rb, ... ]
-  #   pn.children(false)
-  #       # -> [ Pathname:English.rb, Pathname:Env.rb, Pathname:abbrev.rb, ... ]
+  # With `with_dirnames` given as `true` (the default),
+  # each pathname contains the full entry:
   #
-  # Note that the results never contain the entries +.+ and +..+ in
-  # the directory because they are not children.
+  # ```ruby
+  # Pathname('lib').children.size # => 72
+  # Pathname('lib').children.take(3)
+  # # => [#<Pathname:lib/bundled_gems.rb>, #<Pathname:lib/bundler>, #<Pathname:lib/bundler.rb>]
+  # ```
+  # With `with_dirnames` given as `false`,
+  # each pathname contains only the basename of the entry:
   #
+  # ```ruby
+  # Pathname('lib').children(false).take(3)
+  # # => [#<Pathname:bundled_gems.rb>, #<Pathname:bundler>, #<Pathname:bundler.rb>]
+  # ```
+  #
+  # Note that entries `.` and `..` in directory are not actually children,
+  # and so are never included in the result.
   def children(with_directory=true)
     with_directory = false if @path == '.'
     result = Dir.children(@path)
@@ -1097,98 +1132,108 @@ class Pathname    # * File *
   def mtime() File.mtime(@path) end
 
 
+  # :markup: markdown
+  #
   # call-seq:
   #   chmod(mode) -> 1
   #
-  # Changes the mode (i.e., permissions) of the entry represented by +self+;
+  # Changes the mode (i.e., permissions) of the entry represented by `self`;
   # see {File Permissions}[rdoc-ref:File@File+Permissions];
-  # returns +1+:
+  # returns `1`:
   #
-  #   # A helper method to make an integer mode display as octal.
-  #   def pretty(mode); '0' + (mode & 0777).to_s(8); end
+  # ```ruby
+  # # A helper method to make an integer mode display as octal.
+  # def pretty(mode); '0' + (mode & 0777).to_s(8); end
   #
-  #   # Work in a temporary directory.
-  #   require 'tmpdir'
-  #   Dir.mktmpdir do |tmpdirpath|
-  #     # A subdirectory therein, and its Pathname.
-  #     dirpath = File.join(tmpdirpath, 'subdir')
-  #     Dir.mkdir(dirpath)
-  #     dir_pn = Pathname(dirpath)
-  #     # The directory mode.
-  #     puts "Original directory mode: #{pretty(dir_pn.stat.mode)}"
-  #     # Change the directory mode.
-  #     dir_pn.chmod(0777)
-  #     puts "New directory mode:      #{pretty(dir_pn.stat.mode)}"
+  # # Work in a temporary directory.
+  # Pathname.mktmpdir do |tmpdirpath|
+  #   # A subdirectory therein, and its Pathname.
+  #   dirpath = File.join(tmpdirpath, 'subdir')
+  #   dir_pn = Pathname(dirpath)
+  #   dir_pn.mkdir
+  #   # The directory mode.
+  #   puts "Original directory mode: #{pretty(dir_pn.stat.mode)}"
+  #   # Change the directory mode.
+  #   dir_pn.chmod(0777)
+  #   puts "New directory mode:      #{pretty(dir_pn.stat.mode)}"
   #
-  #     # A file in the subdirectory, and its Pathname.
-  #     filepath = File.join(dirpath, 't.txt')
-  #     file_pn = Pathname(filepath)
-  #     # Create the file.
-  #     File.write(filepath, 'foo')
-  #     # The file mode.
-  #     puts "Original file mode:      #{pretty(file_pn.stat.mode)}"
-  #     # Change the file modes.
-  #     file_pn.chmod(0777)
-  #     puts "New file mode:           #{pretty(file_pn.stat.mode)}"
-  #   end
+  #   # A file in the subdirectory, and its Pathname.
+  #   filepath = File.join(dirpath, 't.txt')
+  #   file_pn = Pathname(filepath)
+  #   # Create the file.
+  #   file_pn.write('foo')
+  #   # The file mode.
+  #   puts "Original file mode:      #{pretty(file_pn.stat.mode)}"
+  #   # Change the file modes.
+  #   file_pn.chmod(0777)
+  #   puts "New file mode:           #{pretty(file_pn.stat.mode)}"
+  # end
+  # ```
   #
   # Output:
   #
-  #   Original directory mode: 0775
-  #   New directory mode:      0777
-  #   Original file mode:      0664
-  #   New file mode:           0777
+  # ```text
+  # Original directory mode: 0775
+  # New directory mode:      0777
+  # Original file mode:      0664
+  # New file mode:           0777
+  # ```
   #
   def chmod(mode) File.chmod(mode, @path) end
 
   # See <tt>File.lchmod</tt>.
   def lchmod(mode) File.lchmod(mode, @path) end
 
+  # :markup: markdown
+  #
   # call-seq:
   #   chown(owner_id, group_id) -> 0
   #
   # Changes the owner and group of an entry (directory or file):
   #
-  #   # Work in a temporary directory.
-  #   require 'tmpdir'
-  #   Dir.mktmpdir do |tmpdirpath|
-  #     # A subdirectory therein, and its Pathname.
-  #     dirpath = File.join(tmpdirpath, 'subdir')
-  #     Dir.mkdir(dirpath)
-  #     dir_stat = File.stat(dirpath)
-  #     puts "Original directory owner: #{dir_stat.uid}"
-  #     puts "Original directory group: #{dir_stat.gid}"
-  #     dir_pn = Pathname(dirpath)
-  #     dir_pn.chown(1000, 1000)
-  #     dir_stat = File.stat(dirpath)
-  #     puts "New directory owner:      #{dir_stat.uid}"
-  #     puts "New directory group:      #{dir_stat.gid}"
+  # ```ruby
+  # # Work in a temporary directory.
+  # Pathname.mktmpdir do |tmpdirpath|
+  #   # A subdirectory therein, and its Pathname.
+  #   dirpath = File.join(tmpdirpath, 'subdir')
+  #   dir_pn = Pathname(dirpath)
+  #   dir_pn.mkdir
+  #   dir_stat = File.stat(dirpath)
+  #   puts "Original directory owner: #{dir_stat.uid}"
+  #   puts "Original directory group: #{dir_stat.gid}"
+  #   dir_pn.chown(1000, 1000)
+  #   dir_stat = File.stat(dirpath)
+  #   puts "New directory owner:      #{dir_stat.uid}"
+  #   puts "New directory group:      #{dir_stat.gid}"
   #
-  #     # A file in the subdirectory, and its Pathname.
-  #     filepath = File.join(dirpath, 't.txt')
-  #     file_pn = Pathname(filepath)
-  #     # Create the file.
-  #     File.write(filepath, 'foo')
-  #     file_stat = File.stat(filepath)
-  #     puts "Original file owner:      #{file_stat.uid}"
-  #     puts "Original file group:      #{file_stat.gid}"
-  #     file_pn = Pathname(dirpath)
-  #     file_pn.chown(1000, 1000)
-  #     file_stat = File.stat(dirpath)
-  #     puts "New file owner:           #{file_stat.uid}"
-  #     puts "New file group:           #{file_stat.gid}"
-  #   end
+  #   # A file in the subdirectory, and its Pathname.
+  #   filepath = File.join(dirpath, 't.txt')
+  #   file_pn = Pathname(filepath)
+  #   # Create the file.
+  #   file_pn.write('foo')
+  #   file_stat = File.stat(filepath)
+  #   puts "Original file owner:      #{file_stat.uid}"
+  #   puts "Original file group:      #{file_stat.gid}"
+  #   file_pn = Pathname(dirpath)
+  #   file_pn.chown(1000, 1000)
+  #   file_stat = File.stat(dirpath)
+  #   puts "New file owner:           #{file_stat.uid}"
+  #   puts "New file group:           #{file_stat.gid}"
+  # end
+  # ```
   #
   # Output:
   #
-  #   Original directory owner: 0
-  #   Original directory group: 0
-  #   New directory owner:      1000
-  #   New directory group:      1000
-  #   Original file owner:      0
-  #   Original file group:      0
-  #   New file owner:           1000
-  #   New file group:           1000
+  # ```text
+  # Original directory owner: 0
+  # Original directory group: 0
+  # New directory owner:      1000
+  # New directory group:      1000
+  # Original file owner:      0
+  # Original file group:      0
+  # New file owner:           1000
+  # New file group:           1000
+  # ```
   #
   # Notes:
   #
@@ -1322,34 +1367,44 @@ end
 
 class Pathname    # * FileTest *
 
+  # :markup: markdown
+  #
   # call-seq:
   #   blockdev? => true or false
   #
-  # Returns whether +self+ represents a block device
-  # (i.e., a random-access device):
+  # Returns whether `self` represents a path to a block device
+  # (i.e., a direct-access device):
   #
-  #   Pathname.new('/dev/nvme0n1').blockdev? # => true
-  #   Pathname.new('/dev/loop0').blockdev?   # => true
-  #   Pathname.new('/dev/tty').blockdev?     # => false
-  #   Pathname.new('/dev/null').blockdev?    # => false
-  #   Pathname.new('nosuch').blockdev?       # => false
+  # ```ruby
+  # Pathname('/dev/nvme0n1').blockdev? # => true
+  # Pathname('/dev/loop0').blockdev?   # => true
+  # Pathname('/dev/tty').blockdev?     # => false
+  # Pathname('/dev/null').blockdev?    # => false
+  # Pathname('nosuch').blockdev?       # => false
+  # Pathname($stdin).blockdev?         # => false
+  # ```
   #
-  # The returned value is OS-dependent; on Windows, almost always +false+.
+  # The returned value is OS-dependent; on Windows, almost always `false`.
   def blockdev?() FileTest.blockdev?(@path) end
 
+  # :markup: markdown
+  #
   # call-seq:
   #   chardev? => true or false
   #
-  # Returns whether +self+ represents a character device
+  # Returns whether `self` represents a path to  a character device
   # (i.e., a sequential-access device):
   #
-  #   Pathname.new('/dev/tty').chardev?     # => true
-  #   Pathname.new('/dev/null').chardev?    # => true
-  #   Pathname.new('/dev/nvme0n1').chardev? # => false
-  #   Pathname.new('/dev/loop0').chardev?   # => false
-  #   Pathname.new('nosuch').chardev?       # => false
+  # ```ruby
+  # Pathname('/dev/tty').chardev?     # => true
+  # Pathname('/dev/null').chardev?    # => true
+  # Pathname('/dev/nvme0n1').chardev? # => false
+  # Pathname('/dev/loop0').chardev?   # => false
+  # Pathname($stdin).chardev?         # => false
+  # Pathname('nosuch').chardev?       # => false
+  # ```
   #
-  # The returned value is OS-dependent; on Windows, almost always +false+.
+  # The returned value is OS-dependent; on Windows, almost always `false`.
   def chardev?() FileTest.chardev?(@path) end
 
   # Tests the file is empty.
