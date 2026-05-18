@@ -6577,8 +6577,8 @@ vm_case_dispatch(CDHASH hash, OFFSET else_offset, VALUE key)
                     key = FIXABLE(kval) ? LONG2FIX((long)kval) : rb_dbl2big(kval);
                 }
             }
-            if (rb_hash_stlike_lookup(hash, key, &val)) {
-                return FIX2LONG((VALUE)val);
+            if (st_lookup(rb_imemo_cdhash_tbl(hash), key, &val)) {
+                return (VALUE)val;
             }
             else {
                 return else_offset;

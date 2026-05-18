@@ -3345,8 +3345,8 @@ rb_vm_mark(void *ptr)
             rb_gc_mark(rb_ractor_self(r));
         }
 
-        for (struct global_object_list *list = vm->global_object_list; list; list = list->next) {
-            rb_gc_mark_maybe(*list->varptr);
+        for (size_t index = 0; index < vm->global_object_list_size; index++) {
+            rb_gc_mark_maybe(*vm->global_object_list[index]);
         }
 
         rb_gc_mark_movable(vm->self);
@@ -3452,11 +3452,7 @@ ruby_vm_destruct(rb_vm_t *vm)
         st_free_embedded_table(&vm->ci_table);
         RB_ALTSTACK_FREE(vm->main_altstack);
 
-        struct global_object_list *next;
-        for (struct global_object_list *list = vm->global_object_list; list; list = next) {
-            next = list->next;
-            xfree(list);
-        }
+        SIZED_FREE_N(vm->global_object_list, vm->global_object_list_capa);
 
         if (objspace) {
             if (rb_free_at_exit) {
@@ -3541,6 +3537,7 @@ vm_memsize(const void *ptr)
         vm_memsize_builtin_function_table(vm->builtin_function_table) +
         (rb_id_table_memsize(&vm->negative_cme_table) - sizeof(struct rb_id_table)) +
         (rb_st_memsize(&vm->overloaded_cme_table) - sizeof(struct st_table)) +
+        (vm->global_object_list_capa * sizeof(*vm->global_object_list)) +
         vm_memsize_constant_cache()
     );
 
@@ -4290,7 +4287,7 @@ Init_VM(void)
     /* FrozenCore (hidden) */
     fcore = rb_class_new(rb_cBasicObject);
     rb_set_class_path(fcore, rb_cRubyVM, "FrozenCore");
-    rb_vm_register_global_object(rb_class_path_cached(fcore));
+    rb_vm_register_global_object(rb_mod_name(fcore));
     klass = rb_singleton_class(fcore);
     rb_define_method_id(klass, id_core_set_method_alias, m_core_set_method_alias, 3);
     rb_define_method_id(klass, id_core_set_variable_alias, m_core_set_variable_alias, 2);
