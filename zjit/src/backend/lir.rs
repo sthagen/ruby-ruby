@@ -1812,8 +1812,9 @@ impl Assembler
             Opnd::Reg(ALLOC_REGS[idx])
         } else {
             // With FrameSetup, the address that NATIVE_BASE_PTR points to stores an old value in the register.
-            // To avoid clobbering it, we need to start from the next slot, hence `+ 1` for the index.
-            Opnd::mem(64, NATIVE_BASE_PTR, (idx - ALLOC_REGS.len() + 1) as i32 * -SIZEOF_VALUE_I32)
+            // To avoid clobbering it, we need to start from the next slot, and we also reserve one space for
+            // JITFrame, hence `+ 2` for the index.
+            Opnd::mem(64, NATIVE_BASE_PTR, (idx - ALLOC_REGS.len() + 2) as i32 * -SIZEOF_VALUE_I32)
         }
     }
 
@@ -2383,27 +2384,16 @@ impl Assembler
                             _ => unreachable!(),
                         })
                         .collect();
-                    let survivor_push_groups: Vec<Vec<Opnd>> = survivor_regs
-                        .chunks(2)
-                        .map(|group| group.to_vec())
-                        .collect();
 
                     // Push all survivors on the stack, pairing adjacent pushes when possible.
-                    let needs_alignment = cfg!(target_arch = "x86_64") && survivors.len() % 2 == 1;
-                    for group in &survivor_push_groups {
-                        match group.as_slice() {
-                            [left, right] => new_insns.push(Insn::CPushPair(*left, *right)),
-                            [reg] => new_insns.push(Insn::CPush(*reg)),
+                    for group in survivor_regs.chunks(2) {
+                        match group {
+                            &[left, right] => new_insns.push(Insn::CPushPair(left, right)),
+                            &[reg]         => new_insns.push(Insn::CPushPair(reg, 0.into())),
                             _ => unreachable!(),
                         }
                         new_ids.push(None);
                     }
-                    // Maintain 16-byte stack alignment for x86_64
-                    if needs_alignment {
-                        new_insns.push(Insn::CPush(Opnd::Reg(ALLOC_REGS[0])));
-                        new_ids.push(None);
-                    }
-
                     // Extract arguments from CCall, clear opnds
 
                     assert!(opnds.len() <= regs.len());
@@ -2471,17 +2461,11 @@ impl Assembler
                             new_ids.push(None);
                         }
 
-                        // Pop alignment padding (if needed)
-                        if needs_alignment {
-                            new_insns.push(Insn::CPopInto(Opnd::Reg(ALLOC_REGS[0])));
-                            new_ids.push(None);
-                        }
-
                         // Restore all survivors in reverse stack order, pairing adjacent pops when possible.
-                        for group in survivor_push_groups.iter().rev() {
-                            match group.as_slice() {
-                                [left, right] => new_insns.push(Insn::CPopPairInto(*right, *left)),
-                                [reg] => new_insns.push(Insn::CPopInto(*reg)),
+                        for group in survivor_regs.chunks(2).rev() {
+                            match group {
+                                &[reg]         => new_insns.push(Insn::CPopPairInto(reg, reg)),
+                                &[left, right] => new_insns.push(Insn::CPopPairInto(right, left)),
                                 _ => unreachable!(),
                             }
                             new_ids.push(None);
@@ -2661,24 +2645,8 @@ impl Assembler
             asm.cret(Opnd::UImm(Qundef.as_u64()));
         }
 
-        /// Compile the main side-exit code. This function takes only SideExit so
-        /// that it can be safely deduplicated by using SideExit as a dedup key.
-        fn compile_exit(asm: &mut Assembler, exit: &SideExit) {
-            compile_exit_save_state(asm, exit);
-            // If this side exit should trigger recompilation, call the recompile
-            // function after saving VM state. The ccall must happen after
-            // compile_exit_save_state because it clobbers caller-saved registers
-            // that may hold stack/local operands we need to save.
+        fn compile_exit_recompile(asm: &mut Assembler, exit: &SideExit) {
             if let Some(recompile) = &exit.recompile {
-                if cfg!(feature = "runtime_checks") {
-                    // Clear jit_return to fully materialize the frame. This must happen
-                    // before any C call in the exit path (e.g. exit_recompile)
-                    // because that C call can trigger GC, which walks the stack and would
-                    // hit the CFP_JIT_RETURN assertion if jit_return still holds the
-                    // runtime_checks poison value (JIT_RETURN_POISON).
-                    asm_comment!(asm, "clear cfp->jit_return");
-                    asm.store(Opnd::mem(64, CFP, RUBY_OFFSET_CFP_JIT_RETURN), 0.into());
-                }
 
                 use crate::codegen::exit_recompile;
                 asm_comment!(asm, "profile and maybe recompile");
@@ -2692,6 +2660,34 @@ impl Assembler
                     })
                 );
             }
+        }
+
+        /// Compile the main side-exit code.  The side exit will optionally record a traced exit
+        /// stack, optionally trigger recompilation, and then return to the interpreter. Shared
+        /// exits pass no trace reason so they can still be deduplicated by SideExit.
+        /// IOW, we should never pass a trace reason if we expect the exit to be
+        /// deduplicated.
+        fn compile_exit(asm: &mut Assembler, exit: &SideExit, trace_reason: Option<SideExitReason>) {
+            // Save VM state before the ccall so that
+            // rb_profile_frames sees valid cfp->pc and the
+            // ccall doesn't clobber caller-saved registers
+            // holding stack/local operands.
+            compile_exit_save_state(asm, exit);
+            if trace_reason.is_some() || exit.recompile.is_some() {
+                // Clear cfp->jit_return to prepare for a C call. Normally, cfp->jit_return
+                // is cleared by the caller jit_exec() or JIT_EXEC(), but if we're about to
+                // make a C call, we need to clear any stale JITFrame.
+                asm_comment!(asm, "clear cfp->jit_return");
+                asm.store(Opnd::mem(64, CFP, RUBY_OFFSET_CFP_JIT_RETURN), 0.into());
+            }
+            if let Some(reason) = trace_reason {
+                // Leak a CString with the reason so it's available at runtime
+                let reason_cstr = std::ffi::CString::new(reason.to_string())
+                    .unwrap_or_else(|_| std::ffi::CString::new("unknown").unwrap());
+                let reason_ptr = reason_cstr.into_raw() as *const u8;
+                asm_ccall!(asm, rb_zjit_record_exit_stack, Opnd::const_ptr(reason_ptr));
+            }
+            compile_exit_recompile(asm, exit);
             compile_exit_return(asm);
         }
 
@@ -2768,17 +2764,7 @@ impl Assembler
                     }
 
                     if should_record_exit {
-                        // Save VM state before the ccall so that
-                        // rb_profile_frames sees valid cfp->pc and the
-                        // ccall doesn't clobber caller-saved registers
-                        // holding stack/local operands.
-                        compile_exit_save_state(self, &exit);
-                        // Leak a CString with the reason so it's available at runtime
-                        let reason_cstr = std::ffi::CString::new(reason.to_string())
-                            .unwrap_or_else(|_| std::ffi::CString::new("unknown").unwrap());
-                        let reason_ptr = reason_cstr.into_raw() as *const u8;
-                        asm_ccall!(self, rb_zjit_record_exit_stack, Opnd::const_ptr(reason_ptr));
-                        compile_exit_return(self);
+                        compile_exit(self, &exit, Some(reason));
                     } else {
                         // If the side exit has already been compiled, jump to it.
                         // Otherwise, let it fall through and compile the exit next.
@@ -2798,7 +2784,7 @@ impl Assembler
                     let new_exit = self.new_label("side_exit");
                     self.write_label(new_exit.clone());
                     asm_comment!(self, "Exit: {pc}");
-                    compile_exit(self, &exit);
+                    compile_exit(self, &exit, None);
                     compiled_exits.insert(exit, new_exit.unwrap_label());
                     new_exit
                 };
@@ -4670,8 +4656,8 @@ mod tests {
         let insns = &asm.basic_blocks[b1.0].insns;
 
         // Find CPush and CPopInto - they should be balanced.
-        let pushes: Vec<_> = insns.iter().filter(|i| matches!(i, Insn::CPush(_))).collect();
-        let pops: Vec<_> = insns.iter().filter(|i| matches!(i, Insn::CPopInto(_))).collect();
+        let pushes: Vec<_> = insns.iter().filter(|i| matches!(i, Insn::CPushPair(..))).collect();
+        let pops: Vec<_> = insns.iter().filter(|i| matches!(i, Insn::CPopPairInto(..))).collect();
         assert_eq!(pushes.len(), pops.len(), "CPush/CPopInto should be balanced");
         assert!(!pushes.is_empty(), "Expected at least one saved register across CCall");
 
@@ -4681,10 +4667,10 @@ mod tests {
             Allocation::Fixed(reg) => Opnd::Reg(reg),
             _ => unreachable!(),
         };
-        let pushed_v1 = pushes.iter().any(|insn| matches!(insn, Insn::CPush(opnd) if *opnd == v1_reg));
-        let popped_v1 = pops.iter().any(|insn| matches!(insn, Insn::CPopInto(opnd) if *opnd == v1_reg));
-        assert!(pushed_v1, "CPush should save v1's register");
-        assert!(popped_v1, "CPopInto should restore v1's register");
+        let pushed_v1 = pushes.iter().any(|insn| matches!(**insn, Insn::CPushPair(first, second) if first == v1_reg || second == v1_reg));
+        let popped_v1 = pops.iter().any(|insn| matches!(**insn, Insn::CPopPairInto(first, second) if first == v1_reg || second == v1_reg));
+        assert!(pushed_v1, "CPushPair should save v1's register");
+        assert!(popped_v1, "CPopPairInto should restore v1's register");
 
         // The CCall should have empty opnds and out = C_RET_OPND (rewritten to regs[0])
         let ccall = insns.iter().find(|i| matches!(i, Insn::CCall { .. })).unwrap();

@@ -1157,7 +1157,7 @@ pub enum Insn {
     /// Side-exit if left is not greater than or equal to right (both operands are C long).
     GuardGreaterEq { left: InsnId, right: InsnId, reason: SideExitReason, state: InsnId },
     /// Side-exit if left is not less than right (both operands are C long).
-    GuardLess { left: InsnId, right: InsnId, state: InsnId },
+    GuardLess { left: InsnId, right: InsnId, reason: SideExitReason, state: InsnId },
 
     /// Generate no code (or padding if necessary) and insert a patch point
     /// that can be rewritten to a side exit when the Invariant is broken.
@@ -1311,7 +1311,7 @@ macro_rules! for_each_operand_impl {
                 $visit_one!(state);
             }
             Insn::GuardGreaterEq { left, right, state, .. }
-            | Insn::GuardLess { left, right, state } => {
+            | Insn::GuardLess { left, right, state, .. } => {
                 $visit_one!(left);
                 $visit_one!(right);
                 $visit_one!(state);
@@ -2099,7 +2099,13 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
             Insn::GuardType { val, guard_type, .. } => { write!(f, "GuardType {val}, {}", guard_type.print(self.ptr_map)) },
             Insn::RefineType { val, new_type, .. } => { write!(f, "RefineType {val}, {}", new_type.print(self.ptr_map)) },
             Insn::HasType { val, expected, .. } => { write!(f, "HasType {val}, {}", expected.print(self.ptr_map)) },
-            Insn::GuardBitEquals { val, expected, .. } => { write!(f, "GuardBitEquals {val}, {}", expected.print(self.ptr_map)) },
+            Insn::GuardBitEquals { val, expected, recompile, .. } => {
+                write!(f, "GuardBitEquals {val}, {}", expected.print(self.ptr_map))?;
+                if recompile.is_some() {
+                    write!(f, " recompile")?;
+                }
+                return Ok(())
+            },
             Insn::GuardAnyBitSet { val, mask, mask_name: Some(name), .. } => { write!(f, "GuardAnyBitSet {val}, {name}={}", mask.print(self.ptr_map)) },
             Insn::GuardAnyBitSet { val, mask, .. } => { write!(f, "GuardAnyBitSet {val}, {}", mask.print(self.ptr_map)) },
             Insn::GuardNoBitsSet { val, mask, mask_name: Some(name), .. } => { write!(f, "GuardNoBitsSet {val}, {name}={}", mask.print(self.ptr_map)) },
@@ -3323,10 +3329,18 @@ impl Function {
     /// - `StaticallyKnown` if the receiver's exact class is known at compile-time
     /// - Result of [`Self::resolve_receiver_type_from_profile`] if we need to check profile data
     fn resolve_receiver_type(&self, recv: InsnId, recv_type: Type, insn_idx: YarvInsnIdx) -> ReceiverTypeResolution {
-        if let Some(class) = recv_type.runtime_exact_ruby_class() {
-            return ReceiverTypeResolution::StaticallyKnown { class };
+        match self.resolve_receiver_type_from_profile(recv, insn_idx) {
+            ReceiverTypeResolution::NoProfile => {
+                // Use known type information as a fallback because it doesn't have shape
+                // information (and we can generally eliminate duplicate guards).
+                if let Some(class) = recv_type.runtime_exact_ruby_class() {
+                    ReceiverTypeResolution::StaticallyKnown { class }
+                } else {
+                    ReceiverTypeResolution::NoProfile
+                }
+            }
+            resolution => resolution,
         }
-        self.resolve_receiver_type_from_profile(recv, insn_idx)
     }
 
     fn polymorphic_summary(&self, profiles: &ProfileOracle, recv: InsnId, insn_idx: YarvInsnIdx) -> Option<TypeDistributionSummary> {
@@ -5088,6 +5102,15 @@ impl Function {
                             _ => insn_id,
                         }
                     }
+                    Insn::ArrayLength { array } => {
+                        match self.type_of(array).ruby_object() {
+                            Some(array_obj) if array_obj.is_frozen() => {
+                                let length = unsafe { rb_jit_array_len(array_obj) };
+                                self.new_insn(Insn::Const { val: Const::CInt64(length) })
+                            }
+                            _ => insn_id,
+                        }
+                    }
                     Insn::UnboxFixnum { val } => {
                         let recv_type = self.type_of(val);
                         match recv_type.fixnum_value() {
@@ -5100,6 +5123,18 @@ impl Function {
                         let right_num = self.type_of(right).cint64_value();
                         match (left_num, right_num) {
                             (Some(l), Some(r)) if l >= r => {
+                                self.make_equal_to(insn_id, left);
+                                continue
+                            },
+                            (Some(_), Some(_)) => self.new_insn(Insn::SideExit { state, reason, recompile: None }),
+                            _ => insn_id,
+                        }
+                    },
+                    Insn::GuardLess { left, right, state, reason } => {
+                        let left_num = self.type_of(left).cint64_value();
+                        let right_num = self.type_of(right).cint64_value();
+                        match (left_num, right_num) {
+                            (Some(l), Some(r)) if l < r => {
                                 self.make_equal_to(insn_id, left);
                                 continue
                             },

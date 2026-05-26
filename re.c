@@ -3523,9 +3523,12 @@ rb_reg_init_str_enc(VALUE re, VALUE s, rb_encoding *enc, int options)
 }
 
 VALUE
-rb_reg_new_ary(VALUE ary, int opt)
+rb_reg_new_from_values(long cnt, const VALUE *elements, int opt)
 {
-    return rb_reg_new_str(rb_reg_preprocess_dregexp(ary, opt), opt);
+    const VALUE ary = rb_ary_tmp_new_from_values(0, cnt, elements);
+    VALUE val = rb_reg_new_str(rb_reg_preprocess_dregexp(ary, opt), opt);
+    rb_ary_clear(ary);
+    return val;
 }
 
 VALUE
