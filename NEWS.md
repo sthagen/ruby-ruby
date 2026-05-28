@@ -82,8 +82,8 @@ releases.
   * 6.0.1 to [v6.0.1.1][erb-v6.0.1.1], [v6.0.2][erb-v6.0.2], [v6.0.3][erb-v6.0.3], [v6.0.4][erb-v6.0.4]
 * ipaddr 1.2.9
   * 1.2.8 to [v1.2.9][ipaddr-v1.2.9]
-* json 2.19.5
-  * 2.18.0 to [v2.18.1][json-v2.18.1], [v2.19.0][json-v2.19.0], [v2.19.1][json-v2.19.1], [v2.19.2][json-v2.19.2], [v2.19.3][json-v2.19.3], [v2.19.4][json-v2.19.4], [v2.19.5][json-v2.19.5]
+* json 2.19.7
+  * 2.18.0 to [v2.18.1][json-v2.18.1], [v2.19.0][json-v2.19.0], [v2.19.1][json-v2.19.1], [v2.19.2][json-v2.19.2], [v2.19.3][json-v2.19.3], [v2.19.4][json-v2.19.4], [v2.19.5][json-v2.19.5], [v2.19.6][json-v2.19.6]
 * openssl 4.0.2
   * 4.0.0 to [v4.0.1][openssl-v4.0.1], [v4.0.2][openssl-v4.0.2]
 * prism 1.9.0
@@ -161,6 +161,19 @@ Ruby 4.0 bundled RubyGems and Bundler version 4. see the following links for det
 
   [[Feature #21861]]
 
+### Removed APIs
+
+The following APIs, which have been deprecated for many years, are removed.
+[[Feature #21768]]
+
+* old postponed job functions,
+* untyped data object type/functions,
+* old APIs to allocate a data object,
+* taintedness/trustedness enums/macros,
+* `rb_gc_force_recycle` function,
+* `rb_iterate` function,
+* and some functions and constants for internal use.
+
 ## Implementation improvements
 
 ### Ractor
@@ -172,6 +185,7 @@ A lot of work has gone into making Ractors more stable, performant, and usable. 
 [Feature #8948]: https://bugs.ruby-lang.org/issues/8948
 [Feature #15330]: https://bugs.ruby-lang.org/issues/15330
 [Feature #21390]: https://bugs.ruby-lang.org/issues/21390
+[Feature #21768]: https://bugs.ruby-lang.org/issues/21768
 [Feature #21785]: https://bugs.ruby-lang.org/issues/21785
 [Feature #21796]: https://bugs.ruby-lang.org/issues/21796
 [Feature #21853]: https://bugs.ruby-lang.org/issues/21853
@@ -208,6 +222,7 @@ A lot of work has gone into making Ractors more stable, performant, and usable. 
 [json-v2.19.3]: https://github.com/ruby/json/releases/tag/v2.19.3
 [json-v2.19.4]: https://github.com/ruby/json/releases/tag/v2.19.4
 [json-v2.19.5]: https://github.com/ruby/json/releases/tag/v2.19.5
+[json-v2.19.6]: https://github.com/ruby/json/releases/tag/v2.19.6
 [openssl-v4.0.1]: https://github.com/ruby/openssl/releases/tag/v4.0.1
 [openssl-v4.0.2]: https://github.com/ruby/openssl/releases/tag/v4.0.2
 [prism-v1.8.0]: https://github.com/ruby/prism/releases/tag/v1.8.0

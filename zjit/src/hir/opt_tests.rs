@@ -7912,8 +7912,8 @@ mod hir_opt_tests {
     }
 
     #[test]
-    fn test_optimize_getivar_on_typed_data() {
-        // Thread is typed T_DATA: uses LoadField chain via RTypedData fields_obj
+    fn test_optimize_getivar_on_t_data() {
+        // T_DATA uses fields_obj for instance variables.
         eval("
             class C < Thread
               def test = @a
@@ -7936,7 +7936,7 @@ mod hir_opt_tests {
           Jump bb3(v4)
         bb3(v6:BasicObject):
           PatchPoint SingleRactorMode
-          v17:TypedTData = GuardType v6, TypedTData
+          v17:TData = GuardType v6, TData
           v18:CShape = LoadField v17, :shape_id@0x1000
           v19:CShape[0x1001] = GuardBitEquals v18, CShape(0x1001) recompile
           v20:RubyValue = LoadField v17, :fields_obj@0x1002
@@ -7947,8 +7947,8 @@ mod hir_opt_tests {
     }
 
     #[test]
-    fn test_optimize_getivar_on_typed_data_complex_fields() {
-        // Typed T_DATA with enough ivars to force heap field storage
+    fn test_optimize_getivar_on_t_data_complex_fields() {
+        // T_DATA with enough ivars to force heap field storage
         eval("
             class C < Thread
               def test = @var1000
@@ -8260,7 +8260,7 @@ mod hir_opt_tests {
     }
 
     #[test]
-    fn test_getivar_polymorphic_t_class_and_typed_data() {
+    fn test_getivar_polymorphic_t_class_and_t_data() {
         set_call_threshold(3);
         eval(r#"
           module Reader
@@ -8295,7 +8295,7 @@ mod hir_opt_tests {
           PatchPoint SingleRactorMode
           v11:HeapBasicObject = GuardType v6, HeapBasicObject
           v12:CUInt64 = LoadField v11, :RBASIC_FLAGS@0x1000
-          v14:CUInt64[0xffffffff0000005f] = Const CUInt64(0xffffffff0000005f)
+          v14:CUInt64[0xffffffff0000001f] = Const CUInt64(0xffffffff0000001f)
           v15:CPtr[CPtr(0x1001)] = Const CPtr(0x1001)
           v16 = RefineType v15, CUInt64
           v17:CInt64 = IntAnd v12, v14
@@ -10010,11 +10010,6 @@ mod hir_opt_tests {
           v20:CallableMethodEntry[VALUE(0x1040)] = GuardBitEquals v19, Value(VALUE(0x1040))
           v21:RubyValue = LoadField v18, :VM_ENV_DATA_INDEX_SPECVAL@0x1048
           v22:FalseClass = GuardBitEquals v21, Value(false)
-          v30:CPtr = GetEP 0
-          v31:RubyValue = LoadField v30, :VM_ENV_DATA_INDEX_ME_CREF@0x1038
-          v32:CallableMethodEntry[VALUE(0x1040)] = GuardBitEquals v31, Value(VALUE(0x1040))
-          v33:RubyValue = LoadField v30, :VM_ENV_DATA_INDEX_SPECVAL@0x1048
-          v34:FalseClass = GuardBitEquals v33, Value(false)
           v23:Array = GuardType v6, Array
           v24:CUInt64 = LoadField v23, :RBASIC_FLAGS@0x1049
           v25:CUInt64 = GuardNoBitsSet v24, RUBY_FL_FREEZE=CUInt64(2048)
@@ -10054,11 +10049,6 @@ mod hir_opt_tests {
           v25:CallableMethodEntry[VALUE(0x1048)] = GuardBitEquals v24, Value(VALUE(0x1048))
           v26:RubyValue = LoadField v23, :VM_ENV_DATA_INDEX_SPECVAL@0x1050
           v27:FalseClass = GuardBitEquals v26, Value(false)
-          v38:CPtr = GetEP 0
-          v39:RubyValue = LoadField v38, :VM_ENV_DATA_INDEX_ME_CREF@0x1040
-          v40:CallableMethodEntry[VALUE(0x1048)] = GuardBitEquals v39, Value(VALUE(0x1048))
-          v41:RubyValue = LoadField v38, :VM_ENV_DATA_INDEX_SPECVAL@0x1050
-          v42:FalseClass = GuardBitEquals v41, Value(false)
           v28:Array = GuardType v9, Array
           v29:Fixnum = GuardType v10, Fixnum
           v30:CInt64 = UnboxFixnum v29
@@ -16602,6 +16592,51 @@ mod hir_opt_tests {
           v27:Fixnum = BoxFixnum v28
           CheckInterrupts
           Return v27
+        ");
+    }
+
+    #[test]
+    fn test_elide_test_of_box_bool() {
+        eval(r#"
+            def test(a, b)
+              if a == b
+                3
+              else
+                4
+              end
+            end
+            test(:a, :b)
+        "#);
+        assert_snapshot!(hir_string("test"), @"
+        fn test@<compiled>:3:
+        bb1():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          v2:CPtr = LoadSP
+          v3:BasicObject = LoadField v2, :a@0x1000
+          v4:BasicObject = LoadField v2, :b@0x1001
+          Jump bb3(v1, v3, v4)
+        bb2():
+          EntryPoint JIT(0)
+          v7:BasicObject = LoadArg :self@0
+          v8:BasicObject = LoadArg :a@1
+          v9:BasicObject = LoadArg :b@2
+          Jump bb3(v7, v8, v9)
+        bb3(v11:BasicObject, v12:BasicObject, v13:BasicObject):
+          PatchPoint MethodRedefined(Symbol@0x1008, ==@0x1010, cme:0x1018)
+          v48:StaticSymbol = GuardType v12, StaticSymbol
+          v49:CBool = IsBitEqual v48, v13
+          v50:BoolExact = BoxBool v49
+          CheckInterrupts
+          CondBranch v49, bb5(), bb4(v11, v48, v13)
+        bb5():
+          v29:Fixnum[3] = Const Value(3)
+          CheckInterrupts
+          Return v29
+        bb4(v34:BasicObject, v35:StaticSymbol, v36:BasicObject):
+          v40:Fixnum[4] = Const Value(4)
+          CheckInterrupts
+          Return v40
         ");
     }
 }

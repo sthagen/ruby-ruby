@@ -4147,7 +4147,6 @@ impl Function {
                                     if let Some(replacement) = (props.inline)(self, tmp_block, recv, &args, state) {
                                         // Copy contents of tmp_block to block
                                         assert_ne!(block, tmp_block);
-                                        emit_super_call_guards(self, block, super_cme, current_cme, mid, state);
                                         let insns = std::mem::take(&mut self.blocks[tmp_block.0].insns);
                                         self.blocks[block.0].insns.extend(insns);
                                         self.count(block, Counter::inline_cfunc_optimized_send_count);
@@ -4336,8 +4335,8 @@ impl Function {
             self.push_insn(block, Insn::GuardType { val: recv, guard_type: types::Class, state })
         } else if recv_type.flags().is_t_module() {
             self.push_insn(block, Insn::GuardType { val: recv, guard_type: types::Module, state })
-        } else if recv_type.flags().is_typed_data() {
-            self.push_insn(block, Insn::GuardType { val: recv, guard_type: types::TypedTData, state })
+        } else if recv_type.flags().is_t_data() {
+            self.push_insn(block, Insn::GuardType { val: recv, guard_type: types::TData, state })
         } else {
             // HeapBasicObject is wider than T_OBJECT, but shapes for T_OBJECTs are in a pool of
             // its own and are guaranteed to be different from shapes of any other T_* types. So
@@ -4373,11 +4372,10 @@ impl Function {
             });
             return self.load_ivar_from_fields(block, fields_obj, recv_type.flags().is_fields_embedded(), id, ivar_index);
         }
-        if recv_type.flags().is_typed_data() {
-            // Typed T_DATA: load from fields_obj at fixed offset in RTypedData
+        if recv_type.flags().is_t_data() {
             let fields_obj = self.push_insn(block, Insn::LoadField {
                 recv: self_val, id: FieldName::fields_obj,
-                offset: RTYPEDDATA_OFFSET_FIELDS_OBJ as i32,
+                offset: TDATA_OFFSET_FIELDS_OBJ as i32,
                 return_type: types::RubyValue,
             });
             return self.load_ivar_from_fields(block, fields_obj, recv_type.flags().is_fields_embedded(), id, ivar_index);
@@ -5317,6 +5315,14 @@ impl Function {
                     }
                     Insn::Test { val } if self.type_of(val).is_known_truthy() => {
                         self.new_insn(Insn::Const { val: Const::CBool(true) })
+                    }
+                    Insn::Test { val: test_val } => {
+                        if let Insn::BoxBool { val: bool_val } = self.find(test_val) {
+                            self.make_equal_to(insn_id, bool_val);
+                            continue;
+                        } else {
+                            insn_id
+                        }
                     }
                     Insn::CondBranch { val, if_true, .. } if self.is_a(val, Type::from_cbool(true)) => {
                         self.new_insn(Insn::Jump(if_true))
