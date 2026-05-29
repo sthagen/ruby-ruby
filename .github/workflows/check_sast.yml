@@ -92,7 +92,7 @@ jobs:
           output: sarif-results
 
       - name: filter-sarif
-        uses: advanced-security/filter-sarif@2da736ff05ef065cb2894ac6892e47b5eac2c3c0 # v1.1.0.1.1
+        uses: advanced-security/filter-sarif@2da736ff05ef065cb2894ac6892e47b5eac2c3c0 # v1.1
         with:
           patterns: |
             +**/*.rb
@@ -100,6 +100,7 @@ jobs:
             -lib/uri/rfc3986_parser.rb:rb/overly-large-range
             -lib/bundler/vendor/uri/lib/uri/mailto.rb:rb/overly-large-range
             -lib/bundler/vendor/uri/lib/uri/rfc3986_parser.rb:rb/overly-large-range
+            -spec/ruby/core/regexp/timeout_spec.rb:rb/redos
             -test/ruby/test_io.rb:rb/non-constant-kernel-open
             -test/open-uri/test_open-uri.rb:rb/non-constant-kernel-open
             -test/open-uri/test_ssl.rb:rb/non-constant-kernel-open
@@ -115,7 +116,7 @@ jobs:
         continue-on-error: true
 
       - name: filter-sarif
-        uses: advanced-security/filter-sarif@2da736ff05ef065cb2894ac6892e47b5eac2c3c0 # v1.1.0.1.1
+        uses: advanced-security/filter-sarif@2da736ff05ef065cb2894ac6892e47b5eac2c3c0 # v1.1
         with:
           patterns: |
             +**/*.c

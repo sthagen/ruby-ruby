@@ -4479,31 +4479,43 @@ rb_file_s_expand_path(int argc, const VALUE *argv)
 }
 
 /*
+ *  :markup: markdown
+ *
  *  call-seq:
- *     File.expand_path(file_name [, dir_string] )  ->  abs_file_name
+ *    File.expand_path(path, dirpath = '.') -> absolute_path
  *
- *  Converts a pathname to an absolute pathname. Relative paths are
- *  referenced from the current working directory of the process unless
- *  +dir_string+ is given, in which case it will be used as the
- *  starting point. The given pathname may start with a
- *  ``<code>~</code>'', which expands to the process owner's home
- *  directory (the environment variable +HOME+ must be set
- *  correctly). ``<code>~</code><i>user</i>'' expands to the named
- *  user's home directory.
+ *  Returns the string absolute path for the given `path`.
  *
- *     File.expand_path("~oracle/bin")           #=> "/home/oracle/bin"
+ *  Evaluates a relative path with respect to the directory given by `dirpath`:
  *
- *  A simple example of using +dir_string+ is as follows.
- *     File.expand_path("ruby", "/usr/bin")      #=> "/usr/bin/ruby"
+ *  ```ruby
+ *  Dir.chdir('/snap')
+ *  # Default dirpath.
+ *  File.expand_path('README')                  # => "/snap/README"
+ *  File.expand_path('bin')                     # => "/snap/bin"
+ *  File.expand_path('bin/../var')              # => "/snap/var"  # Cleaned.
+ *  # Other dirpath.
+ *  File.expand_path('../zip', '/usr/bin/ruby') # => "/usr/bin/zip"
+ *  Dir.chdir('/usr/bin')
+ *  File.expand_path('../../snap', __FILE__)    # => "/usr/snap"
+ *  ```
  *
- *  A more complex example which also resolves parent directory is as follows.
- *  Suppose we are in bin/mygem and want the absolute path of lib/mygem.rb.
+ *  Evaluates an absolute path without respect to `dirpath`:
  *
- *     File.expand_path("../../lib/mygem.rb", __FILE__)
- *     #=> ".../path/to/project/lib/mygem.rb"
+ *  ```ruby
+ *  File.expand_path('/snap')           # => "/snap"
+ *  File.expand_path('/snap', 'nosuch') # => "/snap"
+ *  File.expand_path('/snap/../snap')   # => "/snap"  # Cleaned.
+ *  ```
  *
- *  So first it resolves the parent of __FILE__, that is bin/, then go to the
- *  parent, the root of the project and appends +lib/mygem.rb+.
+ *  More examples:
+ *
+ *  ```
+ *  Dir.chdir('/usr/bin')
+ *  File.expand_path('../../snap', __FILE__) # => "/usr/snap"
+ *  File.expand_path('../../snap')           # => "/snap"
+ *  ```
+ *
  */
 
 static VALUE
@@ -5318,28 +5330,42 @@ ruby_enc_find_extname(const char *name, long *len, rb_encoding *enc)
 }
 
 /*
+ *  :markup: markdown
+ *
  *  call-seq:
- *     File.extname(path)  ->  string
+ *     File.extname(path) -> extension
  *
- *  Returns the extension (the portion of file name in +path+
- *  starting from the last period).
+ *  Returns the filename extension --
+ *  usually the portion of the string `path`
+ *  beginning from the last period:
  *
- *  If +path+ is a dotfile, or starts with a period, then the starting
- *  dot is not dealt with the start of the extension.
+ *  ```ruby
+ *  File.extname('t.rb')         # => ".rb"
+ *  File.extname('foo.bar.t.rb') # => ".rb"
+ *  File.extname('foo/bar/t.rb') # => ".rb"
+ *  File.extname('nosuch.txt')   # => ".txt"  # Path need not exist.
+ *  ```
  *
- *  An empty string will also be returned when the period is the last character
- *  in +path+.
+ *  Returns the entire string when there is no period:
  *
- *  On Windows, trailing dots are truncated.
+ *  ```ruby
+ *  Pathname('foo').extname # => ""
+ *  ```
  *
- *     File.extname("test.rb")         #=> ".rb"
- *     File.extname("a/b/d/test.rb")   #=> ".rb"
- *     File.extname(".a/b/d/test.rb")  #=> ".rb"
- *     File.extname("foo.")            #=> "" on Windows
- *     File.extname("foo.")            #=> "." on non-Windows
- *     File.extname("test")            #=> ""
- *     File.extname(".profile")        #=> ""
- *     File.extname(".profile.sh")     #=> ".sh"
+ *  Returns an empty string when the only period is the first character:
+ *
+ *  ```ruby
+ *  File.extname('.irbrc') # => ""
+ *  ```
+ *
+ *  Returns an empty string or `'.'` when `path` ends with a period:
+ *
+ *  ```
+ *  File.extname('foo.') # => ""      # On Windows.
+ *  File.extname('foo.') # => "."     # Elsewhere.
+ *  File.extname('foo....') # => ""   # On Windows.
+ *  File.extname('foo....') # => "."  # Elsewhere.
+ *  ```
  *
  */
 

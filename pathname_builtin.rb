@@ -557,19 +557,28 @@ class Pathname
     !absolute?
   end
 
+  # :markup: markdown
   #
-  # Iterates over each component of the path.
+  # call-seq:
+  #   each_filename {|component| ... } -> nil
+  #   each_filename -> new_enumerator
   #
-  #   Pathname.new("/usr/bin/ruby").each_filename {|filename| ... }
-  #     # yields "usr", "bin", and "ruby".
+  # With a block given, yields each component of the string path:
   #
-  # Returns an Enumerator if no block was given.
+  # ```ruby
+  # Pathname('/foo/bar/baz').each_filename {|filename| p filename }
+  # => nil
+  # ```
   #
-  #   enum = Pathname.new("/usr/bin/ruby").each_filename
-  #     # ... do stuff ...
-  #   enum.each { |e| ... }
-  #     # yields "usr", "bin", and "ruby".
+  # Output:
   #
+  # ```text
+  # "foo"
+  # "bar"
+  # "baz"
+  # ```
+  #
+  # With no block given, returns a new Enumerator.
   def each_filename # :yield: filename
     return to_enum(__method__) unless block_given?
     _, names = split_names(@path)
@@ -901,12 +910,34 @@ class Pathname
 end
 
 class Pathname    # * File *
+
+  # :markup: markdown
   #
-  # #each_line iterates over the line in the file.  It yields a String object
-  # for each line.
+  # call-seq:
+  #   each_line(sep = $/, **opts) {|line| ... } → nil
+  #   each_line(limit, **opts) {|line| ... } → nil
+  #   each_line(sep, limit, **opts) {|line| ... } → nil
+  #   each_line(...) → new_enumerator
   #
-  # This method has existed since 1.8.1.
+  # With a block given, calls the block with each line
+  # from the file represented by `self`;
+  # returns `nil`:
   #
+  # ```ruby
+  # lines = []
+  # Pathname('COPYING').each_line {|line| lines << line }
+  # lines.take(3)
+  # # =>
+  # # ["{日本語}[rdoc-ref:COPYING.ja]\n",
+  # #  "\n",
+  # #  "Ruby is copyrighted free software by Yukihiro Matsumoto <matz@netlab.jp>.\n"]
+  # ```
+  #
+  # The lines are read using IO.foreach,
+  # all arguments and options are passed to that method;
+  # see details at IO.foreach.
+  #
+  # With no block given, returns a new Enumerator.
   def each_line(...) # :yield: line
     File.foreach(@path, ...)
   end
@@ -1391,10 +1422,81 @@ class Pathname    # * File *
   # See <tt>File.dirname</tt>.  Returns all but the last component of the path.
   def dirname() self.class.new(File.dirname(@path)) end
 
-  # See <tt>File.extname</tt>.  Returns the file's extension.
+  # :markup: markdown
+  #
+  # call-seq:
+  #   extname -> extension
+  #
+  # Returns the filename extension of `self` --
+  # usually the portion of the string path beginning from the last period:
+  #
+  # ```ruby
+  # Pathname('t.rb').extname               # => ".rb"
+  # Pathname('foo.bar.t.rb').extname       # => ".rb"
+  # Pathname('foo/bar/t.rb').extname       # => ".rb"
+  # Pathname('nosuch.txt').extname         # => ".txt"  # Path need not exist.
+  # ```
+  #
+  # Returns the entire string when there is no period:
+  #
+  # ```ruby
+  # Pathname('foo').extname # => ""
+  # ```
+  #
+  # Returns an empty string when the only period is the first character:
+  #
+  # ```ruby
+  # Pathname('.irbrc').extname # => ""
+  # ```
+  #
+  # Returns an empty string or `'.'` when `path` ends with a period:
+  #
+  # ```ruby
+  # Pathname('foo.').extname    # => ""   # On Windows.
+  # Pathname('foo.').extname    # => "."  # Elsewhere.
+  # Pathname('foo....').extname # => ""   # On Windows.
+  # Pathname('foo....').extname # => "."  # Elsewhere.
+  # ```
+  #
   def extname() File.extname(@path) end
 
-  # See <tt>File.expand_path</tt>.
+  # :markup: markdown
+  #
+  # call-seq:
+  #   expand_path(dirpath = '.') -> new_pathname
+  #
+  # Returns a new pathname containing the absolute path for `self`.
+  #
+  # Evaluates a relative path with respect to the directory given by `dirpath`:
+  #
+  # ```ruby
+  # Dir.chdir('/snap')
+  # # Default dirpath.
+  # Pathname('README').expand_path                  # => #<Pathname:/snap/README>
+  # Pathname('bin').expand_path                     # => #<Pathname:/snap/bin>
+  # Pathname('bin/../var').expand_path              # => #<Pathname:/snap/var>  # Cleaned.
+  # # Other dirpath.
+  # Pathname('../zip').expand_path('/usr/bin/ruby') # => #<Pathname:/usr/bin/zip>
+  # Dir.chdir('/usr/bin')
+  # Pathname('../../snap').expand_path(__FILE__)    # => #<Pathname:/usr/snap>
+  # ```
+  #
+  # Evaluates an absolute path without respect to `dirpath`:
+  #
+  # ```ruby
+  # Pathname('/snap').expand_path                       # => #<Pathname:/snap>
+  # Pathname('/snap').expand_path.expand_path('nosuch') # => #<Pathname:/snap>
+  # Pathname('/snap/../snap').expand_path               # => #<Pathname:/snap>  # Cleaned.
+  # ```
+  #
+  # More examples:
+  #
+  # ```
+  # Dir.chdir('/usr/bin')
+  # Pathname('../../snap').expand_path(__FILE__) # => #<Pathname:/usr/snap>
+  # Pathname('../../snap').expand_path           # => #<Pathname:/snap>
+  # ```
+  #
   def expand_path(...) self.class.new(File.expand_path(@path, ...)) end
 
   # See <tt>File.split</tt>.  Returns the #dirname and the #basename in an
@@ -1694,8 +1796,24 @@ class Pathname    # * Dir *
     alias pwd getwd
   end
 
-  # Return the entries (files and subdirectories) in the directory, each as a
-  # Pathname object.
+  # :markup: markdown
+  #
+  # call-seq:
+  #   entries -> array_of_pathnames
+  #
+  # Returns an array of pathnames,
+  # one for each entry in the directory represented by `self`:
+  #
+  # ```ruby
+  # Pathname('.').entries.take(5)
+  # # =>
+  # # [#<Pathname:.>,
+  # #  #<Pathname:..>,
+  # #  #<Pathname:gc.rb>,
+  # #  #<Pathname:yjit.rb>,
+  # #  #<Pathname:iseq.h>]
+  # ```
+  #
   def entries() Dir.entries(@path).map {|f| self.class.new(f) } end
 
   # :markup: markdown

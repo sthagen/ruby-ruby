@@ -50,6 +50,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 1 # actions/checkout fetches all heads/tags unless > 0
+          persist-credentials: false
       # tool/make-snapshot derives the branch name from HEAD and looks up
       # the upstream during ChangeLog generation. Detached checkouts
       # (pull_request, merge_group) lack a local branch with tracking, so
@@ -73,7 +74,9 @@ jobs:
     with:
       archname: snapshot-${{ needs.tarball.outputs.branch }}
       notify-release-channel: ${{ github.event_name == 'workflow_dispatch' && inputs.notify-release-channel || false }}
-    secrets: inherit
+    secrets:
+      SIMPLER_ALERTS_URL: ${{ secrets.SIMPLER_ALERTS_URL }}
+      SNAPSHOT_SLACK_WEBHOOK_URL: ${{ secrets.SNAPSHOT_SLACK_WEBHOOK_URL }}
 
   macos:
     needs: tarball
@@ -82,7 +85,9 @@ jobs:
     with:
       archname: snapshot-${{ needs.tarball.outputs.branch }}
       notify-release-channel: ${{ github.event_name == 'workflow_dispatch' && inputs.notify-release-channel || false }}
-    secrets: inherit
+    secrets:
+      SIMPLER_ALERTS_URL: ${{ secrets.SIMPLER_ALERTS_URL }}
+      SNAPSHOT_SLACK_WEBHOOK_URL: ${{ secrets.SNAPSHOT_SLACK_WEBHOOK_URL }}
 
   windows:
     needs: tarball
@@ -91,9 +96,10 @@ jobs:
     with:
       archname: snapshot-${{ needs.tarball.outputs.branch }}
       notify-release-channel: ${{ github.event_name == 'workflow_dispatch' && inputs.notify-release-channel || false }}
-    secrets: inherit
+    secrets:
+      SIMPLER_ALERTS_URL: ${{ secrets.SIMPLER_ALERTS_URL }}
+      SNAPSHOT_SLACK_WEBHOOK_URL: ${{ secrets.SNAPSHOT_SLACK_WEBHOOK_URL }}
 
   non_development:
     needs: tarball
     uses: ./.github/workflows/tarball-non-development.yml
-    secrets: inherit
