@@ -2286,6 +2286,69 @@ fn test_fixnum_floor() {
 }
 
 #[test]
+fn test_fixnum_mod() {
+    eval("
+        def test(a, b) = a % b
+        test(13, 4) # profile opt_mod
+    ");
+    assert_contains_opcode("test", YARVINSN_opt_mod);
+    assert_snapshot!(assert_compiles("[test(13, 4), test(13, 13), test(5, 7)]"), @"[1, 0, 5]");
+}
+
+#[test]
+fn test_fixnum_mod_negative() {
+    eval("
+        def test(a, b) = a % b
+        test(7, 3) # profile opt_mod
+    ");
+    assert_contains_opcode("test", YARVINSN_opt_mod);
+    assert_snapshot!(assert_compiles("[test(-7, 3), test(7, -3), test(-7, -3)]"), @"[2, -2, -1]");
+}
+
+#[test]
+fn test_fixnum_mod_by_zero() {
+    eval("
+        def test(a, b) = a % b rescue :zero_div
+        test(13, 4) # profile opt_mod
+    ");
+    assert_contains_opcode("test", YARVINSN_opt_mod);
+    assert_snapshot!(assert_compiles_allowing_exits("test(13, 0)"), @":zero_div");
+}
+
+#[test]
+fn test_fixnum_div_min_by_neg_one() {
+    // FIXNUM_MIN / -1 overflows to a Bignum: the JIT must side exit, not return a mistyped Fixnum.
+    eval("
+        def test(a, b) = a / b
+        test(10, 3) # profile opt_div
+    ");
+    assert_contains_opcode("test", YARVINSN_opt_div);
+    assert_snapshot!(assert_compiles_allowing_exits("test(-4611686018427387904, -1)"), @"4611686018427387904");
+}
+
+#[test]
+fn test_fixnum_div_overflow_propagation() {
+    // The div must side exit before its Bignum result reaches the specialized (a / b) & 1 op.
+    eval("
+        def test(a, b) = (a / b) & 1
+        test(10, 3) # profile opt_div
+    ");
+    assert_contains_opcode("test", YARVINSN_opt_div);
+    assert_snapshot!(assert_compiles_allowing_exits("test(-4611686018427387904, -1)"), @"0");
+}
+
+#[test]
+fn test_fixnum_div_by_neg_one_is_fine() {
+    // x / -1 (x != FIXNUM_MIN) is a normal Fixnum and must NOT trip the overflow guard.
+    eval("
+        def test(a, b) = a / b
+        test(10, 3) # profile opt_div
+    ");
+    assert_contains_opcode("test", YARVINSN_opt_div);
+    assert_snapshot!(assert_compiles("test(10, -1)"), @"-10");
+}
+
+#[test]
 fn test_opt_not() {
     eval("
         def test(obj) = !obj
@@ -4206,14 +4269,9 @@ fn test_getspecial_multiple_groups() {
     assert_snapshot!(assert_compiles(r#"test("123-456")"#), @r#""456""#);
 }
 
-// In a JIT-to-JIT call, gen_push_frame writes JIT_RETURN_POISON to the
-// callee's cfp->jit_return (runtime_checks builds). On the *first* such
-// call the function stub trampoline clears jit_return to NULL, so the
-// crash only manifests on the second JIT-to-JIT hit when the stub has
-// been patched to jump directly to the callee's JIT entry. Putting $& as
-// the first C call in the callee keeps the poison live until
-// gen_getspecial_symbol calls rb_backref_get → rb_vm_svar_lep → CFP_PC →
-// CFP_ZJIT_FRAME, which dereferences the poison without the prep fix.
+// In a JIT-to-JIT call, the callee's cfp->jit_return is published at entry.
+// Putting $& as the first C call in the callee exercises CFP_ZJIT_FRAME before
+// gen_save_pc_for_gc has a chance to update the entry JITFrame.
 #[test]
 fn test_getspecial_symbol_in_jit_to_jit_callee() {
     eval(r#"
@@ -4224,10 +4282,6 @@ fn test_getspecial_symbol_in_jit_to_jit_callee() {
         callee
         callee
 
-        # First call to caller_method profiles; second JITs caller_method
-        # and runs through the function-stub-hit path which clears
-        # jit_return. The third call goes through the patched stub with
-        # POISON intact, hitting the bug.
         caller_method
         caller_method
     "#);
