@@ -213,14 +213,6 @@ impl Flags {
     const IS_STRUCT_EMBEDDED: u32 = 1 << 3;
     /// Set if the ProfiledType is used for profiling specific objects, not just classes/shapes
     const IS_OBJECT_PROFILING: u32 = 1 << 4;
-    /// Class/module fields_obj is embedded (or absent)
-    const IS_FIELDS_EMBEDDED: u32 = 1 << 5;
-    /// Object is a T_CLASS
-    const IS_T_CLASS: u32 = 1 << 6;
-    /// Object is a T_MODULE
-    const IS_T_MODULE: u32 = 1 << 7;
-    /// Object is a T_DATA
-    const IS_T_DATA: u32 = 1 << 8;
 
     pub fn none() -> Self { Self(Self::NONE) }
 
@@ -230,10 +222,6 @@ impl Flags {
     pub fn is_t_object(self) -> bool { (self.0 & Self::IS_T_OBJECT) != 0 }
     pub fn is_struct_embedded(self) -> bool { (self.0 & Self::IS_STRUCT_EMBEDDED) != 0 }
     pub fn is_object_profiling(self) -> bool { (self.0 & Self::IS_OBJECT_PROFILING) != 0 }
-    pub fn is_fields_embedded(self) -> bool { (self.0 & Self::IS_FIELDS_EMBEDDED) != 0 }
-    pub fn is_t_class(self) -> bool { (self.0 & Self::IS_T_CLASS) != 0 }
-    pub fn is_t_module(self) -> bool { (self.0 & Self::IS_T_MODULE) != 0 }
-    pub fn is_t_data(self) -> bool { (self.0 & Self::IS_T_DATA) != 0 }
 }
 
 /// opt_send_without_block/opt_plus/... should store:
@@ -310,24 +298,6 @@ impl ProfiledType {
         if unsafe { RB_TYPE_P(obj, RUBY_T_OBJECT) } {
             flags.0 |= Flags::IS_T_OBJECT;
         }
-        if unsafe { RB_TYPE_P(obj, RUBY_T_CLASS) } {
-            flags.0 |= Flags::IS_T_CLASS;
-            if obj.class_fields_embedded_p() {
-                flags.0 |= Flags::IS_FIELDS_EMBEDDED;
-            }
-        }
-        if unsafe { RB_TYPE_P(obj, RUBY_T_MODULE) } {
-            flags.0 |= Flags::IS_T_MODULE;
-            if obj.class_fields_embedded_p() {
-                flags.0 |= Flags::IS_FIELDS_EMBEDDED;
-            }
-        }
-        if obj.data_p() {
-            flags.0 |= Flags::IS_T_DATA;
-            if obj.data_fields_embedded_p() {
-                flags.0 |= Flags::IS_FIELDS_EMBEDDED;
-            }
-        }
         Self { class: obj.class_of(), shape: obj.shape_id_of(), flags }
     }
 
@@ -349,28 +319,6 @@ impl ProfiledType {
 
     pub fn flags(&self) -> Flags {
         self.flags
-    }
-
-    /// For ivar access, you need to know the index in the fields array (described by the shape)
-    /// and the way to get the fields array (described by the builtin type). Both pieces of
-    /// information are on the `RBasic::flags` field. This method returns expected masked flags
-    /// for guarding.
-    pub fn rbasic_flags_and_mask(&self) -> (u64, u64) {
-        let shape_flag_shift = u64::from(RB_SHAPE_FLAG_SHIFT);
-        let (shape, shape_mask) = (u64::from(self.shape().0) << shape_flag_shift, !0 << shape_flag_shift);
-        let (builtin_type, type_mask) = if self.flags().is_t_object() {
-            (RUBY_T_OBJECT, RUBY_T_MASK)
-        } else if self.flags().is_t_class() {
-            // Check class first since `Class < Module`
-            (RUBY_T_CLASS, RUBY_T_MASK)
-        } else if self.flags().is_t_module() {
-            (RUBY_T_MODULE, RUBY_T_MASK)
-        } else if self.flags().is_t_data() {
-            (RUBY_T_DATA, RUBY_T_MASK)
-        } else {
-            (0, 0)
-        };
-        (shape | u64::from(builtin_type), shape_mask | u64::from(type_mask))
     }
 
     pub fn is_fixnum(&self) -> bool {

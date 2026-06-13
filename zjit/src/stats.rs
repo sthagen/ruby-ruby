@@ -170,6 +170,7 @@ make_counters! {
         compile_hir_time_ns,
         compile_hir_build_time_ns,
         compile_hir_strength_reduce_time_ns,
+        compile_hir_inline_methods_time_ns,
         compile_hir_optimize_load_store_time_ns,
         compile_hir_canonicalize_time_ns,
         compile_hir_fold_constants_time_ns,
@@ -228,6 +229,7 @@ make_counters! {
         exit_stackoverflow,
         exit_block_param_proxy_not_iseq_or_ifunc,
         exit_block_param_proxy_not_nil,
+        exit_block_param_proxy_not_proc,
         exit_block_param_proxy_fallback_miss,
         exit_block_param_proxy_profile_not_covered,
         exit_block_param_wb_required,
@@ -462,6 +464,19 @@ make_counters! {
     invokeblock_handler_megamorphic,
     invokeblock_handler_no_profiles,
 
+    // HIR-level method inliner (inline_methods) counters. These are incremented
+    // at compile time, once per SendDirect the inliner considers.
+    inline_method_count,
+    inline_reject_too_large,
+    inline_reject_complex_params,
+    inline_reject_ep_escapes,
+    inline_reject_invokeblock,
+    inline_reject_blockparam,
+    inline_reject_denied,
+    inline_reject_compile_failure,
+    inline_reject_no_returns,
+    inline_reject_budget_exceeded,
+
     getblockparamproxy_handler_iseq,
     getblockparamproxy_handler_ifunc,
     getblockparamproxy_handler_symbol,
@@ -610,6 +625,7 @@ pub fn side_exit_counter(reason: crate::hir::SideExitReason) -> Counter {
         StackOverflow                 => exit_stackoverflow,
         BlockParamProxyNotIseqOrIfunc => exit_block_param_proxy_not_iseq_or_ifunc,
         BlockParamProxyNotNil         => exit_block_param_proxy_not_nil,
+        BlockParamProxyNotProc       => exit_block_param_proxy_not_proc,
         BlockParamProxyFallbackMiss => exit_block_param_proxy_fallback_miss,
         BlockParamProxyProfileNotCovered => exit_block_param_proxy_profile_not_covered,
         BlockParamWbRequired          => exit_block_param_wb_required,

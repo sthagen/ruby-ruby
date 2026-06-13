@@ -1458,22 +1458,23 @@ rb_data_free(void *objspace, VALUE obj)
 {
     void *data = RTYPEDDATA_GET_DATA(obj);
     if (data) {
-        int free_immediately = false;
-        void (*dfree)(void *);
-
-        free_immediately = (RTYPEDDATA_TYPE(obj)->flags & RUBY_TYPED_FREE_IMMEDIATELY) != 0;
-        dfree = RTYPEDDATA_TYPE(obj)->function.dfree;
+        const rb_data_type_t *type = RTYPEDDATA_TYPE(obj);
+        void (*dfree)(void *) = type->function.dfree;
 
         if (dfree) {
+            bool embedded = RTYPEDDATA_EMBEDDED_P(obj);
+            int free_immediately = (type->flags & RUBY_TYPED_FREE_IMMEDIATELY) != 0;
+            bool free_embeddable_data = RB_DATA_TYPE_EMBEDDABLE_P(type) && !embedded;
+
             if (dfree == RUBY_DEFAULT_FREE) {
-                if (!RTYPEDDATA_EMBEDDED_P(obj)) {
+                if (!embedded) {
                     xfree(data);
                     RB_DEBUG_COUNTER_INC(obj_data_xfree);
                 }
             }
             else if (free_immediately) {
                 (*dfree)(data);
-                if (RTYPEDDATA_EMBEDDABLE_P(obj) && !RTYPEDDATA_EMBEDDED_P(obj)) {
+                if (free_embeddable_data) {
                     xfree(data);
                 }
 
@@ -3710,10 +3711,14 @@ rb_gc_ractor_cache_free(void *cache)
 void
 rb_gc_register_mark_object(VALUE obj)
 {
-    if (!rb_gc_impl_pointer_to_heap_p(rb_gc_get_objspace(), (void *)obj))
-        return;
-
-    rb_vm_register_global_object(obj);
+    /* rb_gc_impl_pointer_to_heap_p() walks objspace->heap_pages.sorted, which
+     * another ractor may mutate while allocating heap pages under the VM lock,
+     * so the lookup must be done under the VM lock as well. */
+    RB_VM_LOCKING() {
+        if (rb_gc_impl_pointer_to_heap_p(rb_gc_get_objspace(), (void *)obj)) {
+            rb_vm_register_global_object(obj);
+        }
+    }
 }
 
 void

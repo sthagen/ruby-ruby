@@ -274,6 +274,14 @@ pub type YarvInsnIdx = usize;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct ShapeId(pub u32);
 
+ #[derive(PartialEq, Eq)]
+pub enum ShapeLayout {
+    RObject,
+    RClass,
+    RData,
+    Other,
+}
+
 pub const INVALID_SHAPE_ID: ShapeId = ShapeId(rb_invalid_shape_id);
 
 impl ShapeId {
@@ -287,6 +295,16 @@ impl ShapeId {
 
     pub fn is_frozen(self) -> bool {
         (self.0 & SHAPE_ID_FL_FROZEN) != 0
+    }
+
+    pub fn layout(self) -> ShapeLayout {
+        match self.0 & SHAPE_ID_LAYOUT_MASK {
+            SHAPE_ID_LAYOUT_ROBJECT => ShapeLayout::RObject,
+            SHAPE_ID_LAYOUT_RCLASS => ShapeLayout::RClass,
+            SHAPE_ID_LAYOUT_RDATA => ShapeLayout::RData,
+            SHAPE_ID_LAYOUT_OTHER => ShapeLayout::Other,
+            layout => unreachable!("unknown shape layout bits: {layout:#x}"),
+        }
     }
 }
 
@@ -609,19 +627,6 @@ impl VALUE {
             RB_TYPE_P(self, RUBY_T_STRUCT) &&
             FL_TEST_RAW(self, VALUE(RSTRUCT_EMBED_LEN_MASK)) != VALUE(0)
         }
-    }
-
-    pub fn class_fields_embedded_p(self) -> bool {
-        unsafe { rb_jit_class_fields_embedded_p(self) }
-    }
-
-    pub fn data_p(self) -> bool {
-        !self.special_const_p() &&
-            self.builtin_type() == RUBY_T_DATA
-    }
-
-    pub fn data_fields_embedded_p(self) -> bool {
-        unsafe { rb_jit_data_fields_embedded_p(self) }
     }
 
     pub fn as_fixnum(self) -> i64 {
@@ -1643,6 +1648,7 @@ pub(crate) mod ids {
         name: freeze
         name: minusat            content: b"-@"
         name: aref               content: b"[]"
+        name: rb_obj_is_proc
         name: rb_ivar_get_at_no_ractor_check
         name: RUBY_FL_FREEZE
         name: RUBY_ELTS_SHARED

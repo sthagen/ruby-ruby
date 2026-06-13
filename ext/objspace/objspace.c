@@ -510,7 +510,25 @@ iow_newobj(VALUE obj)
     return TypedData_Wrap_Struct(rb_cInternalObjectWrapper, &iow_data_type, (void *)obj);
 }
 
-/* Returns the type of the internal object. */
+/*
+ *  call-seq:
+ *     type -> symbol
+ *
+ *  Returns the type of the wrapped internal object as a symbol.
+ *
+ *  For example, an included module is represented internally as a +T_ICLASS+
+ *  object:
+ *
+ *    require 'objspace'
+ *
+ *    module M; end
+ *    class A; include M; end
+ *
+ *    iclass = ObjectSpace.internal_super_of(A)
+ *    iclass.type # => :T_ICLASS
+ *
+ *  The exact set of returned symbols is implementation specific.
+ */
 static VALUE
 iow_type(VALUE self)
 {
@@ -864,13 +882,18 @@ Init_objspace(void)
     rb_define_module_function(rb_mObjSpace, "internal_super_of", objspace_internal_super_of, 1);
 
     /*
-     * This class is used as a return value from
-     * ObjectSpace::reachable_objects_from.
+     *  ObjectSpace::InternalObjectWrapper wraps objects that are internal to
+     *  the CRuby implementation and usually not directly visible in Ruby code.
      *
-     * When ObjectSpace::reachable_objects_from returns an object with
-     * references to an internal object, an instance of this class is returned.
+     *  ObjectSpace.reachable_objects_from and
+     *  ObjectSpace.reachable_objects_from_root return instances of this class
+     *  when a reachable object is an internal object. Some other ObjectSpace
+     *  methods, such as ObjectSpace.internal_super_of, may also return wrapped
+     *  internal objects.
      *
-     * You can use the #type method to check the type of the internal object.
+     *  An InternalObjectWrapper is a debugging and introspection object. Do not
+     *  use it in application code. The wrapped object and the exact details of
+     *  this class are implementation specific and may change in future versions.
      */
     rb_cInternalObjectWrapper = rb_define_class_under(rb_mObjSpace, "InternalObjectWrapper", rb_cObject);
     rb_undef_alloc_func(rb_cInternalObjectWrapper);

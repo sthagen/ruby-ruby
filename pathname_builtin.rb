@@ -759,17 +759,16 @@ class Pathname
   end
   private :plus
 
+  # call-seq:
+  #   join(*objects) -> new_pathname
   #
-  # Joins the given pathnames onto +self+ to create a new Pathname object.
-  # This is effectively the same as using Pathname#+ to append +self+ and
-  # all arguments sequentially.
+  # Joins the string-converted given +objects+ to the string path in +self+;
+  # returns a new pathname containing the joined string:
   #
-  #   path0 = Pathname.new("/usr")                # Pathname:/usr
-  #   path0 = path0.join("bin/ruby")              # Pathname:/usr/bin/ruby
-  #       # is the same as
-  #   path1 = Pathname.new("/usr") + "bin/ruby"   # Pathname:/usr/bin/ruby
-  #   path0 == path1
-  #       #=> true
+  #   Pathname('foo').join                  # => #<Pathname:foo>
+  #   Pathname('foo').join('bar')           # => #<Pathname:foo/bar>
+  #   Pathname('foo').join('bar', 'baz')    # => #<Pathname:foo/bar/baz>
+  #   Pathname('foo').join(Pathname('bar')) # => #<Pathname:foo/bar>
   #
   def join(*args)
     return self if args.empty?
@@ -1338,8 +1337,14 @@ class Pathname    # * File *
   # See <tt>File.lchown</tt>.
   def lchown(owner, group) File.lchown(owner, group, @path) end
 
-  # See <tt>File.fnmatch</tt>.  Return +true+ if the receiver matches the given
-  # pattern.
+  # :markup: markdown
+  #
+  # call-seq:
+  #   File.fnmatch(pattern, flags = 0) -> true or false
+  #
+  # Returns whether string `pattern` matches against the string path in `self`,
+  # under the control of the given `flags`;
+  # see [Filename Matching](rdoc-ref:file/filename_matching.md).
   def fnmatch(pattern, ...) File.fnmatch(pattern, @path, ...) end
 
   # See <tt>File.fnmatch?</tt> (same as #fnmatch).
@@ -1668,7 +1673,18 @@ class Pathname    # * FileTest *
   #
   def exist?() FileTest.exist?(@path) end
 
-  # See <tt>FileTest.grpowned?</tt>.
+  # call-seq:
+  #   grpowned?(path) -> true or false
+  #
+  # Returns whether the filesystem entry for the path stored in +self+ exists,
+  # and the effective group id of the calling process is the owner of the entry:
+  #
+  #   Pathname('README.md').grpowned?   # => true
+  #   Pathname('lib').grpowned?         # => true
+  #   Pathname('/etc/passwd').grpowned? # => false
+  #   Pathname('nosuch').grpowned?      # => false
+  #
+  # Returns +false+ on Windows.
   def grpowned?() FileTest.grpowned?(@path) end
 
   # :markup: markdown
