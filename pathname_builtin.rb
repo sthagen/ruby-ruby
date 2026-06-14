@@ -1269,7 +1269,28 @@ class Pathname    # * File *
   #
   def chmod(mode) File.chmod(mode, @path) end
 
-  # See <tt>File.lchmod</tt>.
+  #  :markup: markdown
+  #
+  #  call-seq:
+  #    Pathname.lchmod(mode) -> 1
+  #
+  #  Not supported on some platforms (raises Errno:: ENOTSUP).
+  #
+  #  When supported: like Pathname::chmod, but does not follow symbolic links,
+  #  and therefore changes the mode of the entry specified by `self`:
+  #
+  #  ```ruby
+  #  File.write('t.tmp', '')
+  #  File.symlink('t.tmp', 'link')
+  #  File.stat('t.tmp').mode.to_s(8) # => "100664"
+  #  File.stat('link').mode.to_s(8)  # => "100664"
+  #  Pathname('link').lchmod(0777)
+  #  File.stat('t.tmp').mode.to_s(8) # => "100664"
+  #  File.stat('link').mode.to_s(8)  # => "100777"
+  #  File.delete('t.tmp')
+  #  File.delete('link')
+  #  ```
+  #
   def lchmod(mode) File.lchmod(mode, @path) end
 
   # :markup: markdown
@@ -1879,7 +1900,25 @@ class Pathname    # * Dir *
     Dir.foreach(@path) {|f| yield self.class.new(f) }
   end
 
-  # See <tt>Dir.mkdir</tt>.  Create the referenced directory.
+  # :markup: markdown
+  #
+  # call-seq:
+  #    mkdir(permissions = 0755) -> 0
+  #
+  # Creates a directory in the underlying file system
+  # at the path in `self`, with the given `permissions`;
+  # see {File Permissions}[rdoc-ref:File@File+Permissions]:
+  #
+  # ```ruby
+  # Dir.mkdir('foo')
+  # File.stat(Dir.new('foo')).mode.to_s(8) # => "40775"
+  # Dir.mkdir('bar', 0644)
+  # File.stat(Dir.new('bar')).mode.to_s(8) # => "40644"
+  # Dir.rmdir('foo')
+  # Dir.rmdir('bar')
+  # ```
+  #
+  # Argument `permissions` is ignored on Windows.
   def mkdir(...) Dir.mkdir(@path, ...) end
 
   # See <tt>Dir.rmdir</tt>.  Remove the referenced directory.
