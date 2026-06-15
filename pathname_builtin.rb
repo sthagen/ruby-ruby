@@ -1355,7 +1355,49 @@ class Pathname    # * File *
   #
   def chown(owner, group) File.chown(owner, group, @path) end
 
-  # See <tt>File.lchown</tt>.
+  # :markup: markdown
+  #
+  # call-seq:
+  #   lchown(uid, gid) -> 1
+  #
+  #  Not supported on some platforms (raises exception).
+  #
+  #  Calling process must have superuser privileges.
+  #
+  #  When supported: like Pathname#chown, but does not follow symbolic links,
+  #  and therefore changes the ownership of the entry at the path in `self`:
+  #
+  # ```ruby
+  # # Super user; all privileges.
+  # Process.uid # => 0
+  # Process.gid # => 0
+  # # Create regular file and symbolic link to it.
+  # File.write('t.tmp', '')
+  # File.symlink('t.tmp', 'link')
+  # # Capture original statuses.
+  # fstat0 = File.stat('t.tmp')  # Method ::stat; status of file.
+  # lstat0 = File.lstat('link')  # Method ::lstat; status of link.
+  # # Original user ids and group ids.
+  # fstat0.uid # => 0
+  # fstat0.gid # => 0
+  # lstat0.uid # => 0
+  # lstat0.gid # => 0
+  # # Change ids for link.
+  # Pathname('link').lchown(1000, 1000)
+  # # Capture new statuses.
+  # fstat1 = File.stat('t.tmp')
+  # lstat1 = File.lstat('link')
+  # # User id and group id for file not changed.
+  # fstat1.uid # => 0
+  # fstat1.gid # => 0
+  # # User id and group id for link changed.
+  # p lstat1.uid # => 1000
+  # p lstat1.gid # => 1000
+  # # Clean up.
+  # File.delete('t.tmp')
+  # File.delete('link')
+  # ```
+  #
   def lchown(owner, group) File.lchown(owner, group, @path) end
 
   # :markup: markdown
@@ -1411,7 +1453,31 @@ class Pathname    # * File *
   # See <tt>File.stat</tt>.  Returns a <tt>File::Stat</tt> object.
   def stat() File.stat(@path) end
 
-  # See <tt>File.lstat</tt>.
+  #
+  #  :markup: markdown
+  #
+  #  call-seq:
+  #    lstat -> new_stat
+  #
+  #  Returns a File::Stat object for the path in `self`;
+  #  does not follow symbolic links,
+  #  and therefore returns the stat object for that path,
+  #  regardless of whether it is a symbolic link:
+  #
+  #  ```ruby
+  #  File.write('t.tmp', '')
+  #  sleep(1)
+  #  File.symlink('t.tmp', 'link')
+  #  pn = Pathname('link')
+  #  # => #<Pathname:link>
+  #  # Method stat: follows link to 't.tmp'.
+  #  pn.stat.ctime  # => 2026-06-13 15:02:46.562620885 -0500
+  #  # Method lstat; does not follow link.
+  #  pn.lstat.ctime # => 2026-06-13 15:02:47.563619647 -0500
+  #  File.delete('t.tmp')
+  #  File.delete('link')
+  #  ```
+  #
   def lstat() File.lstat(@path) end
 
   # See <tt>File.symlink</tt>.  Creates a symbolic link.
@@ -1777,47 +1843,21 @@ class Pathname    # * FileTest *
 end
 
 
-class Pathname    # * Dir *
+class Pathname
   # call-seq:
-  #   glob(patterns, **kwargs) → array_of_pathnames
-  #   glob(patterns, **kwargs) {|pathname| ... } → nil
+  #   glob(patterns, base: '.', flags: 0, sort: true) → array_of_pathnames
+  #   glob(patterns, base: '.', flags: 0, sort: true) {|pathname| ... } → nil
   #
-  # Calls <tt>Dir.glob(patterns, **kwargs)</tt>, which yields or returns entry names;
-  # see Dir.glob.
+  # Selects filesystem entries
+  # based on the given keyword arguments +base+, +flags+, and +sort+;
+  # see {Filename Globbing}[rdoc-ref:file/filename_globbing.md].
   #
-  # Required argument +patterns+ is a string pattern or an array of string patterns;
-  # note that these patterns are not regexps.
+  # With no block given, returns an array of pathnames,
+  # each based on a selected filesystem entry.
   #
-  # Keyword arguments <tt>**kwargs</tt> are passed through to Dir.glob;
-  # see the documentation there.
+  # With a block given, calls the block with pathnames,
+  # each based on a selected filesytem entry.
   #
-  # With no block given, returns an array of \Pathname objects;
-  # each is <tt>Pathname.new(entry_name)</tt> for an entry name returned by Dir.glob.
-  #
-  #   Pathname.glob('*').take(3)
-  #   # => [#<Pathname:BSDL>, #<Pathname:CONTRIBUTING.md>, #<Pathname:COPYING>]
-  #   Pathname.glob(['o*', 'a*']).take(3)
-  #   # => [#<Pathname:object.c>, #<Pathname:aclocal.m4>, #<Pathname:addr2line.c>]
-  #
-  # With a block given, calls the block with each pathname
-  # <tt>Pathname.new(entry_name)</tt>,
-  # where each +entry_name+ is a \Pathname object created by the value yielded by Dir.glob.
-  #
-  #   a = []
-  #   Pathname.glob(['o*', 'a*']) {|pathname| a << pathname }
-  #   a.take(3)
-  #   # => [#<Pathname:object.c>, #<Pathname:aclocal.m4>, #<Pathname:addr2line.c>]
-  #
-  # Optional keyword argument +base+ is of particular interest.
-  # When it is given, its value specifies the base directory for the pathnames;
-  # each pattern string specifies entries relative to the base directory:
-  #
-  #   Pathname.glob('*', base: 'lib').take(2)
-  #   # => [#<Pathname:English.gemspec>, #<Pathname:English.rb>]
-  #   Pathname.glob('*', base: 'lib/bundler').take(2)
-  #   # => [#<Pathname:build_metadata.rb>, #<Pathname:bundler.gemspec>]
-  #
-  # Note that the base directory is not prepended to the entry names in the result.
   def Pathname.glob(*args, **kwargs) # :yield: pathname
     if block_given?
       Dir.glob(*args, **kwargs) {|f| yield self.new(f) }
