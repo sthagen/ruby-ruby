@@ -43,6 +43,7 @@ macro_rules! hir_comment {
 
 #[allow(unused_imports)]
 pub(crate) use hir_comment;
+use crate::options::INLINE_BUDGET_UNLIMITED;
 
 /// An index of an [`Insn`] in a [`Function`]. This is a popular
 /// type since this effectively acts as a pointer to an [`Insn`].
@@ -3504,6 +3505,22 @@ impl Function {
         None
     }
 
+    fn monomorphic_summary(&self, profiles: &ProfileOracle, recv: InsnId, state: InsnId) -> Option<ProfiledType> {
+        let Some(entries) = profiles.get(state) else {
+            return None;
+        };
+        let recv = self.chase_insn(recv);
+        for (entry_insn, entry_type_summary) in entries {
+            if self.chase_insn(*entry_insn) == recv {
+                if entry_type_summary.is_monomorphic() {
+                    return Some(entry_type_summary.bucket(0));
+                }
+                return None;
+            }
+        }
+        None
+    }
+
     /// Resolve the receiver type for method dispatch optimization from profile data.
     ///
     /// Returns:
@@ -4013,23 +4030,6 @@ impl Function {
                             self.push_insn_id(block, insn_id); continue;
                         }
                     }
-                    Insn::GetConstantPath { ic, state, .. } => {
-                        let idlist: *const ID = unsafe { (*ic).segments };
-                        let ice = unsafe { (*ic).entry };
-                        if ice.is_null() {
-                            self.push_insn_id(block, insn_id); continue;
-                        }
-                        let cref_sensitive = !unsafe { (*ice).ic_cref }.is_null();
-                        if cref_sensitive || !self.assume_single_ractor_mode(block, state) {
-                            self.push_insn_id(block, insn_id); continue;
-                        }
-                        // Invalidate output code on any constant writes associated with constants
-                        // referenced after the PatchPoint.
-                        self.push_insn(block, Insn::PatchPoint { invariant: Invariant::StableConstantNames { idlist }, state });
-                        let replacement = self.push_insn(block, Insn::Const { val: Const::Value(unsafe { (*ice).value }) });
-                        self.insn_types[replacement.0] = self.infer_type(replacement);
-                        self.make_equal_to(insn_id, replacement);
-                    }
                     Insn::ObjToString { val, cd, state, .. } => {
                         if self.is_a(val, types::String) {
                             // behaves differently from `Send` with `mid:to_s` because ObjToString should not have a patch point for String to_s being redefined
@@ -4424,9 +4424,9 @@ impl Function {
         // allocated for this function — not the final compiled size. Once that count
         // crosses the budget, every further callee is rejected and the optimization
         // fixed-point loop reaches its terminal iteration. See `Options::inline_budget`
-        // for the full unit/semantics caveat. Budget == 0 disables this cap.
+        // for the full unit/semantics caveat.
         let budget = get_option!(inline_budget);
-        if budget != 0 && self.insns.len() > budget {
+        if budget != INLINE_BUDGET_UNLIMITED && self.insns.len() > budget {
             incr_counter!(inline_reject_budget_exceeded);
             return false;
         }
@@ -4464,6 +4464,19 @@ impl Function {
     /// Inline method calls by replacing eligible SendDirect instructions with the
     /// callee's HIR body. Returns true if any inlining occurred.
     fn inline_methods(&mut self) -> bool {
+        // Bail early if inlining is disabled.
+        if get_option!(inline_threshold) == 0 {
+            return false;
+        }
+
+        // Fail fast if inlining is enabled but we've exhausted our inlining budget.
+        // Otherwise, `can_inline` and `should_inline` will make local inlining decisions.
+        let budget = get_option!(inline_budget);
+        if budget != INLINE_BUDGET_UNLIMITED && self.insns.len() > budget {
+            incr_counter!(inline_reject_budget_exceeded);
+            return false;
+        }
+
         let mut did_inline = false;
 
         // Worklist of blocks left to scan for inlinable SendDirects. Seeded with
@@ -4928,46 +4941,6 @@ impl Function {
                         let shape = self.load_shape(block, self_val);
                         self.guard_shape(block, shape, recv_type.shape(), state, Some(Recompile::ProfileSelf));
                         let replacement = self.load_ivar(block, self_val, recv_type, id);
-                        self.make_equal_to(insn_id, replacement);
-                    }
-                    Insn::DefinedIvar { self_val, id, pushval, state } => {
-                        let Some(recv_type) = self.profiled_type_of_at(self_val, state) else {
-                            // No (monomorphic/skewed polymorphic) profile info
-                            self.count(block, Counter::definedivar_fallback_not_monomorphic);
-                            self.push_insn_id(block, insn_id); continue;
-                        };
-                        if recv_type.flags().is_immediate() {
-                            // Instance variable lookups on immediate values are always nil
-                            self.count(block, Counter::definedivar_fallback_immediate);
-                            self.push_insn_id(block, insn_id); continue;
-                        }
-                        assert!(recv_type.shape().is_valid());
-                        if !recv_type.flags().is_t_object() {
-                            // Check if the receiver is a T_OBJECT
-                            self.count(block, Counter::definedivar_fallback_not_t_object);
-                            self.push_insn_id(block, insn_id); continue;
-                        }
-                        if recv_type.shape().is_complex() {
-                            // too-complex shapes can't use index access
-                            self.count(block, Counter::definedivar_fallback_complex);
-                            self.push_insn_id(block, insn_id); continue;
-                        }
-                        if self.policy.no_side_exits {
-                            // On the final version, keep the DefinedIvar fallback instead of another shape guard.
-                            self.push_insn_id(block, insn_id); continue;
-                        }
-                        let self_val = self.guard_heap(block, self_val, state);
-                        let shape = self.load_shape(block, self_val);
-                        self.guard_shape(block, shape, recv_type.shape(), state, Some(Recompile::ProfileSelf));
-                        let mut ivar_index: attr_index_t = 0;
-                        let replacement = if unsafe { rb_shape_get_iv_index(recv_type.shape().0, id, &mut ivar_index) } {
-                            self.push_insn(block, Insn::Const { val: Const::Value(pushval) })
-                        } else {
-                            // If there is no IVAR index, then the ivar was undefined when we
-                            // entered the compiler.  That means we can just return nil for this
-                            // shape + iv name
-                            self.push_insn(block, Insn::Const { val: Const::Value(Qnil) })
-                        };
                         self.make_equal_to(insn_id, replacement);
                     }
                     Insn::SetIvar { self_val, id, val, state, ic } => {
@@ -7821,6 +7794,21 @@ fn add_iseq_to_hir(
                     // (ID id, IVC ic, VALUE pushval)
                     let id = ID(get_arg(pc, 0).as_u64());
                     let pushval = get_arg(pc, 2);
+                    fn can_optimize(profiled_type: ProfiledType) -> Option<ShapeId> {
+                        // Runtime immediates cannot pass the HeapBasicObject guard, so don't
+                        // generate unreachable shape branches for profiled immediate buckets.
+                        if profiled_type.flags().is_immediate() { return None; }
+                        // Class/module/T_DATA ivars use different storage rules.
+                        // Let the fallthrough DefinedIvar handle these.
+                        if !profiled_type.flags().is_t_object() { return None; }
+                        let profiled_shape = profiled_type.shape();
+                        assert!(profiled_shape.is_valid());
+                        // Too-complex shapes use hash tables for ivars;
+                        // rb_shape_get_iv_index doesn't work for them.
+                        // Let the fallthrough DefinedIvar handle these.
+                        if profiled_shape.is_complex() { return None; }
+                        Some(profiled_shape)
+                    }
                     if let Some(summary) = fun.polymorphic_summary(&profiles, self_param, exit_id) {
                         self_param = fun.push_insn(block, Insn::GuardType { val: self_param, guard_type: types::HeapBasicObject, state: exit_id, recompile: None });
                         let join_block = fun.new_block(insn_idx);
@@ -7831,18 +7819,7 @@ fn add_iseq_to_hir(
                         for &profiled_type in summary.buckets() {
                             // End of the buckets
                             if profiled_type.is_empty() { break; }
-                            // Runtime immediates cannot pass the HeapBasicObject guard, so don't
-                            // generate unreachable shape branches for profiled immediate buckets.
-                            if profiled_type.flags().is_immediate() { continue; }
-                            // Class/module/T_DATA ivars use different storage rules.
-                            // Let the fallthrough DefinedIvar handle these.
-                            if !profiled_type.flags().is_t_object() { continue; }
-                            let profiled_shape = profiled_type.shape();
-                            assert!(profiled_shape.is_valid());
-                            // Too-complex shapes use hash tables for ivars;
-                            // rb_shape_get_iv_index doesn't work for them.
-                            // Let the fallthrough DefinedIvar handle these.
-                            if profiled_shape.is_complex() { continue; }
+                            let Some(profiled_shape) = can_optimize(profiled_type) else { continue };
                             if seen_shape.contains(&profiled_shape) { continue; }
                             seen_shape.push(profiled_shape);
                             let actual_shape = fun.load_shape(block, self_param);
@@ -7874,10 +7851,25 @@ fn add_iseq_to_hir(
                         state.stack_push(join_param);
                         block = join_block;
                     } else {
-                        // TODO: Handle monomorphic definedivar specialization here too, including the
-                        // no_side_exits policy, so optimize_getivar doesn't need a separate DefinedIvar
-                        // path. Unlike GetIvar, DefinedIvar isn't emitted by later lowering passes.
-                        state.stack_push(fun.push_insn(block, Insn::DefinedIvar { self_val: self_param, id, pushval, state: exit_id }));
+                        if let Some(profiled_shape) = (if fun.policy.no_side_exits { None } else { Some(true) })
+                            .and_then(|_| fun.monomorphic_summary(&profiles, self_param, exit_id))
+                            .and_then(can_optimize) {
+                            self_param = fun.guard_heap(block, self_param, exit_id);
+                            let shape = fun.load_shape(block, self_param);
+                            fun.guard_shape(block, shape, profiled_shape, exit_id, Some(Recompile::ProfileSelf));
+                            let mut ivar_index: attr_index_t = 0;
+                            let result = if unsafe { rb_shape_get_iv_index(profiled_shape.0, id, &mut ivar_index) } {
+                                fun.push_insn(block, Insn::Const { val: Const::Value(pushval) })
+                            } else {
+                                // If there is no IVAR index, then the ivar was undefined when we
+                                // entered the compiler.  That means we can just return nil for this
+                                // shape + iv name
+                                fun.push_insn(block, Insn::Const { val: Const::Value(Qnil) })
+                            };
+                            state.stack_push(result);
+                        } else {
+                            state.stack_push(fun.push_insn(block, Insn::DefinedIvar { self_val: self_param, id, pushval, state: exit_id }));
+                        }
                     }
                 }
                 YARVINSN_checkkeyword => {
@@ -7920,9 +7912,18 @@ fn add_iseq_to_hir(
                     state.stack_push(result);
                 }
                 YARVINSN_opt_getconstant_path => {
-                    let ic = get_arg(pc, 0).as_ptr();
-                    let get_const_path = fun.push_insn(block, Insn::GetConstantPath { ic, state: exit_id });
-                    state.stack_push(get_const_path);
+                    let ic: *const iseq_inline_constant_cache = get_arg(pc, 0).as_ptr();
+                    let idlist: *const ID = unsafe { (*ic).segments };
+                    let ice = unsafe { (*ic).entry };
+                    let result = if !ice.is_null() && (unsafe { (*ice).ic_cref }.is_null() && fun.assume_single_ractor_mode(block, exit_id)) {
+                        // Invalidate output code on any constant writes associated with constants
+                        // referenced after the PatchPoint.
+                        fun.push_insn(block, Insn::PatchPoint { invariant: Invariant::StableConstantNames { idlist }, state: exit_id });
+                        fun.push_insn(block, Insn::Const { val: Const::Value(unsafe { (*ice).value }) })
+                    } else {
+                        fun.push_insn(block, Insn::GetConstantPath { ic, state: exit_id })
+                    };
+                    state.stack_push(result);
 
                     // Check for `::RubyVM::ZJIT` for directives
                     unsafe {
@@ -7942,7 +7943,7 @@ fn add_iseq_to_hir(
                                 let zjit_module = VALUE(state::ZJIT_MODULE.load(Ordering::Relaxed));
                                 let lookedup_module = rb_const_lookup(rb_cRubyVM, ID!(ZJIT));
                                 if !lookedup_module.is_null() && (*lookedup_module).value == zjit_module {
-                                    fun.insn_types[get_const_path.0] = Type::from_value(zjit_module);
+                                    fun.insn_types[result.0] = Type::from_value(zjit_module);
                                 }
                             }
                         }
@@ -8659,87 +8660,52 @@ fn add_iseq_to_hir(
                         break;
                     }
 
-                    {
-                        fn new_branch_block(
-                            fun: &mut Function,
-                            cd: *const rb_call_data,
-                            argc: usize,
-                            opcode: u32,
-                            new_type: Type,
-                            insn_idx: u32,
-                            exit_state: &FrameState,
-                            locals_count: usize,
-                            stack_count: usize,
-                            join_block: BlockId,
-                        ) -> BlockId {
-                            let block = fun.new_block(insn_idx);
-                            let self_param = fun.push_insn(block, Insn::Param);
-                            let mut state = exit_state.clone();
-                            state.locals.clear();
-                            state.stack.clear();
-                            state.locals.extend((0..locals_count).map(|_| fun.push_insn(block, Insn::Param)));
-                            state.stack.extend((0..stack_count).map(|_| fun.push_insn(block, Insn::Param)));
-                            let snapshot = fun.push_insn(block, Insn::Snapshot { state: state.clone() });
-                            let args = state.stack_pop_n(argc).unwrap();
-                            let recv = state.stack_pop().unwrap();
-                            let refined_recv = fun.push_insn(block, Insn::RefineType { val: recv, new_type });
-                            state.replace(recv, refined_recv);
-                            let send = fun.push_insn(block, Insn::Send { recv: refined_recv, cd, block: None, args, state: snapshot, reason: Uncategorized(opcode) });
-                            state.stack_push(send);
-                            fun.push_insn(block, Insn::Jump(BranchEdge { target: join_block, args: state.as_args(self_param) }));
-                            block
-                        }
-                        let branch_insn_idx = exit_state.insn_idx as u32;
-                        let locals_count = state.locals.len();
-                        let stack_count = state.stack.len();
-                        let recv = state.stack_topn(argc as usize)?;  // args are on top
-                        let entry_args = state.as_args(self_param);
-                        if let Some(summary) = fun.polymorphic_summary(&profiles, recv, exit_id) {
-                            let join_block = fun.new_block(insn_idx);
-                            // Dedup by expected type so immediate/heap variants
-                            // under the same Ruby class can still get separate branches.
-                            let mut seen_types = Vec::with_capacity(summary.buckets().len());
-                            for &profiled_type in summary.buckets() {
-                                if profiled_type.is_empty() { break; }
-                                let expected = Type::from_profiled_type(profiled_type);
-                                if seen_types.iter().any(|ty: &Type| ty.bit_equal(expected)) {
-                                    continue;
-                                }
-                                seen_types.push(expected);
-                                let has_type = fun.push_insn(block, Insn::HasType { val: recv, expected });
-                                let iftrue_block =
-                                    new_branch_block(fun, cd, argc as usize, opcode, expected, branch_insn_idx, &exit_state, locals_count, stack_count, join_block);
-                                let target = BranchEdge { target: iftrue_block, args: entry_args.clone() };
-                                let fall_through = fun.new_block(insn_idx);
-                                fun.push_insn(block, Insn::CondBranch {
-                                    val: has_type,
-                                    if_true: target,
-                                    if_false: BranchEdge { target: fall_through, args: vec![] }
-                                });
-                                block = fall_through;
-                            }
-                            // Continue compilation from the join block at the next instruction.
-                            // Make a copy of the current state without the args (pop the receiver
-                            // and push the result) because we just use the locals/stack sizes to
-                            // make the right number of Params
-                            let mut join_state = state.clone();
-                            join_state.stack_pop_n(argc as usize)?;
-                            queue.push_back((join_state, join_block, insn_idx, local_inval));
-                            // In the fallthrough case, do a generic interpreter send and then join.
-                            let args = state.stack_pop_n(argc as usize)?;
-                            let recv = state.stack_pop()?;
-                            let reason = SendWithoutBlockPolymorphicFallback;
-                            let send = fun.push_insn(block, Insn::Send { recv, cd, block: None, args, state: exit_id, reason });
-                            state.stack_push(send);
-                            fun.push_insn(block, Insn::Jump(BranchEdge { target: join_block, args: state.as_args(self_param) }));
-                            break;  // End the block
-                        }
-                    }
-
                     let args = state.stack_pop_n(argc as usize)?;
                     let recv = state.stack_pop()?;
-                    let send = fun.push_insn(block, Insn::Send { recv, cd, block: None, args, state: exit_id, reason: Uncategorized(opcode) });
-                    state.stack_push(send);
+
+                    if let Some(summary) = fun.polymorphic_summary(&profiles, recv, exit_id) {
+                        let join_block = fun.new_block(insn_idx);
+                        let join_param = fun.push_insn(join_block, Insn::Param);
+                        // Dedup by expected type so immediate/heap variants
+                        // under the same Ruby class can still get separate branches.
+                        let mut seen_types = Vec::with_capacity(summary.buckets().len());
+                        for &profiled_type in summary.buckets() {
+                            if profiled_type.is_empty() { break; }
+                            let expected = Type::from_profiled_type(profiled_type);
+                            if seen_types.iter().any(|ty: &Type| ty.bit_equal(expected)) {
+                                continue;
+                            }
+                            seen_types.push(expected);
+                            let has_type = fun.push_insn(block, Insn::HasType { val: recv, expected });
+                            let iftrue_block = fun.new_block(insn_idx);
+                            let fall_through = fun.new_block(insn_idx);
+                            fun.push_insn(block, Insn::CondBranch {
+                                val: has_type,
+                                if_true: BranchEdge { target: iftrue_block, args: vec![] },
+                                if_false: BranchEdge { target: fall_through, args: vec![] }
+                            });
+                            block = fall_through;
+                            // Take a fresh Snapshot rather than
+                            // reusing exit_id so type specialization resolves the receiver from
+                            // its refined, exact type instead of the polymorphic profile that is
+                            // keyed at exit_id.
+                            let snapshot = fun.push_insn(iftrue_block, Insn::Snapshot { state: exit_state.clone() });
+                            let refined_recv = fun.push_insn(iftrue_block, Insn::RefineType { val: recv, new_type: expected });
+                            let send = fun.push_insn(iftrue_block, Insn::Send { recv: refined_recv, cd, block: None, args: args.clone(), state: snapshot, reason: Uncategorized(opcode) });
+                            fun.push_insn(iftrue_block, Insn::Jump(BranchEdge { target: join_block, args: vec![send] }));
+                        }
+                        // In the fallthrough case, do a generic interpreter send and then join.
+                        let reason = SendWithoutBlockPolymorphicFallback;
+                        let send = fun.push_insn(block, Insn::Send { recv, cd, block: None, args, state: exit_id, reason });
+                        fun.push_insn(block, Insn::Jump(BranchEdge { target: join_block, args: vec![send] }));
+                        state.stack_push(join_param);
+                        // Continue compilation from the join block at the next instruction.
+                        block = join_block;
+                    } else {
+                        // Maybe monomorphic; handled in type_specialize
+                        let send = fun.push_insn(block, Insn::Send { recv, cd, block: None, args, state: exit_id, reason: Uncategorized(opcode) });
+                        state.stack_push(send);
+                    }
                 }
                 YARVINSN_send => {
                     let cd: *const rb_call_data = get_arg(pc, 0).as_ptr();
