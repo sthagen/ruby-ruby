@@ -2,6 +2,21 @@
 use super::*;
 
 #[cfg(test)]
+mod size_tests {
+    use super::*;
+
+    #[test]
+    fn test_size_of_insn() {
+        assert_eq!(std::mem::size_of::<Insn>(), 80);
+    }
+
+    #[test]
+    fn test_size_of_type() {
+        assert_eq!(std::mem::size_of::<Type>(), 16);
+    }
+}
+
+#[cfg(test)]
 mod snapshot_tests {
     use super::*;
     use insta::assert_snapshot;
@@ -92,7 +107,7 @@ mod snapshot_tests {
     }
 
     #[test]
-    fn test_send_direct_with_reordered_kwargs_has_snapshot() {
+    fn test_send_with_reordered_kwargs_has_snapshot() {
         eval("
             def foo(a:, b:, c:) = [a, b, c]
             def test = foo(c: 3, a: 1, b: 2)
@@ -121,16 +136,19 @@ mod snapshot_tests {
           v23:Any = Snapshot FrameState { pc: 0x1008, stack: [v6, v13, v15, v11], locals: [] }
           PatchPoint MethodRedefined(Object@0x1010, foo@0x1018, cme:0x1020)
           v25:ObjectSubclass[class_exact*:Object@VALUE(0x1010)] = GuardType v6, ObjectSubclass[class_exact*:Object@VALUE(0x1010)] recompile
-          v26:BasicObject = SendDirect v25, 0x1048, :foo (0x1058), v13, v15, v11
-          v18:Any = Snapshot FrameState { pc: 0x1060, stack: [v26], locals: [] }
-          PatchPoint NoTracePoint
+          v44:Fixnum[0] = Const Value(0)
+          PushInlineFrame v25 (0x1048), v13, v15, v11
+          v38:Any = Snapshot FrameState { pc: 0x1050, stack: [v13, v15, v11], locals: [a=v13, b=v15, c=v11, ID(0)=v44], caller: v27 }
+          v39:ArrayExact = NewArray v13, v15, v11
+          v40:Any = Snapshot FrameState { pc: 0x1058, stack: [v39], locals: [a=v13, b=v15, c=v11, ID(0)=v44], caller: v27 }
           CheckInterrupts
-          Return v26
+          PopInlineFrame
+          Return v39
         ");
     }
 
     #[test]
-    fn test_send_direct_with_kwargs_in_order_has_snapshot() {
+    fn test_send_with_kwargs_in_order_has_snapshot() {
         eval("
             def foo(a:, b:) = [a, b]
             def test = foo(a: 1, b: 2)
@@ -157,11 +175,14 @@ mod snapshot_tests {
           v14:Any = Snapshot FrameState { pc: 0x1008, stack: [v6, v11, v13], locals: [] }
           PatchPoint MethodRedefined(Object@0x1010, foo@0x1018, cme:0x1020)
           v22:ObjectSubclass[class_exact*:Object@VALUE(0x1010)] = GuardType v6, ObjectSubclass[class_exact*:Object@VALUE(0x1010)] recompile
-          v23:BasicObject = SendDirect v22, 0x1048, :foo (0x1058), v11, v13
-          v16:Any = Snapshot FrameState { pc: 0x1060, stack: [v23], locals: [] }
-          PatchPoint NoTracePoint
+          v39:Fixnum[0] = Const Value(0)
+          PushInlineFrame v22 (0x1048), v11, v13
+          v33:Any = Snapshot FrameState { pc: 0x1050, stack: [v11, v13], locals: [a=v11, b=v13, ID(0)=v39], caller: v24 }
+          v34:ArrayExact = NewArray v11, v13
+          v35:Any = Snapshot FrameState { pc: 0x1058, stack: [v34], locals: [a=v11, b=v13, ID(0)=v39], caller: v24 }
           CheckInterrupts
-          Return v23
+          PopInlineFrame
+          Return v34
         ");
     }
 
@@ -2009,10 +2030,261 @@ pub(crate) mod hir_build_tests {
         bb3(v9:BasicObject, v10:BasicObject):
           v15:BasicObject = Send v10, 0x1008, :each # SendFallbackReason: Uncategorized(send)
           PatchPoint NoEPEscape(test)
-          v18:CPtr = LoadSP
-          v19:BasicObject = LoadField v18, :a@0x1000
           CheckInterrupts
           Return v15
+        ");
+    }
+
+    #[test]
+    fn test_send_with_block_reloads_only_written_locals() {
+        eval("
+            def foo = yield
+            def test
+              a = 1
+              b = 2
+              foo { a = 3 }
+              a + b
+            end
+            test
+        ");
+        // Only `a` is reloaded after the call; `b` is never written by the block,
+        // so it keeps its SSA value (the Fixnum constant) and is not reloaded.
+        assert_snapshot!(hir_string("test"), @"
+        fn test@<compiled>:4:
+        bb1():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          v2:NilClass = Const Value(nil)
+          v3:NilClass = Const Value(nil)
+          Jump bb3(v1, v2, v3)
+        bb2():
+          EntryPoint JIT(0)
+          v6:BasicObject = LoadArg :self@0
+          v7:NilClass = Const Value(nil)
+          v8:NilClass = Const Value(nil)
+          Jump bb3(v6, v7, v8)
+        bb3(v10:BasicObject, v11:NilClass, v12:NilClass):
+          v16:Fixnum[1] = Const Value(1)
+          v20:Fixnum[2] = Const Value(2)
+          v25:BasicObject = Send v10, 0x1000, :foo # SendFallbackReason: Uncategorized(send)
+          PatchPoint NoEPEscape(test)
+          v28:CPtr = LoadSP
+          v29:BasicObject = LoadField v28, :a@0x1028
+          PatchPoint NoEPEscape(test)
+          v38:BasicObject = Send v29, :+, v20 # SendFallbackReason: Uncategorized(opt_plus)
+          CheckInterrupts
+          Return v38
+        ");
+    }
+
+    #[test]
+    fn test_send_with_block_does_not_reload_read_only_local() {
+        eval("
+            def foo = yield
+            def test
+              a = 1
+              foo { a }
+              a
+            end
+            test
+        ");
+        // The block only reads `a`; it never assigns it, so `a` keeps its SSA value
+        // and is not reloaded after the call.
+        assert_snapshot!(hir_string("test"), @"
+        fn test@<compiled>:4:
+        bb1():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          v2:NilClass = Const Value(nil)
+          Jump bb3(v1, v2)
+        bb2():
+          EntryPoint JIT(0)
+          v5:BasicObject = LoadArg :self@0
+          v6:NilClass = Const Value(nil)
+          Jump bb3(v5, v6)
+        bb3(v8:BasicObject, v9:NilClass):
+          v13:Fixnum[1] = Const Value(1)
+          v18:BasicObject = Send v8, 0x1000, :foo # SendFallbackReason: Uncategorized(send)
+          PatchPoint NoEPEscape(test)
+          PatchPoint NoEPEscape(test)
+          CheckInterrupts
+          Return v13
+        ");
+    }
+
+    #[test]
+    fn test_send_reloads_referenced_block_param() {
+        eval("
+            def take(x) = x
+            def consume = yield
+            def test(&block)
+              consume { take(block) }
+              ::RubyVM::ZJIT.induce_side_exit!
+            end
+            test { 1 }
+        ");
+        // The block reads `block` (passed as a regular argument), so it references the
+        // block param. `getblockparam` is recorded as a read, but reading the block param
+        // materializes the captured block into its slot, so the block param must be
+        // reloaded after the call (this is the lazy_load_hooks miscompile scenario).
+        assert_snapshot!(hir_string("test"), @"
+        fn test@<compiled>:5:
+        bb1():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          v2:CPtr = LoadSP
+          v3:BasicObject = LoadField v2, :block@0x1000
+          Jump bb3(v1, v3)
+        bb2():
+          EntryPoint JIT(0)
+          v6:BasicObject = LoadArg :self@0
+          v7:BasicObject = LoadArg :block@1
+          Jump bb3(v6, v7)
+        bb3(v9:BasicObject, v10:BasicObject):
+          v15:BasicObject = Send v9, 0x1008, :consume # SendFallbackReason: Uncategorized(send)
+          PatchPoint NoEPEscape(test)
+          v18:CPtr = LoadSP
+          v19:BasicObject = LoadField v18, :block@0x1000
+          PatchPoint SingleRactorMode
+          PatchPoint StableConstantNames(0x1030, ::RubyVM::ZJIT)
+          v25:ModuleSubclass[RubyVM::ZJIT@0x1038] = Const Value(VALUE(0x1038))
+          SideExit DirectiveInduced
+        ");
+    }
+
+    #[test]
+    fn test_send_does_not_reload_unreferenced_block_param() {
+        eval("
+            def consume = yield
+            def test(&block)
+              a = 1
+              consume { a }
+              ::RubyVM::ZJIT.induce_side_exit!
+            end
+            test { 1 }
+        ");
+        // The block only references `a`, never the block param, so the block param
+        // cannot have been materialized by the call and is not reloaded. (Before the
+        // reload filter was refined, the block param was reloaded after every
+        // send-with-block, even when the block could not have touched it.)
+        assert_snapshot!(hir_string("test"), @"
+        fn test@<compiled>:4:
+        bb1():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          v2:CPtr = LoadSP
+          v3:BasicObject = LoadField v2, :block@0x1000
+          v4:NilClass = Const Value(nil)
+          Jump bb3(v1, v3, v4)
+        bb2():
+          EntryPoint JIT(0)
+          v7:BasicObject = LoadArg :self@0
+          v8:BasicObject = LoadArg :block@1
+          v9:NilClass = Const Value(nil)
+          Jump bb3(v7, v8, v9)
+        bb3(v11:BasicObject, v12:BasicObject, v13:NilClass):
+          v17:Fixnum[1] = Const Value(1)
+          v22:BasicObject = Send v11, 0x1008, :consume # SendFallbackReason: Uncategorized(send)
+          PatchPoint NoEPEscape(test)
+          PatchPoint SingleRactorMode
+          PatchPoint StableConstantNames(0x1030, ::RubyVM::ZJIT)
+          v30:ModuleSubclass[RubyVM::ZJIT@0x1038] = Const Value(VALUE(0x1038))
+          SideExit DirectiveInduced
+        ");
+    }
+
+    #[test]
+    fn test_send_with_anonymous_block_param() {
+        eval("
+            def consume = yield
+            def test(&)
+              consume { consume(&) }
+              consume(&)
+            end
+            test { 1 }
+        ");
+        assert_contains_opcode("test", YARVINSN_send);
+        // An anonymous `&` block param can only be forwarded with `&`, which compiles to
+        // `getblockparamproxy` and reads the block from the EP. It never materializes the
+        // param into its slot, so the block param is read directly from the EP after the
+        // call and is not reloaded -- there is nothing a reload could recover.
+        assert_snapshot!(hir_string("test"), @"
+        fn test@<compiled>:4:
+        bb1():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          v2:CPtr = LoadSP
+          v3:BasicObject = LoadField v2, :&@0x1000
+          Jump bb3(v1, v3)
+        bb2():
+          EntryPoint JIT(0)
+          v6:BasicObject = LoadArg :self@0
+          v7:BasicObject = LoadArg :&@1
+          Jump bb3(v6, v7)
+        bb3(v9:BasicObject, v10:BasicObject):
+          v15:BasicObject = Send v9, 0x1008, :consume # SendFallbackReason: Uncategorized(send)
+          PatchPoint NoEPEscape(test)
+          v24:CPtr = GetEP 0
+          v25:CUInt64 = LoadField v24, :VM_ENV_DATA_INDEX_FLAGS@0x1030
+          v26:CBool = IsBlockParamModified v25
+          CondBranch v26, bb4(), bb5()
+        bb4():
+          v28:BasicObject = LoadField v24, :&@0x1031
+          Jump bb6(v28, v28)
+        bb5():
+          v30:CInt64 = LoadField v24, :VM_ENV_DATA_INDEX_SPECVAL@0x1032
+          v31:CInt64 = GuardAnyBitSet v30, CUInt64(1) recompile
+          v32:ObjectSubclass[BlockParamProxy] = Const Value(VALUE(0x1038))
+          Jump bb6(v32, v10)
+        bb6(v22:BasicObject, v23:BasicObject):
+          v35:BasicObject = Send v9, &block, :consume, v22 # SendFallbackReason: Uncategorized(send)
+          CheckInterrupts
+          Return v35
+        ");
+    }
+
+    #[test]
+    fn test_send_reloads_local_written_by_nested_block() {
+        eval("
+            def foo = yield
+            def test
+              a = 1
+              b = 2
+              foo { foo { a = 3 } }
+              a + b
+            end
+            test
+        ");
+        assert_contains_opcode("test", YARVINSN_send);
+        // `a` is assigned only from a block nested inside the block argument, but the
+        // outer block's outer_variables table still records that write (the compiler
+        // aggregates writes up the nesting chain), so `a` is reloaded while the
+        // untouched `b` keeps its SSA value.
+        assert_snapshot!(hir_string("test"), @"
+        fn test@<compiled>:4:
+        bb1():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          v2:NilClass = Const Value(nil)
+          v3:NilClass = Const Value(nil)
+          Jump bb3(v1, v2, v3)
+        bb2():
+          EntryPoint JIT(0)
+          v6:BasicObject = LoadArg :self@0
+          v7:NilClass = Const Value(nil)
+          v8:NilClass = Const Value(nil)
+          Jump bb3(v6, v7, v8)
+        bb3(v10:BasicObject, v11:NilClass, v12:NilClass):
+          v16:Fixnum[1] = Const Value(1)
+          v20:Fixnum[2] = Const Value(2)
+          v25:BasicObject = Send v10, 0x1000, :foo # SendFallbackReason: Uncategorized(send)
+          PatchPoint NoEPEscape(test)
+          v28:CPtr = LoadSP
+          v29:BasicObject = LoadField v28, :a@0x1028
+          PatchPoint NoEPEscape(test)
+          v38:BasicObject = Send v29, :+, v20 # SendFallbackReason: Uncategorized(opt_plus)
+          CheckInterrupts
+          Return v38
         ");
     }
 
@@ -2047,11 +2319,19 @@ pub(crate) mod hir_build_tests {
           v20:BasicObject = Send v19, :to_s # SendFallbackReason: ObjToString: result is not a string
           Jump bb6(v20)
         bb6(v22:BasicObject):
-          v24:String = AnyToString v12, str: v22
-          v26:StringExact = StringConcat v10, v24
-          v28:Symbol = StringIntern v26
+          v24:CBool = HasType v22, String
+          CondBranch v24, bb7(), bb8()
+        bb7():
+          v26:String = RefineType v22, String
+          Jump bb9(v26)
+        bb8():
+          v28:StringExact = AnyToString v12
+          Jump bb9(v28)
+        bb9(v30:String):
+          v32:StringExact = StringConcat v10, v30
+          v34:Symbol = StringIntern v32
           CheckInterrupts
-          Return v28
+          Return v34
         ");
     }
 
@@ -2302,8 +2582,6 @@ pub(crate) mod hir_build_tests {
         bb3(v9:BasicObject, v10:BasicObject):
           v16:BasicObject = InvokeSuperForward v9, 0x1008, v10 # SendFallbackReason: InvokeSuperForward: not yet specialized
           PatchPoint NoEPEscape(test)
-          v19:CPtr = LoadSP
-          v20:BasicObject = LoadField v19, :...@0x1000
           CheckInterrupts
           Return v16
         ");
@@ -4548,15 +4826,8 @@ pub(crate) mod hir_build_tests {
           Jump bb3(v7, v8, v9, v10)
         bb3(v12:BasicObject, v13:NilClass, v14:NilClass, v15:NilClass):
           PatchPoint SingleRactorMode
-          v20:BasicObject = GetIvar v12, :@a
-          PatchPoint SingleRactorMode
-          v23:BasicObject = GetIvar v12, :@b
-          PatchPoint SingleRactorMode
-          v26:BasicObject = GetIvar v12, :@c
-          PatchPoint NoEPEscape(reverse_odd)
-          v38:ArrayExact = NewArray v20, v23, v26
-          CheckInterrupts
-          Return v38
+          v20:HeapBasicObject = GuardType v12, HeapBasicObject
+          SideExit NoProfileGetIvar recompile
 
         fn reverse_even@<compiled>:8:
         bb1():
@@ -4577,17 +4848,8 @@ pub(crate) mod hir_build_tests {
           Jump bb3(v8, v9, v10, v11, v12)
         bb3(v14:BasicObject, v15:NilClass, v16:NilClass, v17:NilClass, v18:NilClass):
           PatchPoint SingleRactorMode
-          v23:BasicObject = GetIvar v14, :@a
-          PatchPoint SingleRactorMode
-          v26:BasicObject = GetIvar v14, :@b
-          PatchPoint SingleRactorMode
-          v29:BasicObject = GetIvar v14, :@c
-          PatchPoint SingleRactorMode
-          v32:BasicObject = GetIvar v14, :@d
-          PatchPoint NoEPEscape(reverse_even)
-          v46:ArrayExact = NewArray v23, v26, v29, v32
-          CheckInterrupts
-          Return v46
+          v23:HeapBasicObject = GuardType v14, HeapBasicObject
+          SideExit NoProfileGetIvar recompile
         ");
     }
 
@@ -4746,7 +5008,7 @@ pub(crate) mod hir_build_tests {
     }
 
     #[test]
-    fn test_invokebuiltin_delegate_annotated() {
+    fn test_invokebuiltin_delegate_annotated_float() {
         assert_contains_opcode("Float", YARVINSN_opt_invokebuiltin_delegate_leave);
         assert_snapshot!(hir_string("Float"), @"
         fn Float@<internal:kernel>:
@@ -4767,11 +5029,60 @@ pub(crate) mod hir_build_tests {
           v12:BasicObject = LoadField v11, :<empty>@0x1003
           Jump bb3(v8, v9, v10, v12)
         bb3(v14:BasicObject, v15:BasicObject, v16:BasicObject, v17:BasicObject):
-          v21:Float = InvokeBuiltin rb_f_float, v14, v15, v16
+          v21:NilClass|Float = InvokeBuiltin rb_f_float, v14, v15, v16
           Jump bb4(v14, v15, v16, v17, v21)
-        bb4(v23:BasicObject, v24:BasicObject, v25:BasicObject, v26:BasicObject, v27:Float):
+        bb4(v23:BasicObject, v24:BasicObject, v25:BasicObject, v26:BasicObject, v27:NilClass|Float):
           CheckInterrupts
           Return v27
+        ");
+    }
+
+    #[test]
+    fn test_invokebuiltin_delegate_annotated_integer() {
+        assert_contains_opcode("Integer", YARVINSN_opt_invokebuiltin_delegate_leave);
+        assert_snapshot!(hir_string("Integer"), @"
+        fn Integer@<internal:kernel>:
+        bb1():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          v2:CPtr = LoadSP
+          v3:BasicObject = LoadField v2, :arg@0x1000
+          v4:BasicObject = LoadField v2, :base@0x1001
+          v5:BasicObject = LoadField v2, :exception@0x1002
+          v6:BasicObject = LoadField v2, :<empty>@0x1003
+          v7:CPtr = LoadPC
+          v8:CPtr[CPtr(0x1004)] = Const CPtr(0x1004)
+          v9:CBool = IsBitEqual v7, v8
+          CondBranch v9, bb3(v1, v3, v4, v5, v6), bb7()
+        bb7():
+          Jump bb5(v1, v3, v4, v5, v6)
+        bb2():
+          EntryPoint JIT(0)
+          v13:BasicObject = LoadArg :self@0
+          v14:BasicObject = LoadArg :arg@1
+          v15:NilClass = Const Value(nil)
+          v16:BasicObject = LoadArg :exception@2
+          v17:CPtr = GetEP 0
+          v18:BasicObject = LoadField v17, :<empty>@0x1005
+          Jump bb3(v13, v14, v15, v16, v18)
+        bb3(v28:BasicObject, v29:BasicObject, v30:BasicObject, v31:BasicObject, v32:BasicObject):
+          v35:Fixnum[0] = Const Value(0)
+          Jump bb5(v28, v29, v35, v31, v32)
+        bb4():
+          EntryPoint JIT(1)
+          v21:BasicObject = LoadArg :self@0
+          v22:BasicObject = LoadArg :arg@1
+          v23:BasicObject = LoadArg :base@2
+          v24:BasicObject = LoadArg :exception@3
+          v25:CPtr = GetEP 0
+          v26:BasicObject = LoadField v25, :<empty>@0x1005
+          Jump bb5(v21, v22, v23, v24, v26)
+        bb5(v38:BasicObject, v39:BasicObject, v40:BasicObject, v41:BasicObject, v42:BasicObject):
+          v46:NilClass|Integer = InvokeBuiltin rb_f_integer, v38, v39, v40, v41
+          Jump bb6(v38, v39, v40, v41, v42, v46)
+        bb6(v48:BasicObject, v49:BasicObject, v50:BasicObject, v51:BasicObject, v52:BasicObject, v53:NilClass|Integer):
+          CheckInterrupts
+          Return v53
         ");
     }
 
@@ -4831,21 +5142,21 @@ pub(crate) mod hir_build_tests {
           v35:CPtr = GetEP 0
           v36:CUInt64 = LoadField v35, :VM_ENV_DATA_INDEX_FLAGS@0x1004
           v37:CBool = IsBlockParamModified v36
-          CondBranch v37, bb5(), bb6()
-        bb5():
-          v39:BasicObject = LoadField v35, :block@0x1005
-          Jump bb7(v39, v39)
+          CondBranch v37, bb6(), bb7()
         bb6():
+          v39:BasicObject = LoadField v35, :block@0x1005
+          Jump bb8(v39, v39)
+        bb7():
           v41:CInt64 = LoadField v35, :VM_ENV_DATA_INDEX_SPECVAL@0x1006
           v42:CInt64 = GuardAnyBitSet v41, CUInt64(1) recompile
           v43:ObjectSubclass[BlockParamProxy] = Const Value(VALUE(0x1008))
-          Jump bb7(v43, v22)
-        bb7(v33:BasicObject, v34:BasicObject):
+          Jump bb8(v43, v22)
+        bb8(v33:BasicObject, v34:BasicObject):
           CheckInterrupts
           v47:CBool = Test v33
           v48:Falsy = RefineType v33, Falsy
-          CondBranch v47, bb8(), bb4(v18, v19, v20, v21, v34, v27)
-        bb8():
+          CondBranch v47, bb9(), bb4(v18, v19, v20, v21, v34, v27)
+        bb9():
           v50:Truthy = RefineType v33, Truthy
           v54:BasicObject = InvokeBlock v27 # SendFallbackReason: InvokeBlock: not yet specialized
           v57:BasicObject = InvokeBuiltin dir_s_close, v18, v27
@@ -4919,7 +5230,7 @@ pub(crate) mod hir_build_tests {
         let iseq = crate::cruby::with_rubyvm(|| get_instance_method_iseq("Symbol", "name"));
         let function = iseq_to_hir(iseq).unwrap();
         assert_snapshot!(hir_string_function(&function), @"
-        fn name@<internal:symbol>:
+        fn to_s@<internal:symbol>:
         bb1():
           EntryPoint interpreter
           v1:BasicObject = LoadSelf
@@ -5029,10 +5340,18 @@ pub(crate) mod hir_build_tests {
           v20:BasicObject = Send v19, :to_s # SendFallbackReason: ObjToString: result is not a string
           Jump bb6(v20)
         bb6(v22:BasicObject):
-          v24:String = AnyToString v12, str: v22
-          v26:StringExact = StringConcat v10, v24
+          v24:CBool = HasType v22, String
+          CondBranch v24, bb7(), bb8()
+        bb7():
+          v26:String = RefineType v22, String
+          Jump bb9(v26)
+        bb8():
+          v28:StringExact = AnyToString v12
+          Jump bb9(v28)
+        bb9(v30:String):
+          v32:StringExact = StringConcat v10, v30
           CheckInterrupts
-          Return v26
+          Return v32
         ");
     }
 
@@ -5064,34 +5383,58 @@ pub(crate) mod hir_build_tests {
           v18:BasicObject = Send v17, :to_s # SendFallbackReason: ObjToString: result is not a string
           Jump bb6(v18)
         bb6(v20:BasicObject):
-          v22:String = AnyToString v10, str: v20
-          v24:Fixnum[2] = Const Value(2)
-          v27:CBool[false] = HasType v24, String
-          CondBranch v27, bb7(), bb8()
+          v22:CBool = HasType v20, String
+          CondBranch v22, bb7(), bb8()
         bb7():
-          v29 = RefineType v24, String
-          Jump bb9(v29)
+          v24:String = RefineType v20, String
+          Jump bb9(v24)
         bb8():
-          v31:Fixnum[2] = RefineType v24, NotString
-          v32:BasicObject = Send v31, :to_s # SendFallbackReason: ObjToString: result is not a string
-          Jump bb9(v32)
-        bb9(v34:BasicObject):
-          v36:String = AnyToString v24, str: v34
-          v38:Fixnum[3] = Const Value(3)
-          v41:CBool[false] = HasType v38, String
-          CondBranch v41, bb10(), bb11()
+          v26:StringExact = AnyToString v10
+          Jump bb9(v26)
+        bb9(v28:String):
+          v30:Fixnum[2] = Const Value(2)
+          v33:CBool[false] = HasType v30, String
+          CondBranch v33, bb10(), bb11()
         bb10():
-          v43 = RefineType v38, String
-          Jump bb12(v43)
+          v35 = RefineType v30, String
+          Jump bb12(v35)
         bb11():
-          v45:Fixnum[3] = RefineType v38, NotString
-          v46:BasicObject = Send v45, :to_s # SendFallbackReason: ObjToString: result is not a string
-          Jump bb12(v46)
-        bb12(v48:BasicObject):
-          v50:String = AnyToString v38, str: v48
-          v52:StringExact = StringConcat v22, v36, v50
+          v37:Fixnum[2] = RefineType v30, NotString
+          v38:BasicObject = Send v37, :to_s # SendFallbackReason: ObjToString: result is not a string
+          Jump bb12(v38)
+        bb12(v40:BasicObject):
+          v42:CBool = HasType v40, String
+          CondBranch v42, bb13(), bb14()
+        bb13():
+          v44:String = RefineType v40, String
+          Jump bb15(v44)
+        bb14():
+          v46:StringExact = AnyToString v30
+          Jump bb15(v46)
+        bb15(v48:String):
+          v50:Fixnum[3] = Const Value(3)
+          v53:CBool[false] = HasType v50, String
+          CondBranch v53, bb16(), bb17()
+        bb16():
+          v55 = RefineType v50, String
+          Jump bb18(v55)
+        bb17():
+          v57:Fixnum[3] = RefineType v50, NotString
+          v58:BasicObject = Send v57, :to_s # SendFallbackReason: ObjToString: result is not a string
+          Jump bb18(v58)
+        bb18(v60:BasicObject):
+          v62:CBool = HasType v60, String
+          CondBranch v62, bb19(), bb20()
+        bb19():
+          v64:String = RefineType v60, String
+          Jump bb21(v64)
+        bb20():
+          v66:StringExact = AnyToString v50
+          Jump bb21(v66)
+        bb21(v68:String):
+          v70:StringExact = StringConcat v28, v48, v68
           CheckInterrupts
-          Return v52
+          Return v70
         ");
     }
 
@@ -5124,10 +5467,18 @@ pub(crate) mod hir_build_tests {
           v20:BasicObject = Send v19, :to_s # SendFallbackReason: ObjToString: result is not a string
           Jump bb6(v20)
         bb6(v22:BasicObject):
-          v24:String = AnyToString v12, str: v22
-          v26:StringExact = StringConcat v10, v24
+          v24:CBool = HasType v22, String
+          CondBranch v24, bb7(), bb8()
+        bb7():
+          v26:String = RefineType v22, String
+          Jump bb9(v26)
+        bb8():
+          v28:StringExact = AnyToString v12
+          Jump bb9(v28)
+        bb9(v30:String):
+          v32:StringExact = StringConcat v10, v30
           CheckInterrupts
-          Return v26
+          Return v32
         ");
     }
 
@@ -5159,34 +5510,58 @@ pub(crate) mod hir_build_tests {
           v18:BasicObject = Send v17, :to_s # SendFallbackReason: ObjToString: result is not a string
           Jump bb6(v18)
         bb6(v20:BasicObject):
-          v22:String = AnyToString v10, str: v20
-          v24:Fixnum[2] = Const Value(2)
-          v27:CBool[false] = HasType v24, String
-          CondBranch v27, bb7(), bb8()
+          v22:CBool = HasType v20, String
+          CondBranch v22, bb7(), bb8()
         bb7():
-          v29 = RefineType v24, String
-          Jump bb9(v29)
+          v24:String = RefineType v20, String
+          Jump bb9(v24)
         bb8():
-          v31:Fixnum[2] = RefineType v24, NotString
-          v32:BasicObject = Send v31, :to_s # SendFallbackReason: ObjToString: result is not a string
-          Jump bb9(v32)
-        bb9(v34:BasicObject):
-          v36:String = AnyToString v24, str: v34
-          v38:Fixnum[3] = Const Value(3)
-          v41:CBool[false] = HasType v38, String
-          CondBranch v41, bb10(), bb11()
+          v26:StringExact = AnyToString v10
+          Jump bb9(v26)
+        bb9(v28:String):
+          v30:Fixnum[2] = Const Value(2)
+          v33:CBool[false] = HasType v30, String
+          CondBranch v33, bb10(), bb11()
         bb10():
-          v43 = RefineType v38, String
-          Jump bb12(v43)
+          v35 = RefineType v30, String
+          Jump bb12(v35)
         bb11():
-          v45:Fixnum[3] = RefineType v38, NotString
-          v46:BasicObject = Send v45, :to_s # SendFallbackReason: ObjToString: result is not a string
-          Jump bb12(v46)
-        bb12(v48:BasicObject):
-          v50:String = AnyToString v38, str: v48
-          v52:RegexpExact = ToRegexp v22, v36, v50
+          v37:Fixnum[2] = RefineType v30, NotString
+          v38:BasicObject = Send v37, :to_s # SendFallbackReason: ObjToString: result is not a string
+          Jump bb12(v38)
+        bb12(v40:BasicObject):
+          v42:CBool = HasType v40, String
+          CondBranch v42, bb13(), bb14()
+        bb13():
+          v44:String = RefineType v40, String
+          Jump bb15(v44)
+        bb14():
+          v46:StringExact = AnyToString v30
+          Jump bb15(v46)
+        bb15(v48:String):
+          v50:Fixnum[3] = Const Value(3)
+          v53:CBool[false] = HasType v50, String
+          CondBranch v53, bb16(), bb17()
+        bb16():
+          v55 = RefineType v50, String
+          Jump bb18(v55)
+        bb17():
+          v57:Fixnum[3] = RefineType v50, NotString
+          v58:BasicObject = Send v57, :to_s # SendFallbackReason: ObjToString: result is not a string
+          Jump bb18(v58)
+        bb18(v60:BasicObject):
+          v62:CBool = HasType v60, String
+          CondBranch v62, bb19(), bb20()
+        bb19():
+          v64:String = RefineType v60, String
+          Jump bb21(v64)
+        bb20():
+          v66:StringExact = AnyToString v50
+          Jump bb21(v66)
+        bb21(v68:String):
+          v70:RegexpExact = ToRegexp v28, v48, v68
           CheckInterrupts
-          Return v52
+          Return v70
         ");
     }
 
@@ -5218,22 +5593,38 @@ pub(crate) mod hir_build_tests {
           v18:BasicObject = Send v17, :to_s # SendFallbackReason: ObjToString: result is not a string
           Jump bb6(v18)
         bb6(v20:BasicObject):
-          v22:String = AnyToString v10, str: v20
-          v24:Fixnum[2] = Const Value(2)
-          v27:CBool[false] = HasType v24, String
-          CondBranch v27, bb7(), bb8()
+          v22:CBool = HasType v20, String
+          CondBranch v22, bb7(), bb8()
         bb7():
-          v29 = RefineType v24, String
-          Jump bb9(v29)
+          v24:String = RefineType v20, String
+          Jump bb9(v24)
         bb8():
-          v31:Fixnum[2] = RefineType v24, NotString
-          v32:BasicObject = Send v31, :to_s # SendFallbackReason: ObjToString: result is not a string
-          Jump bb9(v32)
-        bb9(v34:BasicObject):
-          v36:String = AnyToString v24, str: v34
-          v38:RegexpExact = ToRegexp v22, v36, MULTILINE|IGNORECASE|EXTENDED|NOENCODING
+          v26:StringExact = AnyToString v10
+          Jump bb9(v26)
+        bb9(v28:String):
+          v30:Fixnum[2] = Const Value(2)
+          v33:CBool[false] = HasType v30, String
+          CondBranch v33, bb10(), bb11()
+        bb10():
+          v35 = RefineType v30, String
+          Jump bb12(v35)
+        bb11():
+          v37:Fixnum[2] = RefineType v30, NotString
+          v38:BasicObject = Send v37, :to_s # SendFallbackReason: ObjToString: result is not a string
+          Jump bb12(v38)
+        bb12(v40:BasicObject):
+          v42:CBool = HasType v40, String
+          CondBranch v42, bb13(), bb14()
+        bb13():
+          v44:String = RefineType v40, String
+          Jump bb15(v44)
+        bb14():
+          v46:StringExact = AnyToString v30
+          Jump bb15(v46)
+        bb15(v48:String):
+          v50:RegexpExact = ToRegexp v28, v48, MULTILINE|IGNORECASE|EXTENDED|NOENCODING
           CheckInterrupts
-          Return v38
+          Return v50
         ");
     }
 
@@ -5593,21 +5984,27 @@ pub(crate) mod hir_build_tests {
           v35:Fixnum[0] = Const Value(0)
           Jump bb8(v30, v35)
         bb8(v48:BasicObject, v49:Fixnum):
-          v52:BoolExact = InvokeBuiltin rb_jit_ary_at_end, v48, v49
-          v54:CBool = Test v52
-          v55:FalseClass = RefineType v52, Falsy
-          CondBranch v54, bb10(), bb7(v48, v49)
-        bb10():
-          v57:TrueClass = RefineType v52, Truthy
-          v59:NilClass = Const Value(nil)
+          v52:Array = RefineType v48, Array
+          v53:CInt64 = ArrayLength v52
+          v54:Fixnum = BoxFixnum v53
+          v55:BoolExact = FixnumGe v49, v54
+          v57:CBool = Test v55
+          v58:FalseClass = RefineType v55, Falsy
+          CondBranch v57, bb11(), bb7(v48, v49)
+        bb11():
+          v60:TrueClass = RefineType v55, Truthy
+          v62:NilClass = Const Value(nil)
           CheckInterrupts
           Return v48
-        bb7(v67:BasicObject, v68:Fixnum):
-          v72:BasicObject = InvokeBuiltin rb_jit_ary_at, v67, v68
-          v74:BasicObject = InvokeBlock v72 # SendFallbackReason: InvokeBlock: not yet specialized
-          v78:Fixnum = InvokeBuiltin rb_jit_fixnum_inc, v67, v68
+        bb7(v70:BasicObject, v71:Fixnum):
+          v75:Array = RefineType v70, Array
+          v76:CInt64 = UnboxFixnum v71
+          v77:BasicObject = ArrayAref v75, v76
+          v79:BasicObject = InvokeBlock v77 # SendFallbackReason: InvokeBlock: not yet specialized
+          v83:Fixnum[1] = Const Value(1)
+          v84:Fixnum = FixnumAdd v71, v83
           PatchPoint NoEPEscape(each)
-          Jump bb8(v67, v78)
+          Jump bb8(v70, v84)
         bb4(v23:BasicObject, v24:NilClass):
           v28:BasicObject = InvokeBuiltin <inline_expr>, v23
           Jump bb5(v23, v24, v28)

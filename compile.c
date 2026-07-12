@@ -1962,6 +1962,10 @@ iseq_set_arguments_keywords(rb_iseq_t *iseq, LINK_ANCHOR *const optargs,
         kw++;
         node = node->nd_next;
     }
+    if (kw > VM_CALL_KW_LEN_MAX) {
+        COMPILE_ERROR(ERROR_ARGS_AT(RNODE(args->kw_args)) "too many keyword parameters (%d, maximum is %d)",
+                      kw, (int)VM_CALL_KW_LEN_MAX);
+    }
     arg_size += kw;
     keyword->bits_start = arg_size++;
 
@@ -3698,8 +3702,9 @@ iseq_peephole_optimize(rb_iseq_t *iseq, LINK_ELEMENT *list, const int do_tailcal
                 if (IS_INSN(&nobj->link) && IS_INSN_ID(nobj, jump)) {
                     if (!replace_destination(iobj, nobj)) break;
                 }
-                else if (prev_dup && IS_INSN_ID(nobj, dup) &&
+                else if (prev_dup && IS_INSN(&nobj->link) && IS_INSN_ID(nobj, dup) &&
                          !!(nobj = (INSN *)nobj->link.next) &&
+                         IS_INSN(&nobj->link) &&
                          /* basic blocks, with no labels in the middle */
                          nobj->insn_id == iobj->insn_id) {
                     /*
@@ -3786,7 +3791,11 @@ iseq_peephole_optimize(rb_iseq_t *iseq, LINK_ELEMENT *list, const int do_tailcal
                     break;
                 }
                 else break;
-                nobj = (INSN *)get_destination_insn(nobj);
+                {
+                    LINK_ELEMENT *dest = get_destination_insn(nobj);
+                    if (!dest || !IS_INSN(dest)) break;
+                    nobj = (INSN *)dest;
+                }
             }
         }
     }
@@ -5070,6 +5079,12 @@ compile_keyword_arg(rb_iseq_t *iseq, LINK_ANCHOR *const ret,
         {
             int len = 0;
             VALUE key_index = node_hash_unique_key_index(iseq, RNODE_HASH(root_node), &len);
+
+            if (len > VM_CALL_KW_LEN_MAX) {
+                COMPILE_ERROR(ERROR_ARGS_AT(root_node) "too many keyword arguments (%d, maximum is %d)",
+                              len, (int)VM_CALL_KW_LEN_MAX);
+            }
+
             struct rb_callinfo_kwarg *kw_arg =
                 rb_xmalloc_mul_add(len, sizeof(VALUE), sizeof(struct rb_callinfo_kwarg));
             VALUE *keywords = kw_arg->keywords;
@@ -9595,7 +9610,7 @@ compile_call(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *const node, co
         if (type == NODE_CALL || type == NODE_OPCALL || type == NODE_QCALL) {
             int idx, level;
 
-            if (mid == idCall &&
+            if ((mid == idCall || mid == idAREF || mid == idYield || mid == idEqq) &&
                 nd_type_p(get_nd_recv(node), NODE_LVAR) &&
                 iseq_block_param_id_p(iseq, RNODE_LVAR(get_nd_recv(node))->nd_vid, &idx, &level)) {
                 ADD_INSN2(recv, get_nd_recv(node), getblockparamproxy, INT2FIX(idx + VM_ENV_DATA_SIZE - 1), INT2FIX(level));
@@ -14972,7 +14987,7 @@ ibf_load_iseq(const struct ibf_load *load, const rb_iseq_t *index_iseq)
             fprintf(stderr, "ibf_load_iseq: new iseq=%p\n", (void *)iseq);
 #endif
             FL_SET((VALUE)iseq, ISEQ_NOT_LOADED_YET);
-            iseq->aux.loader.obj = load->loader_obj;
+            RB_OBJ_WRITE((VALUE)iseq, &iseq->aux.loader.obj, load->loader_obj);
             iseq->aux.loader.index = iseq_index;
 #if IBF_ISEQ_DEBUG
             fprintf(stderr, "ibf_load_iseq: iseq=%p loader_obj=%p index=%d\n",

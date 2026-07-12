@@ -15,6 +15,9 @@ pub enum PerfMap {
     HIR,
 }
 
+/// Default maximum number of compiled versions per ISEQ.
+pub const DEFAULT_MAX_VERSIONS: usize = 4;
+
 /// Default --zjit-num-profiles
 const DEFAULT_NUM_PROFILES: NumProfiles = 5;
 pub type NumProfiles = u16;
@@ -25,11 +28,15 @@ pub const DEFAULT_CALL_THRESHOLD: CallThreshold = 30;
 pub type CallThreshold = u64;
 
 /// Default --zjit-inline-threshold
-pub const DEFAULT_INLINE_THRESHOLD: InlineThreshold = 0;
+/// TODO (nirvdrum 2026-06-25): 30 has proven to work well with ruby-bench, but we should finely
+/// tune across more workloads.
+pub const DEFAULT_INLINE_THRESHOLD: InlineThreshold = 30;
 pub type InlineThreshold = usize;
 
 /// Default --zjit-inline-budget
-pub const DEFAULT_INLINE_BUDGET: InlineBudget = 500;
+/// TODO (nirvdrum 2026-06-25): 200 has proven to strike a good balance between memory usage and
+/// run time performance on ruby-bench, but we should finely tune across more workloads.
+pub const DEFAULT_INLINE_BUDGET: InlineBudget = 200;
 pub const INLINE_BUDGET_UNLIMITED: InlineBudget = 0;
 pub type InlineBudget = usize;
 
@@ -212,7 +219,7 @@ impl Default for Options {
             perf: None,
             allowed_iseqs: None,
             log_compiled_iseqs: None,
-            max_versions: 2,
+            max_versions: DEFAULT_MAX_VERSIONS,
             inline_threshold: DEFAULT_INLINE_THRESHOLD,
             inline_budget: DEFAULT_INLINE_BUDGET as InlineBudget,
             inline_deny: HashSet::new(),
@@ -328,6 +335,9 @@ macro_rules! get_option {
     // once before any Ruby code executes
     ($option_name:ident) => {
         unsafe { crate::options::OPTIONS.as_ref() }.unwrap().$option_name
+    };
+    ($option_name:ident, $default:expr) => {
+        unsafe { crate::options::OPTIONS.as_ref() }.map(|opts| opts.$option_name).unwrap_or($default)
     };
 }
 pub(crate) use get_option;
@@ -632,6 +642,13 @@ pub fn set_call_threshold(call_threshold: CallThreshold) {
     unsafe { rb_zjit_call_threshold = call_threshold; }
     rb_zjit_prepare_options();
     update_profile_threshold();
+}
+
+/// Update --zjit-max-versions for testing
+#[cfg(test)]
+pub fn set_max_versions(max_versions: usize) {
+    rb_zjit_prepare_options();
+    unsafe { OPTIONS.as_mut().unwrap().max_versions = max_versions; }
 }
 
 /// Update --zjit-inline-threshold for testing

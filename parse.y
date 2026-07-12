@@ -6063,6 +6063,10 @@ string_content	: tSTRING_CONTENT[content]
                         p->lex.brace_nest = 0;
                     }[brace]<num>
                     {
+                        $$ = p->lex.lpar_beg;
+                        p->lex.lpar_beg = -1;
+                    }[lpar]<num>
+                    {
                         $$ = p->heredoc_indent;
                         p->heredoc_indent = 0;
                     }[indent]<num>
@@ -6073,6 +6077,7 @@ string_content	: tSTRING_CONTENT[content]
                         p->lex.strterm = $term;
                         SET_LEX_STATE($state);
                         p->lex.brace_nest = $brace;
+                        p->lex.lpar_beg = $lpar;
                         p->heredoc_indent = $indent;
                         p->heredoc_line_indent = -1;
                         if ($compstmt) nd_unset_fl_newline($compstmt);
@@ -9174,12 +9179,7 @@ static int
 arg_ambiguous(struct parser_params *p, char c)
 {
 #ifndef RIPPER
-    if (c == '/') {
-        rb_warning1("ambiguity between regexp and two divisions: wrap regexp in parentheses or add a space after '%c' operator", WARN_I(c));
-    }
-    else {
-        rb_warning1("ambiguous first argument; put parentheses or a space even after '%c' operator", WARN_I(c));
-    }
+    rb_warning1("ambiguous first argument; put parentheses or a space even after '%c' operator", WARN_I(c));
 #else
     dispatch1(arg_ambiguous, rb_usascii_str_new(&c, 1));
 #endif
@@ -11019,7 +11019,6 @@ parser_yylex(struct parser_params *p)
         }
         pushback(p, c);
         if (IS_SPCARG(c)) {
-            arg_ambiguous(p, '/');
             p->lex.strterm = NEW_STRTERM(str_regexp, '/', 0);
             return tREGEXP_BEG;
         }

@@ -3002,7 +3002,7 @@ rb_cmpint(VALUE val, VALUE a, VALUE b)
 static size_t
 big_embed_capa(VALUE big)
 {
-    size_t size = rb_gc_obj_slot_size(big) - offsetof(struct RBignum, as.ary);
+    size_t size = rb_obj_shape_slot_size(big) - offsetof(struct RBignum, as.ary);
     RUBY_ASSERT(size % sizeof(BDIGIT) == 0);
     size_t capa = size / sizeof(BDIGIT);
     RUBY_ASSERT(capa <= BIGNUM_EMBED_LEN_MAX);
@@ -7027,6 +7027,23 @@ rb_big_bit_length(VALUE big)
 
     return rb_integer_unpack(result_bary, numberof(result_bary), sizeof(BDIGIT), 0,
             INTEGER_PACK_LSWORD_FIRST|INTEGER_PACK_NATIVE_BYTE_ORDER);
+}
+
+VALUE
+rb_big_bit_count(VALUE big)
+{
+    if (BIGNUM_NEGATIVE_P(big))
+        rb_raise(rb_eArgError, "bit_count is undefined for negative integers");
+
+    BDIGIT *ds = BDIGITS(big);
+    size_t n = BIGNUM_LEN(big);
+    size_t count = 0;
+
+    while (n--) {
+        count += rb_popcount64((uint64_t)ds[n]);
+    }
+
+    return SIZET2NUM(count);
 }
 
 VALUE

@@ -416,7 +416,7 @@ set_s_alloc(VALUE klass)
  *  call-seq:
  *    Set[*objects] -> new_set
  *
- *  Returns a new \Set object populated with the given +objects+:
+ *  Returns a new set populated with the given +objects+:
  *
  *    Set[1, 'one', :one, 1.0, %w[a b c], {foo: 0, bar: 1}]
  *    # => Set[1, "one", :one, 1.0, ["a", "b", "c"], {foo: 0, bar: 1}]
@@ -503,11 +503,11 @@ set_initialize_with_block(RB_BLOCK_CALL_FUNC_ARGLIST(i, set))
  *   Set.new(object = nil) -> new_set
  *   Set.new(object = nil) {|element| ... } -> new_set
  *
- * Returns a new \Set object based on the given +object+,
+ * Returns a new set based on the given +object+,
  * which must be an Enumerable or +nil+.
  *
  * With argument +object+ given as +nil+,
- * returns a new empty \Set object:
+ * returns a new empty set:
  *
  *   Set.new                          # => Set[]
  *   Set.new { fail 'Cannot happen' } # => Set[]  # Block not called.
@@ -621,16 +621,12 @@ set_inspect(VALUE set, VALUE dummy, int recur)
 
 /*
  *  call-seq:
- *    inspect -> new_string
+ *    inspect -> string
  *
- *  Returns a new string containing the set entries:
+ *  Returns a string representation of +self+:
  *
- *    s = Set.new
- *    s.inspect # => "Set[]"
- *    s.add(1)
- *    s.inspect # => "Set[1]"
- *    s.add(2)
- *    s.inspect # => "Set[1, 2]"
+ *    Set[*%w[foo bar], {foo: 0, bar: 1}].inspect
+ *    # => "Set[\"foo\", \"bar\", {foo: 0, bar: 1}]"
  *
  *  Related: see {Methods for Converting}[rdoc-ref:Set@Methods+for+Converting].
  */
@@ -651,10 +647,12 @@ set_to_a_i(st_data_t key, st_data_t arg)
  *  call-seq:
  *    to_a -> array
  *
- *  Returns an array containing all elements in the set.
+ *  Returns an array containing the elements of +self+:
  *
- *    Set[1, 2].to_a                    #=> [1, 2]
- *    Set[1, 'c', :s].to_a              #=> [1, "c", :s]
+ *    Set[1, 2].to_a       # => [1, 2]
+ *    Set[1, 'c', :s].to_a # => [1, "c", :s]
+ *
+ *  Related: {Methods for Converting}[rdoc-ref:Set@Methods+for+Converting].
  */
 static VALUE
 set_i_to_a(VALUE set)
@@ -679,10 +677,31 @@ set_i_to_a(VALUE set)
 
 /*
  *  call-seq:
- *    to_set(&block) -> self or new_set
+ *    to_set {|element| ... } -> new_set
+ *    to_set -> self or new_set
  *
- *  Without a block, if +self+ is an instance of +Set+, returns +self+.
- *  Otherwise, calls <tt>Set.new(self, &block)</tt>.
+ *  With a block given, creates and returns a new set;
+ *  calls the block with each element of +self+,
+ *  and adds the block's returns value to the new set:
+ *
+ *    set = Set[*0..9]        # => Set[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+ *    set.to_set {|i| i * 2 } # => Set[0, 2, 4, 6, 8, 10, 12, 14, 16, 18]
+ *
+ *  With no block given, when +self+ is an instance of +Set+,
+ *  returns +self+:
+ *
+ *    set = Set[*0..9]
+ *    set.to_set
+ *    set.to_set.equal?(set) # => true
+ *
+ *  With no block given, when +self+ is an instance of a subclass of +Set+,
+ *  returns a set containing the elements of +self+:
+ *
+ *    class MySet < Set; end
+ *    my_set = MySet[*0..9] # => #<MySet: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9}>
+ *    set = my_set.to_set   # => Set[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+ *
+ *  Related: see {Methods for Converting}[rdoc-ref:Set@Methods+for+Converting].
  */
 static VALUE
 set_i_to_set(VALUE set)
@@ -696,23 +715,28 @@ set_i_to_set(VALUE set)
 
 /*
  *  call-seq:
- *    join(separator = $,) -> new_string
+ *    join(separator = $,) -> string
  *
- *  Returns the new string formed by joining the string-converted elements of +self+
+ *  Returns the string formed by joining the string-converted elements of +self+
  *  with the given +separator+ (defaults to <tt>$,</tt>):
  *
- *    $,                       # => nil
- *    Set[].join               # => ""
- *    Set[%w[foo]].join        # => "foo"
- *    s = Set[%w[foo bar baz]] # => Set[["foo", "bar", "baz"]]
- *    s.join                   # => "foobarbaz"
- *    s.join('|')              # => "foo|bar|baz"
- *    s.join(' :|: ')          # => "foo :|: bar :|: baz"
+ *    $, # => nil
+ *    Set[*%w[foo bar baz]].join
+ *    # => "foobarbaz"
+ *    Set[*%w[foo bar baz]].join(', ')
+ *    # => "foo, bar, baz"
  *
- *  Flattens and joins nested arrays:
+ *  Flattens nested arrays:
  *
- *    Set[[:foo, [:bar, [:baz, :bat]]]].join0 # => "foobarbazbat"
+ *    Set[[:foo, [:bar, [:baz, :bat]]]].join
+ *    # => "foobarbazbat"
  *
+ *  Does not flatten nested sets:
+ *
+ *    Set[Set[:foo, Set[:bar, Set[:baz, :bat]]]].join
+ *    # => "Set[:foo, Set[:bar, Set[:baz, :bat]]]"
+ *
+ *  Related: see {Methods for Converting}[rdoc-ref:Set@Methods+for+Converting].
  */
 static VALUE
 set_i_join(int argc, VALUE *argv, VALUE set)
@@ -725,7 +749,7 @@ set_i_join(int argc, VALUE *argv, VALUE set)
  *  call-seq:
  *    add(object) -> self
  *
- *  Adds the given +object+ to +self+, returns +self+:
+ *  Adds the given +object+ to +self+; returns +self+:
  *
  *    set = Set[0, 1, 2]
  *    set.add(%w[a b c]) # => Set[0, 1, 2, ["a", "b", "c"]]
@@ -752,7 +776,7 @@ set_i_add(VALUE set, VALUE item)
  *  call-seq:
  *    add?(object) -> self or nil
  *
- *  Like #add, but returns +nil+ if +object+ is already in +self+:
+ *  Like #add, but returns +nil+ if the given +object+ is already in +self+:
  *
  *    set = Set[0, 1, 2]
  *    set.add?(:foo)   # => Set[0, 1, 2, :foo]
@@ -780,7 +804,7 @@ set_i_add_p(VALUE set, VALUE item)
  *  call-seq:
  *    delete(object) -> self
  *
- *  Removes the given +object+ from +self+, if +self+ includes the object;
+ *  Removes the given +object+ from +self+ if +self+ includes the object;
  *  returns +self+:
  *
  *    set = Set[0, 'zero', :zero]
@@ -801,10 +825,15 @@ set_i_delete(VALUE set, VALUE item)
 
 /*
  *  call-seq:
- *    delete?(obj) -> self or nil
+ *    delete?(object) -> self or nil
  *
- *  Deletes the given object from the set and returns self.  If the
- *  object is not in the set, returns nil.
+ *  Like #delete, but returns +nil+ if the object is not in +self+:
+ *
+ *    set = Set[0, 'zero', :zero]
+ *    set.delete?(0) # => Set["zero", :zero]
+ *    set.delete?(0) # => nil
+ *
+ *  Related: see {Methods for Deleting}[rdoc-ref:Set@Methods+for+Deleting].
  */
 static VALUE
 set_i_delete_p(VALUE set, VALUE item)
@@ -825,11 +854,20 @@ set_delete_if_i(st_data_t key, st_data_t dummy)
 
 /*
  *  call-seq:
- *    delete_if { |o| ... } -> self
+ *    delete_if {|element| ... } -> self
  *    delete_if -> enumerator
  *
- *  Deletes every element of the set for which block evaluates to
- *  true, and returns self. Returns an enumerator if no block is given.
+ *  With a block given, calls the block with each element in +self+;
+ *  removes the element if the block returns a truthy value:
+ *
+ *    set = Set[*0..9]
+ *    # => Set[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+ *    set.delete_if {|element| element.even? }
+ *    # => Set[1, 3, 5, 7, 9]
+ *
+ *  With no block given, returns an Enumerator.
+ *
+ *  Related: {Methods for Deleting}[rdoc-ref:Set@Methods+for+Deleting].
  */
 static VALUE
 set_i_delete_if(VALUE set)
@@ -843,11 +881,19 @@ set_i_delete_if(VALUE set)
 
 /*
  *  call-seq:
- *    reject! { |o| ... } -> self
+ *    reject! {|element| ... } -> self or nil
  *    reject! -> enumerator
  *
- *  Equivalent to Set#delete_if, but returns nil if no changes were made.
- *  Returns an enumerator if no block is given.
+ *  With a block given, like #delete_if, but returns +nil+ if no changes were made:
+ *
+ *    set = Set[*0..9]                       # => Set[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+ *    set.reject! {|element| element.even? } # => Set[1, 3, 5, 7, 9]
+ *    set.reject! {|element| element.even? } # => nil
+ *    set.reject! {|element| element.odd? }  # => Set[]
+ *
+ *  With no block given, returns an Enumerator.
+ *
+ *  Related: see {Methods for Deleting}[rdoc-ref:Set@Methods+for+Deleting].
  */
 static VALUE
 set_i_reject(VALUE set)
@@ -984,26 +1030,48 @@ static void set_merge_enum_into(VALUE set, VALUE arg);
 
 /*
  *  call-seq:
- *    divide { |o1, o2| ... } -> set
- *    divide { |o| ... } -> set
+ *    divide {|ele| ... } -> new_set
+ *    divide {|ele0, ele1| ... } -> new_set
  *    divide -> enumerator
  *
- *  Divides the set into a set of subsets according to the commonality
- *  defined by the given block.
+ *  With a block given, returns a set of sets.
  *
- *  If the arity of the block is 2, elements o1 and o2 are in common
- *  if both block.call(o1, o2) and block.call(o2, o1) are true.
- *  Otherwise, elements o1 and o2 are in common if
- *  block.call(o1) == block.call(o2).
+ *  For a block that accepts one argument,
+ *  calls the block with each element;
+ *  creates a set for each distinct block return value:
  *
- *    numbers = Set[1, 3, 4, 6, 9, 10, 11]
- *    set = numbers.divide { |i,j| (i - j).abs == 1 }
- *    set        #=> Set[Set[1],
- *               #       Set[3, 4],
- *               #       Set[6],
- *               #       Set[9, 10, 11]]
+ *    set = Set[*0..9]
+ *    # => Set[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+ *    # Divide into mod 3 sets.
+ *    set.divide {|ele| ele % 3 }
+ *    # => Set[Set[0, 3, 6, 9], Set[1, 4, 7], Set[2, 5, 8]]
+ *    # Divide into mod 5 sets.
+ *    set.divide {|ele| ele % 5 }
+ *    # => Set[Set[0, 5], Set[1, 6], Set[2, 7], Set[3, 8], Set[4, 9]]
  *
- *  Returns an enumerator if no block is given.
+ *    Set[0].divide {|ele| anything } # => Set[Set[0]]
+ *    Set[].divide {|ele| not called } # => Set[]
+ *
+ *  For a block that accepts two arguments,
+ *  divides +self+ into connected components based on the binary
+ *  relation defined by the block, calling the block with each 2-element
+ *  permutation of the elements of +self+:
+ *
+ *    set = Set[*0..9]
+ *    # => Set[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+ *    # Divide into mod 2 sets.
+ *    set.divide {|i, j| (i - j) % 2 == 0 }
+ *    # => Set[Set[0, 2, 4, 6, 8], Set[1, 3, 5, 7, 9]]
+ *    # Divide into mod 3 sets.
+ *    set.divide {|i, j| (i - j) % 3 == 0 }
+ *    # => Set[Set[0, 3, 6, 9], Set[1, 4, 7], Set[2, 5, 8]]
+ *
+ *    Set[0].divide {|i, j| not called } # => Set[Set[0]]
+ *    Set[].divide {|i, j| not called } # => Set[]
+ *
+ *  With no block given, returns an Enumerator.
+ *
+ *  Related: see {Methods for Converting}[rdoc-ref:Set@Methods+for+Converting].
  */
 static VALUE
 set_i_divide(VALUE set)
@@ -1126,27 +1194,29 @@ set_i_intersection(VALUE set, VALUE other)
 
 /*
  *  call-seq:
- *    include?(item) -> true or false
+ *    include?(object) -> true or false
  *
- *  Returns true if the set contains the given object:
+ *  Returns whether the given +object+ is an element of +self+:
  *
- *    Set[1, 2, 3].include? 2   #=> true
- *    Set[1, 2, 3].include? 4   #=> false
+ *    set = [0, :zero, '0']
+ *    set.include?('0')    # => true
+ *    set.include?('zero') # => false
  *
- *  Note that <code>include?</code> and <code>member?</code> do not test member
- *  equality using <code>==</code> as do other Enumerables.
+ *  Tests equality using `hash` and `eql?`.
  *
- *  This is aliased to #===, so it is usable in +case+ expressions:
+ *  Aliased as #===, which means that sets may be used in +case+ expressions:
  *
  *    case :apple
  *    when Set[:potato, :carrot]
- *      "vegetable"
+ *      'vegetable'
  *    when Set[:apple, :banana]
- *      "fruit"
+ *      'fruit'
+ *    else
+ *      'unknown'
  *    end
  *    # => "fruit"
  *
- *  See also Enumerable#include?
+ *  Related: see {Methods for Querying}[rdoc-ref:Set@Methods+for+Querying].
  */
 static VALUE
 set_i_include(VALUE set, VALUE item)
@@ -1199,10 +1269,17 @@ set_merge_enum_into(VALUE set, VALUE arg)
 
 /*
  *  call-seq:
- *    merge(*enums, **nil) -> self
+ *    merge(*enumerables, **nil) -> self
  *
- *  Merges the elements of the given enumerable objects to the set and
- *  returns self.
+ *  Adds each element of each of the given +enumerables+ to +self+;
+ *  returns +self+:
+ *
+ *    set = Set[*0..2]                 # => Set[0, 1, 2]
+ *    set.merge('a'..'c', %w[foo bar]) # => Set[0, 1, 2, "a", "b", "c", "foo", "bar"]
+ *    set.merge('a'..'c', %w[foo bar]) # => Set[0, 1, 2, "a", "b", "c", "foo", "bar"]
+ *
+ *  Related: see {Methods for Assigning}[rdoc-ref:Set@Methods+for+Assigning].
+ *
  */
 static VALUE
 set_i_merge(int argc, VALUE *argv, VALUE set)
@@ -1258,7 +1335,27 @@ set_reset_table_with_type(VALUE set, const struct st_hash_type *type)
  *  call-seq:
  *    compare_by_identity -> self
  *
- *  Makes the set compare its elements by their identity and returns self.
+ *  Sets +self+ to compare by object identity
+ *  (rather than by object content, which is the initial setting);
+ *  returns +self+:
+ *
+ *    set = Set.new
+ *    set.compare_by_identity
+ *    str = +"foo"
+ *    set.add(str)
+ *    # =>  Set["foo"]
+ *    set.include?(str)
+ *    # => true
+ *    set.add(str)
+ *    # => Set["foo"])
+ *    set.include?(+"foo")
+ *    # => false
+ *    set.add(+"foo")
+ *    # => Set["foo", "foo"])
+ *
+ *  Once set, the compare-by-identity property may not be unset.
+ *
+ *  Related: #compare_by_identity?.
  */
 static VALUE
 set_i_compare_by_identity(VALUE set)
@@ -1276,8 +1373,16 @@ set_i_compare_by_identity(VALUE set)
  *  call-seq:
  *    compare_by_identity? -> true or false
  *
- *  Returns true if the set will compare its elements by their
- *  identity.  Also see Set#compare_by_identity.
+ *  Returns whether +self+ compares elements by object identity
+ *  (rather than by content):
+ *
+ *    set = Set[]
+ *    set.compare_by_identity? # => false
+ *    set.compare_by_identity
+ *    set.compare_by_identity? # => true
+ *
+ *  Related: #compare_by_identity;
+ *  see also {Methods for Querying}[rdoc-ref:Set@Methods+for+Querying].
  */
 static VALUE
 set_i_compare_by_identity_p(VALUE set)
@@ -1289,7 +1394,11 @@ set_i_compare_by_identity_p(VALUE set)
  *  call-seq:
  *    size -> integer
  *
- *  Returns the number of elements.
+ *  Returns the number of elements in +self+:
+ *
+ *    Set[*0..9].size # => 10
+ *
+ *  Related: see {Methods for Querying}[rdoc-ref:Set@Methods+for+Querying].
  */
 static VALUE
 set_i_size(VALUE set)
@@ -1301,7 +1410,12 @@ set_i_size(VALUE set)
  *  call-seq:
  *    empty? -> true or false
  *
- *  Returns true if the set contains no elements.
+ *  Returns whether +self+ contains no elements:
+ *
+ *    Set[].empty?  # => true
+ *    Set[0].empty? # => false
+ *
+ *  Related: see {Methods for Querying}[rdoc-ref:Set@Methods+for+Querying].
  */
 static VALUE
 set_i_empty(VALUE set)
@@ -1325,7 +1439,7 @@ set_xor_i(st_data_t key, st_data_t data)
  *  call-seq:
  *    self ^ enumerable -> new_set
  *
- *  Returns a new \Set object containing
+ *  Returns a new set containing
  *  the {exclusive OR}[https://en.wikipedia.org/wiki/Exclusive_or]
  *  of +self+ and the given +enumerable+;
  *  that is, containing each element that is in either +self+ or +enumerable+,
@@ -1365,7 +1479,7 @@ set_i_xor(VALUE set, VALUE other)
  *  call-seq:
  *    self | enumerable -> new_set
  *
- *  Returns a new \Set object containing
+ *  Returns a new set containing
  *  the {union}[https://en.wikipedia.org/wiki/Union_(set_theory)]
  *  of +self+ and the given +enumerable+;
  *  that is, containing the elements of both +self+ and +enumerable+.
@@ -1412,10 +1526,16 @@ set_remove_enum_from(VALUE set, VALUE arg)
 
 /*
  *  call-seq:
- *    subtract(enum) -> self
+ *    subtract(enumerable) -> self
  *
- *  Deletes every element that appears in the given enumerable object
- *  and returns self.
+ *  Deletes from +self+ every element found in the given +enumerable+;
+ *  returns +self+:
+ *
+ *    set = Set[*0..9]        # => Set[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+ *    set.subtract(5..14)     # => Set[0, 1, 2, 3, 4]
+ *    set.subtract(Set[6, 2]) # => Set[0, 1, 3, 4]
+ *
+ *  Related: see {Methods for Deleting}[rdoc-ref:Set@Methods+for+Deleting].
  */
 static VALUE
 set_i_subtract(VALUE set, VALUE other)
@@ -1456,12 +1576,18 @@ set_each_i(st_data_t key, st_data_t dummy)
 
 /*
  *  call-seq:
- *    each { |o| ... } -> self
+ *    each {|element| ... } -> self
  *    each -> enumerator
  *
- *  Calls the given block once for each element in the set, passing
- *  the element as parameter.  Returns an enumerator if no block is
- *  given.
+ *  With a block given, calls the block once for each element in the set,
+ *  passing the element as a parameter;
+ *  returns +self+:
+ *
+ *    sum = 0
+ *    Set[1, 2, 3].each {|i| sum += i }
+ *    sum => 6
+ *
+ *  With no block given, returns an Enumerator.
  */
 static VALUE
 set_i_each(VALUE set)
@@ -1517,11 +1643,21 @@ set_keep_if_i(st_data_t key, st_data_t into)
 
 /*
  *  call-seq:
- *    keep_if { |o| ... } -> self
+ *    keep_if {|element| ... } -> self
  *    keep_if -> enumerator
  *
- *  Deletes every element of the set for which block evaluates to false, and
- *  returns self. Returns an enumerator if no block is given.
+ *  With a block given,
+ *  calls the block with each element in +self+,
+ *  deleting the element if the block returns +false+ or +nil+;
+ *  returns +self+:
+ *
+ *    set = Set[*0..9]           # => Set[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+ *    set.keep_if {|i| i.even? } # => Set[0, 2, 4, 6, 8]
+ *    set.keep_if {|i| i.odd? }  # => Set[]
+ *
+ *  With no block given, returns an Enumerator.
+ *
+ *  Related: see {Methods for Deleting}[rdoc-ref:Set@Methods+for+Deleting].
  */
 static VALUE
 set_i_keep_if(VALUE set)
@@ -1536,11 +1672,19 @@ set_i_keep_if(VALUE set)
 
 /*
  *  call-seq:
- *    select! { |o| ... } -> self
+ *    select! {|element| ... } -> self or nil
  *    select! -> enumerator
  *
- *  Equivalent to Set#keep_if, but returns nil if no changes were made.
- *  Returns an enumerator if no block is given.
+ *  With a block given, like #keep_if, but returns +nil+ if no changes were made:
+ *
+ *    set = Set[*0..9]           # => Set[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+ *    set.select! {|i| i.even? } # => Set[0, 2, 4, 6, 8]
+ *    set.select! {|i| i.even? } # => nil
+ *    set.select! {|i| i.odd? }  # => Set[]
+ *
+ *  With no block given, returns an Enumerator.
+ *
+ *  Related: see {Methods for Deleting}[rdoc-ref:Set@Methods+for+Deleting].
  */
 static VALUE
 set_i_select(VALUE set)
@@ -1557,14 +1701,15 @@ set_i_select(VALUE set)
 
 /*
  *  call-seq:
- *    replace(enum) -> self
+ *    replace(enumerable) -> self
  *
- *  Replaces the contents of the set with the contents of the given
- *  enumerable object and returns self.
+ *  Replaces the contents +self+ with the contents of the given +enumerable+;
+ *  returns +self+:
  *
- *    set = Set[1, 'c', :s]             #=> Set[1, "c", :s]
- *    set.replace([1, 2])               #=> Set[1, 2]
- *    set                               #=> Set[1, 2]
+ *    set = Set[1, 'c', :s] # => Set[1, "c", :s]
+ *    set.replace([1, 2])   # => Set[1, 2]
+ *
+ *  Related: see {Methods for Assigning}[rdoc-ref:Set@Methods+for+Assigning].
  */
 static VALUE
 set_i_replace(VALUE set, VALUE other)
@@ -1593,8 +1738,22 @@ set_i_replace(VALUE set, VALUE other)
  *  call-seq:
  *    reset -> self
  *
- *  Resets the internal state after modification to existing elements
- *  and returns self. Elements will be reindexed and deduplicated.
+ *  Resets the internal state of +self+; returns +self+.
+ *
+ *  A set relies on the #hash results of each element being consistent.
+ *  Modifying an element in a way that changes the results of #hash
+ *  may allow duplicate elements in the set:
+ *
+ *    array = [1]
+ *    set = Set[array]  # => Set[[1]]
+ *    array << 2
+ *    set.add(array)    # => Set[[1, 2], [1, 2]]
+ *
+ *  Calling #reset will recalculate all of the hash values and remove
+ *  duplicate elements:
+ *
+ *    set.reset         # => Set[[1, 2]]
+ *
  */
 static VALUE
 set_i_reset(VALUE set)
@@ -1644,10 +1803,23 @@ set_flatten_merge(VALUE set, VALUE from, VALUE hash)
 
 /*
  *  call-seq:
- *    flatten -> set
+ *    flatten -> new_set
  *
- *  Returns a new set that is a copy of the set, flattening each
- *  containing set recursively.
+ *  Returns a new set that is a copy of +self+,
+ *  but with +self+ and its nested sets flattened;
+ *  that is, their elements become elements of +self+:
+ *
+ *    Set[Set[0, 1], Set[2, 3]].flatten
+ *    # => Set[0, 1, 2, 3]
+ *    Set[Set[0, 1], Set[Set[2, 3], Set[3, 4]]].flatten
+ *    # => Set[0, 1, 2, 3, 4]
+ *
+ *  Does not flatten nested arrays or hashes:
+ *
+ *    Set[%w[foo bar]].flatten      # => Set[["foo", "bar"]]
+ *    Set[{foo: 0, bar: 1}].flatten # => Set[{foo: 0, bar: 1}]
+ *
+ *  Related: see {Methods for Converting}[rdoc-ref:Set@Methods+for+Converting].
  */
 static VALUE
 set_i_flatten(VALUE set)
@@ -1669,10 +1841,21 @@ set_contains_set_i(st_data_t item, st_data_t arg)
 
 /*
  *  call-seq:
- *    flatten! -> self
+ *    flatten! -> self or nil
  *
- *  Equivalent to Set#flatten, but replaces the receiver with the
- *  result in place.  Returns nil if no modifications were made.
+ *  Like #flatten, but if any changes were made
+ *  replaces +self+ with the result and returns +self+:
+ *
+ *    Set[Set[0, 1], Set[2, 3]].flatten!
+ *    # => Set[0, 1, 2, 3]
+ *    Set[Set[0, 1], Set[Set[2, 3], Set[3, 4]]].flatten!
+ *    # => Set[0, 1, 2, 3, 4]
+ *
+ *  Returns +nil+ if no changes were made:
+ *
+ *    Set[0, 1, 2].flatten! # => nil
+ *
+ *  Related: see {Methods for Assigning}[rdoc-ref:Set@Methods+for+Assigning].
  */
 static VALUE
 set_i_flatten_bang(VALUE set)
@@ -1711,9 +1894,17 @@ set_le(VALUE set, VALUE other)
 
 /*
  *  call-seq:
- *    proper_subset?(set) -> true or false
+ *    proper_subset?(other_set) -> true or false
  *
- *  Returns true if the set is a proper subset of the given set.
+ *  Returns whether +self+ is
+ *  a {proper subset}[https://en.wikipedia.org/wiki/Subset]
+ *  of the given +other_set+:
+ *
+ *    set = Set[*'b'..'e']
+ *    set.proper_subset?(set)            # => false
+ *    set.proper_subset?(Set[*'a'..'f']) # => true
+ *
+ *  Related: {Methods for Querying}[rdoc-ref:Set@Methods+for+Querying].
  */
 static VALUE
 set_i_proper_subset(VALUE set, VALUE other)
@@ -1725,9 +1916,17 @@ set_i_proper_subset(VALUE set, VALUE other)
 
 /*
  *  call-seq:
- *    subset?(set) -> true or false
+ *    subset?(other_set) -> true or false
  *
- *  Returns true if the set is a subset of the given set.
+ *  Returns whether +self+ is a {subset}[https://en.wikipedia.org/wiki/Subset]
+ *  of the given +other_set+:
+ *
+ *    set = Set[*'b'..'e']
+ *    set.subset?(set)            # => true
+ *    set.subset?(Set[*'a'..'f']) # => true
+ *    set.subset?(Set[*'c'..'e']) # => false
+ *
+ *  Related: {Methods for Querying}[rdoc-ref:Set@Methods+for+Querying].
  */
 static VALUE
 set_i_subset(VALUE set, VALUE other)
@@ -1739,9 +1938,17 @@ set_i_subset(VALUE set, VALUE other)
 
 /*
  *  call-seq:
- *    proper_superset?(set) -> true or false
+ *    proper_superset?(other_set) -> true or false
  *
- *  Returns true if the set is a proper superset of the given set.
+ *  Returns whether +self+ is
+ *  a {proper superset}[https://en.wikipedia.org/wiki/Subset]
+ *  of the given +other_set+:
+ *
+ *    set = Set[*'a'..'f']
+ *    set.proper_superset?(set)            # => false
+ *    set.proper_superset?(Set[*'b'..'e']) # => true
+ *
+ *  Related: {Methods for Querying}[rdoc-ref:Set@Methods+for+Querying].
  */
 static VALUE
 set_i_proper_superset(VALUE set, VALUE other)
@@ -1753,9 +1960,17 @@ set_i_proper_superset(VALUE set, VALUE other)
 
 /*
  *  call-seq:
- *    superset?(set) -> true or false
+ *    superset?(other_set) -> true or false
  *
- *  Returns true if the set is a superset of the given set.
+ *  Returns whether +self+ is a {superset}[https://en.wikipedia.org/wiki/Subset]
+ *  of the given +other_set+:
+ *
+ *    set = Set[*'a'..'f']          # => Set["a", "b", "c", "d", "e", "f"]
+ *    set.superset?(set)            # => true
+ *    set.superset?(Set[*'b'..'e']) # => true
+ *    set.superset?(Set[*'b'..'x']) # => false
+ *
+ *  Related: {Methods for Querying}[rdoc-ref:Set@Methods+for+Querying].
  */
 static VALUE
 set_i_superset(VALUE set, VALUE other)
@@ -1778,15 +1993,16 @@ set_intersect_i(st_data_t key, st_data_t arg)
 
 /*
  *  call-seq:
- *    intersect?(set) -> true or false
+ *    intersect?(enumerable) -> true or false
  *
- *  Returns true if the set and the given enumerable have at least one
- *  element in common.
+ *  Returns whether +self+ and +enumerable+ have any elements in common:
  *
- *    Set[1, 2, 3].intersect? Set[4, 5]   #=> false
- *    Set[1, 2, 3].intersect? Set[3, 4]   #=> true
- *    Set[1, 2, 3].intersect? 4..5        #=> false
- *    Set[1, 2, 3].intersect? [3, 4]      #=> true
+ *    set = Set[0, 'zero', :zero]
+ *    set.intersect?([0, 1, 2])        # => true
+ *    set.intersect?(%w[zero one two]) # => true
+ *    set.intersect?(Set[3])           # => false
+ *
+ *  Related: see {Methods for Querying}[rdoc-ref:Set@Methods+for+Querying].
  */
 static VALUE
 set_i_intersect(VALUE set, VALUE other)
@@ -1819,15 +2035,15 @@ set_i_intersect(VALUE set, VALUE other)
 
 /*
  *  call-seq:
- *    disjoint?(set) -> true or false
+ *    disjoint?(enumerable) -> true or false
  *
- *  Returns true if the set and the given enumerable have no
- *  element in common.  This method is the opposite of +intersect?+.
+ *  Returns whether no element of +enumerable+ is present in +self+:
  *
- *    Set[1, 2, 3].disjoint? Set[3, 4]   #=> false
- *    Set[1, 2, 3].disjoint? Set[4, 5]   #=> true
- *    Set[1, 2, 3].disjoint? [3, 4]      #=> false
- *    Set[1, 2, 3].disjoint? 4..5        #=> true
+ *    set = Set[0, 'zero', :zero]
+ *    set.disjoint?([1, 2, 3])    # => true
+ *    set.disjoint?([0, 1, 2, 3]) # => false
+ *
+ *  Related: see {Methods for Querying}[rdoc-ref:Set@Methods+for+Querying].
  */
 static VALUE
 set_i_disjoint(VALUE set, VALUE other)
@@ -1962,7 +2178,12 @@ set_hash_i(st_data_t item, st_data_t(arg))
  *  call-seq:
  *    hash -> integer
  *
- *  Returns hash code for set.
+ *  Returns the integer hash value for +self+.
+ *
+ *  Two sets with the same content have the same hash value.
+ *
+ *    Set[0, 1].hash == Set[1, 0].hash # => true
+ *    Set[0, 1].hash == Set[0].hash    # => false
  */
 static VALUE
 set_i_hash(VALUE set)
@@ -2090,44 +2311,27 @@ rb_set_size(VALUE set)
 /*
  *  Document-class: Set
  *
- * The Set class implements a collection of unordered values with no
- * duplicates. It is a hybrid of Array's intuitive inter-operation
- * facilities and Hash's fast lookup.
+ * An instance of class \Set contains a collection
+ * of objects (elements), with no duplicates.
  *
- * Set is easy to use with Enumerable objects (implementing #each).
- * Most of the initializer methods and binary operators accept generic
- * Enumerable objects besides sets and arrays.  An Enumerable object
- * can be converted to Set using the +to_set+ method.
+ * By default:
  *
- * Set uses a data structure similar to Hash for storage, except that
- * it only has keys and no values.
+ * - Set determines equality via Object#eql? and Object#hash,
+ *   and assumes that these values do not change for a stored element.
+ *   If these values do change, the set enters an unreliable state;
+ *   see #reset.
+ * - A String instance added to a set is stored as a frozen copy of the string,
+ *   unless it is already frozen.
  *
- * * Equality of elements is determined according to Object#eql? and
- *   Object#hash.  Use Set#compare_by_identity to make a set compare
- *   its elements by their identity.
- * * Set assumes that the identity of each element does not change
- *   while it is stored.  Modifying an element of a set will render the
- *   set to an unreliable state.
- * * When a string is to be stored, a frozen copy of the string is
- *   stored instead unless the original string is already frozen.
+ * Calling #compare_by_identity causes:
  *
- * == Comparison
+ * - All following determinations of equality
+ *   to use object identity instead of the methods mentioned above.
+ * - A String added to a set is stored "as is", whether or not frozen.
  *
- * The comparison operators <tt><</tt>, <tt>></tt>, <tt><=</tt>, and
- * <tt>>=</tt> are implemented as shorthand for the
- * {proper_,}{subset?,superset?} methods.  The <tt><=></tt>
- * operator reflects this order, or returns +nil+ for sets that both
- * have distinct elements (<tt>{x, y}</tt> vs. <tt>{x, z}</tt> for example).
- *
- * == Example
- *
- *   s1 = Set[1, 2]                        #=> Set[1, 2]
- *   s2 = [1, 2].to_set                    #=> Set[1, 2]
- *   s1 == s2                              #=> true
- *   s1.add("foo")                         #=> Set[1, 2, "foo"]
- *   s1.merge([2, 6])                      #=> Set[1, 2, "foo", 6]
- *   s1.subset?(s2)                        #=> false
- *   s2.subset?(s1)                        #=> true
+ * \Set includes module Enumerable, and is easy to use with other enumerable objects.
+ * Many of its methods accept enumerable objects as arguments;
+ * any enumerable object may be converted to a set via #to_set.
  *
  * == Contact
  *
@@ -2135,35 +2339,30 @@ rb_set_size(VALUE set)
  *
  * == Inheriting from \Set
  *
- * Before Ruby 4.0 (released December 2025), \Set had a different, less
- * efficient implementation. It was reimplemented in C, and the behavior
- * of some of the core methods were adjusted.
+ * Before Ruby 4.0 (released in December, 2025),
+ * class \Set had a different, less efficient implementation.
+ * In Ruby 4.0, the class was reimplemented in C,
+ * and the behaviors of some methods were adjusted.
  *
- * To keep backward compatibility, when a class is inherited from \Set,
- * additional module +Set::SubclassCompatible+ is included, which makes
- * the inherited class behavior, as well as internal method names,
- * closer to what it was before Ruby 4.0.
+ * When compatibility with the older implementation is needed,
+ * a \Set subclass should inherit directly from class +Set+;
+ * this automatically includes module +Set::SubclassCompatible+,
+ * which makes behaviors closer to those in the older implementation.
  *
- * It can be easily seen, for example, in the #inspect method behavior:
+ * A difference may be seen as follows:
  *
- *    p Set[1, 2, 3]
- *    # prints "Set[1, 2, 3]"
+ *   Set[[1, 2, 3]]       # => Set[[1, 2, 3]]
+ *   class MySet < Set; end
+ *   MySet[[1, 2, 3]]     # => #<MySet: {[1, 2, 3]}>  # Same as in Ruby 3.4.
  *
- *    class MySet < Set
- *    end
- *    p MySet[1, 2, 3]
- *    # prints "#<MySet: {1, 2, 3}>", like it was in Ruby 3.4
+ * When backward compatibility is not needed,
+ * a \Set subclass should inherit from +Set::CoreSet+,
+ * which avoids including the compatibility layer:
  *
- * For new code, if backward compatibility is not necessary,
- * it is recommended to instead inherit from +Set::CoreSet+, which
- * avoids including the "compatibility" layer:
+ *   class MyCoreSet < Set::CoreSet; end
+ *   MyCoreSet[[1, 2, 3]] # => MyCoreSet[[1, 2, 3]]
  *
- *    class MyCoreSet < Set::CoreSet
- *    end
- *    p MyCoreSet[1, 2, 3]
- *    # prints "MyCoreSet[1, 2, 3]"
- *
- * == Set's methods
+ * == What's Here
  *
  * First, what's elsewhere. \Class \Set:
  *
@@ -2190,25 +2389,20 @@ rb_set_size(VALUE set)
  * === Methods for Creating a \Set
  *
  * - ::[]:
- *   Returns a new set containing the given objects.
+ *   Returns a new set populated with the given objects.
  * - ::new:
- *   Returns a new set containing either the given objects
- *   (if no block given) or the return values from the called block
- *   (if a block given).
+ *   Returns a new set based on the given object (if no block given),
+ *   or on the return values from the called block (if a block given).
  *
  * === Methods for \Set Operations
  *
- * - #| (aliased as #union and #+):
- *   Returns a new set containing all elements from +self+
- *   and all elements from a given enumerable (no duplicates).
  * - #& (aliased as #intersection):
- *   Returns a new set containing all elements common to +self+
- *   and a given enumerable.
+ *   Returns a new set containing the intersection of +self+ and the given enumerable.
  * - #- (aliased as #difference):
- *   Returns a copy of +self+ with all elements
- *   in a given enumerable removed.
- * - #^: Returns a new set containing all elements from +self+
- *   and a given enumerable except those common to both.
+ *   Returns a new set containing the difference of +self+ and the given enumerable.
+ * - #^: Returns a new set containing the exclusive OR of +self+ and the given enumerable.
+ * - #| (aliased as #union and #+):
+ *   Returns a new set containing the union of +self+ and the given enumerable.
  *
  * === Methods for Comparing
  *
@@ -2217,105 +2411,98 @@ rb_set_size(VALUE set)
  * - #==: Returns whether +self+ and a given enumerable are equal,
  *   as determined by Object#eql?.
  * - #compare_by_identity?:
- *   Returns whether the set considers only identity
+ *   Returns whether +self+ considers only identity
  *   when comparing elements.
+ * - #proper_subset? (aliased as #<):
+ *   Returns whether the given enumerable is a proper subset of +self+.
+ * - #proper_superset? (aliased as #>):
+ *   Returns whether the given enumerable is a proper superset of +self+.
+ * - #subset? (aliased as #<=):
+ *   Returns whether the given object is a subset of +self+.
+ * - #superset? (aliased as #>=):
+ *   Returns whether the given enumerable is a superset of +self+.
  *
  * === Methods for Querying
  *
- * - #length (aliased as #size):
- *   Returns the count of elements.
- * - #empty?:
- *   Returns whether the set has no elements.
- * - #include? (aliased as #member? and #===):
- *   Returns whether a given object is an element in the set.
- * - #subset? (aliased as #<=):
- *   Returns whether a given object is a subset of the set.
- * - #proper_subset? (aliased as #<):
- *   Returns whether a given enumerable is a proper subset of the set.
- * - #superset? (aliased as #>=):
- *   Returns whether a given enumerable is a superset of the set.
- * - #proper_superset? (aliased as #>):
- *   Returns whether a given enumerable is a proper superset of the set.
  * - #disjoint?:
- *   Returns +true+ if the set and a given enumerable
- *   have no common elements, +false+ otherwise.
+ *   Returns whether no element of the given enumerable is present in +self+.
+ * - #empty?:
+ *   Returns whether +self+ contains no elements.
+ * - #include? (aliased as #member? and #===):
+ *   Returns whether the given object is an element of +self+.
  * - #intersect?:
- *   Returns +true+ if the set and a given enumerable:
- *   have any common elements, +false+ otherwise.
- * - #compare_by_identity?:
- *   Returns whether the set considers only identity
- *   when comparing elements.
+ *   Returns whether +self+ and the given enumerable have any elements in common.
+ * - #size (aliased as #length):
+ *   Returns the number of elements in +self+.
  *
  * === Methods for Assigning
  *
  * - #add (aliased as #<<):
- *   Adds a given object to the set; returns +self+.
+ *   Adds the given object to +self+; returns +self+.
  * - #add?:
- *   If the given object is not an element in the set,
- *   adds it and returns +self+; otherwise, returns +nil+.
+ *   Like #add, but returns +nil+ if the given object is already in +self+.
  * - #merge:
- *   Merges the elements of each given enumerable object to the set; returns +self+.
+ *   Adds each element of each of the given enumerables to +self+; returns +self+.
  * - #replace:
- *   Replaces the contents of the set with the contents
- *   of a given enumerable.
+ *   Replaces the contents of +self+ with the contents of the given enumerable;
+ *   returns +self+.
  *
  * === Methods for Deleting
  *
  * - #clear:
- *   Removes all elements in the set; returns +self+.
+ *   Removes all elements from +self+; returns +self+.
  * - #delete:
- *   Removes a given object from the set; returns +self+.
+ *   Removes the given object from +self+ if +self+ includes the object; returns +self+.
  * - #delete?:
- *   If the given object is an element in the set,
- *   removes it and returns +self+; otherwise, returns +nil+.
- * - #subtract:
- *   Removes each given object from the set; returns +self+.
- * - #delete_if - Removes elements specified by a given block.
- * - #select! (aliased as #filter!):
- *   Removes elements not specified by a given block.
+ *   Like #delete, but returns +nil+ if the object is not in +self+.
+ * - #delete_if:
+ *   Calls the block with each element in +self+;
+ *   removes the element if the block returns a truthy value.
  * - #keep_if:
- *   Removes elements not specified by a given block.
+ *   Calls the block with each element in +self+,
+ *   deleting the element if the block returns +false+ or +nil+; returns +self+.
  * - #reject!
- *   Removes elements specified by a given block.
+ *   Like #delete_if, but returns +nil+ if no changes were made.
+ * - #select! (aliased as #filter!):
+ *   Like #keep_if, but returns +nil+ if no changes were made.
+ * - #subtract:
+ *   Deletes from +self+ every element found in the given enumerable; returns +self+:
  *
  * === Methods for Converting
  *
  * - #classify:
- *   Returns a hash that classifies the elements,
+ *   Returns a hash that partitions the elements,
  *   as determined by the given block.
  * - #collect! (aliased as #map!):
  *   Replaces each element with a block return-value.
  * - #divide:
- *   Returns a hash that classifies the elements,
- *   as determined by the given block;
- *   differs from #classify in that the block may accept
- *   either one or two arguments.
+ *   Returns a set of sets that partition the elements,
+ *   as determined by the given block.
  * - #flatten:
  *   Returns a new set that is a recursive flattening of +self+.
- * - #flatten!:
- *   Replaces each nested set in +self+ with the elements from that set.
+ * - #flatten!: Like #flatten, but if any changes were made
+ *   replaces +self+ with the result and returns +self+.
  * - #inspect (aliased as #to_s):
- *   Returns a string displaying the elements.
+ *   Returns a string representation of +self+.
  * - #join:
- *   Returns a string containing all elements, converted to strings
- *   as needed, and joined by the given record separator.
+ *   Returns the string formed by joining the string-converted elements of +self+
+ *   with the given separator.
  * - #to_a:
- *   Returns an array containing all set elements.
+ *   Returns an array containing the elements of +self+.
  * - #to_set:
- *   Returns +self+ if given no arguments and no block;
- *   with a block given, returns a new set consisting of block
- *   return values.
- *
- * === Methods for Iterating
- *
- * - #each:
- *   Calls the block with each successive element; returns +self+.
+ *   With a block given, creates and returns a new set;
+ *   calls the block with each element of +self+,
+ *   and adds the block's returns value to the new set.
  *
  * === Other Methods
  *
+ * - #compare_by_identity:
+ *   Sets +self+ to compare by object identity (rather than by object content).
+ * - #each:
+ *   Calls the block with each successive element of +self+; returns +self+.
  * - #reset:
- *   Resets the internal state; useful if an object
- *   has been modified while an element in the set.
+ *   Resets the internal state of +self+; returns +self+.
+ *   Useful if an element has been modified while an element in the set.
  *
  */
 void
