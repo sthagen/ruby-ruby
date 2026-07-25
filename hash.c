@@ -1159,7 +1159,6 @@ ar_copy(VALUE hash1, VALUE hash2)
     unsigned int bound = RHASH_AR_TABLE_BOUND(hash2);
     new_tab->ar_hint.word = old_tab->ar_hint.word;
     MEMCPY(&new_tab->pairs, &old_tab->pairs, ar_table_pair, bound);
-    RHASH_AR_TABLE(hash1)->ar_hint.word = RHASH_AR_TABLE(hash2)->ar_hint.word;
     RHASH_AR_TABLE_BOUND_SET(hash1, bound);
     RHASH_AR_TABLE_SIZE_SET(hash1, RHASH_AR_TABLE_SIZE(hash2));
 
@@ -2097,7 +2096,7 @@ rb_hash_stlike_lookup(VALUE hash, st_data_t key, st_data_t *pval)
  *
  *  If the key is found, returns its value:
  *
- *    {foo: 0, bar: 1, baz: 2}
+ *    h = {foo: 0, bar: 1, baz: 2}
  *    h[:bar] # => 1
  *
  *  Otherwise, returns a default value (see {Hash Default}[rdoc-ref:Hash@Hash+Default]).
@@ -5731,7 +5730,7 @@ env_aset(VALUE nm, VALUE val)
 static VALUE
 env_keys(int raw)
 {
-    rb_encoding *enc = raw ? 0 : rb_locale_encoding();
+    rb_encoding *enc = raw ? 0 : env_encoding();
     VALUE ary = rb_ary_new();
 
     ENV_LOCKING() {

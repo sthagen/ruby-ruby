@@ -8716,6 +8716,13 @@ lex_identifier(pm_parser_t *parser, bool previous_command_start) {
     if (encoding_changed) {
         return parser->encoding->isupper_char(current_start, end - current_start) ? PM_TOKEN_CONSTANT : PM_TOKEN_IDENTIFIER;
     }
+
+    /* Identifiers usually start with an ASCII byte, for which the uppercase
+     * check is a simple range comparison. This avoids the call into the
+     * encoding module for every identifier. */
+    if (*current_start < 0x80) {
+        return (*current_start >= 'A' && *current_start <= 'Z') ? PM_TOKEN_CONSTANT : PM_TOKEN_IDENTIFIER;
+    }
     return pm_encoding_utf_8_isupper_char(current_start, end - current_start) ? PM_TOKEN_CONSTANT : PM_TOKEN_IDENTIFIER;
 }
 
@@ -10093,7 +10100,11 @@ parser_lex(pm_parser_t *parser) {
             // token. Skip runs of inline whitespace in bulk to avoid per-character
             // stores back to parser->current.end.
             bool chomping = true;
-            while (parser->current.end < parser->end && chomping) {
+            while (chomping) {
+                /* Skip the run of inline whitespace in bulk, then decide what
+                 * to do based on the first byte after it. Handling both in a
+                 * single pass avoids re-entering the scan when the run was
+                 * non-empty, which is the common case. */
                 {
                     static const uint8_t inline_whitespace[256] = {
                         [' '] = 1, ['\t'] = 1, ['\f'] = 1, ['\v'] = 1
@@ -10103,8 +10114,8 @@ parser_lex(pm_parser_t *parser) {
                     if (scan > parser->current.end) {
                         parser->current.end = scan;
                         space_seen = true;
-                        continue;
                     }
+                    if (scan >= parser->end) break;
                 }
 
                 switch (*parser->current.end) {
@@ -12711,14 +12722,6 @@ match6(const pm_parser_t *parser, pm_token_type_t type1, pm_token_type_t type2, 
 }
 
 /**
- * Returns true if the current token is any of the seven given types.
- */
-static PRISM_INLINE bool
-match7(const pm_parser_t *parser, pm_token_type_t type1, pm_token_type_t type2, pm_token_type_t type3, pm_token_type_t type4, pm_token_type_t type5, pm_token_type_t type6, pm_token_type_t type7) {
-    return match1(parser, type1) || match1(parser, type2) || match1(parser, type3) || match1(parser, type4) || match1(parser, type5) || match1(parser, type6) || match1(parser, type7);
-}
-
-/**
  * Returns true if the current token is any of the eight given types.
  */
 static PRISM_INLINE bool
@@ -12928,6 +12931,31 @@ token_begins_expression_p(pm_token_type_t type) {
         default:
             return pm_binding_powers[type].left == PM_BINDING_POWER_UNSET;
     }
+}
+
+/**
+ * Returns true if the given token can begin a pattern element. This is the
+ * set of tokens that can begin an expression plus the tokens that begin
+ * pattern-only constructs — `*` (rest patterns), `**` (keyword rest
+ * patterns), and `^` (pin patterns) — which are binary operator tokens in
+ * expression contexts and therefore excluded from token_begins_expression_p.
+ *
+ * When a token fails this predicate at a decision point, the pattern ends
+ * there and the token is left for the enclosing context to accept or reject.
+ * This mirrors the grammar, whose pattern reductions (`p_top_expr_body:
+ * p_expr ','`, `p_kw: p_kw_label`, `p_kwargs: p_kwarg ','`) fire by default
+ * on any token that cannot start a pattern. Tokens that pass this predicate
+ * but are invalid in the specific context (e.g. `**` in an array pattern)
+ * are rejected by the pattern parser itself with a more targeted diagnostic.
+ */
+static PRISM_INLINE bool
+token_begins_pattern_p(pm_token_type_t type) {
+    return (
+        token_begins_expression_p(type) ||
+        type == PM_TOKEN_USTAR ||
+        type == PM_TOKEN_USTAR_STAR ||
+        type == PM_TOKEN_CARET
+    );
 }
 
 /**
@@ -17097,7 +17125,12 @@ parse_pattern_hash(pm_parser_t *parser, pm_constant_id_list_t *captures, pm_node
 
                 pm_node_t *value;
 
-                if (match8(parser, PM_TOKEN_COMMA, PM_TOKEN_KEYWORD_THEN, PM_TOKEN_BRACE_RIGHT, PM_TOKEN_BRACKET_RIGHT, PM_TOKEN_PARENTHESIS_RIGHT, PM_TOKEN_NEWLINE, PM_TOKEN_SEMICOLON, PM_TOKEN_EOF)) {
+                /*
+                 * The label has an implicit value when the next token cannot
+                 * begin a pattern, mirroring the grammar's `p_kw: p_kw_label`
+                 * reduction.
+                 */
+                if (!token_begins_pattern_p(parser->current.type)) {
                     if (PM_NODE_TYPE_P(first_node, PM_SYMBOL_NODE)) {
                         value = parse_pattern_hash_implicit_value(parser, captures, (pm_symbol_node_t *) first_node);
                     } else {
@@ -17132,8 +17165,12 @@ parse_pattern_hash(pm_parser_t *parser, pm_constant_id_list_t *captures, pm_node
 
     // If there are any other assocs, then we'll parse them now.
     while (accept1(parser, PM_TOKEN_COMMA)) {
-        // Here we need to break to support trailing commas.
-        if (match7(parser, PM_TOKEN_KEYWORD_THEN, PM_TOKEN_BRACE_RIGHT, PM_TOKEN_BRACKET_RIGHT, PM_TOKEN_PARENTHESIS_RIGHT, PM_TOKEN_NEWLINE, PM_TOKEN_SEMICOLON, PM_TOKEN_EOF)) {
+        /*
+         * A trailing comma ends the pattern when the next token cannot begin
+         * another element, mirroring the grammar's `p_kwargs: p_kwarg ','`
+         * reduction.
+         */
+        if (!token_begins_pattern_p(parser->current.type)) {
             // Trailing commas are not allowed to follow a rest pattern.
             if (rest != NULL) {
                 pm_parser_err_token(parser, &parser->current, PM_ERR_PATTERN_EXPRESSION_AFTER_REST);
@@ -17174,7 +17211,12 @@ parse_pattern_hash(pm_parser_t *parser, pm_constant_id_list_t *captures, pm_node
             parse_pattern_hash_key(parser, &keys, key);
             pm_node_t *value = NULL;
 
-            if (match8(parser, PM_TOKEN_COMMA, PM_TOKEN_KEYWORD_THEN, PM_TOKEN_BRACE_RIGHT, PM_TOKEN_BRACKET_RIGHT, PM_TOKEN_PARENTHESIS_RIGHT, PM_TOKEN_NEWLINE, PM_TOKEN_SEMICOLON, PM_TOKEN_EOF)) {
+            /*
+             * The label has an implicit value when the next token cannot
+             * begin a pattern, mirroring the grammar's `p_kw: p_kw_label`
+             * reduction.
+             */
+            if (!token_begins_pattern_p(parser->current.type)) {
                 if (PM_NODE_TYPE_P(key, PM_SYMBOL_NODE)) {
                     value = parse_pattern_hash_implicit_value(parser, captures, (pm_symbol_node_t *) key);
                 } else {
@@ -17674,15 +17716,12 @@ parse_pattern(pm_parser_t *parser, pm_constant_id_list_t *captures, uint8_t flag
 
         // Gather up all of the patterns into the list.
         while (accept1(parser, PM_TOKEN_COMMA)) {
-            // Break early here in case we have a trailing comma. The newline and
-            // EOF terminators cover a one-line match (`x => a,`) or a `case`/`in`
-            // clause (`in a,\n ...`); a newline is only lexed as a token here
-            // when `pattern_matching_newlines` is set, so this does not affect
-            // patterns nested in brackets or parentheses.
-            if (
-                match7(parser, PM_TOKEN_KEYWORD_THEN, PM_TOKEN_BRACE_RIGHT, PM_TOKEN_BRACKET_RIGHT, PM_TOKEN_PARENTHESIS_RIGHT, PM_TOKEN_SEMICOLON, PM_TOKEN_KEYWORD_AND, PM_TOKEN_KEYWORD_OR) ||
-                match2(parser, PM_TOKEN_NEWLINE, PM_TOKEN_EOF)
-            ) {
+            /*
+             * A trailing comma ends the pattern when the next token cannot
+             * begin another pattern element, leaving the token for the
+             * enclosing context to accept or reject.
+             */
+            if (!token_begins_pattern_p(parser->current.type)) {
                 // A trailing comma forms an implicit rest pattern (`[a,]` is
                 // `[a, *]`). If a rest pattern has already been parsed, then
                 // this is a second rest, which is not allowed (e.g. `[a, *b,]`
@@ -19787,6 +19826,18 @@ parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power, u
                     parse_heredoc_dedent(parser, nodes, common_whitespace);
                 }
             }
+
+            /* If a missing terminator left this heredoc's lex mode on the
+             * stack, it still points at our stack-local common_whitespace.
+             * Clear the pointer so that subsequent lexing cannot read from
+             * this function's dead stack frame. */
+            pm_lex_mode_t *whitespace_mode = parser->lex_modes.current;
+            do {
+                if (whitespace_mode->mode == PM_LEX_HEREDOC && whitespace_mode->as.heredoc.common_whitespace == &common_whitespace) {
+                    whitespace_mode->as.heredoc.common_whitespace = NULL;
+                }
+                whitespace_mode = whitespace_mode->prev;
+            } while (whitespace_mode != NULL);
 
             if (match1(parser, PM_TOKEN_STRING_BEGIN)) {
                 return parse_strings(parser, node, false, (uint16_t) (depth + 1));
@@ -23333,6 +23384,41 @@ pm_serialize_parse_stream(pm_buffer_t *buffer, pm_source_t *source, const char *
     pm_parser_free(parser);
     pm_arena_cleanup(&arena);
     pm_options_cleanup(&options);
+}
+
+/**
+ * Parse the given source and format any errors that are encountered into the
+ * given buffer using the given format type. If the source parses without any
+ * errors, then -1 is returned and the buffer is left empty. Otherwise, the
+ * name of the encoding of the source is written to the buffer, followed by a
+ * null byte, followed by the formatted errors, and the error level of the
+ * error with the highest precedence is returned.
+ */
+int8_t
+pm_serialize_parse_errors_format(pm_buffer_t *buffer, const uint8_t *source, size_t size, const char *data, pm_errors_format_type_t format_type) {
+    pm_options_t options = { 0 };
+    pm_options_read(&options, data);
+
+    pm_arena_t arena = { 0 };
+    pm_parser_t parser;
+    pm_parser_init(&arena, &parser, source, size, &options);
+
+    pm_parse(&parser);
+
+    int8_t result = -1;
+    if (parser.error_list.size > 0) {
+        const char *encoding_name = parser.encoding->name;
+        pm_buffer_append_string(buffer, encoding_name, strlen(encoding_name));
+        pm_buffer_append_byte(buffer, '\0');
+
+        result = (int8_t) pm_errors_format(&parser, buffer, format_type);
+    }
+
+    pm_parser_cleanup(&parser);
+    pm_arena_cleanup(&arena);
+    pm_options_cleanup(&options);
+
+    return result;
 }
 
 /**

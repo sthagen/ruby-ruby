@@ -1236,6 +1236,21 @@ class TestProcess < Test::Unit::TestCase
     }
   end
 
+  def test_spawn_trailing_backslash
+    return unless windows?
+    [
+      ["AA BB\\"],
+      ["AA BB\\", "CC"],
+      ["AA BB\\\\", "CC"],
+      ["C:\\Program Files\\Foo\\", "--verbose"],
+      ["AA BB", "CC"],          # control: no trailing backslash
+      ["AA\\", "CC"],           # control: no space, so it is not quoted
+    ].each do |args|
+      out = IO.popen([EnvUtil.rubybin, "-e", "STDOUT.binmode; print Marshal.dump(ARGV)", *args], "rb", &:read)
+      assert_equal(args, Marshal.load(out), "[Bug #22199] argv did not round-trip: #{args.inspect}")
+    end
+  end
+
   def test_exec_wordsplit
     with_tmpchdir {|d|
       File.write("script", <<-'End')
@@ -2783,6 +2798,18 @@ EOS
 
       assert_equal(0, GC.stat(:heap_empty_pages))
       assert_operator(GC.stat(:total_freed_pages), :>, 0)
+    end;
+  end
+
+  def test_warmup_eager_loads_error_decoration_gems
+    assert_separately(["--enable=gems"], "#{<<~"begin;"}\n#{<<~'end;'}")
+    begin;
+      features = ["error_highlight", "did_you_mean", "syntax_suggest"]
+      assert_empty($LOADED_FEATURES.grep(/\/(#{features.join("|")})\.rb\z/))
+      Process.warmup
+      features.each do |feature|
+        assert_includes($LOADED_FEATURES.map { File.basename(it, ".rb") }, feature)
+      end
     end;
   end
 

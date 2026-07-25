@@ -2632,8 +2632,9 @@ rb_fiber_set_scheduler(VALUE klass, VALUE scheduler)
 NORETURN(static void rb_fiber_terminate(rb_fiber_t *fiber, int need_interrupt, VALUE err));
 
 void
-rb_fiber_start(rb_fiber_t *fiber)
+rb_fiber_start(rb_fiber_t *fiber_arg)
 {
+    rb_fiber_t * volatile fiber = fiber_arg;
     rb_thread_t * volatile th = fiber->cont.saved_ec.thread_ptr;
 
     rb_proc_t *proc;
@@ -2646,9 +2647,12 @@ rb_fiber_start(rb_fiber_t *fiber)
         th->blocking += 1;
     }
 
+    /* resolved before EC_PUSH_TAG to keep the setjmp region minimal */
+    const rb_cref_t *cref = rb_proc_refinements_cref(fiber->first_proc);
+
     EC_PUSH_TAG(th->ec);
     if ((state = EC_EXEC_TAG()) == TAG_NONE) {
-        rb_context_t *cont = &VAR_FROM_MEMORY(fiber)->cont;
+        rb_context_t *cont = &fiber->cont;
         int argc;
         const VALUE *argv, args = cont->value;
         GetProcPtr(fiber->first_proc, proc);
@@ -2659,7 +2663,7 @@ rb_fiber_start(rb_fiber_t *fiber)
         th->ec->root_svar = Qfalse;
 
         EXEC_EVENT_HOOK(th->ec, RUBY_EVENT_FIBER_SWITCH, th->self, 0, 0, 0, Qnil);
-        cont->value = rb_vm_invoke_proc(th->ec, proc, argc, argv, cont->kw_splat, VM_BLOCK_HANDLER_NONE);
+        cont->value = rb_vm_invoke_proc(th->ec, proc, argc, argv, cont->kw_splat, VM_BLOCK_HANDLER_NONE, cref);
     }
     EC_POP_TAG();
 
@@ -2866,6 +2870,13 @@ fiber_switch(rb_fiber_t *fiber, int argc, const VALUE *argv, int kw_splat, rb_fi
 
     VM_ASSERT(FIBER_RUNNABLE_P(fiber));
 
+    /*
+     * Keep the target fiber object alive across fiber_store.  The raw
+     * rb_fiber_t pointer is used after the coroutine switch, and GC may run
+     * while this C frame is suspended.
+     */
+    VALUE fiber_value = fiber->cont.self;
+
     rb_fiber_t *current_fiber = fiber_current();
 
     VM_ASSERT(!current_fiber->resuming_fiber);
@@ -2899,6 +2910,7 @@ fiber_switch(rb_fiber_t *fiber, int argc, const VALUE *argv, int kw_splat, rb_fi
         }
     }
 #endif
+    RB_GC_GUARD(fiber_value);
 
     if (fiber_current()->blocking) {
         th->blocking += 1;

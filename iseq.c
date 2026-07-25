@@ -616,7 +616,7 @@ iseq_location_setup(rb_iseq_t *iseq, VALUE name, VALUE path, VALUE realpath, int
     RB_OBJ_WRITE(iseq, &loc->base_label, name);
     loc->first_lineno = first_lineno;
 
-    if (ISEQ_BODY(iseq)->local_iseq == iseq && strcmp(RSTRING_PTR(name), "initialize") == 0) {
+    if (ISEQ_BODY(iseq)->local_iseq == iseq && rb_streql_lit(name, "initialize")) {
         ISEQ_BODY(iseq)->param.flags.use_block = 1;
     }
 
@@ -1359,8 +1359,8 @@ rb_iseq_compile_with_option(VALUE src, VALUE file, VALUE realpath, VALUE line, V
 {
     rb_iseq_t *iseq = NULL;
     rb_compile_option_t option;
-#if !defined(__GNUC__) || (__GNUC__ == 4 && __GNUC_MINOR__ == 8)
-# define INITIALIZED volatile /* suppress warnings by gcc 4.8 */
+#if !defined(__GNUC__)
+# define INITIALIZED volatile /* suppress warnings */
 #else
 # define INITIALIZED /* volatile */
 #endif
@@ -3002,6 +3002,10 @@ rb_iseq_disasm_recursive(const rb_iseq_t *iseq, VALUE indent)
         n += rb_iseq_disasm_insn(str, code, n, iseq, child);
     }
 
+    if (body->mandatory_only_iseq) {
+        rb_ary_push(child, (VALUE)body->mandatory_only_iseq);
+    }
+
     for (l = 0; l < RARRAY_LEN(child); l++) {
         VALUE isv = rb_ary_entry(child, l);
         if (done_iseq && st_is_member(done_iseq, (st_data_t)isv)) continue;
@@ -4112,7 +4116,11 @@ rb_iseq_add_local_tracepoint_recursively(const rb_iseq_t *iseq, rb_event_flag_t 
     data.r = GET_RACTOR();
 
     iseq_add_local_tracepoint_i(iseq, (void *)&data);
-    if (0) fprintf(stderr, "Iseq disasm:\n:%s", RSTRING_PTR(rb_iseq_disasm(iseq))); /* for debug */
+    if (0) {
+        VALUE disasm = rb_iseq_disasm(iseq);
+        fprintf(stderr, "Iseq disasm:\n:%.*s",
+                RSTRING_LENINT(disasm), RSTRING_PTR(disasm));
+    }
     return data.n;
 }
 

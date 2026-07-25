@@ -27,10 +27,11 @@ Note: We're only listing outstanding class updates.
 
 * Array
 
-    * `Array#pack` accepts a new format `R` and `r` for unpacking unsigned
-      and signed LEB128 encoded integers. [[Feature #21785]]
-    * `Array#pack` accepts a new format `^` that returns the current offset.
-      Useful when combined with variable width formats like LEB128. [[Feature #21796]]
+    * `Array#pack` accepts new formats `R` and `r` for unsigned and signed
+      LEB128 encoded integers. [[Feature #21785]]
+    * `Array#pack` accepts new formats `x!` and `@!` to align the current
+      offset to a byte boundary or to the ABI alignment of another
+      directive. [[Feature #22185]]
 
 * ENV
 
@@ -54,7 +55,19 @@ Note: We're only listing outstanding class updates.
 
 * ObjectSpace
 
-    *  `ObjectSpace._id2ref` was removed.  [[Feature #22135]]
+    * `ObjectSpace._id2ref` was removed.  [[Feature #22135]]
+
+* Proc
+
+    * `Proc#refined` is added. It returns a new `Proc` that behaves like the
+      receiver but with the refinements activated by the given modules
+      in effect inside its body, without affecting the original `Proc`.
+      [[Feature #22097]]
+
+* Range
+
+    * `Range#clamp` is added. It returns a new `Range` instance whose
+      begin and end values are clamped to the given bounds. [[Feature #22175]]
 
 * Regexp
 
@@ -66,6 +79,17 @@ Note: We're only listing outstanding class updates.
 
     * A deprecated behavior, `Set#to_set`, `Range#to_set`, and
       `Enumerable#to_set` accepting arguments, was removed.  [[Feature #21390]]
+
+* String
+
+    * `String#unpack` and `String#unpack1` accept new formats `R` and `r`
+      for unsigned and signed LEB128 encoded integers. [[Feature #21785]]
+    * `String#unpack` and `String#unpack1` accept a new format `^` that
+      returns the current offset.  Useful when combined with variable
+      width formats like LEB128. [[Feature #21796]]
+    * `String#unpack` and `String#unpack1` accept new formats `x!` and
+      `@!` to align the current offset to a byte boundary or to the ABI
+      alignment of another directive. [[Feature #22185]]
 
 * Symbol
 
@@ -92,15 +116,15 @@ releases.
 ### The following default gems are updated.
 
 * RubyGems 4.1.0.dev
-  * 4.0.3 to [v4.0.4][RubyGems-v4.0.4], [v4.0.5][RubyGems-v4.0.5], [v4.0.6][RubyGems-v4.0.6], [v4.0.7][RubyGems-v4.0.7], [v4.0.8][RubyGems-v4.0.8], [v4.0.9][RubyGems-v4.0.9], [v4.0.10][RubyGems-v4.0.10], [v4.0.11][RubyGems-v4.0.11], [v4.0.12][RubyGems-v4.0.12], [v4.0.13][RubyGems-v4.0.13], [v4.0.14][RubyGems-v4.0.14], [v4.0.15][RubyGems-v4.0.15], [v4.0.16][RubyGems-v4.0.16]
+  * 4.0.3 to [v4.0.4][RubyGems-v4.0.4], [v4.0.5][RubyGems-v4.0.5], [v4.0.6][RubyGems-v4.0.6], [v4.0.7][RubyGems-v4.0.7], [v4.0.8][RubyGems-v4.0.8], [v4.0.9][RubyGems-v4.0.9], [v4.0.10][RubyGems-v4.0.10], [v4.0.11][RubyGems-v4.0.11], [v4.0.12][RubyGems-v4.0.12], [v4.0.13][RubyGems-v4.0.13], [v4.0.14][RubyGems-v4.0.14], [v4.0.15][RubyGems-v4.0.15], [v4.0.16][RubyGems-v4.0.16], [v4.0.17][RubyGems-v4.0.17]
 * bundler 4.1.0.dev
-  * 4.0.3 to [v4.0.4][bundler-v4.0.4], [v4.0.5][bundler-v4.0.5], [v4.0.6][bundler-v4.0.6], [v4.0.7][bundler-v4.0.7], [v4.0.8][bundler-v4.0.8], [v4.0.9][bundler-v4.0.9], [v4.0.10][bundler-v4.0.10], [v4.0.11][bundler-v4.0.11], [v4.0.12][bundler-v4.0.12], [v4.0.13][bundler-v4.0.13], [v4.0.14][bundler-v4.0.14], [v4.0.15][bundler-v4.0.15], [v4.0.16][bundler-v4.0.16]
-* erb 6.0.4
-  * 6.0.1 to [v6.0.1.1][erb-v6.0.1.1], [v6.0.2][erb-v6.0.2], [v6.0.3][erb-v6.0.3], [v6.0.4][erb-v6.0.4]
+  * 4.0.3 to [v4.0.4][bundler-v4.0.4], [v4.0.5][bundler-v4.0.5], [v4.0.6][bundler-v4.0.6], [v4.0.7][bundler-v4.0.7], [v4.0.8][bundler-v4.0.8], [v4.0.9][bundler-v4.0.9], [v4.0.10][bundler-v4.0.10], [v4.0.11][bundler-v4.0.11], [v4.0.12][bundler-v4.0.12], [v4.0.13][bundler-v4.0.13], [v4.0.14][bundler-v4.0.14], [v4.0.15][bundler-v4.0.15], [v4.0.16][bundler-v4.0.16], [v4.0.17][bundler-v4.0.17]
+* erb 6.0.6
+  * 6.0.1 to [v6.0.1.1][erb-v6.0.1.1], [v6.0.2][erb-v6.0.2], [v6.0.3][erb-v6.0.3], [v6.0.4][erb-v6.0.4], [v6.0.5][erb-v6.0.5], [v6.0.6][erb-v6.0.6]
 * error_highlight 0.7.2
 * ipaddr 1.2.9
   * 1.2.8 to [v1.2.9][ipaddr-v1.2.9]
-* json 2.21.0
+* json 2.21.1
   * 2.18.0 to [v2.18.1][json-v2.18.1], [v2.19.0][json-v2.19.0], [v2.19.1][json-v2.19.1], [v2.19.2][json-v2.19.2], [v2.19.3][json-v2.19.3], [v2.19.4][json-v2.19.4], [v2.19.5][json-v2.19.5], [v2.19.6][json-v2.19.6], [v2.19.7][json-v2.19.7], [v2.19.8][json-v2.19.8], [v2.19.9][json-v2.19.9], [v2.20.0][json-v2.20.0], [v2.21.0][json-v2.21.0]
 * openssl 4.0.2
   * 4.0.0 to [v4.0.1][openssl-v4.0.1], [v4.0.2][openssl-v4.0.2]
@@ -130,7 +154,7 @@ releases.
   * 3.7.5 to [3.7.6][test-unit-3.7.6], [3.7.7][test-unit-3.7.7], [3.7.8][test-unit-3.7.8]
 * rss 0.3.3
   * 0.3.2 to [0.3.3][rss-0.3.3]
-* net-imap 0.6.4.1
+* net-imap 0.6.6
   * 0.6.2 to [v0.6.3][net-imap-v0.6.3], [v0.6.4][net-imap-v0.6.4], [v0.6.4.1][net-imap-v0.6.4.1]
 * rbs 4.0.3
   * 3.10.0 to [v3.10.1][rbs-v3.10.1], [v3.10.2][rbs-v3.10.2], [v3.10.3][rbs-v3.10.3], [v3.10.4][rbs-v3.10.4], [v4.0.0.dev.5][rbs-v4.0.0.dev.5], [v4.0.0][rbs-v4.0.0], [v4.0.2][rbs-v4.0.2], [v4.0.3][rbs-v4.0.3]
@@ -218,14 +242,19 @@ A lot of work has gone into making Ractors more stable, performant, and usable. 
 [Feature #15330]: https://bugs.ruby-lang.org/issues/15330
 [Feature #21390]: https://bugs.ruby-lang.org/issues/21390
 [Feature #21768]: https://bugs.ruby-lang.org/issues/21768
+[Feature #21781]: https://bugs.ruby-lang.org/issues/21781
 [Feature #21785]: https://bugs.ruby-lang.org/issues/21785
 [Feature #21796]: https://bugs.ruby-lang.org/issues/21796
 [Feature #21853]: https://bugs.ruby-lang.org/issues/21853
 [Feature #21861]: https://bugs.ruby-lang.org/issues/21861
 [Feature #21932]: https://bugs.ruby-lang.org/issues/21932
 [Feature #21981]: https://bugs.ruby-lang.org/issues/21981
+[Feature #22097]: https://bugs.ruby-lang.org/issues/22097
+[Feature #22135]: https://bugs.ruby-lang.org/issues/22135
 [Feature #22137]: https://bugs.ruby-lang.org/issues/22137
 [Feature #22139]: https://bugs.ruby-lang.org/issues/22139
+[Feature #22175]: https://bugs.ruby-lang.org/issues/22175
+[Feature #22185]: https://bugs.ruby-lang.org/issues/22185
 [PR #17201]: https://github.com/ruby/ruby/pull/17201
 [RubyGems-v4.0.4]: https://github.com/rubygems/rubygems/releases/tag/v4.0.4
 [RubyGems-v4.0.5]: https://github.com/rubygems/rubygems/releases/tag/v4.0.5
@@ -240,6 +269,7 @@ A lot of work has gone into making Ractors more stable, performant, and usable. 
 [RubyGems-v4.0.14]: https://github.com/rubygems/rubygems/releases/tag/v4.0.14
 [RubyGems-v4.0.15]: https://github.com/rubygems/rubygems/releases/tag/v4.0.15
 [RubyGems-v4.0.16]: https://github.com/rubygems/rubygems/releases/tag/v4.0.16
+[RubyGems-v4.0.17]: https://github.com/rubygems/rubygems/releases/tag/v4.0.17
 [bundler-v4.0.4]: https://github.com/rubygems/rubygems/releases/tag/bundler-v4.0.4
 [bundler-v4.0.5]: https://github.com/rubygems/rubygems/releases/tag/bundler-v4.0.5
 [bundler-v4.0.6]: https://github.com/rubygems/rubygems/releases/tag/bundler-v4.0.6
@@ -253,10 +283,13 @@ A lot of work has gone into making Ractors more stable, performant, and usable. 
 [bundler-v4.0.14]: https://github.com/rubygems/rubygems/releases/tag/bundler-v4.0.14
 [bundler-v4.0.15]: https://github.com/rubygems/rubygems/releases/tag/bundler-v4.0.15
 [bundler-v4.0.16]: https://github.com/rubygems/rubygems/releases/tag/bundler-v4.0.16
+[bundler-v4.0.17]: https://github.com/rubygems/rubygems/releases/tag/bundler-v4.0.17
 [erb-v6.0.1.1]: https://github.com/ruby/erb/releases/tag/v6.0.1.1
 [erb-v6.0.2]: https://github.com/ruby/erb/releases/tag/v6.0.2
 [erb-v6.0.3]: https://github.com/ruby/erb/releases/tag/v6.0.3
 [erb-v6.0.4]: https://github.com/ruby/erb/releases/tag/v6.0.4
+[erb-v6.0.5]: https://github.com/ruby/erb/releases/tag/v6.0.5
+[erb-v6.0.6]: https://github.com/ruby/erb/releases/tag/v6.0.6
 [ipaddr-v1.2.9]: https://github.com/ruby/ipaddr/releases/tag/v1.2.9
 [json-v2.18.1]: https://github.com/ruby/json/releases/tag/v2.18.1
 [json-v2.19.0]: https://github.com/ruby/json/releases/tag/v2.19.0

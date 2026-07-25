@@ -17,13 +17,14 @@ use crate::invariants::{
 };
 use crate::gc::append_gc_offsets;
 use crate::payload::{IseqCodePtrs, IseqStatus, IseqVersion, IseqVersionRef, JITFrame, get_or_create_iseq_payload};
+use crate::profile::reset_profiles_remaining;
 use crate::state::ZJITState;
-use crate::stats::{CompileError, exit_counter_for_compile_error, exit_counter_for_unhandled_hir_insn, incr_counter, incr_counter_by, send_fallback_counter, send_fallback_counter_for_method_type, send_fallback_counter_for_super_method_type, send_fallback_counter_ptr_for_opcode, send_without_block_fallback_counter_for_method_type, send_without_block_fallback_counter_for_optimized_method_type};
+use crate::stats::{CompileError, exit_counter_for_compile_error, exit_counter_for_unhandled_hir_insn, incr_counter, incr_counter_by, send_fallback_counter, send_fallback_counter_for_method_type, send_fallback_counter_for_super_method_type, send_fallback_counter_ptr_for_opcode, send_fallback_counter_for_optimized_method_type};
 use crate::stats::{counter_ptr, with_time_stat, trace_compile_phase, Counter, Counter::{compile_time_ns, exit_compile_error}};
 use crate::{asm::CodeBlock, cruby::*, options::debug, virtualmem::CodePtr};
 use crate::backend::lir::{self, Assembler, C_ARG_OPNDS, C_RET_OPND, CFP, EC, NATIVE_BASE_PTR, Opnd, SP, SideExit, SideExitRecompile, SideExitTarget, StackMap, StackMapEntry, Target, asm_ccall, asm_comment};
 use crate::hir::{iseq_to_hir, BlockId, Invariant, RangeType, SideExitReason::{self, *}, SpecialBackrefSymbol, SpecialObjectType};
-use crate::hir::{BlockHandler, CCallVariadicData, CCallWithFrameData, Const, FieldName, FrameState, Function, Insn, InsnId, Recompile, SendDirectData, SendFallbackReason};
+use crate::hir::{BlockHandler, CCallVariadicData, CCallWithFrameData, Const, FieldName, FrameState, Function, Insn, InsnId, Recompile, SendDirectData, SendFallbackReason, qualified_method_name};
 use crate::hir_type::{types, Type};
 use crate::options::{get_option, InlineDepth, PerfMap, DEFAULT_MAX_VERSIONS};
 use crate::cast::IntoUsize;
@@ -620,8 +621,8 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
             gen_new_hash(jit, asm, function, opnds!(elements), sym_keys, &function.frame_state(*state))
         }
         Insn::NewRange { low, high, flag, state } => gen_new_range(jit, asm, function, opnd!(low), opnd!(high), *flag, &function.frame_state(*state)),
-        Insn::NewRangeFixnum { low, high, flag, state } => gen_new_range_fixnum(asm, opnd!(low), opnd!(high), *flag, &function.frame_state(*state)),
-        Insn::ArrayDup { val, state } => gen_array_dup(asm, opnd!(val), &function.frame_state(*state)),
+        Insn::NewRangeFixnum { low, high, flag, state } => gen_new_range_fixnum(jit, asm, opnd!(low), opnd!(high), *flag, &function.frame_state(*state)),
+        Insn::ArrayDup { val, state } => gen_array_dup(jit, asm, function, *val, opnd!(val), &function.frame_state(*state)),
         Insn::AdjustBounds { index, length } => gen_adjust_bounds(asm, opnd!(index), opnd!(length)),
         Insn::ArrayAref { array, index, .. } => gen_array_aref(asm, opnd!(array), opnd!(index)),
         Insn::ArrayAset { array, index, val } => {
@@ -631,7 +632,7 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
         Insn::ArrayLength { array } => gen_array_length(asm, opnd!(array)),
         Insn::ObjectAlloc { val, state } => gen_object_alloc(jit, asm, function, opnd!(val), &function.frame_state(*state)),
         &Insn::ObjectAllocClass { class, state } => gen_object_alloc_class(jit, asm, class, &function.frame_state(state)),
-        Insn::StringCopy { val, chilled, state } => gen_string_copy(asm, opnd!(val), *chilled, &function.frame_state(*state)),
+        Insn::StringCopy { val, chilled, state } => gen_string_copy(jit, asm, function, *val, opnd!(val), *chilled, &function.frame_state(*state)),
         Insn::StringConcat { strings, state } => gen_string_concat(jit, asm, function, opnds!(strings), &function.frame_state(*state)),
         &Insn::StringGetbyte { string, index } => gen_string_getbyte(asm, opnd!(string), opnd!(index)),
         Insn::StringSetbyteFixnum { string, index, value } => gen_string_setbyte_fixnum(asm, opnd!(string), opnd!(index), opnd!(value)),
@@ -648,11 +649,11 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
         &Insn::Send { cd, block: Some(BlockHandler::BlockArg), state, reason, .. } => gen_send(jit, asm, function, cd, std::ptr::null(), &function.frame_state(state), reason),
         &Insn::SendForward { cd, blockiseq, state, reason, .. } => gen_send_forward(jit, asm, function, cd, blockiseq, &function.frame_state(state), reason),
         Insn::SendDirect(insn) => {
-            let SendDirectData { cme, iseq, recv, args, kw_bits, block, state, .. } = &**insn;
+            let SendDirectData { cme, iseq, recv, args, kw_bits, jit_entry_idx, block, state, .. } = &**insn;
             gen_send_iseq_direct(
                 cb, jit, asm,
                 function, *cme, *iseq, opnd!(recv), opnds!(args),
-                *kw_bits, &function.frame_state(*state), *block,
+                *kw_bits, *jit_entry_idx, &function.frame_state(*state), *block,
             )
         }
         Insn::PushInlineFrame { cme, iseq, recv, args, blockiseq, state, .. } => {
@@ -726,7 +727,7 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
         &Insn::GuardLess { left, right, ref reason, state } => gen_guard_less(jit, asm, function, opnd!(left), opnd!(right), **reason, &function.frame_state(state)),
         &Insn::GuardGreaterEq { left, right, state, .. } => gen_guard_greater_eq(jit, asm, function, opnd!(left), opnd!(right), &function.frame_state(state)),
         Insn::PatchPoint { invariant, state } => no_output!(gen_patch_point(jit, asm, function, invariant, &function.frame_state(*state))),
-        Insn::CCall { cfunc, recv, args, name, owner: _, return_type: _, elidable: _ } => gen_ccall(asm, *cfunc, *name, opnd!(recv), opnds!(args)),
+        Insn::CCall { cfunc, recv, args, name, owner, return_type: _, elidable: _ } => gen_ccall(asm, *cfunc, *name, *owner, opnd!(recv), opnds!(args)),
         Insn::CCallWithFrame(insn) => {
             let CCallWithFrameData { cfunc, recv, name, args, cme, state, block, .. } = &**insn;
             gen_ccall_with_frame(jit, asm, function, *cfunc, *name, opnd!(recv), opnds!(args), *cme, *block, &function.frame_state(*state))
@@ -1079,7 +1080,7 @@ fn gen_ccall_with_frame(
 
     let mut cfunc_args = vec![recv];
     cfunc_args.extend(args);
-    asm.count_call_to(&name.contents_lossy());
+    asm.count_call_to_with(|| qualified_method_name(unsafe { (*cme).owner }, name));
     let result = asm.ccall(cfunc, cfunc_args);
 
     asm_comment!(asm, "pop C frame");
@@ -1096,10 +1097,10 @@ fn gen_ccall_with_frame(
 
 /// Lowering for [`Insn::CCall`]. This is a low-level raw call that doesn't know
 /// anything about the callee, so handling for e.g. GC safety is dealt with elsewhere.
-fn gen_ccall(asm: &mut Assembler, cfunc: *const u8, name: ID, recv: Opnd, args: Vec<Opnd>) -> lir::Opnd {
+fn gen_ccall(asm: &mut Assembler, cfunc: *const u8, name: ID, owner: VALUE, recv: Opnd, args: Vec<Opnd>) -> lir::Opnd {
     let mut cfunc_args = vec![recv];
     cfunc_args.extend(args);
-    asm.count_call_to(&name.contents_lossy());
+    asm.count_call_to_with(|| if owner == Qnil { name.contents_lossy().to_string() } else { qualified_method_name(owner, name) });
     asm.ccall(cfunc, cfunc_args)
 }
 
@@ -1168,7 +1169,7 @@ fn gen_ccall_variadic(
     asm.store(Opnd::mem(64, EC, RUBY_OFFSET_EC_CFP), CFP);
 
     let argv_ptr = gen_push_opnds(jit, asm, &args);
-    asm.count_call_to(&name.contents_lossy());
+    asm.count_call_to_with(|| qualified_method_name(unsafe { (*cme).owner }, name));
     let result = asm.ccall(cfunc, vec![args.len().into(), argv_ptr, recv]);
 
     asm_comment!(asm, "pop C frame");
@@ -1185,6 +1186,7 @@ fn gen_ccall_variadic(
 
 /// Emit an uncached instance variable lookup
 fn gen_getivar(asm: &mut Assembler, recv: Opnd, id: ID, ic: *const iseq_inline_iv_cache_entry, state: &FrameState) -> Opnd {
+    gen_trace_fallback(asm, "getivar");
     if ic.is_null() {
         asm_ccall!(asm, rb_ivar_get, recv, id.0.into())
     } else {
@@ -1195,6 +1197,7 @@ fn gen_getivar(asm: &mut Assembler, recv: Opnd, id: ID, ic: *const iseq_inline_i
 
 /// Emit an uncached instance variable store
 fn gen_setivar(jit: &mut JITState, asm: &mut Assembler, function: &Function, recv: Opnd, id: ID, ic: *const iseq_inline_iv_cache_entry, val: Opnd, state: &FrameState) {
+    gen_trace_fallback(asm, "setivar");
     // Setting an ivar can raise FrozenError, so we need proper frame state for exception handling.
     gen_prepare_non_leaf_call(jit, asm, function, state);
     if ic.is_null() {
@@ -1467,6 +1470,24 @@ fn gen_param(asm: &mut Assembler, _idx: usize) -> lir::Opnd {
     vreg
 }
 
+fn gen_trace_fallback(asm: &mut Assembler, reason: &str) {
+    if !get_option!(trace_fallbacks) {
+        return;
+    }
+    let reason_cstr = std::ffi::CString::new(reason.to_string())
+        .unwrap_or_else(|_| std::ffi::CString::new("unknown").unwrap());
+    let reason_ptr = reason_cstr.into_raw() as *const u8;
+    use crate::state::rb_zjit_record_fallback_stack;
+    asm_ccall!(asm, rb_zjit_record_fallback_stack, Opnd::const_ptr(reason_ptr));
+}
+
+fn gen_trace_send_fallback(asm: &mut Assembler, reason: &SendFallbackReason) {
+    if !get_option!(trace_fallbacks) {
+        return;
+    }
+    gen_trace_fallback(asm, &format!("{reason}"));
+}
+
 /// Compile a dynamic dispatch with block
 fn gen_send(
     jit: &mut JITState,
@@ -1478,6 +1499,7 @@ fn gen_send(
     reason: SendFallbackReason,
 ) -> lir::Opnd {
     gen_incr_send_fallback_counter(asm, reason);
+    gen_trace_send_fallback(asm, &reason);
 
     gen_prepare_fallback_call(jit, asm, function, state);
     asm_comment!(asm, "call #{} with dynamic dispatch", ruby_call_method_name(cd));
@@ -1502,6 +1524,7 @@ fn gen_send_forward(
     reason: SendFallbackReason,
 ) -> lir::Opnd {
     gen_incr_send_fallback_counter(asm, reason);
+    gen_trace_send_fallback(asm, &reason);
 
     gen_prepare_fallback_call(jit, asm, function, state);
 
@@ -1526,6 +1549,7 @@ fn gen_send_without_block(
     reason: SendFallbackReason,
 ) -> lir::Opnd {
     gen_incr_send_fallback_counter(asm, reason);
+    gen_trace_send_fallback(asm, &reason);
 
     gen_prepare_fallback_call(jit, asm, function, state);
     asm_comment!(asm, "call #{} with dynamic dispatch", ruby_call_method_name(cd));
@@ -1685,6 +1709,7 @@ fn gen_send_iseq_direct(
     recv: Opnd,
     args: Vec<Opnd>,
     kw_bits: u32,
+    jit_entry_idx: u16,
     state: &FrameState,
     block: Option<BlockHandler>,
 ) -> lir::Opnd {
@@ -1788,25 +1813,8 @@ fn gen_send_iseq_direct(
         }
     }
 
-    let num_optionals_passed = if params.flags.has_opt() != 0 {
-        // See vm_call_iseq_setup_normal_opt_start in vm_inshelper.c
-        let lead_num = params.lead_num as u32;
-        let opt_num = params.opt_num as u32;
-        let post_num = params.post_num as u32;
-        let keyword = params.keyword;
-        let kw_total_num = if keyword.is_null() { 0 } else { unsafe { (*keyword).num } } as u32;
-        assert!(args.len() as u32 <= lead_num + opt_num + post_num + kw_total_num);
-        // For computing optional positional entry point, only count positional args
-        // and exclude the always-present lead and post slots.
-        let positional_argc = args.len() as u32 - kw_total_num;
-        let num_optionals_passed = positional_argc.saturating_sub(lead_num + post_num);
-        num_optionals_passed
-    } else {
-        0
-    };
-
     // Make a method call. The target address will be rewritten once compiled.
-    let iseq_call = IseqCall::new(iseq, num_optionals_passed.try_into().expect("checked in HIR"), args.len().try_into().expect("checked in HIR"));
+    let iseq_call = IseqCall::new(iseq, jit_entry_idx, args.len().try_into().expect("checked in HIR"));
     let dummy_ptr = cb.get_write_ptr().raw_ptr(cb);
     jit.iseq_calls.push(iseq_call.clone());
     let ret = asm.ccall_with_iseq_call(dummy_ptr, c_args, &iseq_call);
@@ -1836,6 +1844,7 @@ fn gen_invokeblock(
     reason: SendFallbackReason,
 ) -> lir::Opnd {
     gen_incr_send_fallback_counter(asm, reason);
+    gen_trace_send_fallback(asm, &reason);
 
     gen_prepare_fallback_call(jit, asm, function, state);
 
@@ -2003,6 +2012,7 @@ fn gen_invokesuper(
     reason: SendFallbackReason,
 ) -> lir::Opnd {
     gen_incr_send_fallback_counter(asm, reason);
+    gen_trace_send_fallback(asm, &reason);
 
     gen_prepare_fallback_call(jit, asm, function, state);
     asm_comment!(asm, "call super with dynamic dispatch");
@@ -2027,6 +2037,7 @@ fn gen_invokesuperforward(
     reason: SendFallbackReason,
 ) -> lir::Opnd {
     gen_incr_send_fallback_counter(asm, reason);
+    gen_trace_send_fallback(asm, &reason);
 
     gen_prepare_fallback_call(jit, asm, function, state);
     asm_comment!(asm, "call super with dynamic dispatch (forwarding)");
@@ -2040,12 +2051,74 @@ fn gen_invokesuperforward(
     )
 }
 
+const STR_INLINE_STORE_MAX_BYTES: usize = 128;
+
 /// Compile a string resurrection
-fn gen_string_copy(asm: &mut Assembler, recv: Opnd, chilled: bool, state: &FrameState) -> Opnd {
+fn gen_string_copy(jit: &mut JITState, asm: &mut Assembler, function: &Function, val_id: InsnId, recv: Opnd, chilled: bool, state: &FrameState) -> Opnd {
     // TODO: split rb_ec_str_resurrect into separate functions
     gen_prepare_leaf_call_with_gc(asm, state);
-    let chilled = if chilled { Opnd::Imm(1) } else { Opnd::Imm(0) };
-    asm_ccall!(asm, rb_ec_str_resurrect, EC, recv, chilled)
+
+    let Some(src) = function.type_of(val_id).ruby_object() else {
+        return asm_ccall!(asm, rb_ec_str_resurrect, EC, recv, (chilled as i64).into());
+    };
+
+    let slow_path = |asm: &mut Assembler| asm_ccall!(asm, rb_ec_str_resurrect, EC, Opnd::Value(src), (chilled as i64).into());
+
+    let mut alloc_size: usize = 0;
+    let mut flags: VALUE = VALUE(0);
+    let mut len: c_long = 0;
+    let mut byte_size: usize = 0;
+    let has_fastpath = unsafe {
+        rb_zjit_str_resurrect_fastpath(src, chilled, &mut alloc_size, &mut flags, &mut len, &mut byte_size)
+    };
+    if !has_fastpath {
+        return slow_path(asm);
+    }
+
+    let full_flags = flags.as_u64();
+    let klass = unsafe { rb_cString };
+
+    // Because inline stores are 8 bytes, storing large embedded strings would
+    // generate a large number of stores (!125 for a string in the 1024b size
+    // pool). Here we choose an arbitrary threshold (128 bytes, or 16 stores),
+    // above which we'll emit a C call to memcpy instead of multiple stores.
+    if byte_size > STR_INLINE_STORE_MAX_BYTES {
+        return gc_fastpath::gc_fastpath_new_obj(jit, asm, alloc_size, full_flags, klass,
+            |asm, obj| {
+                asm.store(Opnd::mem(VALUE_BITS, obj, RUBY_OFFSET_RSTRING_LEN), Opnd::Imm(len));
+                let src_obj = asm.load(Opnd::Value(src));
+                let src_ptr = asm.lea(Opnd::mem(64, src_obj, RUBY_OFFSET_RSTRING_AS_ARY));
+                let dst_ptr = asm.lea(Opnd::mem(64, obj, RUBY_OFFSET_RSTRING_AS_ARY));
+                asm.ccall(memcpy as *const u8, vec![dst_ptr, src_ptr, Opnd::UImm(byte_size as u64)]);
+            },
+            slow_path);
+    }
+
+    // Pre-process string data into 8 byte chunks and take care of padding
+    // outside the loop, so we can keep the complexity out of the fast path
+    // loop.
+    let padded_size = byte_size.next_multiple_of(8);
+    let Some(src_bytes) = (unsafe { src.as_rstring_byte_slice() }) else {
+        return slow_path(asm);
+    };
+    debug_assert_eq!(src_bytes.len(), len as usize);
+    let mut string_bytes = vec![0u8; padded_size];
+    string_bytes[..src_bytes.len()].copy_from_slice(src_bytes);
+
+    gc_fastpath::gc_fastpath_new_obj(jit, asm, alloc_size, full_flags, klass,
+        |asm, obj| {
+            asm.store(Opnd::mem(VALUE_BITS, obj, RUBY_OFFSET_RSTRING_LEN), Opnd::Imm(len));
+            for (i, chunk) in string_bytes.chunks_exact(8).enumerate() {
+                let word = u64::from_le_bytes(chunk.try_into().unwrap());
+                let offset = RUBY_OFFSET_RSTRING_AS_ARY + (i as i32) * 8;
+                asm.store(Opnd::mem(64, obj, offset), Opnd::UImm(word));
+            }
+        },
+        slow_path)
+}
+
+unsafe extern "C" {
+    fn memcpy(dst: *mut c_void, src: *const c_void, n: usize) -> *mut c_void;
 }
 
 fn gen_string_equal(asm: &mut Assembler, left: Opnd, right: Opnd) -> lir::Opnd {
@@ -2054,12 +2127,38 @@ fn gen_string_equal(asm: &mut Assembler, left: Opnd, right: Opnd) -> lir::Opnd {
 
 /// Compile an array duplication instruction
 fn gen_array_dup(
+    jit: &mut JITState,
     asm: &mut Assembler,
+    function: &Function,
+    val_id: InsnId,
     val: lir::Opnd,
     state: &FrameState,
 ) -> lir::Opnd {
-    gen_prepare_leaf_call_with_gc(asm, state);
+    // duparray resurrects a frozen literal array baked into the ISEQ, so its elements are known
+    // here. When the resurrected copy would be embedded, bump-allocate it inline and store the
+    // elements directly; the fresh object is young and white, so those writes need no write
+    // barrier (elements may be heap objects).
+    if let Some(src) = function.type_of(val_id).ruby_object() {
+        let mut alloc_size: usize = 0;
+        let mut flags = VALUE(0);
+        let mut len: std::os::raw::c_long = 0;
+        if unsafe { rb_zjit_array_dup_can_fastpath(src, &mut alloc_size, &mut flags, &mut len) } {
+            let klass = unsafe { rb_cArray };
+            return gc_fastpath::gc_fastpath_new_obj(jit, asm, alloc_size, flags.as_u64(), klass, |asm, obj| {
+                for i in 0..len {
+                    let elem = unsafe { rb_ary_entry(src, i) };
+                    let offset = RUBY_OFFSET_RARRAY_AS_ARY + (i as i32) * SIZEOF_VALUE_I32;
+                    asm.store(Opnd::mem(VALUE_BITS, obj, offset), Opnd::Value(elem));
+                }
+            },
+            |asm| {
+                gen_prepare_leaf_call_with_gc(asm, state);
+                asm_ccall!(asm, rb_ary_resurrect, val)
+            });
+        }
+    }
 
+    gen_prepare_leaf_call_with_gc(asm, state);
     asm_ccall!(asm, rb_ary_resurrect, val)
 }
 
@@ -2084,7 +2183,7 @@ fn gen_new_array(
     let flags = (RUBY_T_ARRAY as u64) | (RARRAY_EMBED_FLAG as u64);
     let klass = unsafe { rb_cArray };
 
-    gc_fastpath::gc_fast_path_new_obj(jit, asm, alloc_size, flags, klass, |asm| {
+    gc_fastpath::gc_fastpath_new_obj(jit, asm, alloc_size, flags, klass, |_asm, _obj| {}, |asm| {
         asm_ccall!(asm, rb_ec_ary_new_from_values, EC, 0i64.into(), Opnd::UImm(0))
     })
 }
@@ -2377,14 +2476,13 @@ fn gen_new_hash(
         let flags = RUBY_T_HASH as u64;
         let klass = unsafe { rb_cHash };
 
-        let hash = gc_fastpath::gc_fast_path_new_obj(jit, asm, alloc_size, flags, klass, |asm| {
-            asm_ccall!(asm, rb_hash_new,)
-        });
-        // TODO: this runs on the slow path too, where rb_hash_new already set
-        // ifnone. A fast-path-only init hook in gc_fast_path_new_obj would avoid
-        // the redundant store and be reusable for other types.
-        asm.store(Opnd::mem(VALUE_BITS, hash, RUBY_OFFSET_RHASH_IFNONE), Qnil.into());
-        hash
+        gc_fastpath::gc_fastpath_new_obj(jit, asm, alloc_size, flags, klass,
+            |asm, hash| {
+                asm.store(Opnd::mem(VALUE_BITS, hash, RUBY_OFFSET_RHASH_IFNONE), Qnil.into());
+            },
+            |asm| {
+                asm_ccall!(asm, rb_hash_new,)
+            })
     // TODO: we should use effects_of for this (we would need to add it).
     } else if sym_keys {
         // Symbols hash and compare without running Ruby and those operations never raise so
@@ -2397,14 +2495,13 @@ fn gen_new_hash(
             let flags = RUBY_T_HASH as u64;
             let klass = unsafe { rb_cHash };
 
-            let hash = gc_fastpath::gc_fast_path_new_obj(jit, asm, alloc_size, flags, klass, |asm| {
-                asm_ccall!(asm, rb_hash_new_with_size, num_pairs.into())
-            });
-            // TODO: this runs on the slow path too, where rb_hash_new already set
-            // ifnone. A fast-path-only init hook in gc_fast_path_new_obj would avoid
-            // the redundant store and be reusable for other types.
-            asm.store(Opnd::mem(VALUE_BITS, hash, RUBY_OFFSET_RHASH_IFNONE), Qnil.into());
-            hash
+            gc_fastpath::gc_fastpath_new_obj(jit, asm, alloc_size, flags, klass,
+                |asm, hash| {
+                    asm.store(Opnd::mem(VALUE_BITS, hash, RUBY_OFFSET_RHASH_IFNONE), Qnil.into());
+                },
+                |asm| {
+                    asm_ccall!(asm, rb_hash_new_with_size, num_pairs.into())
+                })
         } else {
             asm_ccall!(asm, rb_hash_new_with_size, num_pairs.into())
         };
@@ -2438,14 +2535,32 @@ fn gen_new_range(
 }
 
 fn gen_new_range_fixnum(
+    jit: &mut JITState,
     asm: &mut Assembler,
     low: lir::Opnd,
     high: lir::Opnd,
     flag: RangeType,
     state: &FrameState,
 ) -> lir::Opnd {
-    gen_prepare_leaf_call_with_gc(asm, state);
-    asm_ccall!(asm, rb_range_new, low, high, (flag as i64).into())
+    let mut alloc_size = 0;
+    let mut flags = VALUE(0);
+    let exclude_end = matches!(flag, RangeType::Exclusive);
+    unsafe {
+        rb_zjit_range_new_fastpath(exclude_end, &mut alloc_size, &mut flags)
+    };
+
+    let klass = unsafe { rb_cRange };
+    gc_fastpath::gc_fastpath_new_obj(jit, asm, alloc_size, flags.as_u64(), klass,
+        |asm, range| {
+            asm.store(Opnd::mem(VALUE_BITS, range, RUBY_OFFSET_RSTRUCT_FIELDS_OBJ), Opnd::UImm(0));
+            asm.store(Opnd::mem(VALUE_BITS, range, RUBY_OFFSET_RSTRUCT_AS_ARY), low);
+            asm.store(Opnd::mem(VALUE_BITS, range, RUBY_OFFSET_RSTRUCT_AS_ARY + SIZEOF_VALUE_I32), high);
+        },
+        |asm| {
+            gen_prepare_leaf_call_with_gc(asm, state);
+
+            asm_ccall!(asm, rb_range_new, low, high, (flag as i64).into())
+        })
 }
 
 fn gen_object_alloc(jit: &JITState, asm: &mut Assembler, function: &Function, val: lir::Opnd, state: &FrameState) -> lir::Opnd {
@@ -2466,7 +2581,7 @@ fn gen_object_alloc_class(jit: &mut JITState, asm: &mut Assembler, class: VALUE,
         };
         if has_fastpath {
             let flags = (RUBY_T_OBJECT as u64) | ((shape_id as u64) << RB_SHAPE_FLAG_SHIFT as u64);
-            gc_fastpath::gc_fast_path_new_obj(jit, asm, alloc_size, flags, class, |asm| {
+            gc_fastpath::gc_fastpath_new_obj(jit, asm, alloc_size, flags, class, |_asm, _obj| {}, |asm| {
                 asm_ccall!(asm, rb_class_allocate_instance, class.into())
             })
         } else {
@@ -3012,11 +3127,8 @@ fn gen_incr_send_fallback_counter(asm: &mut Assembler, reason: SendFallbackReaso
         Uncategorized(opcode) => {
             gen_incr_counter_ptr(asm, send_fallback_counter_ptr_for_opcode(opcode));
         }
-        SendWithoutBlockNotOptimizedMethodType(method_type) => {
-            gen_incr_counter(asm, send_without_block_fallback_counter_for_method_type(method_type));
-        }
-        SendWithoutBlockNotOptimizedMethodTypeOptimized(method_type) => {
-            gen_incr_counter(asm, send_without_block_fallback_counter_for_optimized_method_type(method_type));
+        SendNotOptimizedMethodTypeOptimized(method_type) => {
+            gen_incr_counter(asm, send_fallback_counter_for_optimized_method_type(method_type));
         }
         SendNotOptimizedMethodType(method_type) => {
             gen_incr_counter(asm, send_fallback_counter_for_method_type(method_type));
@@ -3380,6 +3492,10 @@ fn compile_iseq(iseq: IseqPtr) -> Result<Function, CompileError> {
         trace_compile_phase("optimize", || function.optimize());
     }
     function.dump_hir();
+    let non_final_version = get_or_create_iseq_payload(iseq).versions.len() + 1 < max_iseq_versions();
+    if non_final_version {
+        reset_profiles_remaining(iseq);
+    }
     Ok(function)
 }
 

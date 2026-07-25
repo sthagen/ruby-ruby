@@ -34,6 +34,7 @@
 #include "shape.h"
 #include "vm_core.h"
 #include "builtin.h"
+#include "zjit.h"
 
 #if !ARRAY_DEBUG
 # undef NDEBUG
@@ -2710,27 +2711,27 @@ ary_enum_length(VALUE ary, VALUE args, VALUE eobj)
 
 // Return true if the index is at or past the end of the array.
 VALUE
-rb_jit_ary_at_end(rb_execution_context_t *ec, VALUE self, VALUE index)
+rb_builtin_ary_at_end(rb_execution_context_t *ec, VALUE self, VALUE index)
 {
     return FIX2LONG(index) >= RARRAY_LEN(self) ? Qtrue : Qfalse;
 }
 
 // Return the element at the given fixnum index.
 VALUE
-rb_jit_ary_at(rb_execution_context_t *ec, VALUE self, VALUE index)
+rb_builtin_ary_at(rb_execution_context_t *ec, VALUE self, VALUE index)
 {
     return RARRAY_AREF(self, FIX2LONG(index));
 }
 
 // Increment a fixnum by 1.
 VALUE
-rb_jit_fixnum_inc(rb_execution_context_t *ec, VALUE self, VALUE num)
+rb_builtin_fixnum_inc(rb_execution_context_t *ec, VALUE self, VALUE num)
 {
     return LONG2FIX(FIX2LONG(num) + 1);
 }
 
 // Push a value onto an array and return the value.
-VALUE
+static VALUE
 rb_jit_ary_push(rb_execution_context_t *ec, VALUE self, VALUE ary, VALUE val)
 {
     rb_ary_push(ary, val);
@@ -2924,6 +2925,25 @@ rb_ary_resurrect(VALUE ary)
 {
     return ary_make_partial(ary, rb_cArray, 0, RARRAY_LEN(ary));
 }
+
+#if USE_ZJIT
+bool
+rb_zjit_array_dup_can_fastpath(VALUE ary, size_t *alloc_size_out, VALUE *flags_out, long *len_out)
+{
+    long len = RARRAY_LEN(ary);
+    long embed_capa = (sizeof(struct RArray) - offsetof(struct RArray, as.ary)) / sizeof(VALUE);
+
+    if (len > embed_capa) return false;
+
+    size_t size = sizeof(struct RArray);
+    shape_id_t shape_id = rb_shape_transition_slot_size(ROOT_SHAPE_ID | SHAPE_ID_LAYOUT_OTHER,
+                                                        rb_gc_size_slot_size(size));
+    *alloc_size_out = size;
+    *flags_out = T_ARRAY | RARRAY_EMBED_FLAG | ((VALUE)len << RARRAY_EMBED_LEN_SHIFT) | ((VALUE)shape_id << SHAPE_FLAG_SHIFT);
+    *len_out = len;
+    return true;
+}
+#endif
 
 extern VALUE rb_output_fs;
 
@@ -7723,7 +7743,7 @@ rb_ary_repeated_combination(VALUE ary, VALUE num)
  *  If no argument is given, returns an array of 1-element arrays,
  *  each containing an element of +self+:
  *
- *    a.product # => [[0], [1], [2]]
+ *    [0, 1, 2].product # => [[0], [1], [2]]
  *
  *  With a block given, calls the block with each combination; returns +self+:
  *

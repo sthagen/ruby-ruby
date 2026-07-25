@@ -6,7 +6,7 @@ use crate::backend::lir::Assembler;
 use crate::codegen::max_iseq_versions;
 use crate::cruby::*;
 use crate::hir::{Insn, iseq_to_hir};
-use crate::options::{get_option, rb_zjit_prepare_options, set_call_threshold, set_inline_threshold};
+use crate::options::{get_option, rb_zjit_prepare_options, set_call_threshold, set_inline_threshold, set_max_versions};
 use crate::payload::IseqVersion;
 use crate::hir::tests::hir_build_tests::assert_contains_opcode;
 use crate::payload::*;
@@ -120,6 +120,28 @@ fn test_putobject() {
         test
         test
     "), @"1");
+}
+
+#[test]
+fn test_recompile_exit_waits_for_interpreter_profiles() {
+    set_call_threshold(2);
+    eval("
+        def recompile_profile_window(a, b) = a + b
+        recompile_profile_window(1, 2)
+        recompile_profile_window(1, 2)
+    ");
+
+    let iseq = get_method_iseq("self", "recompile_profile_window");
+    let num_profiles = get_option!(num_profiles);
+    for _ in 0..num_profiles {
+        eval("recompile_profile_window(1.5, 2.5)");
+    }
+    let payload = get_or_create_iseq_payload(iseq);
+    assert!(!unsafe { payload.versions.last().unwrap().as_ref() }.is_invalidated());
+
+    eval("recompile_profile_window(1.5, 2.5)");
+    let payload = get_or_create_iseq_payload(iseq);
+    assert!(unsafe { payload.versions.last().unwrap().as_ref() }.is_invalidated());
 }
 
 #[test]
@@ -972,6 +994,96 @@ fn test_send_optional_arguments() {
         entry
         entry
     "), @"[[1, 2], [3, 4]]");
+}
+
+#[test]
+fn test_send_rest_arguments() {
+    eval("
+        def test(*args) = args
+        def entry = test(1, 2, 3)
+        entry
+    ");
+    assert_snapshot!(assert_compiles("entry"), @"[1, 2, 3]");
+}
+
+#[test]
+fn test_send_many_rest_arguments() {
+    eval("
+        def test(*args) = args.length
+        def entry = test(1, 2, 3, 4, 5, 6, 7)
+        entry
+    ");
+    assert_snapshot!(assert_compiles("entry"), @"7");
+}
+
+#[test]
+fn test_send_rest_arguments_with_post() {
+    eval("
+        def test(a, *args, z) = [a, args, z]
+        def entry = test(1, 2, 3, 4)
+        entry
+    ");
+    assert_snapshot!(assert_compiles("entry"), @"[1, [2, 3], 4]");
+}
+
+#[test]
+fn test_send_rest_arguments_with_keyword() {
+    eval("
+        def test(*args, k:) = [args, k]
+        def entry = test(1, 2, k: 40)
+        entry
+    ");
+    assert_snapshot!(assert_compiles("entry"), @"[[1, 2], 40]");
+}
+
+#[test]
+fn test_send_rest_arguments_with_optional_keyword_default() {
+    eval("
+        def test(*args, k: 40) = [args, k]
+        def entry = test(1, 2)
+        entry
+    ");
+    assert_snapshot!(assert_compiles("entry"), @"[[1, 2], 40]");
+}
+
+#[test]
+fn test_send_optional_and_rest_arguments() {
+    eval("
+        def test(a, b = 2, *rest) = [a, b, rest]
+        def entry = [test(1), test(3, 4), test(5, 6, 7, 8)]
+        entry
+    ");
+    assert_snapshot!(assert_compiles("entry"), @"[[1, 2, []], [3, 4, []], [5, 6, [7, 8]]]");
+}
+
+#[test]
+fn test_send_rest_arguments_with_keyword_to_positional_hash() {
+    eval("
+        def test(*args) = args
+        def entry = test(k: 1)
+        entry
+    ");
+    assert_snapshot!(assert_compiles("entry"), @"[{k: 1}]");
+}
+
+#[test]
+fn test_send_rest_arguments_with_block_literal() {
+    eval("
+        def test(*args) = yield args.length
+        def entry = test(1, 2, 3) { |n| n + 4 }
+        entry
+    ");
+    assert_snapshot!(assert_compiles("entry"), @"7");
+}
+
+#[test]
+fn test_send_rest_arguments_with_block_param() {
+    eval("
+        def test(*args, &block) = block.call(args.length)
+        def entry = test(1, 2, 3) { |n| n + 5 }
+        entry
+    ");
+    assert_snapshot!(assert_compiles("entry"), @"8");
 }
 
 #[test]
@@ -3171,6 +3283,87 @@ fn test_object_alloc_gc_stress() {
 }
 
 #[test]
+fn test_string_copy_gc_stress() {
+    eval(r#"
+        # frozen_string_literal: false
+        def make = "hello world"
+    "#);
+    assert_contains_opcode("make", YARVINSN_dupstring);
+    assert_snapshot!(assert_compiles(r#"
+        begin
+          GC.stress = true
+          make
+          s = make
+          orig = s.dup
+          s << "!"
+          [s.class, s, s.frozen?, s.encoding.name, s.length, orig]
+        ensure
+          GC.stress = false
+        end
+    "#), @r#"[String, "hello world!", false, "UTF-8", 12, "hello world"]"#);
+}
+
+#[test]
+fn test_string_copy_large_gc_stress() {
+    eval(r#"
+        # frozen_string_literal: false
+        def make = "the quick brown fox jumps over the lazy dog, the quick brown fox jumps over"
+    "#);
+    assert_contains_opcode("make", YARVINSN_dupstring);
+    assert_snapshot!(assert_compiles(r#"
+        begin
+          GC.stress = true
+          make
+          s = make
+          s << "!"
+          [s.class, s.frozen?, s.length, s.end_with?("!")]
+        ensure
+          GC.stress = false
+        end
+    "#), @"[String, false, 76, true]");
+}
+
+#[test]
+fn test_string_copy_memcpy_gc_stress() {
+    eval(r#"
+        # frozen_string_literal: false
+        def make = "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz"
+    "#);
+    assert_contains_opcode("make", YARVINSN_dupstring);
+    assert_snapshot!(assert_compiles(r#"
+        begin
+          GC.stress = true
+          make
+          s = make
+          s << "!"
+          [s.class, s.frozen?, s.length, s.end_with?("!")]
+        ensure
+          GC.stress = false
+        end
+    "#), @"[String, false, 157, true]");
+}
+
+#[test]
+fn test_string_copy_chilled_gc_stress() {
+    eval(r#"
+        def make = "hello world"
+    "#);
+    assert_contains_opcode("make", YARVINSN_dupchilledstring);
+    assert_snapshot!(assert_compiles(r#"
+        begin
+          GC.stress = true
+          make
+          s = make
+          orig = s.dup
+          s << "!"
+          [s.class, s, s.frozen?, s.encoding.name, s.length, orig]
+        ensure
+          GC.stress = false
+        end
+    "#), @r#"[String, "hello world!", false, "UTF-8", 12, "hello world"]"#);
+}
+
+#[test]
 fn test_new_hash_nonempty() {
     eval(r#"
         def test
@@ -3518,6 +3711,43 @@ fn test_array_dup() {
         test
         test
     "), @"[1, 2, 3]");
+}
+
+#[test]
+fn test_array_dup_embedded_gc_stress() {
+    eval(r#"
+        def make = [1, 100000000000000000000, :sym]
+    "#);
+    assert_contains_opcode("make", YARVINSN_duparray);
+    assert_snapshot!(assert_compiles(r#"
+        begin
+          GC.stress = true
+          make
+          a = make
+          a << :extra
+          [a.frozen?, a.class, a]
+        ensure
+          GC.stress = false
+        end
+    "#), @r#"[false, Array, [1, 100000000000000000000, :sym, :extra]]"#);
+}
+
+#[test]
+fn test_array_dup_non_embedded_gc_stress() {
+    eval("
+        def make = [10, 20, 30, 40, 50]
+    ");
+    assert_contains_opcode("make", YARVINSN_duparray);
+    assert_snapshot!(assert_compiles(r#"
+        begin
+          GC.stress = true
+          make
+          m = make
+          [m.frozen?, m]
+        ensure
+          GC.stress = false
+        end
+    "#), @"[false, [10, 20, 30, 40, 50]]");
 }
 
 #[test]
@@ -4167,6 +4397,29 @@ fn test_setinstancevariable() {
         test()
         @foo
     "), @"1");
+}
+
+#[test]
+fn test_polymorphic_setinstancevariable_with_shape_transitions() {
+    set_call_threshold(3);
+    assert_snapshot!(inspect(r#"
+        class C
+          def set(value) = @a = value
+        end
+
+        normal = C.new
+        with_b = C.new
+        with_b.instance_variable_set(:@b, true)
+        normal.set(:profile_normal)
+        with_b.set(:profile_with_b)
+
+        normal = C.new
+        with_b = C.new
+        with_b.instance_variable_set(:@b, true)
+        results = [normal.set(:normal), with_b.set(:with_b)]
+        results << normal.instance_variable_get(:@a)
+        results << with_b.instance_variable_get(:@a)
+    "#), @"[:normal, :with_b, :normal, :with_b]");
 }
 
 #[test]
@@ -4904,7 +5157,7 @@ mod signal_profiler {
 
             let mut handler: libc::sigaction = unsafe { std::mem::zeroed() };
             assert_eq!(unsafe { libc::sigemptyset(&mut handler.sa_mask) }, 0, "sigemptyset failed");
-            handler.sa_sigaction = sample_profile_frames as libc::sighandler_t;
+            handler.sa_sigaction = sample_profile_frames as *const () as libc::sighandler_t;
             handler.sa_flags = libc::SA_RESTART;
 
             let mut old_sigprof: libc::sigaction = unsafe { std::mem::zeroed() };
@@ -6441,6 +6694,19 @@ fn test_inlined_method_returns_correct_value() {
 }
 
 #[test]
+fn test_inlined_method_with_rest_parameter() {
+    with_inlining(|| {
+        assert_snapshot!(assert_inlines("
+            def add_rest(*rest) = rest[0] + rest[1]
+            def test = add_rest(1, 2)
+
+            test
+            test
+        "), @"3");
+    });
+}
+
+#[test]
 fn test_inlined_method_deoptimizes_on_redefinition() {
     with_inlining(|| {
         assert_snapshot!(assert_inlines("
@@ -6982,6 +7248,61 @@ fn test_regression_gc_stress_with_lazy_block_code() {
     "#), @":ok");
 }
 
+// Hash recursion uses catch/throw internally. The target frame remains in JIT
+// code after the caught throw, so longjmp must not materialize and detach it
+// before a callee side exit uses its updated PC and stack map.
+#[test]
+fn test_keep_jit_frame_for_caught_jump() {
+    rb_zjit_prepare_options();
+    let old_call_threshold = unsafe { crate::options::rb_zjit_call_threshold };
+    let old_inline_threshold = get_option!(inline_threshold);
+    let old_max_versions = get_option!(max_versions);
+    set_call_threshold(1);
+    set_inline_threshold(0);
+    set_max_versions(2);
+    let result = inspect(r#"
+        module KeepJITFrameAssertions
+          def assert_receiver(*)
+            raise unless is_a?(KeepJITFrameBase)
+          end
+        end
+
+        class KeepJITFrameBase
+          include KeepJITFrameAssertions
+
+          def hash_class = Hash
+
+          def test
+            hash = hash_class[]
+            recursive = [hash]
+            hash[:x] = recursive
+            object = Object.new
+            lookup = { hash => object }
+
+            [recursive, [hash]].each do |key|
+              key = { x: key }
+              assert_receiver(object, lookup[key], -> { key.inspect })
+            end
+          end
+        end
+
+        class KeepJITFrameHash < Hash
+        end
+
+        class KeepJITFrameSubclass < KeepJITFrameBase
+          def hash_class = KeepJITFrameHash
+        end
+
+        KeepJITFrameBase.new.test
+        KeepJITFrameSubclass.new.test
+        :ok
+    "#);
+    set_max_versions(old_max_versions);
+    set_inline_threshold(old_inline_threshold);
+    set_call_threshold(old_call_threshold);
+    assert_snapshot!(result, @":ok");
+}
+
 #[test]
 fn test_float_arithmetic() {
     set_call_threshold(1);
@@ -7031,4 +7352,34 @@ fn test_send_no_profiles_with_disabled_specialized_instruction() {
 #[test]
 fn test_array_each_is_defined_in_ruby() {
     assert_snapshot!(inspect("Array.instance_method(:each).source_location&.first"), @r#""<internal:array>""#);
+}
+
+#[test]
+fn test_forward_fallback_with_lightweight_frame_reads_cfp() {
+    assert_snapshot!(inspect(r#"
+      class Base
+        def foo(...)
+          "base"
+        end
+      end
+
+      class Child < Base
+        def foo(...)
+          bar do
+            super
+          end
+        end
+
+        def bar
+          yield
+        end
+      end
+
+      c = Child.new
+      100.times do
+        Array.new(50) { |n| n * n }
+        c.foo(1, 2, 3)
+      end
+      :done
+    "#), @":done");
 }

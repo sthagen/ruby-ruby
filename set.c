@@ -9,6 +9,7 @@
 #include "internal/bits.h"
 #include "internal/error.h"
 #include "internal/hash.h"
+#include "internal/object.h"
 #include "internal/proc.h"
 #include "internal/sanitizers.h"
 #include "internal/set_table.h"
@@ -1198,7 +1199,7 @@ set_i_intersection(VALUE set, VALUE other)
  *
  *  Returns whether the given +object+ is an element of +self+:
  *
- *    set = [0, :zero, '0']
+ *    set = Set[0, :zero, '0']
  *    set.include?('0')    # => true
  *    set.include?('zero') # => false
  *
@@ -1585,7 +1586,7 @@ set_each_i(st_data_t key, st_data_t dummy)
  *
  *    sum = 0
  *    Set[1, 2, 3].each {|i| sum += i }
- *    sum => 6
+ *    sum # => 6
  *
  *  With no block given, returns an Enumerator.
  */
@@ -2228,7 +2229,7 @@ set_i_to_h(VALUE set)
 static VALUE
 compat_dumper(VALUE set)
 {
-    VALUE dumper = rb_class_new_instance(0, 0, rb_cObject);
+    VALUE dumper = rb_class_allocate_instance_capa(rb_cObject, 1);
     rb_ivar_set(dumper, id_i_hash, set_i_to_h(set));
     return dumper;
 }

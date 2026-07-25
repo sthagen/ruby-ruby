@@ -74,8 +74,11 @@ rb_hrtime_sub(rb_hrtime_t a, rb_hrtime_t b)
 
 #include "probes.h"
 
+/* cl.exe's traditional preprocessor passes __VA_ARGS__ to a nested macro as
+ * a single argument; the extra expansion re-scans it into separate ones. */
+#define RUBY_DTRACE_GC_HOOK_EXPAND(expr) expr
 #define RUBY_DTRACE_GC_HOOK(name, ...) \
-    do {if (RUBY_DTRACE_GC_##name##_ENABLED()) RUBY_DTRACE_GC_##name(__VA_ARGS__);} while (0)
+    do {if (RUBY_DTRACE_GC_##name##_ENABLED()) RUBY_DTRACE_GC_HOOK_EXPAND(RUBY_DTRACE_GC_##name(__VA_ARGS__));} while (0)
 
 #if USE_ZJIT
 # include "gc/default/zjit_fastpath.h"
@@ -319,10 +322,8 @@ static ruby_gc_params_t gc_params = {
 #endif
 #if RGENGC_DEBUG < 0 && !defined(_MSC_VER)
 # define RGENGC_DEBUG_ENABLED(level) (-(RGENGC_DEBUG) >= (level) && ruby_rgengc_debug >= (level))
-#elif defined(HAVE_VA_ARGS_MACRO)
-# define RGENGC_DEBUG_ENABLED(level) ((RGENGC_DEBUG) >= (level))
 #else
-# define RGENGC_DEBUG_ENABLED(level) 0
+# define RGENGC_DEBUG_ENABLED(level) ((RGENGC_DEBUG) >= (level))
 #endif
 int ruby_rgengc_debug;
 
@@ -1334,12 +1335,8 @@ static inline void gc_prof_set_heap_info(rb_objspace_t *);
 #define gc_prof_record(objspace) (objspace)->profile.current_record
 #define gc_prof_enabled(objspace) ((objspace)->profile.run && (objspace)->profile.current_record)
 
-#ifdef HAVE_VA_ARGS_MACRO
-# define gc_report(level, objspace, ...) \
+#define gc_report(level, objspace, ...) \
     if (!RGENGC_DEBUG_ENABLED(level)) {} else gc_report_body(level, objspace, __VA_ARGS__)
-#else
-# define gc_report if (!RGENGC_DEBUG_ENABLED(0)) {} else gc_report_body
-#endif
 PRINTF_ARGS(static void gc_report_body(int level, rb_objspace_t *objspace, const char *fmt, ...), 3, 4);
 
 static void gc_finalize_deferred(void *dmy);
@@ -2708,12 +2705,6 @@ newobj_bump_pointer_miss(rb_objspace_t *objspace, rb_ractor_newobj_cache_t *gc_c
                 }
                 rb_bug("object allocation during garbage collection phase");
             }
-
-            if (ruby_gc_stressful) {
-                if (!garbage_collect(objspace, GPR_FLAG_NEWOBJ)) {
-                    rb_memerror();
-                }
-            }
         }
 
         if (is_incremental_marking(objspace)) {
@@ -2762,6 +2753,12 @@ newobj_bump_pointer_miss(rb_objspace_t *objspace, rb_ractor_newobj_cache_t *gc_c
 static VALUE
 newobj_alloc(rb_objspace_t *objspace, rb_ractor_newobj_cache_t *gc_cache, size_t heap_idx, bool vm_locked)
 {
+    if (RB_UNLIKELY(ruby_gc_stressful)) {
+        if (!garbage_collect(objspace, GPR_FLAG_NEWOBJ)) {
+            rb_memerror();
+        }
+    }
+
     VALUE obj = ractor_cache_allocate_slot(objspace, gc_cache, heap_idx);
 
     if (RB_UNLIKELY(obj == Qfalse)) {
@@ -4136,10 +4133,6 @@ gc_sweep_start_heap(rb_objspace_t *objspace, rb_heap_t *heap)
     }
 }
 
-#if defined(__GNUC__) && __GNUC__ == 4 && __GNUC_MINOR__ == 4
-__attribute__((noinline))
-#endif
-
 #if GC_CAN_COMPILE_COMPACTION
 static void gc_sort_heap_by_compare_func(rb_objspace_t *objspace, gc_compact_compare_func compare_func);
 static int compare_pinned_slots(const void *left, const void *right, void *d);
@@ -4242,6 +4235,15 @@ gc_sweep_freeobj_hooks(rb_objspace_t *objspace)
     }
 }
 
+static int
+gc_sweep_weak_table_i(VALUE val, void *data)
+{
+    rb_objspace_t *objspace = data;
+    if (RB_SPECIAL_CONST_P(val)) return ST_CONTINUE;
+    if (RVALUE_MARKED(objspace, val)) return ST_CONTINUE;
+    return ST_DELETE;
+}
+
 static void
 gc_sweep_start(rb_objspace_t *objspace)
 {
@@ -4250,6 +4252,17 @@ gc_sweep_start(rb_objspace_t *objspace)
 
     if (RB_UNLIKELY(objspace->hook_events & RUBY_INTERNAL_EVENT_FREEOBJ)) {
         gc_sweep_freeobj_hooks(objspace);
+    }
+
+    for (int table = 0; table < RB_GC_VM_WEAK_TABLE_COUNT; table++) {
+        if (!rb_gc_vm_weak_table_essential_p(table)) continue;
+        rb_gc_vm_weak_table_foreach(
+            gc_sweep_weak_table_i,
+            NULL,
+            objspace,
+            true,
+            table
+        );
     }
 
 #if GC_CAN_COMPILE_COMPACTION
@@ -7620,6 +7633,14 @@ gc_move(rb_objspace_t *objspace, VALUE src, VALUE dest, struct heap_page *src_pa
     }
 
     RVALUE_AGE_SET(dest, age);
+
+    /* A re-embedded object (rb_gc_obj_changed_slot_size) references its
+     * former fields_obj's contents directly; the write-barrier history
+     * lived on the discarded fields_obj, so remember the object. */
+    if (src_slot_size != slot_size && age >= RVALUE_OLD_AGE && !remembered) {
+        rgengc_remember(objspace, dest);
+    }
+
     /* Assign forwarding address */
     RMOVED(src)->flags = T_MOVED;
     RMOVED(src)->dummy = Qundef;

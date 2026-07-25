@@ -644,16 +644,15 @@ class TestYJIT < Test::Unit::TestCase
     RUBY
   end
 
-  STRUCT_MAX_EMBEDDED_MEMBERS = (
-    GC::INTERNAL_CONSTANTS[:RVARGC_MAX_ALLOCATE_SIZE] -
-    GC::INTERNAL_CONSTANTS[:RBASIC_SIZE] -
-    GC::INTERNAL_CONSTANTS[:RVALUE_OVERHEAD]
-  ) / RbConfig::SIZEOF["void*"]
-
   def test_spilled_struct_aref
     omit("FIXME: https://github.com/Shopify/ruby/issues/977")
+    struct_max_embedded_members = (
+        GC::INTERNAL_CONSTANTS[:RVARGC_MAX_ALLOCATE_SIZE] -
+        GC::INTERNAL_CONSTANTS[:RBASIC_SIZE] -
+        GC::INTERNAL_CONSTANTS[:RVALUE_OVERHEAD]
+      ) / RbConfig::SIZEOF["void*"]
     assert_compiles(<<~RUBY)
-      LargeStruct = Struct.new(:foo, :bar, *(#{STRUCT_MAX_EMBEDDED_MEMBERS} - 2).times.map { :"m_\#{it}" })
+      LargeStruct = Struct.new(:foo, :bar, *(#{struct_max_embedded_members} - 2).times.map { :"m_\#{it}" })
 
       def foo(obj)
         foo = obj.foo
@@ -852,6 +851,27 @@ class TestYJIT < Test::Unit::TestCase
       end
       jit_method
     RUBY
+  end
+
+  def test_forwarding_callee_does_not_map_arguments_to_locals
+    assert_compiles(
+      <<~'RUBY', call_threshold: 1, code_gc: true, result: [:ok, :ok], verify_ctx: true
+      class ForwardingReceiver
+        def foo(...) = :ok
+      end
+
+      def delegate(...)
+        receiver = ForwardingReceiver.new
+        if defined?(receiver.foo)
+          receiver.foo(...)
+        else
+          receiver.__send__(:foo, ...)
+        end
+      end
+
+      2.times.map { delegate(nil, "string") }
+      RUBY
+    )
   end
 
   def test_send_block
@@ -1997,7 +2017,8 @@ class TestYJIT < Test::Unit::TestCase
     frozen_string_literal: nil,
     mem_size: nil,
     code_gc: false,
-    no_send_fallbacks: false
+    no_send_fallbacks: false,
+    verify_ctx: false
   )
     reset_stats = <<~RUBY
       RubyVM::YJIT.runtime_stats
@@ -2032,7 +2053,7 @@ class TestYJIT < Test::Unit::TestCase
       #{write_results}
     RUBY
 
-    status, out, err, stats = eval_with_jit(script, call_threshold:, mem_size:, code_gc:)
+    status, out, err, stats = eval_with_jit(script, call_threshold:, mem_size:, code_gc:, verify_ctx:)
 
     assert status.success?, "exited with status #{status.to_i}, stderr:\n#{err}"
 
@@ -2097,7 +2118,9 @@ class TestYJIT < Test::Unit::TestCase
     s.chars.map { |c| c.ascii_only? ? c : "\\u%x" % c.codepoints[0] }.join
   end
 
-  def eval_with_jit(script, call_threshold: 1, timeout: 1000, mem_size: nil, code_gc: false)
+  def eval_with_jit(
+    script, call_threshold: 1, timeout: 1000, mem_size: nil, code_gc: false, verify_ctx: false
+  )
     args = [
       "--disable-gems",
       "--yjit-call-threshold=#{call_threshold}",
@@ -2105,6 +2128,7 @@ class TestYJIT < Test::Unit::TestCase
     ]
     args << "--yjit-exec-mem-size=#{mem_size}" if mem_size
     args << "--yjit-code-gc" if code_gc
+    args << "--yjit-verify-ctx" if verify_ctx
     args << "-e" << script_shell_encode(script)
     stats_r, stats_w = IO.pipe
     # Separate thread so we don't deadlock when

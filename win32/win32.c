@@ -1080,7 +1080,7 @@ rb_w32_get_osfhandle(int fh)
 
 /* License: Ruby's */
 static int
-join_argv(char *cmd, char *const *argv, BOOL escape, UINT cp, int backslash)
+join_argv(char *cmd, char *const *argv, BOOL escape, UINT cp, int backslash, BOOL quote_bs)
 {
     const char *p, *s;
     char *q, *const *t;
@@ -1131,7 +1131,7 @@ join_argv(char *cmd, char *const *argv, BOOL escape, UINT cp, int backslash)
             }
         }
         len += (n = p - s) + 1;
-        if (quote) len++;
+        if (quote) len += (quote_bs ? bs : 0) + 1;
         if (q) {
             memcpy(q, s, n);
             if (backslash > 0) {
@@ -1140,7 +1140,14 @@ join_argv(char *cmd, char *const *argv, BOOL escape, UINT cp, int backslash)
                 translate_char(q, '/', '\\', cp);
             }
             q += n;
-            if (quote) *q++ = '"';
+            if (quote) {
+                // See [Bug #22199]
+                if (quote_bs && bs) {
+                    memset(q, '\\', bs);
+                    q += bs;
+                }
+                *q++ = '"';
+            }
             *q++ = ' ';
         }
     }
@@ -1483,20 +1490,20 @@ w32_spawn_process(int mode, const char *prog, char *const *argv,
         char *progs[2];
         progs[0] = (char *)prog;
         progs[1] = NULL;
-        len = join_argv(NULL, progs, ntcmd, cp, 1);
+        len = join_argv(NULL, progs, ntcmd, cp, 1, FALSE);
         if (c_switch) len += 3;
         else ++argv;
-        if (argv[0]) len += join_argv(NULL, argv, ntcmd, cp, 0);
+        if (argv[0]) len += join_argv(NULL, argv, ntcmd, cp, 0, FALSE);
         cmd = ALLOCV(v, len);
-        join_argv(cmd, progs, ntcmd, cp, 1);
+        join_argv(cmd, progs, ntcmd, cp, 1, FALSE);
         if (c_switch) strlcat(cmd, " /c", len);
-        if (argv[0]) join_argv(cmd + strlcat(cmd, " ", len), argv, ntcmd, cp, 0);
+        if (argv[0]) join_argv(cmd + strlcat(cmd, " ", len), argv, ntcmd, cp, 0, FALSE);
         prog = c_switch ? shell : 0;
     }
     else {
-        len = join_argv(NULL, argv, FALSE, cp, 1);
+        len = join_argv(NULL, argv, FALSE, cp, 1, TRUE);
         cmd = ALLOCV(v, len);
-        join_argv(cmd, argv, FALSE, cp, 1);
+        join_argv(cmd, argv, FALSE, cp, 1, TRUE);
     }
 
     if (!e && cmd && !(wcmd = mbstr_to_wstr(cp, cmd, -1, NULL))) e = E2BIG;
@@ -1655,7 +1662,7 @@ has_redirection(const char *cmd, UINT cp)
           case '%':
             if (*++ptr != '_' && !ISALPHA(*ptr)) break;
             while (*++ptr == '_' || ISALNUM(*ptr));
-            if (*ptr++ == '%') return TRUE;
+            if (*ptr && *ptr++ == '%') return TRUE;
             break;
 
           case '\\':
@@ -1955,7 +1962,10 @@ get_handle_pathname(HANDLE fh, WCHAR **pathptr, DWORD add)
     WCHAR *path = malloc((len + add + 1) * sizeof(WCHAR));
     if (!(*pathptr = path)) return 0;
     len = GetFinalPathNameByHandleW(fh, path, len + 1, 0);
-    if (!len) free(path);
+    if (!len) {
+        free(path);
+        *pathptr = NULL;
+    }
     return len;
 }
 
@@ -4012,6 +4022,13 @@ socketpair_unix_path(struct sockaddr_un *sock_un)
         case 0:
             /* user temp dir from TMP or TEMP env var, it ends with a backslash */
             path_len = GetTempPathW(maxpath, wpath);
+            if (path_len == 0 || path_len > maxpath) {
+                /* The env var path did not fit in wpath (GetTempPathW then
+                 * returns the required length and leaves wpath unfilled), or
+                 * the call failed.  Skip to the next candidate directory
+                 * instead of reading past wpath in WideCharToMultiByte. */
+                continue;
+            }
             break;
         case 1:
             wcsncpy(wpath, L"C:/Temp/", maxpath);
@@ -6708,9 +6725,6 @@ rb_w32_pipe(int fds[2])
 static int
 console_emulator_p(void)
 {
-#ifdef _WIN32_WCE
-    return FALSE;
-#else
     const void *const func = WriteConsoleW;
     HMODULE k;
     MEMORY_BASIC_INFORMATION m;
@@ -6722,7 +6736,6 @@ console_emulator_p(void)
     k = GetModuleHandle("kernel32.dll");
     if (!k) return FALSE;
     return (HMODULE)m.AllocationBase != k;
-#endif
 }
 
 /* License: Ruby's */

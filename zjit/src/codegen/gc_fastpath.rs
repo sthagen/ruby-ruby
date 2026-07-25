@@ -68,12 +68,13 @@ enum PreparedNewObjFastpath {
     Mmtk(RbGcZjitMmtkNewObjFastpath),
 }
 
-pub(super) fn gc_fast_path_new_obj(
+pub(super) fn gc_fastpath_new_obj(
     jit: &mut JITState,
     asm: &mut Assembler,
     alloc_size: usize,
     flags: u64,
     klass: VALUE,
+    init: impl Fn(&mut Assembler, Opnd),
     slow_path: impl Fn(&mut Assembler) -> lir::Opnd,
 ) -> lir::Opnd {
     let Some(fastpath) = prepare_new_obj_fastpath(alloc_size, flags, klass) else {
@@ -90,7 +91,7 @@ pub(super) fn gc_fast_path_new_obj(
 
     let result_edge = |v: Opnd| Target::Block(Box::new(lir::BranchEdge { target: result_block, args: vec![v] }));
 
-    let obj = emit_new_obj_fastpath(jit, asm, &fastpath, miss_block)
+    let obj = emit_new_obj_fastpath(jit, asm, &fastpath, init, miss_block)
         .expect("validated GC fastpath must return an object");
     asm.jmp(result_edge(obj));
 
@@ -145,6 +146,7 @@ fn emit_new_obj_fastpath(
     jit: &mut JITState,
     asm: &mut Assembler,
     prepared: &PreparedNewObjFastpath,
+    init: impl Fn(&mut Assembler, Opnd),
     miss_block: lir::BlockId,
 ) -> Option<Opnd> {
     let miss = Target::Block(Box::new(lir::BranchEdge {
@@ -154,10 +156,10 @@ fn emit_new_obj_fastpath(
 
     match prepared {
         PreparedNewObjFastpath::Default(fastpath) => {
-            emit_default_new_obj_fastpath(jit, asm, fastpath, &miss)
+            emit_default_new_obj_fastpath(jit, asm, fastpath, init, &miss)
         }
         PreparedNewObjFastpath::Mmtk(fastpath) => {
-            emit_mmtk_new_obj_fastpath(jit, asm, fastpath, &miss)
+            emit_mmtk_new_obj_fastpath(jit, asm, fastpath, init, &miss)
         }
     }
 }
@@ -170,6 +172,7 @@ fn emit_default_new_obj_fastpath(
     jit: &mut JITState,
     asm: &mut Assembler,
     fastpath: &RbGcZjitDefaultNewObjFastpath,
+    init: impl Fn(&mut Assembler, Opnd),
     miss: &Target,
 ) -> Option<Opnd> {
     let cursor_offset: i32 = fastpath.cursor_offset.try_into().ok()?;
@@ -200,6 +203,8 @@ fn emit_default_new_obj_fastpath(
         fastpath.klass.into(),
     );
 
+    init(asm, cursor);
+
     Some(cursor)
 }
 
@@ -210,6 +215,7 @@ fn emit_mmtk_new_obj_fastpath(
     jit: &mut JITState,
     asm: &mut Assembler,
     fastpath: &RbGcZjitMmtkNewObjFastpath,
+    init: impl Fn(&mut Assembler, Opnd),
     miss: &Target,
 ) -> Option<Opnd> {
     let objspace_total_allocated_objects_offset: i32 = fastpath
@@ -315,6 +321,8 @@ fn emit_mmtk_new_obj_fastpath(
         Opnd::mem(VALUE_BITS, obj, RUBY_OFFSET_RBASIC_KLASS),
         fastpath.klass.into(),
     );
+
+    init(asm, obj);
 
     let mutator = asm.load(Opnd::mem(
         64,

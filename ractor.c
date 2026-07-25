@@ -1282,6 +1282,20 @@ obj_traverse_reachable_i(VALUE obj, void *ptr)
     }
 }
 
+// Traverse obj's children via its GC mark function. Returns 1 to stop.
+static int
+obj_traverse_reachable(VALUE obj, struct obj_traverse_data *data)
+{
+    struct obj_traverse_callback_data d = {
+        .stop = false,
+        .data = data,
+    };
+    RB_VM_LOCKING_NO_BARRIER() {
+        rb_objspace_reachable_objects_from(obj, obj_traverse_reachable_i, &d);
+    }
+    return d.stop;
+}
+
 static struct st_table *
 obj_traverse_rec(struct obj_traverse_data *data)
 {
@@ -1323,12 +1337,14 @@ obj_traverse_i(VALUE obj, struct obj_traverse_data *data)
     }
     RB_OBJ_WRITTEN(data->rec_hash, Qundef, obj);
 
-    struct obj_traverse_callback_data d = {
-        .stop = false,
-        .data = data,
-    };
-    rb_ivar_foreach(obj, obj_traverse_ivar_foreach_i, (st_data_t)&d);
-    if (d.stop) return 1;
+    if (rb_obj_shape_has_ivars(obj)) {
+        struct obj_traverse_callback_data d = {
+            .stop = false,
+            .data = data,
+        };
+        rb_ivar_foreach(obj, obj_traverse_ivar_foreach_i, (st_data_t)&d);
+        if (d.stop) return 1;
+    }
 
     switch (BUILTIN_TYPE(obj)) {
       // no child node
@@ -1349,7 +1365,7 @@ obj_traverse_i(VALUE obj, struct obj_traverse_data *data)
             rb_ary_cancel_sharing(obj);
 
             for (int i = 0; i < RARRAY_LENINT(obj); i++) {
-                VALUE e = rb_ary_entry(obj, i);
+                VALUE e = RARRAY_AREF(obj, i);
                 if (obj_traverse_i(e, data)) return 1;
             }
         }
@@ -1393,17 +1409,29 @@ obj_traverse_i(VALUE obj, struct obj_traverse_data *data)
         break;
 
       case T_DATA:
-      case T_IMEMO:
         {
-            struct obj_traverse_callback_data d = {
-                .stop = false,
-                .data = data,
-            };
-            RB_VM_LOCKING_NO_BARRIER() {
-                rb_objspace_reachable_objects_from(obj, obj_traverse_reachable_i, &d);
+            void *const ptr = RTYPEDDATA_GET_DATA(obj);
+            const rb_data_type_t *type = RTYPEDDATA_TYPE(obj);
+
+            if (!ptr || !type->function.dmark) {
+                // no references (the class and ivars are handled elsewhere)
             }
-            if (d.stop) return 1;
+            else if (type->flags & RUBY_TYPED_DECL_MARKING) {
+                const size_t *offsets = (const size_t *)(uintptr_t)type->function.dmark;
+                for (; *offsets != RUBY_REF_END; offsets++) {
+                    VALUE ref = *(VALUE *)((char *)ptr + *offsets);
+                    if (obj_traverse_i(ref, data)) return 1;
+                }
+            }
+            else {
+                if (obj_traverse_reachable(obj, data)) return 1;
+            }
         }
+        break;
+
+      case T_IMEMO:
+        // TODO: Not sure this can actually happen; traverse rather than crash.
+        if (obj_traverse_reachable(obj, data)) return 1;
         break;
 
       // unreachable
@@ -1575,7 +1603,7 @@ make_shareable_check_shareable(VALUE obj)
 static enum obj_traverse_iterator_result
 mark_shareable(VALUE obj)
 {
-    if (RB_TYPE_P(obj, T_STRING)) {
+    if (RB_BUILTIN_TYPE(obj) == T_STRING) {
         rb_str_make_independent(obj);
     }
 
@@ -1813,6 +1841,11 @@ obj_traverse_replace_i(VALUE obj, struct obj_traverse_replace_data *data)
         return 0;
     }
 
+    if (UNLIKELY(data->rec && st_lookup(data->rec, (st_data_t)obj, &replacement))) {
+        data->replacement = (VALUE)replacement;
+        return 0;
+    }
+
     switch (data->enter_func(obj, data)) {
       case traverse_cont: break;
       case traverse_skip: return 0; // skip children
@@ -1820,16 +1853,9 @@ obj_traverse_replace_i(VALUE obj, struct obj_traverse_replace_data *data)
     }
 
     replacement = (st_data_t)data->replacement;
-
-    if (UNLIKELY(st_lookup(obj_traverse_replace_rec(data), (st_data_t)obj, &replacement))) {
-        data->replacement = (VALUE)replacement;
-        return 0;
-    }
-    else {
-        st_insert(obj_traverse_replace_rec(data), (st_data_t)obj, replacement);
-        RB_OBJ_WRITTEN(data->rec_hash, Qundef, obj);
-        RB_OBJ_WRITTEN(data->rec_hash, Qundef, replacement);
-    }
+    st_insert(obj_traverse_replace_rec(data), (st_data_t)obj, replacement);
+    RB_OBJ_WRITTEN(data->rec_hash, Qundef, obj);
+    RB_OBJ_WRITTEN(data->rec_hash, Qundef, replacement);
 
     if (!data->move) {
         obj = replacement;
@@ -1881,14 +1907,16 @@ obj_traverse_replace_i(VALUE obj, struct obj_traverse_replace_data *data)
 
       case T_OBJECT:
         {
-            if (rb_obj_shape_complex_p(obj)) {
+            VALUE fields_obj = ROBJECT_FIELDS_OBJ(obj);
+            shape_id_t shape_id = RBASIC_SHAPE_ID(fields_obj);
+            if (rb_shape_complex_p(shape_id)) {
                 struct obj_traverse_replace_callback_data d = {
                     .stop = false,
                     .data = data,
                     .src = obj,
                 };
                 rb_st_foreach_with_replace(
-                    ROBJECT_FIELDS_HASH(obj),
+                    rb_imemo_fields_complex_tbl(fields_obj),
                     obj_iv_hash_traverse_replace_foreach_i,
                     obj_iv_hash_traverse_replace_i,
                     (st_data_t)&d
@@ -1896,10 +1924,10 @@ obj_traverse_replace_i(VALUE obj, struct obj_traverse_replace_data *data)
                 if (d.stop) return 1;
             }
             else {
-                uint32_t len = ROBJECT_FIELDS_COUNT_NOT_COMPLEX(obj);
-                VALUE *ptr = ROBJECT_FIELDS(obj);
+                attr_index_t len = RSHAPE_LEN(shape_id);
+                VALUE *ptr = rb_imemo_fields_ptr(fields_obj);
 
-                for (uint32_t i = 0; i < len; i++) {
+                for (attr_index_t i = 0; i < len; i++) {
                     CHECK_AND_REPLACE(obj, ptr[i]);
                 }
             }
@@ -1911,7 +1939,7 @@ obj_traverse_replace_i(VALUE obj, struct obj_traverse_replace_data *data)
             rb_ary_cancel_sharing(obj);
 
             for (int i = 0; i < RARRAY_LENINT(obj); i++) {
-                VALUE e = rb_ary_entry(obj, i);
+                VALUE e = RARRAY_AREF(obj, i);
 
                 if (obj_traverse_replace_i(e, data)) {
                     return 1;
@@ -2079,11 +2107,17 @@ move_leave(VALUE obj, struct obj_traverse_replace_data *data)
     }
 
     VALUE flags = T_OBJECT | FL_FREEZE | (RBASIC(obj)->flags & FL_PROMOTED);
+    shape_id_t shape_id = (RBASIC_SHAPE_ID(obj) & SHAPE_ID_CAPACITY_MASK) | ROOT_SHAPE_ID | SHAPE_ID_LAYOUT_ROBJECT | SHAPE_ID_FL_FROZEN;
 
     // Avoid mutations using bind_call, etc.
     MEMZERO((char *)obj, char, sizeof(struct RBasic));
     RBASIC(obj)->flags = flags;
     RBASIC_SET_CLASS_RAW(obj, rb_cRactorMovedObject);
+
+    // The husk keeps its original (larger) slot, so give it a field-less shape
+    // sized to that slot; otherwise compaction's slot_size == shape_slot_size
+    // invariant is violated.
+    RBASIC_SET_FULL_SHAPE_ID(obj, shape_id);
     return traverse_cont;
 }
 

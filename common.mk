@@ -101,6 +101,7 @@ LIBPRISM_OBJS = \
 		prism/constant_pool.$(OBJEXT) \
 		prism/diagnostic.$(OBJEXT) \
 		prism/encoding.$(OBJEXT) \
+		prism/errors_format.$(OBJEXT) \
 		prism/integer.$(OBJEXT) \
 		prism/json.$(OBJEXT) \
 		prism/line_offset_list.$(OBJEXT) \
@@ -226,7 +227,7 @@ $(PRISM_BUILD_DIR)/.time $(PRISM_BUILD_DIR)/util/.time:
 	$(Q) $(MAKEDIRS) $(@D)
 	@$(NULLCMD) > $@
 
-EXPORTOBJS    = $(DLNOBJ) \
+EXPORTOBJS    = $(DLNOBJS) \
 		localeinit.$(OBJEXT) \
 		loadpath.$(OBJEXT) \
 		$(COMMONOBJS)
@@ -354,6 +355,7 @@ ext/configure-ext.mk: $(PREP) all-incs $(MKFILES) $(RBCONFIG) $(LIBRUBY) \
 	$(Q)$(MINIRUBY) $(tooldir)/generic_erb.rb -o $@ -c \
 	    $(srcdir)/template/$(@F).tmpl --srcdir="$(srcdir)" \
 	    --miniruby="$(MINIRUBY)" --script-args='$(SCRIPT_ARGS)' \
+	    --thread-model="$(THREAD_MODEL)" --gnumake=$(gnumake) \
 	    $(yes_cross_compiling:yes=--without-ext=-test-)
 
 configure-ext: $(EXTS_MK)
@@ -724,6 +726,7 @@ clean-rubyspec: clean-spec
 
 distclean: distclean-ext distclean-enc distclean-golf distclean-docs distclean-extout distclean-modular-gc distclean-local distclean-platform distclean-spec
 distclean-local:: clean-local
+	-$(Q)$(RMALL) .deps
 	$(Q)$(RM) $(MKFILES) *.inc $(PRELUDES) *.rbinc *.rbbin
 	$(Q)$(RM) config.cache config.status config.status.lineno
 	$(Q)$(RM) *~ *.bak *.stackdump core *.core gmon.out $(PREP)
@@ -1316,7 +1319,7 @@ $(MAINOBJ): $(srcdir)/$(MAINSRC)
 probes.dmyh:
 	$(BASERUBY) $(tooldir)/gen_dummy_probes.rb $(srcdir)/probes.d > $@
 
-probes.h: {$(VPATH)}probes.$(DTRACE_EXT)
+probes.h: {$(VPATH)}probes.$(DTRACE_EXT) $(srcdir)/vm_opts.h
 
 prereq: incs srcs preludes PHONY
 
@@ -1440,15 +1443,26 @@ COMPARE_RUBY = $(BASERUBY)
 BENCH_RUBY = $(RUNRUBY)
 BENCH_OPTS = --output=markdown --output-compare -v
 ITEM =
-ARGS = $$(find $(srcdir)/benchmark -maxdepth 1 -name '$(ITEM)' -o -name '*$(ITEM)*.yml' -o -name '*$(ITEM)*.rb' | sort)
+ARGS =
 OPTS =
 
-# See benchmark/README.md for details.
+# Select the benchmark files with Ruby instead of `find | sort`, so the
+# recipe runs on any platform regardless of the shell.  When ARGS is
+# empty, collect the files matching ITEM under benchmark/.  Executables
+# are passed with forward slashes because benchmark-driver splits them
+# with Shellwords, which eats backslashes.  See benchmark/README.md.
 benchmark: miniruby$(EXEEXT) update-benchmark-driver PHONY
-	$(BASERUBY) -rrubygems -I$(srcdir)/benchmark/lib $(srcdir)/benchmark/benchmark-driver/exe/benchmark-driver \
-	            --executables="compare-ruby::$(COMPARE_RUBY) -I$(EXTOUT)/common --disable-gem" \
-	            --executables="built-ruby::$(BENCH_RUBY) --disable-gem" \
-	            $(BENCH_OPTS) $(ARGS) $(OPTS)
+	$(BASERUBY) -rrubygems -I$(srcdir)/benchmark/lib \
+	    -e "files = %w[$(ARGS)]" \
+	    -e "files = Dir.glob(['$(ITEM)', '*$(ITEM)*.yml', '*$(ITEM)*.rb'], base: '$(srcdir)/benchmark').reject(&:empty?).sort.uniq.map {|f| '$(srcdir)/benchmark/' + f} if files.empty?" \
+	    -e "if sep = File::ALT_SEPARATOR" \
+	    -e   "ARGV.map! {|a| a.start_with?('--executables') ? a.gsub(sep, '/') : a}" \
+	    -e "end" \
+	    -e "ARGV.concat(files)" \
+	    -e "load '$(srcdir)/benchmark/benchmark-driver/exe/benchmark-driver'" -- \
+	    --executables="compare-ruby::$(COMPARE_RUBY) -I$(EXTOUT)/common --disable-gem" \
+	    --executables="built-ruby::$(BENCH_RUBY) --disable-gem" \
+	    $(BENCH_OPTS) $(OPTS)
 
 run.gdb:
 	echo set breakpoint pending on         > run.gdb
@@ -1458,8 +1472,9 @@ run.gdb:
 	echo '# handle SIGINT nostop'         >> run.gdb
 	echo '# handle SIGPIPE nostop'        >> run.gdb
 	echo '# b rb_longjmp'                 >> run.gdb
-	echo source $(srcdir)/breakpoints.gdb >> run.gdb
-	echo source $(srcdir)/.gdbinit        >> run.gdb
+	echo directory $(srcdir)              >> run.gdb
+	echo source -s breakpoints.gdb        >> run.gdb
+	echo source -s .gdbinit               >> run.gdb
 	echo 'set $$_exitcode = -999'         >> run.gdb
 	echo run                              >> run.gdb
 	echo 'if $$_exitcode != -999'         >> run.gdb
@@ -1598,7 +1613,7 @@ no-install-for-test-bundled-gems: no-update-default-gemspecs
 yes-install-for-test-bundled-gems: yes-update-default-gemspecs
 	$(XRUBY) -C "$(srcdir)" -r./tool/lib/gem_env.rb bin/gem \
 		install --no-document --conservative \
-		"hoe" "json-schema:5.1.0" "test-unit-rr" "simplecov" "simplecov-html" "simplecov-json" "rspec" "zeitwerk" \
+		"hoe" "json-schema:5.1.0" "test-unit-rr" "rspec" "zeitwerk" \
 		"sinatra" "rack" "tilt" "mustermann" "base64" "compact_index" "rack-test" "logger" "kpeg" "tracer" "minitest-mock"
 
 test-bundled-gems-fetch: yes-test-bundled-gems-fetch
@@ -1992,6 +2007,15 @@ rewindable:
 
 HELP_EXTRA_TASKS = ""
 
+MKDEPEND_FILES = --scope=all
+MKDEPEND_OPTIONS = --sources
+
+fix-depends: PHONY
+	$(BASERUBY) -C $(srcdir) tool/mkdepend.rb $(MKDEPEND_FILES) $(MKDEPEND_OPTIONS) --inplace
+
+check-depends: PHONY
+	$(BASERUBY) -C $(srcdir) tool/mkdepend.rb --scope=all --sources --check
+
 gc/Makefile:
 	$(MAKEDIRS) $(@D)
 	$(MESSAGE_BEGIN) \
@@ -2071,4 +2095,4 @@ $(CROSS_COMPILING:yes=)builtin.$(OBJEXT): {$(VPATH)}mini_builtin.c
 $(CROSS_COMPILING:yes=)builtin.$(OBJEXT): {$(VPATH)}miniprelude.c
 
 !include $(srcdir)/prism/srcs.mk
-!include $(srcdir)/depend
+!include $(DEPENDENCIES_DIR)/depend

@@ -123,6 +123,12 @@ pub struct Options {
     /// Frequency of tracing side exits.
     pub trace_side_exits_sample_interval: usize,
 
+    /// Trace and write fallback source maps to /tmp for stackprof.
+    pub trace_fallbacks: bool,
+
+    /// Frequency of tracing fallbacks.
+    pub trace_fallbacks_sample_interval: usize,
+
     /// Trace compilation phases as Perfetto duration events.
     pub trace_compiles: bool,
 
@@ -149,27 +155,16 @@ pub struct Options {
     pub inline_threshold: InlineThreshold,
 
     /// Per-caller cumulative size budget for inlining, measured as the caller
-    /// `Function`'s `insns.len()` at the moment `should_inline` is consulted (during
+    /// `Function::num_instructions` at the moment `should_inline` is consulted (during
     /// `inline_methods` inside the `optimize()` fixed-point loop). Once a caller has
     /// grown past this many HIR instructions, `should_inline` rejects further callees,
     /// bounding runaway code-size growth from depth-N inlining (and providing the
     /// optimization fixed-point loop's effective terminating condition).
     /// `INLINE_BUDGET_UNLIMITED` disables the budget.
     ///
-    /// Caveat on the unit: `self.insns` is append-only across the whole pipeline —
-    /// `InsnId`s are stable indices into it, so passes never shrink it. `len()` is
-    /// therefore a high-water mark of total HIR instructions ever allocated for the
-    /// function, including ones that later optimization passes mark dead via
-    /// `eliminate_dead_code` or alias away via `union_find`. By the time
-    /// `should_inline` runs in a given fixed-point iteration, `self.insns.len()` has
-    /// already been bumped by `iseq_to_hir`'s initial build, then by `type_specialize`
-    /// and the trivial `inline` pass, and (in iterations 2+) by every prior pass in
-    /// the loop including the previous round's `inline_methods`. It is a useful proxy
-    /// for "compile work done" but not for "size of the compiled output".
-    ///
     /// Note: this is a different unit than `inline_threshold` — that field is callee
-    /// YARV bytecode words; this one is caller HIR instructions, allocation high-water
-    /// mark. They aren't directly comparable; YARV → HIR typically expands roughly 1-3x.
+    /// YARV bytecode words; this one is caller HIR instructions. They aren't directly comparable;
+    /// YARV → HIR typically expands roughly 1-3x.
     pub inline_budget: InlineBudget,
 
     /// Set of qualified method names (e.g. `Class#method`, `Module::Class.method`) that
@@ -214,6 +209,8 @@ impl Default for Options {
             dump_disasm: None,
             trace_side_exits: None,
             trace_side_exits_sample_interval: 0,
+            trace_fallbacks: false,
+            trace_fallbacks_sample_interval: 0,
             trace_compiles: false,
             trace_invalidation: false,
             perf: None,
@@ -512,6 +509,17 @@ fn parse_option(str_ptr: *const std::os::raw::c_char) -> Option<()> {
             }
             // `sample_interval ` must provide a string that can be validly parsed to a `usize`.
             options.trace_side_exits_sample_interval = sample_interval.parse::<usize>().ok()?;
+        }
+
+        ("trace-fallbacks", "") => {
+            options.trace_fallbacks = true;
+        }
+
+        ("trace-fallbacks-sample-rate", sample_interval) => {
+            // If not already set, then set it.
+            options.trace_fallbacks = true;
+            // `sample_interval ` must provide a string that can be validly parsed to a `usize`.
+            options.trace_fallbacks_sample_interval = sample_interval.parse::<usize>().ok()?;
         }
 
         ("trace-compiles", "") => options.trace_compiles = true,

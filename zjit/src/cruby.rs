@@ -265,7 +265,7 @@ pub struct ShapeId(pub u32);
 pub enum ShapeLayout {
     RObject,
     RClass,
-    RData,
+    Extended,
     Other,
 }
 
@@ -288,7 +288,7 @@ impl ShapeId {
         match self.0 & SHAPE_ID_LAYOUT_MASK {
             SHAPE_ID_LAYOUT_ROBJECT => ShapeLayout::RObject,
             SHAPE_ID_LAYOUT_RCLASS => ShapeLayout::RClass,
-            SHAPE_ID_LAYOUT_RDATA => ShapeLayout::RData,
+            SHAPE_ID_LAYOUT_EXTENDED => ShapeLayout::Extended,
             SHAPE_ID_LAYOUT_OTHER => ShapeLayout::Other,
             layout => unreachable!("unknown shape layout bits: {layout:#x}"),
         }
@@ -648,10 +648,8 @@ impl VALUE {
         }
     }
 
-    pub fn embedded_p(self) -> bool {
-        unsafe {
-            FL_TEST_RAW(self, VALUE(ROBJECT_HEAP as usize)) == VALUE(0)
-        }
+    pub fn layout(self) ->  ShapeLayout {
+        self.shape_id_of().layout()
     }
 
     pub fn struct_embedded_p(self) -> bool {
@@ -1214,8 +1212,9 @@ mod manual_defs {
     pub const RUBY_OFFSET_RARRAY_AS_HEAP_PTR: i32 = 32; // struct RArray, subfield "as.heap.ptr"
     pub const RUBY_OFFSET_RARRAY_AS_ARY: i32 = 16; // struct RArray, subfield "as.ary"
 
-    pub const RUBY_OFFSET_RSTRUCT_AS_HEAP_PTR: i32 = 24; // struct RStruct, subfield "as.heap.ptr"
-    pub const RUBY_OFFSET_RSTRUCT_AS_ARY: i32 = 16; // struct RStruct, subfield "as.ary"
+    pub const RUBY_OFFSET_RSTRUCT_AS_HEAP_PTR: i32 = 32; // struct RStruct, subfield "as.heap.ptr"
+    pub const RUBY_OFFSET_RSTRUCT_FIELDS_OBJ: i32 = 16; // struct RStruct, field "fields_obj"
+    pub const RUBY_OFFSET_RSTRUCT_AS_ARY: i32 = 24; // struct RStruct, subfield "as.ary"
 
     pub const RUBY_OFFSET_RSTRING_AS_HEAP_PTR: i32 = 24; // struct RString, subfield "as.heap.ptr"
     pub const RUBY_OFFSET_RSTRING_AS_ARY: i32 = 24; // struct RString, subfield "as.embed.ary"

@@ -51,14 +51,12 @@ impl CodeBlock {
     pub fn jmp_ptr_bytes(&self) -> usize {
         // b instruction's offset is encoded as imm26 times 4. It can jump to
         // +/-128MiB, so this can be used when --zjit-exec-mem-size <= 128.
-        /*
-        let num_insns = if b_offset_fits_bits(self.virtual_region_size() as i64 / 4) {
+        // The widest in-region branch spans the region minus one instruction.
+        let num_insns = if b_offset_fits_bits((self.virtual_region_size() as i64 - 4) / 4) {
             1 // b instruction
         } else {
             5 // 4 instructions to load a 64-bit absolute address + br instruction
         };
-        */
-        let num_insns = 5; // TODO: support virtual_region_size() check
         num_insns * 4
     }
 
@@ -1164,12 +1162,18 @@ impl Assembler {
                         slot_count += 1
                     }
                     if slot_count > 0 {
-                        let slot_offset = (slot_count * SIZEOF_VALUE) as u64;
-                        // Bail when asked to reserve too many slots in one instruction.
-                        if ShiftedImmediate::try_from(slot_offset).is_err() {
-                            return Err(CompileError::NativeStackTooLarge);
+                        let mut slot_offset = (slot_count * SIZEOF_VALUE) as u64;
+                        // Loop when asked to reserve too many slots in one instruction.
+                        // TODO(max): Use a scratch reg instead of iterated subtraction
+                        while slot_offset > 0 {
+                            let reserve_step = if ShiftedImmediate::try_from(slot_offset).is_ok() {
+                                slot_offset
+                            } else {
+                                ShiftedImmediate::MAX
+                            };
+                            sub(cb, C_SP_REG, C_SP_REG, A64Opnd::new_uimm(reserve_step));
+                            slot_offset = slot_offset.saturating_sub(reserve_step);
                         }
-                        sub(cb, C_SP_REG, C_SP_REG, A64Opnd::new_uimm(slot_offset));
                     }
                 }
                 Insn::FrameTeardown { preserved } => {
@@ -1646,9 +1650,6 @@ impl Assembler {
             asm.stack_state.num_spill_slots = num_stack_slots;
             asm.stack_state.num_side_exit_stack_map_slots = asm.side_exit_stack_map_slots(&assignments);
             let stack_slot_count = asm.stack_state.stack_slot_count();
-            if stack_slot_count > Self::MAX_FRAME_STACK_SLOTS {
-                return Err(CompileError::NativeStackTooLarge);
-            }
 
             // Dump vreg-to-physical-register mapping if requested
             if let Some(crate::options::Options { dump_lir: Some(dump_lirs), .. }) = unsafe { crate::options::OPTIONS.as_ref() } {
@@ -1737,6 +1738,9 @@ impl Assembler {
                 unsafe { rb_jit_icache_invalidate(start_ptr.raw_ptr(cb) as _, cb.get_write_ptr().raw_ptr(cb) as _) };
             });
 
+            if crate::state::ZJITState::has_instance() {
+                crate::stats::incr_counter_by(crate::stats::Counter::total_native_stack_bytes, (asm.stack_state.stack_slot_count() * (VALUE_BITS as usize)).try_into().unwrap());
+            }
             Ok((start_ptr, gc_offsets))
         })
     }
@@ -1765,6 +1769,19 @@ mod tests {
         let (mut asm, scratch_reg) = Assembler::new_with_scratch_reg();
         asm.new_block_without_id("test");
         (asm, CodeBlock::new_dummy(), scratch_reg)
+    }
+
+    #[test]
+    fn test_jmp_ptr_bytes_at_b_range_boundary() {
+        // The widest branch in a 128MiB region spans 128MiB - 4 bytes, which is
+        // still the largest offset a b can encode, so one instruction is enough.
+        let cb = CodeBlock::new_dummy_sized(128 * 1024 * 1024);
+        assert_eq!(4, cb.jmp_ptr_bytes());
+
+        // One instruction further and a b can no longer span the region, so we
+        // have to reserve room for an absolute load-address plus br.
+        let cb = CodeBlock::new_dummy_sized(128 * 1024 * 1024 + 4);
+        assert_eq!(20, cb.jmp_ptr_bytes());
     }
 
     #[test]
@@ -2051,12 +2068,8 @@ mod tests {
         assert_disasm_snapshot!(cb.disasm(), @"
         0x0: b.eq #0x50
         0x4: nop
-        0x8: nop
-        0xc: nop
-        0x10: nop
-        0x14: nop
         ");
-        assert_snapshot!(cb.hexdump(), @"800200541f2003d51f2003d51f2003d51f2003d51f2003d5");
+        assert_snapshot!(cb.hexdump(), @"800200541f2003d5");
     }
 
     #[test]
@@ -2072,12 +2085,8 @@ mod tests {
         assert_disasm_snapshot!(cb.disasm(), @"
         0x0: b.ne #8
         0x4: b #0x200000
-        0x8: nop
-        0xc: nop
-        0x10: nop
-        0x14: nop
         ");
-        assert_snapshot!(cb.hexdump(), @"41000054ffff07141f2003d51f2003d51f2003d51f2003d5");
+        assert_snapshot!(cb.hexdump(), @"41000054ffff0714");
     }
 
     #[test]
@@ -2950,5 +2959,61 @@ mod tests {
         0x4: ldur x0, [x0]
         ");
         assert_snapshot!(cb.hexdump(), @"00000891000040f8");
+    }
+
+    #[test]
+    fn test_frame_setup() {
+        let (mut asm, mut cb) = setup_asm();
+
+        asm.stack_state.stack_base_idx = 16;
+        let _ = asm.frame_setup(&[]);
+        asm.compile(&mut cb).unwrap();
+
+        assert_disasm_snapshot!(cb.disasm(), @"
+        0x0: stp x29, x30, [sp, #-0x10]!
+        0x4: mov x29, sp
+        0x8: sub sp, sp, #0x80
+        ");
+        assert_snapshot!(cb.hexdump(), @"fd7bbfa9fd030091ff0302d1");
+    }
+
+    #[test]
+    fn test_frame_setup_with_large_frame_fits_in_immediate() {
+        let (mut asm, mut cb) = setup_asm();
+
+        asm.stack_state.stack_base_idx = ShiftedImmediate::MAX.to_usize();
+        let _ = asm.frame_setup(&[]);
+        asm.compile(&mut cb).unwrap();
+
+        assert_disasm_snapshot!(cb.disasm(), @"
+        0x0: stp x29, x30, [sp, #-0x10]!
+        0x4: mov x29, sp
+        0x8: sub sp, sp, #8, lsl #12
+        ");
+        assert_snapshot!(cb.hexdump(), @"fd7bbfa9fd030091ff2340d1");
+    }
+
+    #[test]
+    fn test_frame_setup_with_large_frame_too_big_for_immediate() {
+        let (mut asm, mut cb) = setup_asm();
+
+        asm.stack_state.stack_base_idx = (ShiftedImmediate::MAX + 8).to_usize();
+        let _ = asm.frame_setup(&[]);
+        asm.compile(&mut cb).unwrap();
+
+        assert_disasm_snapshot!(cb.disasm(), @"
+        0x0: stp x29, x30, [sp, #-0x10]!
+        0x4: mov x29, sp
+        0x8: sub sp, sp, #0xfff
+        0xc: sub sp, sp, #0xfff
+        0x10: sub sp, sp, #0xfff
+        0x14: sub sp, sp, #0xfff
+        0x18: sub sp, sp, #0xfff
+        0x1c: sub sp, sp, #0xfff
+        0x20: sub sp, sp, #0xfff
+        0x24: sub sp, sp, #0xfff
+        0x28: sub sp, sp, #0x48
+        ");
+        assert_snapshot!(cb.hexdump(), @"fd7bbfa9fd030091ffff3fd1ffff3fd1ffff3fd1ffff3fd1ffff3fd1ffff3fd1ffff3fd1ffff3fd1ff2301d1");
     }
 }

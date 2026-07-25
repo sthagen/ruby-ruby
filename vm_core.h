@@ -1029,6 +1029,12 @@ struct rb_vm_tag {
 #if USE_ZJIT
     // ec->cfp as of EC_PUSH_TAG, which is saved for materializing JITFrame.
     rb_control_frame_t *cfp;
+    // Whether cfp had a ZJIT frame before this tag's setjmp was established.
+    // It's used for checking if zjit_materialize_frames should materialize
+    // the frame or not when the tag is popped. If zjit_frame_active is true,
+    // we don't want to materialize cfp->jit_return, which will still be used
+    // by JIT code.
+    bool zjit_frame_active;
 #endif
 };
 
@@ -1318,7 +1324,13 @@ typedef struct {
     unsigned int is_from_method: 1;	/* bool */
     unsigned int is_lambda: 1;		/* bool */
     unsigned int is_isolated: 1;        /* bool */
+    unsigned int is_refined: 1;         /* bool: Proc#refined */
 } rb_proc_t;
+
+/* A refined proc's cref lives in a hidden ivar on the proc object;
+ * rb_proc_refinements_cref returns NULL unless is_refined is set. */
+const rb_cref_t *rb_proc_refinements_cref(VALUE procval);
+void rb_proc_set_refinements_cref(VALUE procval, const rb_cref_t *cref);
 
 RUBY_SYMBOL_EXPORT_BEGIN
 VALUE rb_proc_isolate(VALUE self);
@@ -1736,7 +1748,7 @@ VM_BH_ISEQ_BLOCK_P(VALUE block_handler)
         if (!imemo_type_p(captured->code.val, imemo_iseq)) {
             rb_bug("not imemo_iseq. captured:%p IMEMO_P(captured->code.val):%d, "
                    "flags:%.*" PRIxVALUE,
-                   captured,
+                   (void *)captured,
                    RB_TYPE_P(captured->code.val, T_IMEMO),
                    (int)(sizeof(VALUE) * CHAR_BIT / 4), RBASIC(captured->code.val)->flags);
         }
@@ -1954,6 +1966,7 @@ VALUE rb_thread_alloc(VALUE klass);
 VALUE rb_binding_alloc(VALUE klass);
 VALUE rb_proc_alloc(VALUE klass);
 VALUE rb_proc_dup(VALUE self);
+VALUE rb_proc_dup_0(VALUE self);
 
 /* for debug */
 extern bool rb_vmdebug_stack_dump_raw(const rb_execution_context_t *ec, const rb_control_frame_t *cfp, FILE *);
@@ -1981,7 +1994,7 @@ void rb_iseq_pathobj_set(const rb_iseq_t *iseq, VALUE path, VALUE realpath);
 int rb_ec_frame_method_id_and_class(const rb_execution_context_t *ec, ID *idp, ID *called_idp, VALUE *klassp);
 void rb_ec_setup_exception(const rb_execution_context_t *ec, VALUE mesg, VALUE cause);
 
-VALUE rb_vm_invoke_proc(rb_execution_context_t *ec, rb_proc_t *proc, int argc, const VALUE *argv, int kw_splat, VALUE block_handler);
+VALUE rb_vm_invoke_proc(rb_execution_context_t *ec, rb_proc_t *proc, int argc, const VALUE *argv, int kw_splat, VALUE block_handler, const rb_cref_t *cref);
 
 VALUE rb_vm_make_proc_lambda(const rb_execution_context_t *ec, const struct rb_captured_block *captured, VALUE klass, int8_t is_lambda);
 static inline VALUE

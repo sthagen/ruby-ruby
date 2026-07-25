@@ -367,8 +367,6 @@ pub struct RArray__bindgen_ty_1__bindgen_ty_1__bindgen_ty_1 {
 }
 pub const RMODULE_IS_REFINEMENT: ruby_rmodule_flags = 8192;
 pub type ruby_rmodule_flags = u32;
-pub const ROBJECT_HEAP: ruby_robject_flags = 65536;
-pub type ruby_robject_flags = u32;
 pub type rb_event_flag_t = u32;
 pub type rb_block_call_func = ::std::option::Option<
     unsafe extern "C" fn(
@@ -1443,10 +1441,44 @@ impl rb_proc_t {
         }
     }
     #[inline]
+    pub fn is_refined(&self) -> ::std::os::raw::c_uint {
+        unsafe { ::std::mem::transmute(self._bitfield_1.get(3usize, 1u8) as u32) }
+    }
+    #[inline]
+    pub fn set_is_refined(&mut self, val: ::std::os::raw::c_uint) {
+        unsafe {
+            let val: u32 = ::std::mem::transmute(val);
+            self._bitfield_1.set(3usize, 1u8, val as u64)
+        }
+    }
+    #[inline]
+    pub unsafe fn is_refined_raw(this: *const Self) -> ::std::os::raw::c_uint {
+        unsafe {
+            ::std::mem::transmute(<__BindgenBitfieldUnit<[u8; 1usize]>>::raw_get(
+                ::std::ptr::addr_of!((*this)._bitfield_1),
+                3usize,
+                1u8,
+            ) as u32)
+        }
+    }
+    #[inline]
+    pub unsafe fn set_is_refined_raw(this: *mut Self, val: ::std::os::raw::c_uint) {
+        unsafe {
+            let val: u32 = ::std::mem::transmute(val);
+            <__BindgenBitfieldUnit<[u8; 1usize]>>::raw_set(
+                ::std::ptr::addr_of_mut!((*this)._bitfield_1),
+                3usize,
+                1u8,
+                val as u64,
+            )
+        }
+    }
+    #[inline]
     pub fn new_bitfield_1(
         is_from_method: ::std::os::raw::c_uint,
         is_lambda: ::std::os::raw::c_uint,
         is_isolated: ::std::os::raw::c_uint,
+        is_refined: ::std::os::raw::c_uint,
     ) -> __BindgenBitfieldUnit<[u8; 1usize]> {
         let mut __bindgen_bitfield_unit: __BindgenBitfieldUnit<[u8; 1usize]> = Default::default();
         __bindgen_bitfield_unit.set(0usize, 1u8, {
@@ -1460,6 +1492,10 @@ impl rb_proc_t {
         __bindgen_bitfield_unit.set(2usize, 1u8, {
             let is_isolated: u32 = unsafe { ::std::mem::transmute(is_isolated) };
             is_isolated as u64
+        });
+        __bindgen_bitfield_unit.set(3usize, 1u8, {
+            let is_refined: u32 = unsafe { ::std::mem::transmute(is_refined) };
+            is_refined as u64
         });
         __bindgen_bitfield_unit
     }
@@ -1513,11 +1549,13 @@ pub const SHAPE_ID_FL_FROZEN: shape_id_fl_type = 134217728;
 pub const SHAPE_ID_FL_HAS_OBJECT_ID: shape_id_fl_type = 268435456;
 pub const SHAPE_ID_LAYOUT_ROBJECT: shape_id_fl_type = 0;
 pub const SHAPE_ID_LAYOUT_RCLASS: shape_id_fl_type = 536870912;
+pub const SHAPE_ID_LAYOUT_EXTENDED: shape_id_fl_type = 1073741824;
 pub const SHAPE_ID_LAYOUT_RDATA: shape_id_fl_type = 1073741824;
 pub const SHAPE_ID_LAYOUT_OTHER: shape_id_fl_type = 1610612736;
 pub const SHAPE_ID_LAYOUT_MASK: shape_id_fl_type = 1610612736;
 pub const SHAPE_ID_FL_NON_CANONICAL_MASK: shape_id_fl_type = 402653184;
 pub const SHAPE_ID_FLAGS_MASK: shape_id_fl_type = 2146959360;
+pub const SHAPE_ID_FL_PRIVATE_MASK: shape_id_fl_type = 1677197312;
 pub type shape_id_fl_type = u32;
 pub const CONST_DEPRECATED: rb_const_flag_t = 256;
 pub const CONST_VISIBILITY_MASK: rb_const_flag_t = 255;
@@ -2192,7 +2230,6 @@ unsafe extern "C" {
     pub fn rb_ivar_get_at_no_ractor_check(obj: VALUE, index: attr_index_t) -> VALUE;
     pub fn rb_gvar_get(arg1: ID) -> VALUE;
     pub fn rb_gvar_set(arg1: ID, arg2: VALUE) -> VALUE;
-    pub fn rb_ensure_iv_list_size(obj: VALUE, current_len: u32, newsize: u32);
     pub fn rb_vm_barrier();
     pub fn rb_str_byte_substr(str_: VALUE, beg: VALUE, len: VALUE) -> VALUE;
     pub fn rb_str_substr_two_fixnums(
@@ -2234,12 +2271,32 @@ unsafe extern "C" {
     pub fn rb_iseqw_to_iseq(iseqw: VALUE) -> *const rb_iseq_t;
     pub fn rb_iseq_label(iseq: *const rb_iseq_t) -> VALUE;
     pub fn rb_iseq_defined_string(type_: defined_type) -> VALUE;
+    pub fn rb_zjit_profile_enable(iseq: *const rb_iseq_t);
     pub fn rb_zjit_hash_new_size() -> usize;
     pub fn rb_zjit_class_allocate_instance_fastpath(
         klass: VALUE,
         size_out: *mut usize,
         shape_id_out: *mut shape_id_t,
     ) -> bool;
+    pub fn rb_zjit_str_resurrect_fastpath(
+        str_: VALUE,
+        chilled: bool,
+        size_out: *mut usize,
+        flags_out: *mut VALUE,
+        len_out: *mut ::std::os::raw::c_long,
+        byte_size_out: *mut usize,
+    ) -> bool;
+    pub fn rb_zjit_array_dup_can_fastpath(
+        ary: VALUE,
+        alloc_size_out: *mut usize,
+        flags_out: *mut VALUE,
+        len_out: *mut ::std::os::raw::c_long,
+    ) -> bool;
+    pub fn rb_zjit_range_new_fastpath(
+        exclude_end: bool,
+        alloc_size_out: *mut usize,
+        flags_out: *mut VALUE,
+    );
     pub fn rb_profile_frames(
         start: ::std::os::raw::c_int,
         limit: ::std::os::raw::c_int,

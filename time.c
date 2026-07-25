@@ -2233,6 +2233,10 @@ invalid_utc_offset(VALUE zone)
 static VALUE
 utc_offset_arg(VALUE arg)
 {
+    if (RB_INTEGER_TYPE_P(arg)) {
+        return arg;
+    }
+
     VALUE tmp;
     if (!NIL_P(tmp = rb_check_string_type(arg))) {
         int n = 0;
@@ -4140,7 +4144,7 @@ static VALUE
 time_zonelocal(VALUE time, VALUE off)
 {
     VALUE zone = off;
-    if (zone_localtime(zone, time)) return time;
+    if (maybe_tzobj_p(zone) && zone_localtime(zone, time)) return time;
 
     if (NIL_P(off = utc_offset_arg(off))) {
         off = zone;
