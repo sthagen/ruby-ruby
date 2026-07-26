@@ -1226,12 +1226,13 @@ missing-srcs: $(srcdir)/missing/des_tables.c
 
 srcs: common-srcs missing-srcs srcs-enc srcs-doc
 
-RIPPER_SRCS = $(srcdir)/ext/ripper/ripper.c \
-	      $(srcdir)/ext/ripper/ripper_init.c \
-	      $(srcdir)/ext/ripper/eventids1.h \
-	      $(srcdir)/ext/ripper/eventids1.c \
-	      $(srcdir)/ext/ripper/eventids2table.c \
-	      # RIPPER_SRCS
+RIPPER_SRCS1 = $(srcdir)/ext/ripper/ripper.c
+RIPPER_SRCS2 = $(srcdir)/ext/ripper/ripper_init.c \
+	       $(srcdir)/ext/ripper/eventids1.h \
+	       $(srcdir)/ext/ripper/eventids1.c \
+	       $(srcdir)/ext/ripper/eventids2table.c \
+	       # RIPPER_SRCS2
+RIPPER_SRCS = $(RIPPER_SRCS1) $(RIPPER_SRCS2)
 
 EXT_SRCS = ripper_srcs \
 	   $(srcdir)/ext/rbconfig/sizeof/sizes.c \
@@ -1348,10 +1349,12 @@ dump_ast$(BUILD_EXEEXT): $(tooldir)/dump_ast.c $(LIBPRISM_OBJS)
 	$(Q) $(CC) $(CFLAGS) $(OUTFLAG)$@ $(INCFLAGS) $(tooldir)/dump_ast.c $(LIBPRISM_OBJS)
 
 build-tool/Makefile: $(tooldir)/dump_ast.mkmf.rb prism-srcs prism-incs
-	+$(BASERUBY) -s $(tooldir)/dump_ast.mkmf.rb "-INCFLAGS=$(INCFLAGS)" "-make=$(MAKE)" build-tool $(tooldir)/dump_ast.c dump_ast.$(OBJEXT) $(LIBPRISM_OBJS)
+	+$(BASERUBY) -s $(tooldir)/dump_ast.mkmf.rb \
+	    "-INCFLAGS=$(INCFLAGS)" "-make=$(MAKE)" "-objext=$(OBJEXT)" \
+	    build-tool $(tooldir)/dump_ast.c dump_ast.$(OBJEXT) $(LIBPRISM_OBJS)
 
 build-tool/dump_ast$(BUILD_EXEEXT): build-tool/Makefile
-	cd build-tool && MAKEFLAGS= MFLAGS= && unset MAKEFLAGS MFLAGS && $(MAKE)
+	cd build-tool && MAKEFLAGS= MFLAGS= && unset MAKEFLAGS MFLAGS && $(MAKE) Q=$(Q)
 
 clean-local:: clean-build-tool
 clean-build-tool:
@@ -1379,6 +1382,8 @@ $(RIPPER_SRCS): $(srcdir)/parse.y $(srcdir)/defs/id.def
 $(RIPPER_SRCS): $(srcdir)/ext/ripper/depend $(srcdir)/ext/ripper/extconf.rb
 $(RIPPER_SRCS): $(srcdir)/ext/ripper/tools/preproc.rb $(srcdir)/ext/ripper/tools/dsl.rb
 $(RIPPER_SRCS): $(srcdir)/ext/ripper/ripper_init.c.tmpl $(srcdir)/ext/ripper/eventids2.c
+$(RIPPER_SRCS2): $(RIPPER_SRCS1)
+$(RIPPER_SRCS1):
 	$(ECHO) generating $@
 	$(Q) $(CHDIR) $(@D) && \
 	$(CAT_DEPEND) depend | \
