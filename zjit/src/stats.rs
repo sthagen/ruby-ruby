@@ -185,6 +185,7 @@ make_counters! {
     exit {
         // exit_: Side exits reasons
         exit_compile_error,
+        exit_exception_handler,
         exit_unhandled_newarray_send_min,
         exit_unhandled_newarray_send_hash,
         exit_unhandled_newarray_send_pack,
@@ -220,12 +221,14 @@ make_counters! {
         exit_patchpoint_method_redefined,
         exit_patchpoint_stable_constant_names,
         exit_patchpoint_no_tracepoint,
+        exit_patchpoint_no_newobj_hook,
         exit_patchpoint_no_ep_escape,
         exit_patchpoint_single_ractor_mode,
         exit_patchpoint_no_singleton_class,
         exit_patchpoint_root_box_only,
         exit_callee_side_exit,
         exit_interrupt,
+        exit_throw,
         exit_stackoverflow,
         exit_block_param_proxy_not_iseq_or_ifunc,
         exit_block_param_proxy_not_nil,
@@ -291,6 +294,7 @@ make_counters! {
         send_fallback_super_target_complex_args_pass,
         send_fallback_cannot_send_direct,
         send_fallback_invokeblock_not_specialized,
+        send_fallback_invokeblock_polymorphic_miss,
         send_fallback_sendforward_not_specialized,
         send_fallback_invokesuperforward_not_specialized,
         send_fallback_single_ractor_mode_required,
@@ -349,7 +353,6 @@ make_counters! {
     compile_error_iseq_version_limit_reached,
     compile_error_iseq_stack_too_large,
     compile_error_native_stack_too_large,
-    compile_error_exception_handler,
     compile_error_out_of_memory,
     compile_error_label_linking_failure,
     compile_error_jit_to_jit_optional,
@@ -369,9 +372,6 @@ make_counters! {
     compile_error_validation_misc_validation_error,
 
     // unhandled_hir_insn_: Unhandled HIR instructions
-    unhandled_hir_insn_array_max,
-    unhandled_hir_insn_fixnum_div,
-    unhandled_hir_insn_throw,
     unhandled_hir_insn_invokebuiltin,
     unhandled_hir_insn_unknown,
 
@@ -435,6 +435,14 @@ make_counters! {
 
     // Unsupported argument conversions
     complex_arg_pass_keyword_to_positional_hash,
+
+    // Caller splat length profile shapes
+    caller_splat_profile_no_profiles,
+    caller_splat_profile_monomorphic,
+    caller_splat_profile_polymorphic,
+    caller_splat_profile_skewed_polymorphic,
+    caller_splat_profile_megamorphic,
+    caller_splat_profile_skewed_megamorphic,
 
     // Writes to the VM frame
     vm_write_jit_frame_count,
@@ -525,7 +533,6 @@ pub enum CompileError {
     IseqVersionLimitReached,
     IseqStackTooLarge,
     NativeStackTooLarge,
-    ExceptionHandler,
     OutOfMemory,
     ParseError(ParseError),
     /// When a ZJIT function is too large, the branches may have
@@ -544,7 +551,6 @@ pub fn exit_counter_for_compile_error(compile_error: &CompileError) -> Counter {
         IseqVersionLimitReached => compile_error_iseq_version_limit_reached,
         IseqStackTooLarge       => compile_error_iseq_stack_too_large,
         NativeStackTooLarge     => compile_error_native_stack_too_large,
-        ExceptionHandler        => compile_error_exception_handler,
         OutOfMemory             => compile_error_out_of_memory,
         LabelLinkingFailure     => compile_error_label_linking_failure,
         ParseError(parse_error) => match parse_error {
@@ -570,9 +576,6 @@ pub fn exit_counter_for_unhandled_hir_insn(insn: &crate::hir::Insn) -> Counter {
     use crate::hir::Insn::*;
     use crate::stats::Counter::*;
     match insn {
-        ArrayMax { .. }      => unhandled_hir_insn_array_max,
-        FixnumDiv { .. }     => unhandled_hir_insn_fixnum_div,
-        Throw { .. }         => unhandled_hir_insn_throw,
         InvokeBuiltin { .. } => unhandled_hir_insn_invokebuiltin,
         _                    => unhandled_hir_insn_unknown,
     }
@@ -619,6 +622,7 @@ pub fn side_exit_counter(reason: crate::hir::SideExitReason) -> Counter {
         GuardSuperMethodEntry         => exit_guard_super_method_entry,
         CalleeSideExit                => exit_callee_side_exit,
         Interrupt                     => exit_interrupt,
+        Throw                         => exit_throw,
         StackOverflow                 => exit_stackoverflow,
         BlockParamProxyNotIseqOrIfunc => exit_block_param_proxy_not_iseq_or_ifunc,
         BlockParamProxyNotNil         => exit_block_param_proxy_not_nil,
@@ -642,6 +646,8 @@ pub fn side_exit_counter(reason: crate::hir::SideExitReason) -> Counter {
                                       => exit_patchpoint_stable_constant_names,
         PatchPoint(Invariant::NoTracePoint)
                                       => exit_patchpoint_no_tracepoint,
+        PatchPoint(Invariant::NoNewObjHook)
+                                      => exit_patchpoint_no_newobj_hook,
         PatchPoint(Invariant::NoEPEscape(_))
                                       => exit_patchpoint_no_ep_escape,
         PatchPoint(Invariant::SingleRactorMode)
@@ -703,6 +709,7 @@ pub fn send_fallback_counter(reason: crate::hir::SendFallbackReason) -> Counter 
         SuperTargetNotFound                       => send_fallback_super_target_not_found,
         SuperTargetComplexArgsPass                => send_fallback_super_target_complex_args_pass,
         InvokeBlockNotSpecialized                 => send_fallback_invokeblock_not_specialized,
+        InvokeBlockPolymorphicMiss                => send_fallback_invokeblock_polymorphic_miss,
         SendForwardNotSpecialized                 => send_fallback_sendforward_not_specialized,
         InvokeSuperForwardNotSpecialized          => send_fallback_invokesuperforward_not_specialized,
         SingleRactorModeRequired                  => send_fallback_single_ractor_mode_required,

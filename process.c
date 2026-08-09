@@ -1116,20 +1116,19 @@ rb_process_status_wait(rb_pid_t pid, int flags)
  *
  *  If there are child processes,
  *  waits for a child process to exit and returns a Process::Status object
- *  containing information on that process;
- *  sets thread-local variable <tt>$?</tt>:
+ *  containing information on that process.
+ *  Unlike Process.wait, this method does not set thread-local variable
+ *  <tt>$?</tt>:
  *
  *    Process.spawn('cat /nop') # => 1155880
  *    Process::Status.wait      # => #<Process::Status: pid 1155880 exit 1>
- *    $?                        # => #<Process::Status: pid 1155508 exit 1>
+ *    $?                        # => nil # Not set.
  *
  *  If there is no child process,
  *  returns an "empty" Process::Status object
- *  that does not represent an actual process;
- *  does not set thread-local variable <tt>$?</tt>:
+ *  that does not represent an actual process:
  *
  *    Process::Status.wait # => #<Process::Status: pid -1 exit 0>
- *    $?                   # => #<Process::Status: pid 1155508 exit 1> # Unchanged.
  *
  *  May invoke the scheduler hook Fiber::Scheduler#process_wait.
  *
@@ -2785,20 +2784,16 @@ rb_execarg_parent_start1(VALUE execarg_obj)
         }
         hide_obj(envtbl);
         if (envopts != Qfalse) {
-            st_table *stenv = RHASH_TBL_RAW(envtbl);
             long i;
             for (i = 0; i < RARRAY_LEN(envopts); i++) {
                 VALUE pair = RARRAY_AREF(envopts, i);
                 VALUE key = RARRAY_AREF(pair, 0);
                 VALUE val = RARRAY_AREF(pair, 1);
                 if (NIL_P(val)) {
-                    st_data_t stkey = (st_data_t)key;
-                    st_delete(stenv, &stkey, NULL);
+                    rb_hash_delete(envtbl, key);
                 }
                 else {
-                    st_insert(stenv, (st_data_t)key, (st_data_t)val);
-                    RB_OBJ_WRITTEN(envtbl, Qundef, key);
-                    RB_OBJ_WRITTEN(envtbl, Qundef, val);
+                    rb_hash_aset(envtbl, key, val);
                 }
             }
         }
@@ -4688,8 +4683,6 @@ rb_spawn(int argc, const VALUE *argv)
  *
  *  See {Execution Shell}[rdoc-ref:Process@Execution+Shell] for details about the shell.
  *
- *  Raises an exception if the new process could not execute.
- *
  *  <b>Argument +exe_path+</b>
  *
  *  Argument +exe_path+ is one of the following:
@@ -4731,7 +4724,6 @@ rb_spawn(int argc, const VALUE *argv)
  *    C*
  *    hello world
  *
- *  Raises an exception if the new process could not execute.
  */
 
 static VALUE

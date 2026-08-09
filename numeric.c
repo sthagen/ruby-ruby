@@ -39,6 +39,7 @@
 #include "internal/string.h"
 #include "internal/util.h"
 #include "internal/variable.h"
+#include "vm_core.h"
 #include "ruby/encoding.h"
 #include "ruby/util.h"
 #include "builtin.h"
@@ -2164,8 +2165,8 @@ flo_floor(int argc, VALUE *argv, VALUE num)
  *  returns an Integer based on a computed granularity:
  *
  *  - The granularity is `10 ** ndigits.abs`.
- *  - The returned value is the largest multiple of the granularity
- *    that is less than or equal to `self`.
+ *  - The returned value is the smallest multiple of the granularity
+ *    that is greater than or equal to `self`.
  *
  *  Examples with positive `self`:
  *

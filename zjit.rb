@@ -116,6 +116,7 @@ class << RubyVM::ZJIT
     # use multiple complex features, a decrease in this number does not
     # necessarily mean an increase in number of optimized calls.
     print_counters_with_prefix(prefix: 'complex_arg_pass_', prompt: 'popular complex argument-parameter features not optimized', buf:, stats:, limit: 10)
+    print_counters_with_prefix(prefix: 'caller_splat_profile_', prompt: 'caller splat length profiles', buf:, stats:, limit: 10)
 
     # Show exit counters, ordered by the typical amount of exits for the prefix at the time
     print_counters_with_prefix(prefix: 'compile_error_', prompt: 'compile error reasons', buf:, stats:, limit: 20)
@@ -284,7 +285,12 @@ class << RubyVM::ZJIT
   def print_stats_file
     filename = Primitive.rb_zjit_get_stats_file_path_p
     File.open(filename, "wb") do |file|
-      file.write stats_string
+      if filename.end_with?(".json")
+        require "json"
+        file.write(JSON.pretty_generate(stats))
+      else
+        file.write stats_string
+      end
     end
   end
 
