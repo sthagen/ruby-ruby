@@ -1214,6 +1214,13 @@ rb_gc_impl_object_moved_p(void *objspace_ptr, VALUE obj)
     return rb_mmtk_call_object_closure(obj, false) != obj;
 }
 
+bool
+rb_gc_impl_pinned_p(void *objspace_ptr, VALUE obj)
+{
+    /* MMTk tracks pinning separately */
+    return false;
+}
+
 VALUE
 rb_gc_impl_location(void *objspace_ptr, VALUE obj)
 {
@@ -1813,6 +1820,13 @@ rb_gc_impl_during_global_gc_p(void *objspace_ptr)
      * stopped. */
     struct objspace *objspace = objspace_ptr;
     return objspace->world_stopped;
+}
+
+bool
+rb_gc_impl_during_postmortem_p(void *objspace_ptr)
+{
+    /* mmtk has a single objspace and no per-Ractor retire collection. */
+    return false;
 }
 
 bool

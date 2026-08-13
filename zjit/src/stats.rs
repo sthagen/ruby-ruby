@@ -9,7 +9,7 @@ use crate::options::OPTIONS;
 #[path = "../../jit/src/lib.rs"]
 mod jit;
 
-use crate::{cruby::*, hir::ParseError, options::get_option, state::{zjit_enabled_p, ZJITState}};
+use crate::{cast::IntoUsize as _, cruby::*, hir::ParseError, options::get_option, state::{zjit_enabled_p, ZJITState}};
 
 macro_rules! make_counters {
     (
@@ -171,12 +171,14 @@ make_counters! {
         compile_hir_build_time_ns,
         compile_hir_strength_reduce_time_ns,
         compile_hir_inline_methods_time_ns,
+        compile_hir_remove_trivial_block_params_time_ns,
         compile_hir_optimize_load_store_time_ns,
         compile_hir_canonicalize_time_ns,
         compile_hir_fold_constants_time_ns,
         compile_hir_clean_cfg_time_ns,
         compile_hir_remove_redundant_patch_points_time_ns,
         compile_hir_remove_duplicate_check_interrupts_time_ns,
+        compile_hir_eliminate_empty_inline_frames_time_ns,
         compile_hir_eliminate_dead_code_time_ns,
         compile_lir_time_ns,
     }
@@ -239,7 +241,6 @@ make_counters! {
         exit_invoke_block_iseq_changed,
         exit_block_param_wb_required,
         exit_too_many_keyword_parameters,
-        exit_too_many_args_for_lir,
         exit_no_profile_send,
         exit_no_profile_getivar,
         exit_no_profile_setivar,
@@ -472,6 +473,7 @@ make_counters! {
     // be incremented only once, rather than once per SendDirect, if the caller
     // already exceeds the budget before scanning for its SendDirects.
     inline_method_count,
+    empty_inline_frame_count,
     inline_reject_too_large,
     inline_reject_complex_params,
     inline_reject_ep_escapes,
@@ -522,9 +524,9 @@ pub fn exit_counter_ptr_for_opcode(opcode: u32) -> *mut u64 {
 }
 
 /// Return a raw pointer to the fallback counter for a given YARV opcode
-pub fn send_fallback_counter_ptr_for_opcode(opcode: u32) -> *mut u64 {
+pub fn send_fallback_counter_ptr_for_opcode(opcode: VmInsnType) -> *mut u64 {
     let fallback_counters = ZJITState::get_send_fallback_counters();
-    unsafe { fallback_counters.get_unchecked_mut(opcode as usize) }
+    unsafe { fallback_counters.get_unchecked_mut(opcode.to_usize()) }
 }
 
 /// Reason why ZJIT failed to produce any JIT code
@@ -633,7 +635,6 @@ pub fn side_exit_counter(reason: crate::hir::SideExitReason) -> Counter {
         InvokeBlockIseqChanged        => exit_invoke_block_iseq_changed,
         BlockParamWbRequired          => exit_block_param_wb_required,
         TooManyKeywordParameters      => exit_too_many_keyword_parameters,
-        TooManyArgsForLir             => exit_too_many_args_for_lir,
         SplatKwNotNilOrHash           => exit_splatkw_not_nil_or_hash,
         SplatKwPolymorphic            => exit_splatkw_polymorphic,
         SplatKwNotProfiled            => exit_splatkw_not_profiled,

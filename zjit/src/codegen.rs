@@ -82,7 +82,7 @@ impl JITState {
 
     /// Retrieve the output of a given instruction that has been compiled
     fn get_opnd(&self, insn_id: InsnId) -> lir::Opnd {
-        self.opnds[insn_id.0].unwrap_or_else(|| panic!("Failed to get_opnd({insn_id})"))
+        self.opnds[insn_id.to_usize()].unwrap_or_else(|| panic!("Failed to get_opnd({insn_id})"))
     }
 
     /// Get the ISEQ for the version currently being compiled.
@@ -422,7 +422,7 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, version: IseqVersionRef, func
             // Skip the entries superblock -- it's an internal CFG artifact
             if block_id == function.entries_block { continue; }
             let lir_block_id = asm.new_block(block_id, function.is_entry_block(block_id), rpo_idx);
-            hir_to_lir[block_id.0] = Some(lir_block_id);
+            hir_to_lir[block_id.to_usize()] = Some(lir_block_id);
         }
 
         // Compile each basic block
@@ -431,7 +431,7 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, version: IseqVersionRef, func
             if block_id == function.entries_block { continue; }
             // Set the current block to the LIR block that corresponds to this
             // HIR block.
-            let lir_block_id = hir_to_lir[block_id.0].unwrap();
+            let lir_block_id = hir_to_lir[block_id.to_usize()].unwrap();
             asm.set_current_block(lir_block_id);
 
             // Write a label to jump to the basic block
@@ -451,7 +451,7 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, version: IseqVersionRef, func
                 // Param does not have operands, so fake a ResolvedInsnId.
                 match crate::hir::ResolvedInsnId(insn_id).insn(function) {
                     Insn::Param => {
-                        jit.opnds[insn_id.0] = Some(gen_param(&mut asm, idx));
+                        jit.opnds[insn_id.to_usize()] = Some(gen_param(&mut asm, idx));
                     },
                     insn => unreachable!("Non-param insn found in block.params: {insn:?}"),
                 }
@@ -464,7 +464,7 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, version: IseqVersionRef, func
                     let insn_id = function.find_id(insn_id);
                     // Param does not have operands, so fake a ResolvedInsnId.
                     if let &Insn::LoadArg { idx, .. } = crate::hir::ResolvedInsnId(insn_id).insn(function) {
-                        jit.opnds[insn_id.0] = Some(gen_param(&mut asm, idx as usize));
+                        jit.opnds[insn_id.to_usize()] = Some(gen_param(&mut asm, idx as usize));
                     }
                 }
             }
@@ -477,8 +477,8 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, version: IseqVersionRef, func
                 let result = match &insn {
                     Insn::CondBranch { val, if_true, if_false } => {
                         let val_opnd = jit.get_opnd(*val);
-                        let true_target = hir_to_lir[if_true.target.0].unwrap();
-                        let false_target = hir_to_lir[if_false.target.0].unwrap();
+                        let true_target = hir_to_lir[if_true.target.to_usize()].unwrap();
+                        let false_target = hir_to_lir[if_false.target.to_usize()].unwrap();
 
                         let true_branch = lir::BranchEdge {
                             target: true_target,
@@ -498,7 +498,7 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, version: IseqVersionRef, func
                         Ok(())
                     }
                     Insn::Jump(target) => {
-                        let lir_target = hir_to_lir[target.target.0].unwrap();
+                        let lir_target = hir_to_lir[target.target.to_usize()].unwrap();
                         let branch_edge = lir::BranchEdge {
                             target: lir_target,
                             args: target.args.iter().map(|insn_id| jit.get_opnd(*insn_id)).collect()
@@ -659,8 +659,8 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
                 *kw_bits, *jit_entry_idx, &function.frame_state(*state), *block,
             )
         }
-        Insn::PushInlineFrame { cme, iseq, recv, args, blockiseq, state, .. } => {
-            no_output!(gen_push_inline_frame(jit, asm, function, *cme, *iseq, opnd!(recv), opnds!(args), &function.frame_state(*state), *blockiseq))
+        Insn::PushInlineFrame { cme, iseq, recv, num_args, blockiseq, state, .. } => {
+            no_output!(gen_push_inline_frame(jit, asm, function, *cme, *iseq, opnd!(recv), *num_args, &function.frame_state(*state), *blockiseq))
         },
         Insn::PopInlineFrame { iseq, argc, state } => {
             no_output!(gen_pop_inline_frame(asm, *iseq, *argc, &function.frame_state(*state)))
@@ -795,7 +795,7 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
     assert!(insn.has_output(), "Cannot write LIR output of HIR instruction with no output: {insn}");
 
     // If the instruction has an output, remember it in jit.opnds
-    jit.opnds[insn_id.0] = Some(out_opnd);
+    jit.opnds[insn_id.to_usize()] = Some(out_opnd);
 
     Ok(())
 }
@@ -819,7 +819,7 @@ fn gen_get_ep(asm: &mut Assembler, level: u32) -> Opnd {
     ep_opnd
 }
 
-fn gen_defined(jit: &JITState, asm: &mut Assembler, function: &Function, op_type: usize, obj: VALUE, pushval: VALUE, tested_value: Opnd, lep_level: u32, state: &FrameState) -> Opnd {
+fn gen_defined(jit: &JITState, asm: &mut Assembler, function: &Function, op_type: defined_type, obj: VALUE, pushval: VALUE, tested_value: Opnd, lep_level: u32, state: &FrameState) -> Opnd {
     match op_type as defined_type {
         DEFINED_YIELD => {
             // `lep_level` was precomputed at HIR construction so we can materialize the local EP
@@ -952,11 +952,6 @@ fn gen_fixnum_bit_check(asm: &mut Assembler, val: Opnd, index: u8) -> Opnd {
 }
 
 fn gen_invokebuiltin(jit: &JITState, asm: &mut Assembler, function: &Function, state: &FrameState, bf: &rb_builtin_function, leaf: bool, args: Vec<Opnd>) -> lir::Opnd {
-    // +2 for ec, self
-    assert!(bf.argc + 2 <= C_ARG_OPNDS.len() as i32,
-            "gen_invokebuiltin should not be called for builtin function {} with too many arguments: {}",
-            unsafe { std::ffi::CStr::from_ptr(bf.name).to_str().unwrap() },
-            bf.argc);
     if leaf {
         gen_prepare_leaf_call_with_gc(asm, state);
     } else {
@@ -1579,7 +1574,7 @@ fn gen_push_inline_frame(
     cme: *const rb_callable_method_entry_t,
     iseq: IseqPtr,
     recv: Opnd,
-    args: Vec<Opnd>,
+    num_args: u16,
     state: &FrameState,
     blockiseq: Option<IseqPtr>,
 ) {
@@ -1589,7 +1584,7 @@ fn gen_push_inline_frame(
 
     // Save cfp->pc and cfp->sp for the caller frame.
     // Cannot use gen_prepare_non_leaf_call because we need special SP math.
-    let stack_size = state.stack().len() - args.len() - 1; // -1 for receiver
+    let stack_size = state.stack().len() - num_args.to_usize() - 1; // -1 for receiver
     gen_write_jit_frame(asm, state, 0);
     gen_save_sp(asm, stack_size);
 
@@ -1618,7 +1613,7 @@ fn gen_push_inline_frame(
         (VM_FRAME_MAGIC_METHOD | VM_ENV_FLAG_LOCAL, specval)
     };
 
-    gen_push_frame(asm, args.len(), state, ControlFrame {
+    gen_push_frame(asm, num_args.to_usize(), state, ControlFrame {
         recv,
         iseq: Some(iseq),
         cme,
@@ -1669,11 +1664,11 @@ fn gen_push_inline_frame(
     // `FixnumBitCheck` rather than a memory load. On a side exit out of the
     // inlined body, FrameState materialization writes the local back to the
     // callee frame from that constant, and on the no-side-exit path nothing
-    // reads the slot before `gen_pop_lightweight_frame` tears down the frame.
+    // reads the slot before `gen_pop_inline_frame` tears down the frame.
     // (The non-inlined `gen_send_iseq_direct` path still emits its own store
     // because the callee's separate JIT entry reads it from memory.)
 
-    let sp_offset = (state.stack().len() + local_size - args.len() + VM_ENV_DATA_SIZE.to_usize()) * SIZEOF_VALUE;
+    let sp_offset = (state.stack().len() + local_size - num_args.to_usize() + VM_ENV_DATA_SIZE.to_usize()) * SIZEOF_VALUE;
     asm_comment!(asm, "switch to inlined callee SP");
     let new_sp = asm.add(SP, sp_offset.into());
     asm.mov(SP, new_sp);
@@ -2668,7 +2663,7 @@ fn gen_entry_point(jit: &mut JITState, asm: &mut Assembler, jit_entry_idx: Optio
 
     // Publish a valid entry JITFrame before setting cfp->jit_return. The entry point is
     // always the top-level frame (depth 0). Inlined frames get their own deeper
-    // slots in gen_push_lightweight_frame().
+    // slots in gen_push_inline_frame().
     let jit_frame = JITFrame::new_iseq(entry_pc(jit.iseq(), jit_entry_idx), jit.iseq(), 0);
     asm.mov(Opnd::mem(64, NATIVE_BASE_PTR, -SIZEOF_VALUE_I32), Opnd::const_ptr(jit_frame));
     asm.mov(Opnd::mem(64, CFP, RUBY_OFFSET_CFP_JIT_RETURN), NATIVE_BASE_PTR);
